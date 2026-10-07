@@ -1318,24 +1318,10 @@ class Participant:
         картинки или материал с текстом — с диска, если на них не ссылается
         другое вложение. Уже отправленное (на него ссылается сообщение) или
         не вложение — ValueError. → событие журнала (None — уже убрано)."""
-        from meet.assist.chatlog import REMOVED
-
-        if not isinstance(aid, str) or not _ATTACHMENT_ID.match(aid):
-            raise ValueError("неизвестное вложение")
-        messages = await self._io(self._chatlog.messages)
-        record = next((m for m in messages if m.get("id") == aid), None)
-        if record is None or record.get("kind") != "attachment":
-            raise ValueError(f"вложения {aid} нет в журнале")
-        if record.get("status") == REMOVED:
+        got = await self._io(remove_attachment, self._chatlog, self._folder, aid, log=self._log)
+        if got is None:
             return None
-        if any(m.get("kind") == "user" and aid in (m.get("attachments") or []) for m in messages):
-            raise ValueError("вложение уже отправлено — убрать его нельзя")
-        event = await self._io(self._chatlog.patch, aid, {"status": REMOVED})
-        others = [m for m in messages if m.get("kind") == "attachment" and m.get("id") != aid
-                  and m.get("status") != REMOVED]
-        ref = record.get("ref")
-        if isinstance(ref, str) and not any(m.get("ref") == ref for m in others):
-            await asyncio.to_thread(self._drop_files, record)
+        event, record = got
         if record.get("status") == "ready":
             if record.get("type") == "image":
                 self._images = max(0, self._images - 1)
@@ -1345,26 +1331,6 @@ class Participant:
             self._emit_chat([event])
         self._changed()
         return event
-
-    def _drop_files(self, record: dict) -> None:
-        """Файлы убранного вложения: картинка (`assistant/files/…`) или
-        материал (`materials/<ref>.json` и текст рядом). Только внутри папки встречи."""
-        from meet import materials
-
-        ref = str(record.get("ref") or "")
-        paths = []
-        if record.get("type") == "doc" and ref:
-            paths += [materials.materials_dir(self._folder) / f"{ref}.json", _text_dump_path(self._folder, ref)]
-        elif record.get("type") == "image" and record.get("path"):
-            paths.append(Path(record["path"]))
-        root = self._folder.resolve()
-        for path in paths:
-            try:
-                if not path.resolve().is_relative_to(root):
-                    continue
-                path.unlink(missing_ok=True)
-            except OSError as e:
-                self._log(f"агент: файл убранного вложения не удалён ({path.name}: {e})")
 
     async def queue_existing(self, mid: str) -> dict:
         """Сообщение пользователя, уже записанное в журнал другим писателем
@@ -1439,22 +1405,9 @@ class Participant:
         try:
             if _looks_image(item) and images >= att.MAX_PER_MESSAGE:
                 raise att.AttachmentError(f"В сообщении — не больше {att.MAX_PER_MESSAGE} изображений")
-            if isinstance(item, dict) and isinstance(item.get("data"), (bytes, bytearray)):
-                saved = await self._parse(att.save, self._folder, bytes(item["data"]),
-                                          name=item.get("name"))
-                fields, image = self._image_fields(saved), saved["path"]
-            else:
-                path = Path(item.get("path") if isinstance(item, dict) else item)
-                if path.suffix.lower() in IMAGE_SUFFIXES and not path.is_dir():
-                    saved = await self._parse(att.save_file, self._folder, path)
-                    fields, image = self._image_fields(saved), saved["path"]
-                else:
-                    fields = await self._parse(self._add_document, path)
+            fields, image = await self._parse(parse_attachment, self._folder, item, vision=self.vision)
         except (ValueError, OSError, TypeError) as e:
-            name = _item_name(item)
-            fields = {"type": "image" if _looks_image(item) else "doc", "name": name,
-                      "status": "failed", "error": str(e)[:300], "note": f"не разобрано: {str(e)[:200]}"}
-            image = None
+            fields, image = failed_attachment(item, e), None
         added = await self._io(self._chatlog.append, "attachment", **fields)
         self._emit_chat([added.event])
         if image:
@@ -1480,54 +1433,149 @@ class Participant:
         if future.cancelled() or future.exception() is not None:
             return
         result = future.result()
-        if not isinstance(result, dict) or result.get("duplicate"):
-            return
-        from meet import materials
+        drop_parsed(self._folder, result[0] if isinstance(result, tuple) else result, log=self._log)
 
-        paths = []
-        if result.get("type") == "doc" and isinstance(result.get("ref"), str):
-            paths.append(materials.materials_dir(self._folder) / f"{result['ref']}.json")
-            paths.append(_text_dump_path(self._folder, result["ref"]))
-        elif result.get("path"):
-            paths.append(Path(result["path"]))   # картинка: assistant/files/<id>.<ext>
-        for path in paths:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as e:
-                self._log(f"агент: брошенное вложение не убрано ({path.name}: {e})")
 
-    def _image_fields(self, saved: dict) -> dict:
-        fields = {"type": "image", "name": saved.get("name") or saved["id"], "status": "ready",
-                  "path": saved["path"], "ref": saved["id"], "vision": self.vision}
-        if not self.vision:
-            from meet.llm.base import NO_VISION_NOTE
+# --- вложения: общее у живого агента и чата после встречи ---
+#
+# Вложение после встречи («Продолжить разговор») пишет в журнал резидент,
+# а не агент, — теми же функциями: разбор, пределы и квоты те же
+# (`attachments.save`, `materials.add`), что и во время встречи.
 
-            fields["note"] = NO_VISION_NOTE
-        return fields
+def parse_attachment(folder, item, *, vision: bool) -> tuple[dict, str | None]:
+    """Новое вложение → (поля записи журнала `attachment`, путь картинки или
+    None). `item` — картинка байтами (`{"data", "name"}`) или путь к файлу
+    или папке. Не разобралось — исключение (ValueError, OSError, TypeError):
+    из него `failed_attachment` делает запись «не разобрано». Блокирующее."""
+    from meet.assist import attachments as att
 
-    def _add_document(self, path: Path) -> dict:
-        """Документ или папка → `materials.add`, текст — рядом (агент с
-        инструментами читает его из папки встречи), сводка — в ограду."""
-        from meet import materials
+    folder = Path(folder)
+    if isinstance(item, dict) and isinstance(item.get("data"), (bytes, bytearray)):
+        saved = att.save(folder, bytes(item["data"]), name=item.get("name"))
+        return image_fields(saved, vision), saved["path"]
+    path = Path(item.get("path") if isinstance(item, dict) else item)
+    if path.suffix.lower() in IMAGE_SUFFIXES and not path.is_dir():
+        saved = att.save_file(folder, path)
+        return image_fields(saved, vision), saved["path"]
+    return document_fields(folder, path), None
 
-        desc = materials.add(self._folder, path)
-        aid = desc["id"]
-        record = materials.read(self._folder, aid) or {}
-        summary = desc.get("summary") or materials.outline(SimpleNamespace(chunks=record.get("chunks") or []))
-        dump = _text_dump_path(self._folder, aid)
+
+def failed_attachment(item, error) -> dict:
+    """Поля записи журнала о вложении, которое не разобралось."""
+    text = str(error)
+    return {"type": "image" if _looks_image(item) else "doc", "name": _item_name(item),
+            "status": "failed", "error": text[:300], "note": f"не разобрано: {text[:200]}"}
+
+
+def image_fields(saved: dict, vision: bool) -> dict:
+    fields = {"type": "image", "name": saved.get("name") or saved["id"], "status": "ready",
+              "path": saved["path"], "ref": saved["id"], "vision": vision}
+    if not vision:
+        from meet.llm.base import NO_VISION_NOTE
+
+        fields["note"] = NO_VISION_NOTE
+    return fields
+
+
+def document_fields(folder, path: Path) -> dict:
+    """Документ или папка → `materials.add`, текст — рядом (агент с
+    инструментами читает его из папки встречи), сводка — в ограду. `source` —
+    исходный файл: чип-источник в окне открывает его, если оболочка пустит
+    (`open_material`: база знаний, библиотека встреч), иначе текст рядом."""
+    from meet import materials
+
+    folder = Path(folder)
+    desc = materials.add(folder, path)
+    aid = desc["id"]
+    record = materials.read(folder, aid) or {}
+    summary = desc.get("summary") or materials.outline(SimpleNamespace(chunks=record.get("chunks") or []))
+    dump = _text_dump_path(folder, aid)
+    try:
+        _write_text_dump(dump, desc.get("title") or path.name, record.get("chunks") or [])
+        text_path = str(dump)
+    except OSError:
+        text_path = desc.get("path") or str(path)
+    fields = {"type": "doc", "name": desc.get("title") or path.name, "status": "ready",
+              "path": text_path, "ref": aid, "summary": summary or "",
+              "chars": desc.get("chars", 0)}
+    source = desc.get("path") or str(path)
+    if isinstance(source, str) and source and Path(source).is_file():
+        fields["source"] = source
+    if desc.get("warnings"):
+        fields["note"] = "; ".join(desc["warnings"])[:200]
+    if desc.get("duplicate"):
+        fields["duplicate"] = True
+    return fields
+
+
+def drop_parsed(folder, fields, *, log=print) -> None:
+    """Разобранное вложение без записи журнала (отменили, вышел срок) —
+    убрать то, что разбор положил в папку встречи: материал без записи иначе
+    съедал бы квоту и попадал в затравку (ревью chat-api M3)."""
+    from meet import materials
+
+    if not isinstance(fields, dict) or fields.get("duplicate"):
+        return
+    folder = Path(folder)
+    paths = []
+    if fields.get("type") == "doc" and isinstance(fields.get("ref"), str):
+        paths.append(materials.materials_dir(folder) / f"{fields['ref']}.json")
+        paths.append(_text_dump_path(folder, fields["ref"]))
+    elif fields.get("path"):
+        paths.append(Path(fields["path"]))   # картинка: assistant/files/<id>.<ext>
+    for path in paths:
         try:
-            _write_text_dump(dump, desc.get("title") or path.name, record.get("chunks") or [])
-            text_path = str(dump)
-        except OSError:
-            text_path = desc.get("path") or str(path)
-        fields = {"type": "doc", "name": desc.get("title") or path.name, "status": "ready",
-                  "path": text_path, "ref": aid, "summary": summary or "",
-                  "chars": desc.get("chars", 0)}
-        if desc.get("warnings"):
-            fields["note"] = "; ".join(desc["warnings"])[:200]
-        if desc.get("duplicate"):
-            fields["duplicate"] = True
-        return fields
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            log(f"агент: брошенное вложение не убрано ({path.name}: {e})")
+
+
+def remove_attachment(chatlog, folder, aid: str, *, log=print) -> tuple[dict | None, dict] | None:
+    """Вложение убрали до отправки: запись журнала — `status: "removed"`,
+    файлы (картинка; материал с текстом) — с диска, если на них не ссылается
+    другое живое вложение, и только внутри папки встречи. Уже отправленное
+    или не вложение — ValueError. → (событие журнала, запись до правки);
+    None — уже убрано. Блокирующее."""
+    from meet.assist.chatlog import REMOVED
+
+    if not isinstance(aid, str) or not _ATTACHMENT_ID.match(aid):
+        raise ValueError("неизвестное вложение")
+    messages = chatlog.messages()
+    record = next((m for m in messages if m.get("id") == aid), None)
+    if record is None or record.get("kind") != "attachment":
+        raise ValueError(f"вложения {aid} нет в журнале")
+    if record.get("status") == REMOVED:
+        return None
+    if any(m.get("kind") == "user" and aid in (m.get("attachments") or []) for m in messages):
+        raise ValueError("вложение уже отправлено — убрать его нельзя")
+    event = chatlog.patch(aid, {"status": REMOVED})
+    others = [m for m in messages if m.get("kind") == "attachment" and m.get("id") != aid
+              and m.get("status") != REMOVED]
+    ref = record.get("ref")
+    if isinstance(ref, str) and not any(m.get("ref") == ref for m in others):
+        _drop_files(Path(folder), record, log)
+    return event, record
+
+
+def _drop_files(folder: Path, record: dict, log) -> None:
+    """Файлы убранного вложения: картинка (`assistant/files/…`) или
+    материал (`materials/<ref>.json` и текст рядом). Только внутри папки встречи."""
+    from meet import materials
+
+    ref = str(record.get("ref") or "")
+    paths = []
+    if record.get("type") == "doc" and ref:
+        paths += [materials.materials_dir(folder) / f"{ref}.json", _text_dump_path(folder, ref)]
+    elif record.get("type") == "image" and record.get("path"):
+        paths.append(Path(record["path"]))
+    root = folder.resolve()
+    for path in paths:
+        try:
+            if not path.resolve().is_relative_to(root):
+                continue
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            log(f"агент: файл убранного вложения не удалён ({path.name}: {e})")
 
 
 # --- сборка по настройкам ---

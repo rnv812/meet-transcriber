@@ -280,6 +280,20 @@ class KnowledgeBase:
         self._parsed[key] = (st.st_size, st.st_mtime_ns, parsed)
         return parsed
 
+    def doc_list(self, limit: int = MAP_MAX_FILES) -> list[str]:
+        """Документы базы — пути относительно неё через «/» (без исключённых,
+        скрытых и ссылок наружу), не больше `limit`. Базы нет — []. Окну —
+        чтобы узнавать их в сообщениях агента (чипы-источники)."""
+        if not self.configured:
+            return []
+        out = []
+        for path in self._kb_files(self.root, limit):
+            try:
+                out.append(path.relative_to(self.root).as_posix())
+            except ValueError:
+                continue
+        return out
+
     def _kb_files(self, folder: Path, limit: int) -> list[Path]:
         """Документы папки базы рекурсивно, без исключённых, скрытых и ссылок наружу."""
         out = []

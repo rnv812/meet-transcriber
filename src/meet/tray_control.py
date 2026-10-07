@@ -143,6 +143,10 @@ _CHAT_ATTACHMENT_ID = re.compile(r"a\d{1,9}")
 # Событие шины: чат записи после встречи изменился ({"id": папка записи,
 # "partial"?: {"id", "text"}}) — окно перечитывает GET /recordings/{id}/chat.
 CHAT_UPDATED = jobs.CHAT_UPDATED
+# Вложение к чату после встречи разбирается не дольше (как `/chat/attach` ребёнка).
+CHAT_ATTACH_TIMEOUT_S = 90.0
+# Документов базы знаний для чипов-источников окна — не больше.
+KB_DOCS_MAX = 5000
 # Переписка с ассистентом для вкладки «Агент» (meet.assist.chatlog.ASSISTANT_CHAT_MD).
 ASSISTANT_CHAT_MD = "assistant_chat.md"
 
@@ -1186,6 +1190,8 @@ class TrayControl:
             # Папка для встреч в базе знаний: оболочка открывает выгруженные
             # папки только внутри неё (и папки записей).
             "meetings_dir": str(meetings) if meetings else None,
+            # База знаний: оболочка открывает документы из неё (open_material).
+            "knowledge_dir": str(cfg.assistant.knowledge_dir) if cfg.assistant.knowledge_dir else None,
             # Последний сбой автоматической выгрузки {"folder", "error", "at"}:
             # новое `at` — уведомление «Не удалось выгрузить встречу…».
             "kb_export_failed": dict(self._kb_failed) if self._kb_failed else None,
@@ -2253,8 +2259,14 @@ class TrayControl:
         from meet import groups
 
         body = body if isinstance(body, dict) else {}
+        extra = {}
+        if "kb_folder" in body:
+            # Папка базы знаний группы (путь внутри базы; null или "" — убрать):
+            # регистр — как на диске, если папка там есть.
+            knowledge = settings.load().assistant.knowledge_dir
+            extra = {"kb_folder": body.get("kb_folder"), "kb_root": knowledge}
         got = self._group_call(groups.update, self._root(), gid, name=body.get("name"),
-                               color=body.get("color"))
+                               color=body.get("color"), **extra)
         if "error" not in got:
             self._groups_changed("update", gid, got.get("moved_broken"))
         return got
@@ -3360,6 +3372,8 @@ class TrayControl:
         out["live"] = self._live_folder(folder)
         job = self.llm_queue.active_for(str(folder), (jobs.CHAT,))
         out["job"] = job.to_raw() if job is not None else None
+        # Агент-участник включён в настройках: писать после встречи можно (иначе 409).
+        out["enabled"] = bool(settings.load().assist.participant)
         return out
 
     def continue_chat(self, recording_id: str, body: dict | None) -> dict:
@@ -3373,16 +3387,9 @@ class TrayControl:
 
         provider = self._chosen(body)
         payload = _chat_message(body)
-        folder = self._folder(recording_id)
+        folder = self._after_meeting_folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        if not settings.load().assist.participant:
-            # Ревью chat-api, M7: агент-участник выключен в настройках — и после встречи.
-            raise _conflict("Чат с ассистентом выключен в настройках")
-        if self._live_folder(folder, strict=True):
-            raise _conflict("Идёт живой режим этой записи — пишите ассистенту в чат встречи")
-        if self._key(folder) in self._busy_now():
-            raise _conflict("Запись ещё идёт — продолжить разговор можно после её окончания")
         self._ready_for_model(folder, provider)
         log = chatlog.ChatLog(folder, log=self.tray.log)
         try:
@@ -3391,6 +3398,38 @@ class TrayControl:
                                after_meeting=True)
         except chatlog.FileLockTimeout:
             raise _unavailable("Журнал чата занят — повторите")
+        return self._chat_reply_job(folder, log, added, provider)
+
+    def recording_chat_click(self, recording_id: str, mid: str, body: dict | None) -> dict:
+        """Кнопка сообщения агента после встречи: `{"label", "client_id"?,
+        "provider"?}` → сообщение человека с надписью (`via: "button"`, `re`)
+        и задача ответа — как «Продолжить разговор». Кнопки нет — 400."""
+        from meet.assist import chatlog
+
+        mid = _chat_mid(mid)
+        body = body or {}
+        label = body.get("label")
+        if not isinstance(label, str) or not label.strip() or len(label) > 200:
+            raise _bad_request("label — надпись кнопки")
+        cid = _chat_client_id(body)
+        provider = self._chosen(body)
+        folder = self._after_meeting_folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        self._ready_for_model(folder, provider)
+        log = chatlog.ChatLog(folder, log=self.tray.log)
+        try:
+            added = log.click_button(mid, label, client_id=cid)
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except chatlog.FileLockTimeout:
+            raise _unavailable("Журнал чата занят — повторите")
+        return self._chat_reply_job(folder, log, added, provider)
+
+    def _chat_reply_job(self, folder: Path, log, added, provider: str | None) -> dict:
+        """Сообщение человека записано (`added`) — задача ответа агента.
+        Повтор того же `client_id` — то же сообщение и идущая задача; ответа
+        нет и задачи нет — спросить агента снова (ревью chat-api I1)."""
         message = added.message
         if not added.created:
             job = self.llm_queue.active_for(str(folder), (jobs.CHAT,))
@@ -3405,6 +3444,167 @@ class TrayControl:
         job = self.llm_queue.submit(jobs.CHAT, str(folder),
                                     _with_provider({"message": message["id"]}, provider))
         return {"message": message, "job": job.to_raw()}
+
+    def _after_meeting_folder(self, recording_id: str) -> Path | None:
+        """Папка записи, в журнал чата которой резидент пишет после встречи.
+        Нет записи — None. 409: агент-участник выключен в настройках, идёт
+        живой режим этой записи (пишет ребёнок) или запись ещё пишется; 503 —
+        не узнать, идёт ли живой режим."""
+        folder = self._folder(recording_id)
+        if folder is None:
+            return None
+        if not settings.load().assist.participant:
+            # Ревью chat-api, M7: агент-участник выключен в настройках — и после встречи.
+            raise _conflict("Чат с ассистентом выключен в настройках")
+        if self._live_folder(folder, strict=True):
+            raise _conflict("Идёт живой режим этой записи — пишите ассистенту в чат встречи")
+        if self._key(folder) in self._busy_now():
+            raise _conflict("Запись ещё идёт — продолжить разговор можно после её окончания")
+        return folder
+
+    # --- вложения и реакции после встречи ------------------------------------
+
+    def recording_chat_attach(self, recording_id: str, body: dict | None) -> dict:
+        """Файл или папка с диска к чату записи после встречи (`{"path",
+        "provider"?}`) — те же проверки пути, что у `/live/chat/attach`
+        (полный локальный путь, существует, не сетевой) и тот же разбор, пределы
+        и квоты, что во время встречи (`participant.parse_attachment`). →
+        `{"id", "status", "attachment", "error"?}`; сообщение потом ссылается
+        на id."""
+        path = _chat_path((body or {}).get("path"))
+        return self._attach_after(recording_id, path, body)
+
+    def recording_chat_paste(self, recording_id: str, data: bytes, content_type: str | None,
+                             name: str | None = None) -> dict:
+        """Вставленная картинка (сырое тело до 10 МБ) к чату записи после встречи."""
+        kind = (content_type or "").split(";")[0].strip().lower()
+        if kind not in CHAT_PASTE_TYPES:
+            raise _bad_request("нужна картинка: PNG, JPEG, WEBP, GIF, BMP или TIFF")
+        if name is not None:
+            from urllib.parse import unquote
+
+            name = os.path.basename(unquote(name).replace("\\", "/"))[:200] or None
+        if not data:
+            raise _bad_request("пустая картинка")
+        return self._attach_after(recording_id, {"data": data, "name": name}, None)
+
+    def _attach_after(self, recording_id: str, item, body: dict | None) -> dict:
+        from meet.assist import chatlog, participant
+
+        provider = self._chosen(body)
+        folder = self._after_meeting_folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        vision = self._chat_vision(provider)
+        result: dict = {}
+
+        def work():
+            try:
+                result["fields"] = participant.parse_attachment(folder, item, vision=vision)[0]
+                result["parsed"] = True
+            except (ValueError, OSError, TypeError) as e:
+                result["fields"] = participant.failed_attachment(item, e)
+
+        worker = threading.Thread(target=work, name="chat-attach", daemon=True)
+        worker.start()
+        worker.join(CHAT_ATTACH_TIMEOUT_S)
+        if worker.is_alive():
+            def tidy():
+                # Разбор доработает сам; его результат без записи журнала — убрать.
+                worker.join()
+                if result.get("parsed"):
+                    participant.drop_parsed(folder, result["fields"], log=self.tray.log)
+
+            threading.Thread(target=tidy, name="chat-attach-tidy", daemon=True).start()
+            raise _unavailable("Файл разбирается слишком долго — приложите его частями или поменьше")
+        fields = result["fields"]
+        try:
+            added = chatlog.ChatLog(folder, log=self.tray.log).append("attachment", **fields)
+        except (chatlog.FileLockTimeout, OSError, RuntimeError) as e:
+            if result.get("parsed"):
+                participant.drop_parsed(folder, fields, log=self.tray.log)
+            if isinstance(e, chatlog.FileLockTimeout):
+                raise _unavailable("Журнал чата занят — повторите")
+            raise
+        self.bus.emit(CHAT_UPDATED, id=folder.name)
+        message = added.message
+        out = {"id": message["id"], "status": message.get("status"), "attachment": message}
+        if message.get("status") == "failed":
+            out["error"] = message.get("error") or "не разобрано"
+        return out
+
+    @staticmethod
+    def _chat_vision(provider: str | None) -> bool:
+        """Видит ли картинки модель, которая ответит после встречи (выбранная
+        или по умолчанию). «Авто» — не знаем, кого оно выберет (выбор не
+        запускаем ради пометки): да, пометки нет; ответ агенту всё равно
+        уходит с пометкой, если модель картинок не видит."""
+        from meet import llm
+
+        if provider is None:
+            provider = settings.load().llm.provider
+        return True if provider in (None, "auto") else llm.vision(provider)
+
+    def recording_chat_remove(self, recording_id: str, aid: str) -> dict:
+        """Вложение убрали из строки ввода до отправки (после встречи):
+        `status: "removed"`, файлы — с диска. Уже отправленное — 400."""
+        from meet.assist import chatlog, participant
+
+        if not isinstance(aid, str) or not re.fullmatch(r"a\d{1,9}", aid):
+            raise _bad_request("неизвестное вложение")
+        folder = self._after_meeting_folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        try:
+            got = participant.remove_attachment(chatlog.ChatLog(folder, log=self.tray.log), folder, aid,
+                                                log=self.tray.log)
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except chatlog.FileLockTimeout:
+            raise _unavailable("Журнал чата занят — повторите")
+        if got is not None and got[0] is not None:
+            self.bus.emit(CHAT_UPDATED, id=folder.name)
+        return {"ok": True, "removed": got is not None}
+
+    def recording_chat_react(self, recording_id: str, mid: str, body: dict | None) -> dict:
+        """Реакция на сообщение агента после встречи: `{"emoji": "👍|👎|❓",
+        "on"?: bool|null}` → `{"ok", "changed"}`. Агент увидит её в журнале
+        при следующем ответе."""
+        from meet.assist import chatlog
+
+        mid = _chat_mid(mid)
+        body = body or {}
+        emoji, on = body.get("emoji"), body.get("on")
+        if emoji not in ("👍", "👎", "❓"):
+            raise _bad_request("реакция — 👍, 👎 или ❓")
+        if on is not None and not isinstance(on, bool):
+            raise _bad_request("on — true, false или null")
+        folder = self._after_meeting_folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        try:
+            changed = chatlog.ChatLog(folder, log=self.tray.log).react(mid, emoji, on)
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except chatlog.FileLockTimeout:
+            raise _unavailable("Журнал чата занят — повторите")
+        if changed:
+            self.bus.emit(CHAT_UPDATED, id=folder.name)
+        return {"ok": True, "changed": bool(changed)}
+
+    def kb_docs(self) -> dict:
+        """Документы базы знаний (пути относительно неё, через «/»), без
+        исключённых `assist.kb_exclude`, — окну, чтобы узнавать их в
+        сообщениях агента (чипы-источники). `{"root", "docs", "more"}`;
+        базы нет — root null."""
+        from meet.assist import kb_prep
+
+        cfg = settings.load()
+        kb = kb_prep.for_settings(cfg, self._root())
+        if not kb.configured:
+            return {"root": None, "docs": [], "more": False}
+        docs = kb.doc_list(KB_DOCS_MAX + 1)
+        return {"root": str(kb.root), "docs": docs[:KB_DOCS_MAX], "more": len(docs) > KB_DOCS_MAX}
 
     @staticmethod
     def _chat_answered(log, mid: str) -> bool:

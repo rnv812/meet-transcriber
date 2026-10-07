@@ -522,6 +522,12 @@ def summary(items: list[dict], cards) -> dict:
             none += 1
     known = {g["id"] for g in items}
     unknown = sorted(((gid, n) for gid, n in counts.items() if gid not in known), key=lambda x: (-x[1], x[0]))
-    return {"groups": [{"id": g["id"], "name": g["name"], "color": g["color"], "count": counts.get(g["id"], 0)}
-                       for g in items],
+    def row(g: dict) -> dict:
+        out = {"id": g["id"], "name": g["name"], "color": g["color"], "count": counts.get(g["id"], 0)}
+        folder = kb_folder(g)
+        if folder:
+            out["kb_folder"] = folder   # папка базы знаний группы (окно показывает её в шапке)
+        return out
+
+    return {"groups": [row(g) for g in items],
             "unknown": [{"id": gid, "count": n} for gid, n in unknown], "none": none}

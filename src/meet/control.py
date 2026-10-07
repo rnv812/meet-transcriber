@@ -108,6 +108,9 @@ IMPORTANT: токен принимается и в query-параметре `?to
     agent_frequency(body)                 «Как часто писать»: в настройки и агенту
     recording_chat(id) -> dict            чат записи после встречи (+ legacy)
     continue_chat(id, body) -> dict       «Продолжить разговор»: сообщение и задача chat
+    recording_chat_attach / _paste / _remove / _click / _react
+                                          вложения, кнопки и реакции чата после встречи
+    kb_docs() -> dict                     документы базы знаний (чипы-источники окна)
 """
 
 import json
@@ -876,6 +879,8 @@ _ROUTES = {
     ("POST", "/live/chat/attach"): lambda h, p: _server_of(h).state.live_chat_attach(h._body()),
     ("POST", "/live/chat/stop"): lambda h, p: _server_of(h).state.live_chat_stop(h._body()),
     ("PUT", "/agent/frequency"): lambda h, p: _server_of(h).state.agent_frequency(h._body()),
+    # Документы базы знаний (без исключённых) — окно узнаёт их в сообщениях агента.
+    ("GET", "/assistant/kb-docs"): lambda h, p: _server_of(h).state.kb_docs(),
     ("GET", "/export/preview"): lambda h, p: _server_of(h).state.export_preview(
         {k: v[0] for k, v in p.items() if k != "token" and v}
     ),
@@ -951,6 +956,19 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.recording_chat(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/chat$"),
      lambda h, p, rid: _server_of(h).state.continue_chat(unquote(rid), h._body())),
+    # Вложения к чату после встречи: файл или папка с диска, вставленная
+    # картинка (сырое тело до 10 МБ), «×» до отправки; кнопки и реакции.
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat/attach$"),
+     lambda h, p, rid: _server_of(h).state.recording_chat_attach(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat/paste$"),
+     lambda h, p, rid: _server_of(h).state.recording_chat_paste(
+         unquote(rid), h._raw_body(), h.headers.get("Content-Type"), h.headers.get("X-File-Name"))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat/attachments/([^/]+)/remove$"),
+     lambda h, p, rid, aid: _server_of(h).state.recording_chat_remove(unquote(rid), unquote(aid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat/([^/]+)/click$"),
+     lambda h, p, rid, mid: _server_of(h).state.recording_chat_click(unquote(rid), unquote(mid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat/([^/]+)/react$"),
+     lambda h, p, rid, mid: _server_of(h).state.recording_chat_react(unquote(rid), unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/click$"),
      lambda h, p, mid: _server_of(h).state.live_chat_click(unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/react$"),
