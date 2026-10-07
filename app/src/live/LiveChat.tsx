@@ -110,6 +110,7 @@ function AgentMessage({ m, chat, onTime, compact, disabled }: {
         <span className="chat-msg__who">Ассистент</span>
         {time && !compact && <span className="chat-msg__time num">{time}</span>}
         {m.pin && <span className="chat-msg__tag">вопрос вам</span>}
+        {writing && partial?.trim() && <span className="chat-msg__writing">пишет…</span>}
       </div>
       {writing ? (
         partial?.trim()

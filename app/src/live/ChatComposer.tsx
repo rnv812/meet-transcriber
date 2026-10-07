@@ -213,7 +213,8 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
       <div className="chat-compose__row">
         <textarea ref={field} className="chat-compose__field" rows={1} value={text} disabled={disabled}
           aria-label="Сообщение ассистенту"
-          placeholder={disabled ? "Писать ассистенту сейчас нельзя" : "Написать ассистенту… (Enter — отправить, Shift+Enter — строка)"}
+          placeholder={disabled ? "Писать ассистенту сейчас нельзя" : "Написать ассистенту…"}
+          title="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот"
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} />
         {inTauri() && (
           <IconButton icon={Paperclip} label="Приложить файл" disabled={disabled}

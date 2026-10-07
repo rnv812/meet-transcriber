@@ -104,6 +104,7 @@
 .chat-msg__text .md-p, .chat-msg__text p { margin: 0 0 4px; }
 .chat-msg__text ul, .chat-msg__text ol { margin: 2px 0 4px; padding-left: 18px; }
 .chat-msg__note { color: var(--text-3); font-size: 11px; }
+.chat-msg__writing { color: var(--text-3); font-size: 10.5px; font-style: italic; }
 .chat-msg__error { color: var(--err); font-size: 11.5px; }
 .chat-msg__via { color: var(--text-3); font-size: 10.5px; }
 
@@ -211,3 +212,10 @@
 
 /* Свёрнутая панель: подпись «Ассистент» у последнего сообщения агента. */
 .live-last__kind--agent { --kind: var(--accent-hover); }
+
+/* Поповер «Что я знаю»: окно панели не грузит card.css, где общий `.popover`. */
+.session-bar > .popover {
+  position: fixed; z-index: 50; max-height: calc(100vh - 16px); overflow-y: auto; max-width: calc(100vw - 16px);
+  padding: 0; background: var(--surface-2);
+  border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 8px 24px #0008;
+}
