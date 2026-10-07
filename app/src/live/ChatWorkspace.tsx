@@ -35,6 +35,7 @@ import { LiveChat } from "./LiveChat";
 import { LiveFeed } from "./LiveFeed";
 import { CONNECTING, CatchupNote, type LivePlace, type LiveView } from "./LiveWorkspace";
 import { SessionBar } from "./SessionBar";
+import { NEUTRAL_LIVE_QUESTIONS, profileOf } from "./profiles";
 import type { Chat } from "./useChat";
 import type { Live } from "./useLive";
 import { useWide } from "./useWide";
@@ -143,7 +144,8 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
       {live.catchup?.active && <CatchupNote catchup={live.catchup} />}
       {agent && (
         <SessionBar agent={agent} summary={live.summary} writing={!!chat.writing} compact={barCompact} quiet={view.quiet}
-          onFrequency={(f) => void chat.setFrequency(f)} disabled={!!block} />
+          onFrequency={(f) => void chat.setFrequency(f)} onProfile={(p) => void chat.setProfile(p)}
+          disabled={!!block} />
       )}
       {/* Одна раскладка при любой ширине: чат и строка ввода всегда на месте и не пересоздаются. */}
       <div className={`chat-ws__body${hidden ? " is-hidden" : ""}`}>
@@ -167,7 +169,8 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
         </div>
         <div ref={column} className="chat-ws__main">
           <LiveChat chat={chat} onTime={view.jump} quiet={view.quiet} compact={compact} disabled={!!block} />
-          <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false} />
+          <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
+            quick={profileOf(agent?.profile) === "neutral" ? NEUTRAL_LIVE_QUESTIONS : undefined} />
         </div>
       </div>
     </div>

@@ -33,6 +33,18 @@ FAIL; FAIL — механика (ошибки провайдера, переза
     python scripts/smoke_participant.py --run                # Claude Code
     python scripts/smoke_participant.py --run --provider codex
     python scripts/smoke_participant.py --run --cleanup      # и удалить сеансы и папку
+    python scripts/smoke_participant.py --profile neutral    # план профиля «Нейтральный»
+    python scripts/smoke_participant.py --run --profile neutral
+
+Профиль «Нейтральный» (`--profile neutral`, 0.3.7) — свой сценарий: тот же
+временный каталог с базой знаний (чтобы проверить, что её нет), но вместо
+встречи — заготовленный стрим (~2,5 мин: ведущий и гость про домашний сервер
+из старых ноутбуков, болтовня с чатом). Пользователь спрашивает «сколько он
+потратил на всё это?» после 3-го отрезка и «кратко, о чём это было?» в конце.
+Проверки суждения — WARN: агент сам понял, что это стрим; ответил на вопрос;
+дал краткое содержание; ни слова о работе; ни документов, ни самой базы
+знаний. FAIL — механика: база знаний или библиотека в папках модели, карта в
+промпте, ошибки провайдера. Около 8 ходов модели.
 
 Без `--cleanup` временная папка (журнал `assistant/chat.jsonl`) и сеансы в
 истории CLI остаются — путь и id печатаются в конце. Код выхода 1, если есть
@@ -230,6 +242,82 @@ CHECKS = [
     ("budget", f"вызовов модели ≤ {MAX_CALLS}, время"),
 ]
 
+# --- профиль «Нейтральный»: выдуманный стрим ---------------------------------------
+
+NEUTRAL_MAX_CALLS = 12
+# Отрезки по 25 с: ведущий и гость (имён диаризация не знает), болтовня с чатом.
+STREAM_CHUNKS = [
+    [(2, "Спикер 1", "Всем привет, чат! Мы в эфире, сегодня большой выпуск про домашние серверы."),
+     (9, "Спикер 1", "У меня в гостях Арсений, он собрал себе стойку из старых ноутбуков."),
+     (15, "Спикер 2", "Привет всем, рад быть на стриме."),
+     (20, "Спикер 1", "Пишите вопросы в чат, в конце ответим.")],
+    [(26, "Спикер 2", "Началось всё с того, что у меня скопилось пять старых ноутбуков."),
+     (33, "Спикер 2", "Я поставил на них Proxmox и объединил в кластер."),
+     (40, "Спикер 1", "А по шуму как? Ноутбуки же гудят."),
+     (45, "Спикер 2", "Почти не слышно, вентиляторы я поменял на тихие.")],
+    [(51, "Спикер 1", "Сколько всё это стоило?"),
+     (55, "Спикер 2", "Ноутбуки достались бесплатно, на вентиляторы и коммутатор ушло около восьми тысяч рублей."),
+     (64, "Спикер 2", "Плюс электричество — примерно триста рублей в месяц."),
+     (70, "Спикер 1", "Чат пишет, что это дешевле любого облака.")],
+    [(76, "Спикер 1", "О, донат от Матвея, спасибо!"),
+     (81, "Спикер 1", "Чат, кто откуда смотрит?"),
+     (88, "Спикер 2", "Вижу Казань, Минск, Новосибирск."),
+     (95, "Спикер 1", "Отлично, всем привет.")],
+    [(101, "Спикер 2", "Главная проблема была с батареями: старые вздулись, пришлось вынуть."),
+     (108, "Спикер 2", "Без батарей ноутбук при отключении света просто выключается, поэтому я купил ИБП."),
+     (116, "Спикер 1", "А что крутится на кластере?"),
+     (121, "Спикер 2", "Домашняя медиатека, резервные копии фотографий и умный дом.")],
+    [(126, "Спикер 1", "Последний вопрос из чата: стоит ли повторять?"),
+     (132, "Спикер 2", "Если есть старое железо — да, но начните с одного ноутбука."),
+     (140, "Спикер 1", "Спасибо, Арсений! Всем пока, до следующего стрима."),
+     (146, "Спикер 2", "Пока!")],
+]
+NEUTRAL_QUESTION = "сколько он потратил на всё это?"
+NEUTRAL_SUMMARY = "кратко, о чём это было?"
+
+# Агент понял, что это: слова о виде контента.
+CONTENT_TYPE = (r"стрим", r"эфир", r"трансляц", r"видео", r"подкаст", r"интервью", r"выпуск")
+# Ответ на вопрос о деньгах — сумма из записи.
+COST = (r"8\s*000", r"8\s*тыс", r"восьм\w* тысяч", r"300", r"трист")
+# Краткое содержание — хотя бы два пункта стрима.
+STREAM_POINTS = (r"ноутбук", r"Proxmox|кластер", r"вентилятор|шум", r"батаре|ИБП",
+                 r"медиатек|фото|умн\w* дом", r"8\s*000|восьм\w* тысяч|8\s*тыс")
+# Рабочая рамка — в «Нейтральном» её быть не должно («работает» — можно).
+WORK_MARKERS = (r"\bработ[аеуы]?\b", r"\bрабоч", r"\bвстреч", r"\bколлег", r"\bзадач",
+                r"\bсрок", r"дедлайн", r"\bвладел", r"совещан", r"план\w*\s+действ",
+                r"следующ\w*\s+шаг", r"поручен")
+# Документы и сама база знаний (временная база смоука лежит рядом и закрыта профилем).
+KB_NAMES = (r"План запуска", r"Ретро релиза", r"Альф", r"Команда «", r"баз\w*\s+знаний",
+            r"прошл\w*\s+встреч", r"Личное", r"\.md\b")
+
+
+def build_neutral_plan() -> list[Step]:
+    plan = []
+
+    def chunk(i):
+        lines = STREAM_CHUNKS[i]
+        plan.append(Step("chunk", i, f"отрезок {i + 1} [{_mmss(lines[0][0])}–{_mmss(lines[-1][0])}]"))
+
+    for i in (0, 1, 2):
+        chunk(i)
+    plan.append(Step("user", NEUTRAL_QUESTION, f"пользователь пишет «{NEUTRAL_QUESTION}»"))
+    for i in (3, 4, 5):
+        chunk(i)
+    plan.append(Step("user", NEUTRAL_SUMMARY, f"пользователь пишет «{NEUTRAL_SUMMARY}»"))
+    return plan
+
+
+NEUTRAL_CHECKS = [
+    ("content_type", "сам понял, что это (стрим, видео, созвон…), до вопросов пользователя"),
+    ("answered", "ответил на вопрос пользователя (сумма из записи)"),
+    ("summary", "краткое содержание по просьбе"),
+    ("no_work", "ни слова о работе (встреча, задачи, сроки, коллеги, план действий…)"),
+    ("no_kb", "ни документов из базы знаний, ни самой базы, ни прошлых встреч"),
+    ("kb_closed", "база знаний и библиотека не в папках модели, карты в промпте нет"),
+    ("errors", "ходы без ошибок провайдера"),
+    ("budget", f"вызовов модели ≤ {NEUTRAL_MAX_CALLS}, время"),
+]
+
 
 def build_kb(root: Path) -> Path:
     """База знаний во временной папке: три заметки и закрытая «Личное/»."""
@@ -306,9 +394,16 @@ class Scenario:
     диалога Claude Code) и `runner` (Codex) — для тестов; по умолчанию —
     настоящие."""
 
+    PROFILE = "work"
+    CHUNKS = CHUNKS
+    CHECKS = CHECKS
+    MAX_CALLS = MAX_CALLS
+    FEED_LABEL = "встреча"
+
     def __init__(self, provider: str, work: Path, *, model: str | None = None,
                  proxy: str | None = "system", conversation=None, runner=None, out=print,
-                 max_calls: int = MAX_CALLS) -> None:
+                 max_calls: int | None = None) -> None:
+        max_calls = self.MAX_CALLS if max_calls is None else max_calls
         self.provider = PROVIDERS.get(provider, provider)
         self.work = Path(work)
         self.model = model
@@ -337,6 +432,10 @@ class Scenario:
         self.marks: dict[str, object] = {}
         self.skipped: list[str] = []
         self.wall = 0.0
+        self.session_kwargs: list[dict] = []   # с чем поднят сеанс модели (папки, промпт)
+
+    def plan(self) -> list["Step"]:
+        return build_plan()
 
     # --- провайдер
 
@@ -345,6 +444,7 @@ class Scenario:
             self.sessions.append(sid)
 
     def _make_conversation(self, **kwargs):
+        self.session_kwargs.append(dict(kwargs))
         if self._conversation is not None:
             conv = self._conversation(**kwargs)
         else:
@@ -369,6 +469,9 @@ class Scenario:
 
         async def counted(prompt, **kwargs):
             self.calls += 1
+            self.session_kwargs.append({"add_dirs": list(kwargs.get("allowed_dirs") or ()),
+                                        "deny_paths": list(kwargs.get("deny_paths") or ()),
+                                        "system_prompt": kwargs.get("system_prompt") or ""})
             reply = await runner(prompt, **kwargs)
             self.keep(getattr(reply, "session_id", None))
             return reply
@@ -387,7 +490,8 @@ class Scenario:
             runner=self._make_runner(), conversation=self._make_conversation, kb=kb,
             library_root=self.library, owner_name=OWNER, owner_speaker=OWNER, owner_names=(OWNER,),
             frequency="чаще", model=self.model if self.provider == "claude-code" else None,
-            proxy=self.proxy, clock=self.clock, log=lambda m: self.out(f"    · {m}"))
+            proxy=self.proxy, clock=self.clock, log=lambda m: self.out(f"    · {m}"),
+            profile=self.PROFILE)
 
     # --- вывод чата
 
@@ -499,10 +603,10 @@ class Scenario:
 
     def _feed(self, p, i: int) -> None:
         self.clock.t += 1
-        for t, speaker, text in CHUNKS[i]:
+        for t, speaker, text in self.CHUNKS[i]:
             entry = {"t": float(t), "end": float(t) + 3, "speaker": speaker, "text": text}
             self.bus.publish(f"[{_mmss(t)}] {speaker}: {text}", entry)
-            self.out(f"  встреча │ [{_mmss(t)}] {speaker}: {text}")
+            self.out(f"  {self.FEED_LABEL} │ [{_mmss(t)}] {speaker}: {text}")
         p._scan()                    # реплики пришли «сейчас» по поддельным часам
         self.clock.t += CHUNK_S      # прошло 25 с: ход по сроку подачи
 
@@ -580,10 +684,11 @@ class Scenario:
         self.p = self._participant()
         await self.p.start()
         view = self.p.view()
-        self.out(f"агент: {view['label']}, частота «{view['frequency']}», видит базу: {view['sees']['kb']}, "
+        self.out(f"агент: {view['label']}, профиль «{view.get('profile', 'work')}», "
+                 f"частота «{view['frequency']}», видит базу: {view['sees']['kb']}, "
                  f"запрет на уровне CLI: {view['deny_enforced']}")
         try:
-            for step in build_plan():
+            for step in self.plan():
                 await self._step(step)
         finally:
             live = self.restarted if self.restarted is not None else self.p
@@ -705,6 +810,93 @@ class Scenario:
         return rows
 
 
+class NeutralScenario(Scenario):
+    """Профиль «Нейтральный» (0.3.7): стрим вместо встречи, база знаний лежит
+    рядом, но закрыта профилем. Проверки суждения — WARN, механика — FAIL."""
+
+    PROFILE = "neutral"
+    CHUNKS = STREAM_CHUNKS
+    CHECKS = NEUTRAL_CHECKS
+    MAX_CALLS = NEUTRAL_MAX_CALLS
+    FEED_LABEL = "стрим"
+
+    def plan(self) -> list[Step]:
+        return build_neutral_plan()
+
+    def evaluate(self) -> list[tuple[str, str, str]]:
+        msgs = self.chat.messages()
+        shown = [m for m in msgs if m.get("kind") == "agent" and m.get("status") == "shown"]
+        user_ids = self.marks.get("user_ids") or {}
+        rows = []
+
+        def row(key, status, detail):
+            rows.append((dict(NEUTRAL_CHECKS)[key], status, detail))
+
+        def short(text, n=70):
+            return " ".join(str(text or "").split())[:n]
+
+        qid, sid = user_ids.get(NEUTRAL_QUESTION), user_ids.get(NEUTRAL_SUMMARY)
+        first_user = min((int(i[1:]) for i in user_ids.values() if i), default=None)
+        before = [m for m in shown if first_user is None or int(m["id"][1:]) < first_user]
+        typed = next((m for m in before if _has(CONTENT_TYPE, m["text"])), None)
+        typed_any = next((m for m in shown if _has(CONTENT_TYPE, m["text"])), None)
+        if typed:
+            row("content_type", PASS, f"{typed['id']}: «{short(typed['text'])}»")
+        elif typed_any:
+            row("content_type", WARN, f"только после вопроса: {typed_any['id']}")
+        else:
+            row("content_type", WARN, "вид контента так и не назван")
+
+        answer = next((m for m in shown if qid and m.get("re") == qid), None)
+        if answer:
+            row("answered", PASS if _has(COST, answer["text"]) else WARN,
+                f"{answer['id']}: " + ("сумма из записи есть" if _has(COST, answer["text"])
+                                       else f"без суммы — «{short(answer['text'])}»"))
+        else:
+            row("answered", WARN, "ответа на вопрос нет" if qid else "вопрос не задан")
+
+        summary = next((m for m in shown if sid and m.get("re") == sid), None)
+        points = [p for p in STREAM_POINTS if summary and re.search(p, summary["text"], flags=re.I)]
+        if summary:
+            row("summary", PASS if len(points) >= 2 else WARN,
+                f"{summary['id']}: пунктов стрима {len(points)} из {len(STREAM_POINTS)}")
+        else:
+            row("summary", WARN, "краткого содержания нет" if sid else "просьбы не было")
+
+        work = [(m["id"], _has(WORK_MARKERS, m["text"])) for m in shown if _has(WORK_MARKERS, m["text"])]
+        row("no_work", WARN if work else PASS,
+            ", ".join(f"{i}: {w}" for i, w in work) or f"чисто ({len(shown)} сообщений)")
+
+        kb = [(m["id"], _has(KB_NAMES, m["text"])) for m in shown if _has(KB_NAMES, m["text"])]
+        reads = [a for _s, _n, a in self.tools if self.kb_root.name in a or "Встречи" in a]
+        if kb or reads:
+            row("no_kb", WARN, "; ".join([f"{i}: {w}" for i, w in kb] + [f"чтение {a[:60]}" for a in reads]))
+        else:
+            row("no_kb", PASS, "чисто")
+
+        leaks = []
+        for kw in self.session_kwargs:
+            dirs = [str(d) for d in kw.get("add_dirs") or ()]
+            if any(d == str(self.kb_root) or d == str(self.library) for d in dirs):
+                leaks.append("база знаний или библиотека в папках модели")
+            if "План запуска" in str(kw.get("system_prompt") or ""):
+                leaks.append("карта базы знаний в промпте")
+        if not self.session_kwargs:
+            row("kb_closed", WARN, "сеанс модели так и не поднят")
+        else:
+            row("kb_closed", FAIL if leaks else PASS,
+                "; ".join(sorted(set(leaks))) or f"папки модели: только запись ({len(self.session_kwargs)} сеанс.)")
+
+        errors = [m for m in msgs if m.get("kind") == "agent" and m.get("error")
+                  and m.get("status") in ("failed", "dropped")]
+        row("errors", FAIL if errors else PASS,
+            "; ".join(f"{m['id']}: {str(m['error'])[:80]}" for m in errors) or "ошибок нет")
+        row("budget", PASS if self.calls <= self.max_calls else WARN,
+            f"вызовов {self.calls}, время {self.wall:.0f} с" + (
+                f"; пропущено: {', '.join(self.skipped)}" if self.skipped else ""))
+        return rows
+
+
 # --- запуск -------------------------------------------------------------------------
 
 def _versions() -> dict:
@@ -746,11 +938,30 @@ def print_plan(provider: str, model: str | None) -> None:
           "--cleanup удалит их и временную папку.")
 
 
+def print_neutral_plan(provider: str, model: str | None) -> None:
+    lines = [line for chunk in STREAM_CHUNKS for line in chunk]
+    print(f"\nПлан профиля «Нейтральный» (вызовов модели не было; запустите с --run). "
+          f"Провайдер: {provider}" + (f", модель {model}" if provider == "claude" and model else ""))
+    print("\nПодготовка (временная папка):")
+    print(f"  база знаний: {len(KB_NOTES)} заметки — лежит рядом, профиль её закрывает")
+    print(f"  стрим: {len(lines)} реплик, {len(STREAM_CHUNKS)} отрезков по {CHUNK_S:.0f} с, "
+          f"до [{_mmss(lines[-1][0])}]; ведущий и гость — «Спикер 1» и «Спикер 2»")
+    print("\nСценарий (сжатые часы: отрезок — сразу после ответа на предыдущий):")
+    for i, step in enumerate(build_neutral_plan(), 1):
+        print(f"  {i:2d}. {step.title}")
+    print("\nПроверки (суждение модели — WARN, механика — FAIL):")
+    for _key, title in NEUTRAL_CHECKS:
+        print(f"  - {title}")
+    print(f"\nБюджет: около 8 ходов модели, не больше {NEUTRAL_MAX_CALLS}. Сеансы остаются в истории "
+          "CLI; --cleanup удалит их и временную папку.")
+
+
 async def main_async(args, versions=None) -> int:
     versions = versions if versions is not None else _versions()
     print("CLI:", ", ".join(f"{k} = {v or 'не найден'}" for k, v in versions.items()))
+    neutral = getattr(args, "profile", "work") == "neutral"
     if not args.run:
-        print_plan(args.provider, args.model)
+        (print_neutral_plan if neutral else print_plan)(args.provider, args.model)
         return 0
     if not versions.get(args.provider):
         print(f"{args.provider}: CLI не найден — прогон невозможен")
@@ -758,7 +969,8 @@ async def main_async(args, versions=None) -> int:
     work = Path(tempfile.mkdtemp(prefix="meet-smoke-participant-"))
     os.environ["MEET_DATA_DIR"] = str(work / "data")   # не трогать данные установленного Meet
     print(f"Временная папка: {work}")
-    smoke = Scenario(args.provider, work, model=args.model, proxy=args.proxy)
+    smoke = (NeutralScenario if neutral else Scenario)(args.provider, work, model=args.model,
+                                                       proxy=args.proxy)
     rows = await smoke.run()
     code = report(rows)
     provider = PROVIDERS[args.provider]
@@ -796,6 +1008,9 @@ def parse_args(argv=None):
                         help="как llm.proxy: system (по умолчанию), none или http://хост:порт")
     parser.add_argument("--cleanup", action="store_true",
                         help="после прогона удалить сеансы (llm.forget_session) и временную папку")
+    parser.add_argument("--profile", choices=("work", "neutral"), default="work",
+                        help="профиль сессии: work — встреча (по умолчанию), neutral — стрим, "
+                        "без базы знаний и рабочей рамки")
     return parser.parse_args(argv)
 
 

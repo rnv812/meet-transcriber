@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
+  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
   ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, KbDocs, RecordingChat,
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
@@ -19,7 +19,7 @@ import type {
 } from "./types";
 
 export type {
-  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, ChatAttachment, ChatAttachResult, ChatEvent, ChatKind,
+  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, ChatAttachment, ChatAttachResult, ChatEvent, ChatKind,
   ChatMessage, ChatPartial, ChatPost, ChatPostResult, ChatReaction, ChatSnapshot, ChatStatus, ChatUpdatedEvent,
   ContinueChatResult, KbDocs, LegacyAssistant, RecordingChat,
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
@@ -603,8 +603,16 @@ export function getExportPreview(ep: Endpoint, values: Record<string, string | b
 
 // --- живой режим ---------------------------------------------------------------
 
-/** Ответ сразу (`starting`); дальше — события `live.started` / `live.failed`. 409/400 — ApiError. */
-export const liveStart = (ep: Endpoint) => json<{ ok: boolean } & LiveStatus>(ep, "/live/start", { method: "POST" });
+/** Тело старта ассистента: профиль — только если выбран (иначе резидент берёт по умолчанию). */
+const profileInit = (profile?: AgentProfile): RequestInit =>
+  (profile ? body("POST", { profile }) : { method: "POST" });
+
+/**
+ * Ответ сразу (`starting`); дальше — события `live.started` / `live.failed`. 409/400 — ApiError.
+ * `profile` — профиль сессии ассистента; без него — `assist.profile` из настроек.
+ */
+export const liveStart = (ep: Endpoint, profile?: AgentProfile) =>
+  json<{ ok: boolean } & LiveStatus>(ep, "/live/start", profileInit(profile));
 /** Ответ сразу; конец — событием `live.stopped`. */
 export const liveStop = (ep: Endpoint) =>
   json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/stop", { method: "POST" });
@@ -612,7 +620,8 @@ export const liveStop = (ep: Endpoint) =>
  * «Включить ассистента» посреди обычной записи: запись не прерывается,
  * ассистент догоняет уже записанное и слушает дальше. Ответ сразу (`starting`).
  */
-export const liveAttach = (ep: Endpoint) => json<{ ok: boolean } & LiveStatus>(ep, "/live/attach", { method: "POST" });
+export const liveAttach = (ep: Endpoint, profile?: AgentProfile) =>
+  json<{ ok: boolean } & LiveStatus>(ep, "/live/attach", profileInit(profile));
 /** «Выключить ассистента»: запись идёт дальше, его сводка остаётся с пометкой «неполная». */
 export const liveDetach = (ep: Endpoint) =>
   json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/detach", { method: "POST" });
@@ -679,6 +688,9 @@ export const stopChat = (ep: Endpoint, id?: string) =>
 /** «Как часто писать»: сохраняется в настройках и сразу доходит до агента идущей встречи. */
 export const setAgentFrequency = (ep: Endpoint, frequency: AgentFrequency | AgentFrequencyLabel) =>
   json<AgentFrequencyResult>(ep, "/agent/frequency", body("PUT", { frequency }));
+/** Профиль идущей сессии ассистента (только эта сессия; профиль по умолчанию — в настройках). 409 — ассистента нет. */
+export const setAgentProfile = (ep: Endpoint, profile: AgentProfile) =>
+  json<AgentProfileResult>(ep, "/live/profile", body("PUT", { profile }));
 /** Чат записи после встречи; у встреч до 0.3.6 — `legacy` (прежние подсказки и вопросы). */
 export const getRecordingChat = (ep: Endpoint, id: string) =>
   json<RecordingChat>(ep, `/recordings/${enc(id)}/chat`);

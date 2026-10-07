@@ -419,6 +419,18 @@ def _chat_mid(mid) -> str:
     return mid
 
 
+def _session_profile(body: dict | None) -> str | None:
+    """`profile` из тела `/live/start`, `/live/attach`, `/live/profile`: ключ
+    (`work` / `neutral`) или подпись; нет поля — None; негодное — 400."""
+    value = (body or {}).get("profile")
+    if value is None:
+        return None
+    key = settings.profile_key(value)
+    if key is None:
+        raise _bad_request("profile — work или neutral")
+    return key
+
+
 def _chat_message(body: dict | None) -> dict:
     """Тело сообщения чата: текст и/или id вложений (`a3`), `client_id`."""
     body = body or {}
@@ -1368,14 +1380,17 @@ class TrayControl:
 
     # --- живой режим (запись с ассистентом) -----------------------------
 
-    def live_start(self) -> dict:
+    def live_start(self, body: dict | None = None) -> dict:
         """Запись с ассистентом — это обычная запись резидента (`source:
         live`) и ассистент, подключённый к ней с первой секунды (тот же путь,
         что «Включить ассистента»). Ассистент не запустился или упал — запись
         идёт дальше как обычная, сохраняется и расшифровывается своей
-        остановкой. Ответ сразу (`starting`), дальше — события `live.*`."""
+        остановкой. Ответ сразу (`starting`), дальше — события `live.*`.
+        `{"profile"?: "work" | "neutral"}` — профиль сессии (0.3.7); нет —
+        `assist.profile`."""
         from meet import assistant
 
+        _session_profile(body)          # негодный профиль — 400 до начала записи
         if self.tray.recording:
             raise _bad_request("Идёт обычная запись — включите ассистента в ней "
                                "(«Включить ассистента»)")
@@ -1425,7 +1440,7 @@ class TrayControl:
         from meet.control import BadRequest, Conflict
 
         try:
-            return self.live_attach(with_recording=True)
+            return self.live_attach(body, with_recording=True)
         except (BadRequest, Conflict) as e:
             if not self.tray.recording or self._record_stopping():
                 return {**self.live.status(), "ok": True, "action": "stopped"}
@@ -1454,13 +1469,16 @@ class TrayControl:
             return self.live_detach()
         return self.live.stop()
 
-    def live_attach(self, with_recording: bool = False) -> dict:
+    def live_attach(self, body: dict | None = None, with_recording: bool = False) -> dict:
         """«Включить ассистента» посреди обычной записи: ребёнок `meet assist`
         берёт звук из отвода записи (`meet.pcm_tap`), второй раз устройства не
         открывает и lock записи не трогает; сначала догоняет уже записанное
-        (с дорожек на диске), дальше слушает вживую. Ответ сразу (`starting`)."""
+        (с дорожек на диске), дальше слушает вживую. Ответ сразу (`starting`).
+        `{"profile"?: "work" | "neutral"}` — профиль сессии; нет — из журнала
+        встречи (ассистента в неё уже включали) или `assist.profile`."""
         from meet import assistant, pcm_tap
 
+        profile = _session_profile(body)
         if not self.tray.recording:
             raise _bad_request("Запись не идёт — включить ассистента можно только во время записи")
         if getattr(self.tray, "stopping", False):
@@ -1503,7 +1521,7 @@ class TrayControl:
         try:
             reply = self.live.start(self._root(), attach={
                 "folder": str(folder), "server": server, "started_at": started_at,
-                "reopen": reopen, "with_recording": with_recording})
+                "reopen": reopen, "with_recording": with_recording, "profile": profile})
         except live_control.LiveBusy as e:
             raise _bad_request(str(e))
         if reply.get("ok"):
@@ -1675,6 +1693,17 @@ class TrayControl:
             # Ассистент без агента-участника или старый — настройка всё равно сохранена.
             self.tray.log(f"«Как часто писать» не передано ассистенту: {e}")
         return {"frequency": key, "label": settings.FREQUENCY_LABELS[key], "live": live}
+
+    def live_profile(self, body: dict | None) -> dict:
+        """Профиль идущей сессии ассистента (`{"profile": work|neutral}`,
+        0.3.7): только эта сессия — настройка по умолчанию (`assist.profile`)
+        не меняется. Ассистента нет — 409. → `{"profile", "label", "live"}`."""
+        key = _session_profile(body)
+        if key is None:
+            raise _bad_request("profile — work или neutral")
+        reply = self._live_call(self.live.agent_profile, key)
+        live = isinstance(reply, dict) and reply.get("live") is True
+        return {"profile": key, "label": settings.PROFILE_LABELS[key], "live": live}
 
     def adopt_recording(self) -> dict:
         """Автозапись → ручная: детектор её больше не остановит."""
@@ -3457,6 +3486,13 @@ class TrayControl:
         out["job"] = job.to_raw() if job is not None else None
         # Агент-участник включён в настройках: писать после встречи можно (иначе 409).
         out["enabled"] = bool(settings.load().assist.participant)
+        # Профиль сессии этой встречи (0.3.7); до 0.3.7 или без ассистента — None.
+        out["profile"] = None
+        if (chatlog.chat_dir(folder) / chatlog.SESSIONS_JSON).is_file():
+            try:
+                out["profile"] = chatlog.ChatLog(folder, log=self.tray.log).profile()
+            except OSError:
+                pass
         return out
 
     def continue_chat(self, recording_id: str, body: dict | None) -> dict:

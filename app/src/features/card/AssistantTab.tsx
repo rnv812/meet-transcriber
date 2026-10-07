@@ -14,6 +14,9 @@
  * - **Старые встречи** (до 0.3.6) — прежние подсказки и вопросы только для
  *   чтения, под заголовком «Подсказки (старый ассистент)».
  * - **Чата нет** — «Спросить ассистента о встрече».
+ * - **Профиль сессии** (0.3.7) — с каким профилем шла встреча («Профиль:
+ *   Нейтральный»); «Продолжить разговор» идёт с ним же (резидент берёт его из
+ *   журнала встречи). В нейтральном — свои быстрые вопросы, без рабочих.
  *
  * Писать нельзя, как и у резидента: агент-участник выключен в настройках
  * (`assist.participant`), идёт живой режим этой записи или модель не
@@ -33,12 +36,15 @@ import { ChatComposer } from "../../live/ChatComposer";
 import { LiveChat } from "../../live/LiveChat";
 import { recordingChatBackend } from "../../live/chatBackend";
 import { KIND_LABEL } from "../../live/liveModel";
+import { PROFILE_NOTES, profileLabel, profileOf } from "../../live/profiles";
 import { useChat } from "../../live/useChat";
 import { noModelText, noProvider } from "./assistant";
 import "../../live/live.css";
 
 /** Быстрые вопросы после встречи (над пустым полем). */
 export const AFTER_QUESTIONS = ["Кратко итоги", "Какие решения приняли?", "Что мне сделать?"];
+/** То же в профиле «Нейтральный»: созвон, стрим, видео — без рабочих вопросов. */
+export const NEUTRAL_QUESTIONS = ["Краткое содержание", "О чём это было?", "Главные мысли"];
 /** Кто видит картинки (как `llm.VISION_PROVIDERS` у резидента). */
 const VISION = new Set(["claude-code", "codex"]);
 const ACTIVE = new Set(["queued", "running"]);
@@ -181,6 +187,7 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
   const vision = !assistant?.provider || VISION.has(assistant.provider);
   const hasChat = chat.items.length > 0;
   const thinking = job && !chat.writing ? job : null;
+  const profile = info?.profile ? profileOf(info.profile) : null;
 
   return (
     <div className="assist assist-chat" data-chat-drop="">
@@ -194,13 +201,18 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
       {!info && !error && <p className="muted assist-chat__loading">Загружаю чат ассистента…</p>}
       {info && (hasChat || asking || thinking) ? (
         <div className="chat-ws__main assist-chat__main">
+          {profile && (
+            <p className="assist-chat__profile" title={PROFILE_NOTES[profile]}>
+              <span className="muted">Профиль:</span> {profileLabel(profile)}
+            </p>
+          )}
           <LiveChat chat={chat} disabled={!!reason}
             empty="Спросите ассистента о встрече: он видит расшифровку, итоги и то, что вы приложите." />
           {thinking && <Thinking job={thinking} onStop={() => stopJob(thinking)} />}
           {stopNote && <div className="assist__error" role="alert">{stopNote}</div>}
           <div className="assist-chat__continue" role="group" aria-label="Продолжить разговор">
             <span className="assist-chat__label">Продолжить разговор</span>
-            <ChatComposer chat={chat} disabledReason={reason} vision={vision} quick={AFTER_QUESTIONS}
+            <ChatComposer chat={chat} disabledReason={reason} vision={vision} quick={profile === "neutral" ? NEUTRAL_QUESTIONS : AFTER_QUESTIONS}
               placeholder="Спросить о встрече…" autoFocus={asking && !hasChat} />
           </div>
         </div>

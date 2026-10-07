@@ -158,6 +158,9 @@ KINDS = ("agent", "user", "attachment", "meeting", "system", "tool")
 # Ключ головы оставлен гибким (любая непустая строка).
 DEFAULT_HEAD = "agent"
 HEADS = (DEFAULT_HEAD,)
+# Профиль сессии (0.3.7, `participant_prompts.PROFILES`) — поле `profile` в
+# `sessions.json`, одно на встречу (не на провайдера).
+PROFILES = ("work", "neutral")
 # Кнопки реплики агента (v4-simple §2): 0–3, придумывает агент.
 BUTTONS_MAX = 3
 BUTTON_MAX_CHARS = 60
@@ -1011,6 +1014,34 @@ class ChatLog:
                 heads[head] = providers
             doc.setdefault("v", VERSION)
             doc["heads"] = heads
+            self._write_json(self.sessions_path, doc)
+
+    def profile(self) -> str | None:
+        """Профиль сессии ассистента этой встречи (`work` / `neutral`, 0.3.7) —
+        поле `profile` в `sessions.json`; не задан (встреча до 0.3.7) или
+        негодный — None. Файл занят дольше повторов — OSError."""
+        with self._read_lock():
+            doc = self._load_sessions() or {}
+        value = doc.get("profile")
+        return value if value in PROFILES else None
+
+    def set_profile(self, profile: str) -> None:
+        """Запомнить профиль сессии (старт, смена по ходу): «Продолжить
+        разговор» после встречи продолжит в нём же. Атомарно, под строгим
+        замком; сеансы провайдеров и неизвестные поля сохраняются. Файл не
+        прочитался — OSError, и он не перезаписывается."""
+        if profile not in PROFILES:
+            raise ValueError(f"профиль — {' или '.join(PROFILES)}")
+        with self._write_lock():
+            doc = self._load_sessions()
+            if doc is None:
+                doc = {}                          # битый — заменяется
+            if doc.get("profile") == profile:
+                return
+            doc.setdefault("v", VERSION)
+            if not isinstance(doc.get("heads"), dict):
+                doc["heads"] = {}
+            doc["profile"] = profile
             self._write_json(self.sessions_path, doc)
 
     @staticmethod

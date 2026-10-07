@@ -35,15 +35,29 @@ test("во время записи «Стоп ▾»: «Включить асси
   render(<Harness />);
   expect(screen.getByText(/REC/)).toHaveTextContent("12:34");
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента/ });
+  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
   expect(item).toHaveTextContent("догонит начало встречи");
   await userEvent.click(item);
-  expect(attach).toHaveBeenCalledWith(ep);
+  expect(attach).toHaveBeenCalledWith(ep, "work");
   expect(stop).not.toHaveBeenCalled(); // запись не останавливали
   expect(await screen.findByText("Ассистент запускается…")).toBeInTheDocument();
   expect(screen.getByText(/REC/)).toHaveTextContent("12:34"); // всё та же запись
   expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("«Включить ассистента · Нейтральный» — подключает с нейтральным профилем", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
+    { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
+  render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
+  await openMenu();
+  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Нейтральный/ });
+  expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+  await waitFor(() => expect(item).toBeEnabled());
+  expect(item).toHaveTextContent("без базы знаний");
+  await userEvent.click(item);
+  expect(attach).toHaveBeenCalledWith(ep, "neutral");
 });
 
 test("без подключённой модели «Включить ассистента» неактивен, с подсказкой", async () => {
@@ -51,7 +65,7 @@ test("без подключённой модели «Включить ассис
   const attach = vi.spyOn(api, "liveAttach");
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента/ });
+  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
   await waitFor(() => expect(item).toBeDisabled());
   expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code, Codex или OpenCode в настройках");
   await userEvent.click(item);
@@ -82,7 +96,7 @@ test("отказ резидента виден рядом с кнопкой", as
   vi.spyOn(api, "liveAttach").mockRejectedValue(new Error("Ассистент ещё запускается или останавливается"));
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента/ });
+  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
   await userEvent.click(item);
   expect(await screen.findByRole("alert")).toHaveTextContent("Ассистент ещё запускается");

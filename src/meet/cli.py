@@ -441,6 +441,12 @@ def main(argv: list[str] | None = None) -> int | None:
     # порт отвода звука (токен — в окружении MEET_TAP_TOKEN).
     p_as.add_argument("--attach-to", default=None, help=argparse.SUPPRESS)
     p_as.add_argument("--tap-port", type=int, default=None, help=argparse.SUPPRESS)
+    p_as.add_argument(
+        "--profile", default=None, choices=("work", "neutral"),
+        help="профиль сессии: work — рабочая встреча (база знаний, прошлые встречи), "
+        "neutral — нейтральный (созвон, стрим, видео, без базы знаний); "
+        "по умолчанию — из журнала встречи или настроек",
+    )
 
     p_en = sub.add_parser(
         "enroll", help="запомнить голоса: «Спикер N» из записи → имя в базе голосов"
@@ -515,7 +521,8 @@ def main(argv: list[str] | None = None) -> int | None:
                        parent_pid=args.parent_pid,
                        attach_to=args.attach_to, tap_port=args.tap_port,
                        tap_token=_take_tap_token() if args.attach_to else None,
-                       control_token=_take_control_token())
+                       control_token=_take_control_token(),
+                       profile=args.profile)
     elif args.command == "status":
         print_status()
     elif args.command == "live-stop":

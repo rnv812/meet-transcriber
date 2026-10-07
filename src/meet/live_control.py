@@ -636,7 +636,9 @@ class LiveControl:
 
         `attach` — включить посреди обычной записи: {"folder": папка записи,
         "server": TapServer отвода звука, "started_at": стенное время начала
-        записи}. Сервер отвода закрывается, когда ассистент кончился (или не
+        записи, "profile"?: профиль сессии `work` / `neutral`, выбранный при
+        старте — ребёнку `--profile`; нет — из журнала встречи или
+        настроек}. Сервер отвода закрывается, когда ассистент кончился (или не
         запустился)."""
         # Временные папки убитых раньше процессов (ассистент, задачи) — до старта.
         _sweep_temp()
@@ -737,6 +739,8 @@ class LiveControl:
         if attach is not None:
             argv += ["--attach-to", str(attach["folder"]),
                      "--tap-port", str(attach["server"].port)]
+            if attach.get("profile"):
+                argv += ["--profile", str(attach["profile"])]
         return argv
 
     def _spawn_with(self, argv: list[str], log_file, attach: dict | None):
@@ -1281,6 +1285,12 @@ class LiveControl:
         return self._request(self._active_port(), "/agent/frequency",
                              {"frequency": key, "persist": False}, REQUEST_TIMEOUT_S,
                              method="PUT")
+
+    def agent_profile(self, key: str) -> dict:
+        """Профиль сессии (`work` / `neutral`) — агенту идущей встречи; только
+        эта сессия, настройки не трогаются."""
+        return self._request(self._active_port(), "/agent/profile", {"profile": key},
+                             REQUEST_TIMEOUT_S, method="PUT")
 
     def open_events(self, last_event_id: str | None = None) -> "LiveStream":
         """Подписка на поток ассистента для ретрансляции клиенту панели."""

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { KB_MAP_LABEL, PARTICIPANT_LABEL, VISION_NOTE } from "./ParticipantRows";
+import { KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL, VISION_NOTE } from "./ParticipantRows";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
@@ -73,6 +73,19 @@ test("участник включён (по умолчанию): частота,
   await userEvent.click(screen.getByRole("switch", { name: KB_MAP_LABEL }));
   await save();
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { frequency: "less", kb_map: false } }));
+});
+
+test("«Профиль по умолчанию»: рабочая встреча, если не задан; нейтральный сохраняется ключом", async () => {
+  open();
+  const group = await screen.findByRole("radiogroup", { name: PROFILE_DEFAULT_LABEL });
+  expect(within(group).getAllByRole("radio").map((r) => r.closest("label")?.textContent))
+    .toEqual(["Рабочая встреча", "Нейтральный"]);
+  expect(within(group).getByRole("radio", { name: "Рабочая встреча" })).toBeChecked();
+  expect(screen.getByText(/база знаний, прошлые встречи, подсказки по встрече/)).toBeInTheDocument();
+  await userEvent.click(within(group).getByRole("radio", { name: "Нейтральный" }));
+  expect(screen.getByText(/без базы знаний и рабочих советов/)).toBeInTheDocument();
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { profile: "neutral" } }));
 });
 
 test("участник выключен: прежние подсказки видны (запасной режим), настроек участника нет", async () => {

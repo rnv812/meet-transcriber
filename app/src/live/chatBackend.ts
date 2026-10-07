@@ -14,10 +14,10 @@
 import {
   type Endpoint, attachChatFile, cancelJob, clickChat, continueChat, getChat, getRecordingChat, pasteChatImage,
   postChat, reactChat, recordingChatAttach, recordingChatClick, recordingChatPaste, recordingChatReact,
-  recordingChatRemove, removeChatAttachment, setAgentFrequency, stopChat,
+  recordingChatRemove, removeChatAttachment, setAgentFrequency, setAgentProfile, stopChat,
 } from "../lib/api";
 import type {
-  AgentFrequencyLabel, ChatAttachResult, ChatPost, ChatReaction, ChatSnapshot, Job, RecordingChat,
+  AgentFrequencyLabel, AgentProfile, ChatAttachResult, ChatPost, ChatReaction, ChatSnapshot, Job, RecordingChat,
 } from "../lib/types";
 
 export type ChatBackend = {
@@ -30,6 +30,8 @@ export type ChatBackend = {
   /** «Стоп» у ответа, который пишется. */
   stop: (ep: Endpoint, id?: string) => Promise<unknown>;
   frequency: (ep: Endpoint, label: AgentFrequencyLabel) => Promise<unknown>;
+  /** Профиль идущей сессии (после встречи — ничего: профиль у сессии уже был). */
+  profile: (ep: Endpoint, profile: AgentProfile) => Promise<unknown>;
   paste: (ep: Endpoint, blob: Blob, name?: string) => Promise<ChatAttachResult>;
   attach: (ep: Endpoint, path: string) => Promise<ChatAttachResult>;
   remove: (ep: Endpoint, id: string) => Promise<unknown>;
@@ -45,6 +47,7 @@ export const LIVE_CHAT: ChatBackend = {
   react: (ep, id, emoji, on) => reactChat(ep, id, emoji, on),
   stop: (ep, id) => stopChat(ep, id),
   frequency: (ep, label) => setAgentFrequency(ep, label),
+  profile: (ep, profile) => setAgentProfile(ep, profile),
   paste: (ep, blob, name) => pasteChatImage(ep, blob, name),
   attach: (ep, path) => attachChatFile(ep, path),
   remove: (ep, id) => removeChatAttachment(ep, id),
@@ -73,6 +76,7 @@ export function recordingChatBackend(id: string, job: () => Job | null,
       await cancelJob(ep, running.id);
     },
     frequency: async () => undefined,
+    profile: async () => undefined,
     paste: (ep, blob, name) => recordingChatPaste(ep, id, blob, name),
     attach: (ep, path) => recordingChatAttach(ep, id, path),
     remove: (ep, aid) => recordingChatRemove(ep, id, aid),

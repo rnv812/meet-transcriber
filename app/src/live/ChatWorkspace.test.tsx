@@ -4,11 +4,12 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   setAgentFrequency: vi.fn(async () => ({ frequency: "less", label: "реже", live: true })),
+  setAgentProfile: vi.fn(async () => ({ profile: "neutral", label: "Нейтральный", live: true })),
   pasteChatImage: vi.fn(async () => ({ id: "a1", status: "ready", attachment: { id: "a1", kind: "attachment" } })),
   postChat: vi.fn(async () => ({ id: "m9", queued: false, attachments: [] })),
   newChatClientId: vi.fn(() => "c1"),
 }));
-import { postChat, setAgentFrequency } from "../lib/api";
+import { postChat, setAgentFrequency, setAgentProfile } from "../lib/api";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
 import { readFileSync } from "node:fs";
@@ -100,6 +101,21 @@ test("«Как часто писать» уходит setAgentFrequency и ср�
   await userEvent.click(within(group).getByRole("radio", { name: "реже" }));
   expect(setAgentFrequency).toHaveBeenCalledWith(ep, "реже");
   expect(within(group).getByRole("radio", { name: "реже" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("«Профиль» уходит setAgentProfile, чип и выбор меняются сразу; отказ — пометка и прежний профиль", async () => {
+  width(600);
+  render(<Host live={makeLive({ agent: agentInfo() })} />);
+  load();
+  const group = screen.getByRole("radiogroup", { name: "Профиль" });
+  await userEvent.click(within(group).getByRole("radio", { name: "нейтральный" }));
+  expect(setAgentProfile).toHaveBeenCalledWith(ep, "neutral");
+  expect(within(group).getByRole("radio", { name: "нейтральный" })).toHaveAttribute("aria-checked", "true");
+  expect(document.querySelector(".session-bar__profile")).toHaveTextContent("Нейтральный");
+  vi.mocked(setAgentProfile).mockRejectedValueOnce(new Error("ассистент не запущен"));
+  await userEvent.click(within(group).getByRole("radio", { name: "рабочая встреча" }));
+  expect(await screen.findByText(/Профиль не удалось сменить: ассистент не запущен/)).toBeInTheDocument();
+  expect(document.querySelector(".session-bar__profile")).toHaveTextContent("Рабочая встреча");
 });
 
 test("нет связи — писать нельзя, причина видна", () => {

@@ -260,3 +260,109 @@ def test_scenario_warns_when_the_downvoted_point_comes_back(smoke, tmp_path, mon
     rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
     status, detail = rows[dict(smoke.CHECKS)["dislike"]]
     assert status == smoke.WARN and "повторяет" in detail
+
+
+# --- профиль «Нейтральный» (0.3.7): стрим, без базы знаний и рабочей рамки ---
+
+
+def test_neutral_dry_run_prints_its_plan(smoke, capsys, monkeypatch):
+    def boom(*_a, **_kw):
+        raise AssertionError("без --run модель не зовётся")
+
+    monkeypatch.setattr(smoke.NeutralScenario, "run", boom)
+    monkeypatch.setattr("meet.llm.claude_stream.Conversation", boom)
+    args = smoke.parse_args(["--profile", "neutral"])
+    assert args.profile == "neutral" and not args.run
+    assert smoke.parse_args([]).profile == "work"
+    code = asyncio.run(smoke.main_async(args, versions={"claude": "2.1.292", "codex": None}))
+    out = capsys.readouterr().out
+    assert code == 0 and "План профиля «Нейтральный»" in out
+    for step in smoke.build_neutral_plan():
+        assert step.title in out
+    for _key, title in smoke.NEUTRAL_CHECKS:
+        assert title in out
+
+
+def test_canned_stream_has_no_work_or_kb_words(smoke):
+    lines = [line for chunk in smoke.STREAM_CHUNKS for line in chunk]
+    for i, chunk in enumerate(smoke.STREAM_CHUNKS):           # отрезки по 25 с
+        assert all(i * 25 <= t < (i + 1) * 25 for t, _s, _x in chunk)
+    text = "\n".join(x for _t, _s, x in lines)
+    assert "в эфире" in text and "стрим" in text               # есть по чему понять вид
+    assert smoke._has(smoke.COST, "около восьми тысяч рублей")
+    # Стрим сам не даёт повода говорить о работе или базе знаний: их появление — от агента.
+    assert not smoke._has(smoke.WORK_MARKERS, text)
+    assert not smoke._has(smoke.KB_NAMES, text)
+    assert not smoke._has(smoke.WORK_MARKERS, "без батарей ноутбук не работает")   # не ложная тревога
+    plan = smoke.build_neutral_plan()
+    assert [s.arg for s in plan if s.kind == "user"] == [smoke.NEUTRAL_QUESTION, smoke.NEUTRAL_SUMMARY]
+    assert len(smoke.STREAM_CHUNKS) + 2 <= smoke.NEUTRAL_MAX_CALLS
+
+
+def _neutral_model(text: str) -> AgentReply:
+    """Ответ «хорошей модели» в профиле «Нейтральный»."""
+    if "кратко, о чём это было" in text:
+        return _say("Кратко:\n- стрим про домашний сервер из пяти старых ноутбуков на Proxmox;\n"
+                    "- тихие вентиляторы и коммутатор — около 8 тысяч рублей;\n"
+                    "- вздувшиеся батареи вынули, поставили ИБП.")
+    if "сколько он потратил" in text:
+        return _say("Около восьми тысяч рублей на вентиляторы и коммутатор, ноутбуки достались "
+                    "бесплатно; плюс примерно 300 рублей в месяц за электричество.")
+    if "в эфире" in text:
+        return _say("Похоже, это стрим: ведущий и гость Арсений рассказывают про домашний сервер "
+                    "из старых ноутбуков.")
+    return AgentReply(text='{"silent": true}')
+
+
+def test_neutral_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+    made = []
+
+    class Neutral(FakeConversation):
+        async def send(self, text, **kw):
+            await super().send(text, **kw)
+            return _neutral_model(text)
+
+    out = []
+    scenario = smoke.NeutralScenario("claude", tmp_path / "work",
+                                     conversation=lambda **kw: Neutral(ids, made, **kw),
+                                     out=out.append)
+    rows = asyncio.run(scenario.run())
+    statuses = {name: (status, detail) for name, status, detail in rows}
+    assert [name for name, _s, _d in rows] == [title for _k, title in smoke.NEUTRAL_CHECKS]
+    assert all(status == smoke.PASS for status, _d in statuses.values()), statuses
+    # Механика профиля: в папках модели только запись, база знаний — ещё и запрет.
+    assert made[0].kwargs["add_dirs"] == [str(scenario.folder)]
+    assert str(scenario.kb_root) in made[0].kwargs["deny_paths"]
+    assert "План запуска" not in made[0].kwargs["system_prompt"]
+    assert made[0].sent[0].startswith(pp.SEED_NEW_NEUTRAL)
+    printed = "\n".join(out)
+    assert "профиль «neutral»" in printed and "стрим │ [00:02] Спикер 1" in printed
+    assert scenario.calls <= smoke.NEUTRAL_MAX_CALLS
+
+
+def test_neutral_scenario_warns_on_work_talk_and_kb_documents(smoke, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+
+    class Worky(FakeConversation):
+        async def send(self, text, **kw):
+            await super().send(text, **kw)
+            if "сколько он потратил" in text:
+                return _say("Это стоит обсудить на следующей встрече с коллегами: в «План запуска.md» "
+                            "в базе знаний есть бюджет, а сроки и владельцев задач лучше закрепить.")
+            return AgentReply(text='{"silent": true}')
+
+    scenario = smoke.NeutralScenario("claude", tmp_path / "work",
+                                     conversation=lambda **kw: Worky(ids, [], **kw),
+                                     out=lambda _m: None)
+    rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
+    checks = dict(smoke.NEUTRAL_CHECKS)
+    assert rows[checks["no_work"]][0] == smoke.WARN
+    assert rows[checks["no_kb"]][0] == smoke.WARN and "План запуска" in rows[checks["no_kb"]][1]
+    assert rows[checks["content_type"]][0] == smoke.WARN
+    assert rows[checks["answered"]][0] == smoke.WARN         # без суммы из записи
+    assert rows[checks["summary"]][0] == smoke.WARN
+    assert rows[checks["kb_closed"]][0] == smoke.PASS        # механика в порядке
+    assert rows[checks["errors"]][0] == smoke.PASS

@@ -63,6 +63,12 @@
 @media (prefers-reduced-motion: reduce) { .session-bar__dot { animation: none !important; } }
 .session-bar__model { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .session-bar__sees { color: var(--text-3); min-width: 0; }
+/* Профиль сессии (0.3.7): виден всегда, и в компактной шапке. */
+.session-bar__profile {
+  padding: 0 7px; border: 1px solid var(--line-2); border-radius: 9px; color: var(--text-2);
+  font-size: 11px; line-height: 16px; white-space: nowrap;
+}
+.session-bar__profile--neutral { border-color: rgba(94, 106, 210, 0.45); color: var(--accent-hover); }
 .session-bar__note {
   padding: 0 6px; border-radius: 8px; background: rgba(240, 191, 0, 0.12); color: var(--amber);
   font-size: 11px; line-height: 18px; white-space: nowrap;

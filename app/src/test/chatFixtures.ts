@@ -4,7 +4,7 @@ import type { AgentInfo, ChatMessage } from "../lib/types";
 
 export const agentInfo = (o: Partial<AgentInfo> = {}): AgentInfo => ({
   state: "listening", error: null, provider: "claude-code", label: "Claude Code (sonnet)", vision: true, tools: true,
-  deny_enforced: true, frequency: "чаще", session: "new", writing: null,
+  deny_enforced: true, frequency: "чаще", profile: "work", session: "new", writing: null,
   sees: { conversation: true, kb: true, materials: 0, images: 0 }, ...o,
 });
 

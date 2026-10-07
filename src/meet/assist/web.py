@@ -54,7 +54,10 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
 - `PUT /agent/frequency` `{"frequency": "less|normal|more|реже|обычно|чаще",
   "persist"?}` → `{"frequency", "label", "live", "saved"}`: агенту — сразу,
   в настройки (`assist.frequency`) — ключом, если не `persist: false`
-  (резидент сохраняет сам).
+  (резидент сохраняет сам);
+- `PUT /agent/profile` `{"profile": "work|neutral"}` → `{"profile", "label",
+  "live"}`: профиль только этой сессии (0.3.7) — агенту пометка в ближайший
+  ход, журналу встречи — новое значение; настройка по умолчанию не меняется.
 
 SSE для чата (без `id:`): `chat_snapshot` (`GET /chat` — при подключении и
 если поток отстал от буфера `ChatFeed`), `chat` (событие журнала `{"seq",
@@ -1348,6 +1351,17 @@ def build_app(state) -> web.Application:
         return _json_response({"frequency": key, "label": FREQUENCY_LABELS[key],
                                "live": participant is not None, "saved": saved})
 
+    async def agent_profile(request):
+        from meet.settings import PROFILE_LABELS, profile_key
+
+        body = await _json_body(request)
+        key = profile_key(body.get("profile"))
+        if key is None:
+            raise web.HTTPBadRequest(text="profile — work или neutral")
+        participant = _participant(state)
+        participant.set_profile(key)
+        return _json_response({"profile": key, "label": PROFILE_LABELS[key], "live": True})
+
     # Картинка до 10 МБ в теле `/chat/paste` (по умолчанию aiohttp — 1 МБ).
     app = web.Application(middlewares=[_own_host, _same_origin_posts],
                           client_max_size=PASTE_MAX_BYTES + 64 * 1024)
@@ -1367,6 +1381,7 @@ def build_app(state) -> web.Application:
         web.post("/chat/{mid}/click", chat_click),
         web.post("/chat/{mid}/react", chat_react),
         web.put("/agent/frequency", agent_frequency),
+        web.put("/agent/profile", agent_profile),
     ])
     return app
 

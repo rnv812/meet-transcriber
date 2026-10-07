@@ -924,6 +924,12 @@ export type ChatAttachment = ChatMessage & { kind: "attachment"; name: string; s
 export type AgentFrequency = "less" | "normal" | "more";
 /** Та же настройка подписью — так её видит агент и `AgentInfo.frequency`. */
 export type AgentFrequencyLabel = "реже" | "обычно" | "чаще";
+/**
+ * Профиль сессии ассистента (`assist.profile`, 0.3.7): «Рабочая встреча» (`work` —
+ * база знаний, прошлые встречи, подсказки по делу) или «Нейтральный» (`neutral` —
+ * созвон, стрим, видео: без базы знаний и рабочей рамки).
+ */
+export type AgentProfile = "work" | "neutral";
 
 /** `state.agent` и событие `agent`: что с агентом и что он видит. */
 export type AgentInfo = {
@@ -942,6 +948,8 @@ export type AgentInfo = {
   model_mismatch?: boolean;
   deny_enforced: boolean;
   frequency: AgentFrequencyLabel;
+  /** Профиль сессии; старый резидент — нет поля (как «Рабочая встреча»). */
+  profile?: AgentProfile;
   session: "new" | "resumed" | "seeded" | null;
   /** Id ответа, который пишется сейчас. */
   writing: string | null;
@@ -987,6 +995,8 @@ export type ChatAttachResult = {
 };
 
 export type AgentFrequencyResult = { frequency: AgentFrequency; label: AgentFrequencyLabel; live: boolean };
+/** Ответ `PUT /live/profile`: профиль идущей сессии сменён (настройка по умолчанию — нет). */
+export type AgentProfileResult = { profile: AgentProfile; label: string; live: boolean };
 
 /** Прежний ассистент встречи до 0.3.6: подсказки и вопросы — только для чтения. */
 export type LegacyAssistant = { hints: LiveHint[]; qa: QaItem[] };
@@ -1003,6 +1013,8 @@ export type RecordingChat = {
   job: Job | null;
   /** Агент-участник включён в настройках (`assist.participant`); выключен — писать нельзя (409). Старый резидент — нет поля. */
   enabled?: boolean;
+  /** Профиль, с которым шла сессия ассистента этой встречи; null или нет поля — неизвестно. */
+  profile?: AgentProfile | null;
 };
 
 /** `GET /assistant/kb-docs`: документы базы знаний (пути от неё через «/», без исключённых). */

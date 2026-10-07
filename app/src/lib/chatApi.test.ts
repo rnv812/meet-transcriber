@@ -45,6 +45,22 @@ test("чат идущей встречи: адреса, методы и тела
   expect(headers).toMatchObject({ Authorization: "Bearer t", "Content-Type": "application/json" });
 });
 
+test("профиль сессии: старт и подключение с профилем, смена по ходу — PUT /live/profile", async () => {
+  const f = okFetch({ ok: true });
+  await api.liveStart(ep);
+  await api.liveStart(ep, "neutral");
+  await api.liveAttach(ep);
+  await api.liveAttach(ep, "work");
+  await api.setAgentProfile(ep, "neutral");
+  expect(calls(f)).toEqual([
+    ["http://h/live/start", "POST", undefined],
+    ["http://h/live/start", "POST", JSON.stringify({ profile: "neutral" })],
+    ["http://h/live/attach", "POST", undefined],
+    ["http://h/live/attach", "POST", JSON.stringify({ profile: "work" })],
+    ["http://h/live/profile", "PUT", JSON.stringify({ profile: "neutral" })],
+  ]);
+});
+
 test("pasteChatImage: сырое тело с типом картинки и именем в X-File-Name", async () => {
   const f = okFetch({ id: "a2", status: "ready", attachment: { id: "a2", kind: "attachment" } });
   const blob = new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });

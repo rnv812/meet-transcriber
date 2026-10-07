@@ -552,7 +552,7 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                cfg=None, knowledge_dir: str | None = None,
                parent_pid: int | None = None, attach_to: str | None = None,
                tap_port: int | None = None, tap_token: str | None = None,
-               control_token: str | None = None) -> None:
+               control_token: str | None = None, profile: str | None = None) -> None:
     """`port=0` — эфемерный порт; `endpoint_file` получает
     `{"port", "pid", "folder", "ready", "capturing", "stage"}`, как только
     поднят веб, переписывается на каждом этапе старта и удаляется при любом
@@ -561,7 +561,9 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     `parent_pid` — резидент: умер он — штатная остановка, как по /stop;
     `attach_to`/`tap_port`/`tap_token` — подключиться к идущей обычной записи
     (папка и отвод звука резидента); `control_token` — токен резидента для
-    доверенных маршрутов чата (`POST /chat/attach`)."""
+    доверенных маршрутов чата (`POST /chat/attach`); `profile` — профиль
+    сессии агента-участника (`work` / `neutral`), выбранный при старте; None
+    — из журнала встречи или `assist.profile`."""
     from meet import tempdirs
 
     endpoint = Path(endpoint_file) if endpoint_file else None
@@ -575,7 +577,7 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                         provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
                         parent_pid=parent_pid, attach_to=attach_to,
                         tap_port=tap_port, tap_token=tap_token,
-                        control_token=control_token)
+                        control_token=control_token, profile=profile)
     finally:
         remove_endpoint(endpoint)
         # Остановили посреди загрузки модели: её поток ещё работает. Запись
@@ -767,7 +769,7 @@ class StartClock:
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 no_voices, *, open_browser, endpoint, provider, cfg,
                 knowledge_dir=None, parent_pid=None, attach_to=None,
-                tap_port=None, tap_token=None, control_token=None) -> None:
+                tap_port=None, tap_token=None, control_token=None, profile=None) -> None:
     def log(line: str) -> None:
         # Одной записью со своим переводом строки: строки этапов пишут и
         # фоновые потоки старта, print() кусками их перемешивал бы.
@@ -904,7 +906,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     if participant_on:
         state.participant = _make_participant(
             cfg, bus, out_dir, provider_name, runner, knowledge_dir=knowledge_dir,
-            glossary=state._glossary, on_fresh_audio=fresh_audio, log=log)
+            glossary=state._glossary, on_fresh_audio=fresh_audio, log=log, profile=profile)
         from meet.assist.web import ChatFeed
 
         state.chat_feed = ChatFeed(state.participant)
@@ -1040,18 +1042,21 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
 
 
 def _make_participant(cfg, bus: TranscriptBus, out_dir: Path, provider: str, runner, *,
-                      knowledge_dir=None, glossary: str = "", on_fresh_audio=None, log=print):
+                      knowledge_dir=None, glossary: str = "", on_fresh_audio=None, log=print,
+                      profile=None):
     """Агент-участник встречи (`assist.participant`): журнал папки записи,
     база знаний на сессию (карта, исключения, запасные запросы), библиотека —
-    папка, где лежит запись (`participant.from_settings`)."""
+    папка, где лежит запись (`participant.from_settings`); `profile` —
+    выбранный при старте профиль (None — из журнала встречи или настроек)."""
     from meet.assist.participant import from_settings
 
     participant = from_settings(cfg, bus, out_dir, provider, runner, knowledge_dir=knowledge_dir,
-                                glossary=glossary, on_fresh_audio=on_fresh_audio, log=log)
+                                glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
+                                profile=profile)
     # Новое в чате и у агента — сигнал окнам (SSE `state`, `chat`, `chat_partial`, `agent`).
     participant.add_listener(lambda _name, _data: bus.changed.notify())
-    print(f"агент-участник: {participant.label}, «Как часто писать»: {participant.frequency}",
-          flush=True)
+    print(f"агент-участник: {participant.label}, «Как часто писать»: {participant.frequency}, "
+          f"профиль: {participant.profile}", flush=True)
     return participant
 
 

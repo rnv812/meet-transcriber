@@ -301,7 +301,9 @@ class FakeState:
     live_active = False
     live_last_id = "нет"
 
-    def live_start(self):
+    def live_start(self, body=None):
+        if body:
+            self.calls.append(("live.start.body", body))
         if not self.provider_ready:
             raise control.Conflict("Подключите Claude Code, Codex или OpenCode в настройках")
         if self.recording:

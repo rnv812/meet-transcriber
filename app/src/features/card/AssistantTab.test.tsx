@@ -34,7 +34,7 @@ import {
 import type { ChatMessage, ChatUpdatedEvent, Job, RecordingChat } from "../../lib/types";
 import { COPY_OPENED, resetKbDocs } from "../../live/useChat";
 import { agentMsg, attMsg, userMsg } from "../../test/chatFixtures";
-import { AssistantTab, TRANSCRIBING } from "./AssistantTab";
+import { AssistantTab, NEUTRAL_QUESTIONS, TRANSCRIBING } from "./AssistantTab";
 
 const ep = { base: "http://h", token: "t" };
 const ID = "2026-10-07_10-00";
@@ -160,6 +160,31 @@ test("чата нет: «Спросить ассистента о встрече
   expect(screen.getByRole("group", { name: "Быстрые вопросы" })).toHaveTextContent("Кратко итоги");
   await userEvent.click(screen.getByRole("button", { name: "Кратко итоги" }));
   expect(continueChat).toHaveBeenCalledWith(ep, ID, { text: "Кратко итоги", client_id: "c1", attachments: [] });
+});
+
+test("профиль сессии виден; в нейтральном — свои быстрые вопросы, без рабочих", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2, profile: "neutral" }));
+  const view = render(<Tab />);
+  await within(await ready()).findByText("15 ноября");
+  expect(screen.getByText("Профиль:").parentElement).toHaveTextContent("Профиль: Нейтральный");
+  const quick = screen.getByRole("group", { name: "Быстрые вопросы" });
+  for (const q of NEUTRAL_QUESTIONS) expect(quick).toHaveTextContent(q);
+  expect(quick).not.toHaveTextContent("Что мне сделать?");
+  expect(quick).not.toHaveTextContent("Какие решения приняли?");
+  view.unmount();
+
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2, profile: "work" }));
+  const work = render(<Tab />);
+  await within(await ready()).findByText("15 ноября");
+  expect(screen.getByText("Профиль:").parentElement).toHaveTextContent("Профиль: Рабочая встреча");
+  expect(screen.getByRole("group", { name: "Быстрые вопросы" })).toHaveTextContent("Что мне сделать?");
+  work.unmount();
+
+  // Старый резидент или встреча до 0.3.7 — профиля нет, строки нет.
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
+  render(<Tab />);
+  await within(await ready()).findByText("15 ноября");
+  expect(screen.queryByText("Профиль:")).toBeNull();
 });
 
 test("агент-участник выключен в настройках — как у резидента: писать нельзя, видно почему", async () => {

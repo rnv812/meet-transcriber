@@ -84,7 +84,7 @@ const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
 });
 const openMenu = async () => {
   await userEvent.click(screen.getByRole("button", { name: "Другие варианты записи" }));
-  return screen.findByRole("menuitem", { name: /С ассистентом/ });
+  return screen.findByRole("menuitem", { name: /С ассистентом · Рабочая встреча/ });
 };
 
 test("«▾» открывает меню: «С ассистентом» запускает живой режим, ответ применяется сразу", async () => {
@@ -100,9 +100,34 @@ test("«▾» открывает меню: «С ассистентом» зап�
   await waitFor(() => expect(api.getAssistant).toHaveBeenCalledWith(ep));
   expect(item).toBeEnabled();
   await userEvent.click(item);
-  expect(start).toHaveBeenCalledWith(ep);
+  expect(start).toHaveBeenCalledWith(ep, "work");
   expect(await screen.findByText("Ассистент запускается…")).toBeInTheDocument();
   expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("профиль выбирается тем же щелчком: два пункта, «Нейтральный» запускает с ним", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  const first = await openMenu();
+  const items = screen.getAllByRole("menuitem");
+  expect(items.map((i) => i.textContent)).toEqual([
+    expect.stringContaining("С ассистентом · Рабочая встреча"),
+    expect.stringContaining("С ассистентом · Нейтральный"),
+  ]);
+  expect(items[1]).toHaveTextContent("без базы знаний");
+  await waitFor(() => expect(first).toHaveFocus());
+  await userEvent.click(screen.getByRole("menuitem", { name: /Нейтральный/ }));
+  expect(start).toHaveBeenCalledWith(ep, "neutral");
+});
+
+test("без провайдера неактивны оба пункта профиля", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null }));
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  await openMenu();
+  await waitFor(() => expect(screen.getAllByRole("menuitem").every((i) => (i as HTMLButtonElement).disabled)).toBe(true));
+  expect(screen.getByRole("menuitem", { name: /Нейтральный/ }))
+    .toHaveAccessibleDescription("Подключите Claude Code, Codex или OpenCode в настройках");
 });
 
 test("без провайдера «С ассистентом» неактивен, с подсказкой", async () => {

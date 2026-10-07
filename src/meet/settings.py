@@ -206,6 +206,25 @@ def frequency_key(value) -> str | None:
     if text in FREQUENCY_LABELS:
         return text
     return next((key for key, label in FREQUENCY_LABELS.items() if label == text), None)
+
+
+# Профиль сессии ассистента (0.3.7): «Рабочая встреча» — база знаний, прошлые
+# встречи, подсказки по делу; «Нейтральный» — созвон, стрим, видео: без базы
+# знаний и рабочей рамки. Ключ → подпись (`participant_prompts.PROFILES`).
+ASSIST_PROFILES = ("work", "neutral")
+DEFAULT_PROFILE = "work"
+PROFILE_LABELS = {"work": "Рабочая встреча", "neutral": "Нейтральный"}
+
+
+def profile_key(value) -> str | None:
+    """Ключ `assist.profile` по ключу (`neutral`) или подписи («Нейтральный»),
+    без учёта регистра и пробелов по краям; иное — None."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if text in PROFILE_LABELS:
+        return text
+    return next((key for key, label in PROFILE_LABELS.items() if label.lower() == text), None)
 # Распознавание живого режима: `auto` — GigaAM короткими окнами, если язык
 # русский и модель GigaAM скачана (иначе Whisper); `whisper` — всегда Whisper.
 LIVE_ASR = ("auto", "whisper")
@@ -1020,7 +1039,11 @@ class Assist:
     `frequency` — «Как часто писать»: `less` / `normal` / `more` (по
     умолчанию «чаще» — активное участие). «Только сводка» (`activity:
     summary`) выключает и агента-участника (`participant_on`): человек
-    просил не писать ему во время встречи."""
+    просил не писать ему во время встречи.
+    `profile` — профиль сессии по умолчанию (0.3.7): `work` («Рабочая
+    встреча», как в 0.3.6) или `neutral` («Нейтральный»: без базы знаний и
+    прошлых встреч, без рабочей рамки). Его выбирают и при старте записи с
+    ассистентом, и по ходу встречи — там он только на эту сессию."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -1040,6 +1063,7 @@ class Assist:
     kb_exclude: tuple[str, ...] = KB_EXCLUDE_DEFAULT
     participant: bool = True
     frequency: str = "more"
+    profile: str = DEFAULT_PROFILE
 
     @property
     def participant_on(self) -> bool:
@@ -1070,6 +1094,7 @@ class Assist:
             kb_exclude=_kb_exclude(raw.get("kb_exclude")),
             participant=as_flag(raw.get("participant"), True),
             frequency=as_choice(raw.get("frequency"), ASSIST_FREQUENCIES, "more"),
+            profile=as_choice(raw.get("profile"), ASSIST_PROFILES, DEFAULT_PROFILE),
         )
 
     def to_raw(self) -> dict:
@@ -1090,6 +1115,7 @@ class Assist:
             "kb_exclude": list(self.kb_exclude),
             "participant": self.participant,
             "frequency": self.frequency,
+            "profile": self.profile,
         }
 
 

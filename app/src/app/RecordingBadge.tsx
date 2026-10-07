@@ -5,7 +5,8 @@ import { noProvider } from "../features/card/assistant";
 import { type Endpoint, getAssistant, liveAttach, liveDetach, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { openScreenRecordingSettings } from "../lib/shell";
-import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
+import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
+import { PROFILES, PROFILE_LABELS, PROFILE_NOTES } from "../live/profiles";
 import { Button } from "../ui/Button";
 import { floatingStyle, useFloating } from "../ui/floating";
 import { Icon } from "../ui/Icon";
@@ -71,6 +72,10 @@ const warmingUp = (live: LiveStatus | undefined) => !!live?.active && live.ready
  * (запись не прерывается: ассистент догоняет уже записанное и слушает
  * дальше) или, когда он включён (`live.attached`), «Выключить ассистента»
  * (запись идёт дальше). Без подключённой модели пункт неактивен с подсказкой.
+ *
+ * Профиль сессии (0.3.7) выбирается тем же щелчком: и «С ассистентом», и
+ * «Включить ассистента» — по пункту на профиль («Рабочая встреча»,
+ * «Нейтральный»); в шапке сессии его можно сменить по ходу.
  */
 export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, onSnapshot }: {
   endpoint: Endpoint | null;
@@ -205,10 +210,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       .then((result) => onSnapshot?.(result))
       .catch((e) => setError(errorText(e)));
   };
-  const runLive = (call: typeof liveStart | typeof liveStop | typeof liveAttach | typeof liveDetach) => {
+  const runLive = (call: typeof liveStart | typeof liveStop | typeof liveAttach | typeof liveDetach,
+    profile?: AgentProfile) => {
     setMenu(false);
     setError(null);
-    call(endpoint)
+    (profile ? (call as typeof liveStart)(endpoint, profile) : call(endpoint))
       .then((result) => {
         // Не запустился сразу (например, нет интерпретатора): ответ 200 с ok:false.
         if (call === liveStart && !result.ok) setError(result.error || START_FAILED);
@@ -248,13 +254,14 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
                   Выключить ассистента
                   <span className="rec-menu__note">запись продолжится, сводка останется в карточке</span>
                 </button>
-              ) : (
-                <button ref={item} type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
-                  aria-describedby={blocked ? hintId : undefined} onClick={() => runLive(liveAttach)}>
-                  Включить ассистента
-                  <span className="rec-menu__note">догонит начало встречи и будет подсказывать дальше</span>
+              ) : PROFILES.map((p, k) => (
+                <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
+                  disabled={blocked} aria-describedby={blocked ? hintId : undefined}
+                  onClick={() => runLive(liveAttach, p)}>
+                  Включить ассистента · {PROFILE_LABELS[p]}
+                  <span className="rec-menu__note">догонит начало встречи; {PROFILE_NOTES[p]}</span>
                 </button>
-              )}
+              ))}
               {blocked && !attached && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
             </div>
           )}
@@ -296,11 +303,14 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
           aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Icon as={ChevronDown} size="sm" /></Button>
         {menu && (
           <div ref={menuBox} className="rec-menu" role="menu" aria-label="Варианты записи" style={floatingStyle(menuPos)}>
-            <button ref={item} type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
-              aria-describedby={blocked ? hintId : undefined} onClick={() => runLive(liveStart)}>
-              С ассистентом
-              <span className="rec-menu__note">дайджест и вопросы по ходу встречи</span>
-            </button>
+            {PROFILES.map((p, k) => (
+              <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
+                disabled={blocked} aria-describedby={blocked ? hintId : undefined}
+                onClick={() => runLive(liveStart, p)}>
+                С ассистентом · {PROFILE_LABELS[p]}
+                <span className="rec-menu__note">{PROFILE_NOTES[p]}</span>
+              </button>
+            ))}
             {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
           </div>
         )}

@@ -64,7 +64,7 @@
 потоках `asyncio.to_thread`. Цикл событий не блокируется.
 
 API для окна (задача 6): `post_user_message`, `attach`, `click`, `react`,
-`stop_reply`, `set_frequency`, `snapshot`, `view`; «Продолжить разговор»
+`stop_reply`, `set_frequency`, `set_profile`, `snapshot`, `view`; «Продолжить разговор»
 после встречи — `queue_existing` и `add_note`; события —
 `add_listener(fn(name, data))`: `chat` (событие журнала), `chat_partial`
 (`{"id","text"}`), `agent` (`view()`).
@@ -114,6 +114,7 @@ NOTE_STOPPED = "Пользователь остановил твой прошл�
 EXPLAIN_REQUEST = ("❓ к твоему сообщению: поясни его — на что ты опирался и что предлагаешь "
                    "(как реакция ❓ во время встречи).")
 TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
+NEUTRAL_NO_KB = "в профиле «Нейтральный» базы знаний и прошлых встреч нет — ответь по тому, что услышал"
 SHUTDOWN_ERROR = "ассистент остановлен"
 NOTHING_TO_ADD = "Ассистенту нечего добавить"
 # ❓ остался без пояснения: человек остановил ответ.
@@ -274,6 +275,7 @@ class _Inputs:
     tools: list = field(default_factory=list)   # ответы Meet на запросы
     notes: list = field(default_factory=list)
     frequency: str | None = None
+    profile: bool = False                       # профиль сменили: пометка агенту
 
     def empty(self) -> bool:
         return not (self.lines or self.user or self.reactions or self.tools)
@@ -317,7 +319,10 @@ class Participant:
     «Как часто писать»; `model`/`proxy` — Claude Code; `on_fresh_audio` —
     дорасшифровать хвост речи перед ответом пользователю; `clock` — часы
     (тесты — поддельные); `after_meeting` — разговор после встречи (задача
-    «Продолжить разговор»): у записей нет секунд встречи `t`."""
+    «Продолжить разговор»): у записей нет секунд встречи `t`; `profile` —
+    профиль сессии (`work` / `neutral`, 0.3.7): в «Нейтральном» нет карты
+    базы знаний, базы и библиотеки в папках модели и запасных запросов к
+    базе (`_profile_blocked_roots` — точка для ворот A1)."""
 
     def __init__(self, bus, chatlog, *, provider: str, folder, runner=None, conversation=None,
                  kb=None, library_root=None, group=None, owner_name: str = "",
@@ -328,7 +333,8 @@ class Participant:
                  clock=time.monotonic, log=print, merge_window_s: float = MERGE_WINDOW_S,
                  pause_s: float = PAUSE_S, max_interval_s: float = MAX_INTERVAL_S,
                  min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S,
-                 after_meeting: bool = False, seed_until: str | None = None) -> None:
+                 after_meeting: bool = False, seed_until: str | None = None,
+                 profile=pp.DEFAULT_PROFILE) -> None:
         from meet import llm
 
         self._bus = bus
@@ -344,6 +350,10 @@ class Participant:
         self._owner_speaker = owner_speaker or pp.OWNER_SPEAKER
         self._owner_names = {n for n in (owner_speaker, *owner_names) if n}
         self.frequency = pp.normalize_frequency(frequency)
+        self.profile = pp.normalize_profile(profile)
+        # Профиль, с которым поднят текущий сеанс модели: сменили — сеанс
+        # пересоздаётся (с продолжением), у него другие папки и промпт.
+        self._session_profile: str | None = None
         # Claude Code — модель всегда явно (`--model`): пустая — модель по
         # умолчанию Meet, не модель CLI по умолчанию.
         self._model = claude_model(model) if provider == "claude-code" else model
@@ -399,6 +409,7 @@ class Participant:
         self._tool_results: list[dict] = []
         self._notes: list[str] = []
         self._frequency_note: str | None = None
+        self._profile_note = False
         self._tool_rounds = 0
         # Цепочка запросов: (addressed, re, explains, implicit) — продолжение того же хода.
         self._chain: tuple | None = None
@@ -482,18 +493,21 @@ class Participant:
         которую запустил CLI (None — ещё не известна), `model_configured` —
         заданная в настройках, `model_mismatch` — они разные."""
         claude = self.provider == "claude-code"
+        # «Нейтральный»: карта не уходит агенту — и в шапке её нет.
+        kb_map = self._kb_map if self.profile == pp.WORK else ""
         return {"state": self.state, "error": self.error, "provider": self.provider,
                 "label": self.label, "vision": self.vision, "tools": self.tools,
                 "model": self.model_actual if claude else None,
                 "model_configured": self._model if claude else None,
                 "model_mismatch": self.model_mismatch,
                 "deny_enforced": self.deny_enforced,
-                "frequency": self.frequency, "session": self.session_state,
+                "frequency": self.frequency, "profile": self.profile,
+                "session": self.session_state,
                 "writing": self._turn.reply_id if self._turn is not None else None,
                 # kb — есть карта (база знаний и/или прошлые встречи группы);
                 # kb_docs — в ней структура базы знаний, а не только встречи.
-                "sees": {"conversation": True, "kb": bool(self._kb_map),
-                         "kb_docs": _map_has_kb(self._kb_map),
+                "sees": {"conversation": True, "kb": bool(kb_map),
+                         "kb_docs": _map_has_kb(kb_map),
                          "materials": self._materials, "images": self._images}}
 
     async def snapshot(self, limit: int | None = 200) -> dict:
@@ -519,6 +533,7 @@ class Participant:
                 self._stored_sid = await self._io(self._chatlog.session_id, self.provider)
         except OSError as e:
             self._log(f"агент: журнал не прочитан при старте ({type(e).__name__}: {e})")
+        await self._save_profile()
         await self._load_info()
 
     async def _load_info(self) -> None:
@@ -575,6 +590,35 @@ class Participant:
             self._changed()
         return name
 
+    def set_profile(self, value) -> str:
+        """Профиль сменили по ходу сессии: пометка агенту в ближайшем ходе
+        («Профиль сменён на … — это заменяет прежние правила роли: …», как
+        смена частоты), сеанс модели к ближайшему ходу пересоздаётся с
+        продолжением (другие папки и системный промпт), профиль — в журнал
+        встречи (`sessions.json`): «Продолжить разговор» продолжит в нём."""
+        name = pp.normalize_profile(value)
+        if name != self.profile:
+            self.profile = name
+            self._profile_note = True
+            self._changed()
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                with _quiet():
+                    self._chatlog.set_profile(name)
+            else:
+                self._background_task(self._save_profile())
+        return name
+
+    async def _save_profile(self) -> None:
+        set_profile = getattr(self._chatlog, "set_profile", None)
+        if set_profile is None:
+            return
+        try:
+            await self._io(set_profile, self.profile)
+        except (OSError, ValueError) as e:
+            self._log(f"агент: профиль не сохранён в журнал ({type(e).__name__}: {e})")
+
     def set_task_context(self, text: str) -> None:
         """Контекст задачи (`/task`): системный промпт новых сеансов и —
         если сеанс уже идёт — заметка в ближайший ход (ревью M11)."""
@@ -588,6 +632,10 @@ class Participant:
     # --- сессия ---
 
     def _folders(self) -> dict[str, str]:
+        if self.profile == pp.NEUTRAL:
+            # «Нейтральный»: ни базы знаний, ни библиотеки — только своя папка
+            # (вложения пользователя разбираются в неё).
+            return {"Папка этой записи": str(self._folder)}
         out = {}
         if self._kb is not None and getattr(self._kb, "configured", False):
             out["База знаний"] = str(self._kb.root)
@@ -596,7 +644,54 @@ class Participant:
         out["Эта встреча"] = str(self._folder)
         return out
 
+    def _add_dirs(self) -> list[str]:
+        """Папки на чтение модели (`add_dirs` Claude Code, `allowed_dirs`
+        остальных): папка встречи, в «Рабочей встрече» — ещё база знаний и
+        библиотека встреч."""
+        if self.profile == pp.NEUTRAL:
+            return [str(self._folder)]
+        return [str(d) for d in (self._folder,
+                                 self._kb.root if self._kb is not None and self._kb.configured else None,
+                                 self._library_root) if d]
+
+    def _profile_blocked_roots(self) -> list[str]:
+        """Что профиль закрывает целиком: в «Нейтральном» — база знаний и
+        библиотека встреч (кроме папки этой записи, она внутри библиотеки).
+
+        Точка подключения для ворот A1 (`v037/agent-freedom`, `llm/consent.py`):
+        при слиянии ворота должны отказывать в чтении этих путей на любом
+        уровне согласия — как `kb_exclude`. Здесь, без ворот, барьер — папки
+        модели (`_add_dirs`) и правила запрета Claude Code (`_deny`) для
+        базы знаний, если папка записи не внутри неё."""
+        if self.profile != pp.NEUTRAL:
+            return []
+        out = []
+        if self._kb is not None and getattr(self._kb, "configured", False):
+            out.append(str(self._kb.root))
+        if self._library_root is not None:
+            out.append(str(self._library_root))
+        return out
+
+    def _deny(self) -> list[str]:
+        """Запреты сеанса: `kb_exclude`, в «Нейтральном» — и корни профиля,
+        которые не содержат папку записи (запрет библиотеки закрыл бы и её)."""
+        deny = list(self._deny_paths)
+        folder = self._folder.resolve() if self._folder.exists() else self._folder
+        for root in self._profile_blocked_roots():
+            path = Path(root)
+            try:
+                inside = folder.is_relative_to(path.resolve() if path.exists() else path)
+            except (OSError, ValueError):
+                inside = True
+            if not inside and root not in deny:
+                deny.append(root)
+        return deny
+
     def system_prompt(self) -> str:
+        if self.profile == pp.NEUTRAL:
+            return pp.build_system(
+                frequency=self.frequency, tools_available=self.tools, owner_name=self._owner_name,
+                folders=self._folders() if self.tools else None, profile=pp.NEUTRAL)
         return pp.build_system(
             frequency=self.frequency, tools_available=self.tools, kb_map=self._kb_map,
             owner_name=self._owner_name,
@@ -638,16 +733,21 @@ class Participant:
             return []
 
     async def _ensure_session(self):
+        if self._session is not None and self._session_profile != self.profile:
+            # Профиль сменили: у сеанса другие папки и промпт — новый процесс,
+            # тот же сеанс провайдера (id сохранён после прошлого хода).
+            self._log(f"агент: профиль «{pp.PROFILES[self.profile]}» — сеанс модели заново "
+                      "с продолжением")
+            await asyncio.to_thread(self.close)
         if self._session is not None:
             return self._session
         await self._load_info()
-        dirs = [str(d) for d in (self._folder,
-                                 self._kb.root if self._kb is not None and self._kb.configured else None,
-                                 self._library_root) if d]
+        dirs = self._add_dirs()
+        deny = self._deny()
         if self.provider == "claude-code":
             conv = self._conversation(
                 system_prompt=self.system_prompt(), model=self._model, proxy=self._proxy,
-                log=self._log, responder=True, add_dirs=dirs, deny_paths=self._deny_paths,
+                log=self._log, responder=True, add_dirs=dirs, deny_paths=deny,
                 persist=True, resume=self._stored_sid, on_model=self._on_model)
             self._session = _ConversationSession(conv)
         else:
@@ -656,7 +756,8 @@ class Participant:
             self._session = _RunnerSession(
                 self._runner, self.provider, system=self.system_prompt,
                 session_id=self._stored_sid, resumable=self.resumable,
-                allowed_dirs=dirs, deny_paths=self._deny_paths, call_kwargs=self._call_kwargs)
+                allowed_dirs=dirs, deny_paths=deny, call_kwargs=self._call_kwargs)
+        self._session_profile = self.profile
         self._changed()
         return self._session
 
@@ -827,12 +928,14 @@ class Participant:
         inputs = _Inputs(lines=lines, start=self._cursor, end=end,
                          first_pending_at=self._first_pending_at,
                          user=self._user, reactions=self._reactions, tools=self._tool_results,
-                         notes=self._notes, frequency=self._frequency_note)
+                         notes=self._notes, frequency=self._frequency_note,
+                         profile=self._profile_note)
         self._cursor = end
         if self._bus.size() <= end:
             self._first_pending_at = None
         self._user, self._reactions, self._tool_results, self._notes = [], [], [], []
         self._frequency_note = None
+        self._profile_note = False
         self._user_fresh = False
         return inputs
 
@@ -849,6 +952,7 @@ class Participant:
             self._notes = inputs.notes + self._notes
             if inputs.frequency and self._frequency_note is None:
                 self._frequency_note = inputs.frequency
+            self._profile_note = self._profile_note or inputs.profile
 
     def _start_turn(self, now: float) -> _Turn | None:
         inputs = self._collect()
@@ -856,6 +960,7 @@ class Participant:
             self._notes = inputs.notes + self._notes
             if inputs.frequency and self._frequency_note is None:
                 self._frequency_note = inputs.frequency
+            self._profile_note = self._profile_note or inputs.profile
             return None
         addressed = bool(inputs.user or inputs.reactions)
         re_id = inputs.user[-1]["id"] if inputs.user else None
@@ -981,7 +1086,8 @@ class Participant:
                        else self._chatlog)
             seed = pp.seed(journal, "", self._materials_summary(),
                            pp.ParticipantSettings(frequency=self.frequency,
-                                                  owner_speaker=self._owner_speaker),
+                                                  owner_speaker=self._owner_speaker,
+                                                  profile=self.profile),
                            transcript=self._history(inputs.start), t=self._now_t())
             parts.append(seed)
             self.session_state = "seeded" if self._chatlog_has_history() else "new"
@@ -990,7 +1096,9 @@ class Participant:
         delta = pp.delta(inputs.lines, inputs.user, (), inputs.reactions,
                          owner_speaker=self._owner_speaker, tool_results=inputs.tools,
                          notes=inputs.notes, frequency=inputs.frequency,
-                         agent_texts=self._agent_texts)
+                         agent_texts=self._agent_texts, profile=self.profile,
+                         profile_changed=inputs.profile,
+                         kb_map=self._kb_map if inputs.profile else "")
         if delta:
             parts.append(delta)
         return "\n\n".join(parts)
@@ -1114,6 +1222,7 @@ class Participant:
         self._notes = [NOTE_STOPPED, *inputs.notes, *self._notes]
         if inputs.frequency and self._frequency_note is None:
             self._frequency_note = inputs.frequency
+        self._profile_note = self._profile_note or inputs.profile
 
     def _failed(self, error: str) -> None:
         self._failures += 1
@@ -1291,6 +1400,10 @@ class Participant:
     def _tool_call(self, action) -> tuple[str, str | None]:
         from meet.assist.kb_prep import KnowledgeBase
 
+        if self.profile == pp.NEUTRAL:
+            # Запасной путь — только база знаний и прошлые встречи: в
+            # «Нейтральном» их нет (вложения уходят агенту в ходе сами).
+            return "", NEUTRAL_NO_KB
         kb = self._kb or KnowledgeBase(None, library_root=self._library_root)
         if action.kind == "read":
             return _read_text(kb.kb_read(list(action.paths)))
@@ -1685,13 +1798,30 @@ def _drop_files(folder: Path, record: dict, log) -> None:
 
 # --- сборка по настройкам ---
 
+def session_profile(chatlog, default, profile=None) -> str:
+    """Профиль сессии: выбранный при старте (`profile`), иначе записанный в
+    журнале встречи (повторное включение, «Продолжить разговор» после
+    встречи), иначе настройка по умолчанию (`assist.profile`)."""
+    if profile is not None:
+        return pp.normalize_profile(profile)
+    stored = None
+    if chatlog is not None:
+        try:
+            stored = chatlog.profile()
+        except (OSError, AttributeError):
+            stored = None
+    return pp.normalize_profile(stored or default)
+
+
 def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None,
                   glossary: str = "", on_fresh_audio=None, log=print, chatlog=None,
-                  **kwargs) -> "Participant":
+                  profile=None, **kwargs) -> "Participant":
     """Агент-участник записи по настройкам (`assist.*`, `recording.*`,
     `llm.*`): журнал папки записи, база знаний на сессию (карта, исключения,
     запасные запросы), библиотека — папка, где лежит запись. Так его собирают
-    и живой ассистент, и задача «Продолжить разговор» после встречи."""
+    и живой ассистент, и задача «Продолжить разговор» после встречи.
+    `profile` — профиль, выбранный при старте; нет — из журнала встречи или
+    `assist.profile` (`session_profile`)."""
     from meet import llm
     from meet.assist.chatlog import ChatLog
     from meet.assist.kb_prep import KnowledgeBase
@@ -1702,13 +1832,15 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
     library_root = folder.parent
     kb = KnowledgeBase(knowledge, exclude=cfg.assist.kb_exclude, library_root=library_root,
                        show_map=cfg.assist.kb_map)
+    chatlog = chatlog if chatlog is not None else ChatLog(folder, log=log)
     return Participant(
-        bus, chatlog if chatlog is not None else ChatLog(folder, log=log), provider=provider,
+        bus, chatlog, provider=provider,
         folder=folder, runner=runner, kb=kb, library_root=library_root,
         owner_name=cfg.recording.speaker_name, owner_speaker=cfg.recording.speaker_name,
         owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
         frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
-        proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log, **kwargs)
+        proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
+        profile=session_profile(chatlog, cfg.assist.profile, profile), **kwargs)
 
 
 # --- помощники ---

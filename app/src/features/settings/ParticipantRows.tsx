@@ -4,6 +4,9 @@
  * - «Ассистент — участник встречи» (`assist.participant`) — во время встречи ассистент
  *   пишет в чат как участник; выключен — прежние подсказки и «Спросить»
  *   (запасной режим в 0.3.6), и тогда видны их настройки (`LiveHintsRows`);
+ * - «Профиль по умолчанию» (`assist.profile`: work / neutral, 0.3.7) — с каким
+ *   профилем стартует сессия, если его не выбрали в меню записи; в панели
+ *   встречи профиль меняется на ходу (только для этой сессии);
  * - «Как часто писать» (`assist.frequency`: less / normal / more);
  * - «Показывать ассистенту карту: базу знаний и прошлые встречи группы» (`assist.kb_map`);
  * - «Не показывать ассистенту» — исключённые папки базы (`assist.kb_exclude`,
@@ -23,6 +26,8 @@ import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
+import type { AgentProfile } from "../../lib/types";
+import { PROFILES, PROFILE_LABELS, profileOf } from "../../live/profiles";
 import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
 
 type Frequency = "less" | "normal" | "more";
@@ -31,6 +36,13 @@ const FREQUENCIES: { value: Frequency; label: string }[] = [
   { value: "normal", label: "обычно" },
   { value: "more", label: "чаще" },
 ];
+/** Профиль сессии по умолчанию (`assist.profile`). */
+const PROFILE_OPTIONS: { value: AgentProfile; label: string }[] = PROFILES.map((p) => ({ value: p, label: PROFILE_LABELS[p] }));
+export const PROFILE_DEFAULT_LABEL = "Профиль по умолчанию";
+export const PROFILE_HINTS: Record<AgentProfile, string> = {
+  work: "Рабочая встреча: база знаний, прошлые встречи, подсказки по встрече. Профиль можно выбрать при старте и сменить в панели встречи",
+  neutral: "Нейтральный: созвон, стрим, видео — без базы знаний и рабочих советов. Профиль можно выбрать при старте и сменить в панели встречи",
+};
 /** Как у резидента (`settings.KB_EXCLUDE_DEFAULT`). */
 export const KB_EXCLUDE_DEFAULT = ["Личное/", ".trash/"];
 /** Модели, которые не умеют запрещать чтение папок: исключения — только просьба. */
@@ -132,6 +144,7 @@ export function ParticipantRows({ draft, set, provider }: {
   const assist = draft.assist ?? {};
   const on = assist.participant !== false;
   const frequency = (FREQUENCIES.some((f) => f.value === assist.frequency) ? assist.frequency : "more") as Frequency;
+  const profile = profileOf(assist.profile);
   const kbRoot = (draft.assistant?.knowledge_dir as string | null | undefined) || null;
   const sees = provider ? provider in VISION : null;
   return (
@@ -147,6 +160,8 @@ export function ParticipantRows({ draft, set, provider }: {
               <Button variant="link" onClick={() => set("assist", "activity", "calm")}>Вернуть чат</Button>
             </div>
           )}
+          <Radio label={PROFILE_DEFAULT_LABEL} value={profile} options={PROFILE_OPTIONS}
+            hint={PROFILE_HINTS[profile]} onChange={(v) => set("assist", "profile", v)} />
           <Radio label="Как часто писать" value={frequency} options={FREQUENCIES}
             hint="Просьба к ассистенту в инструкции; меняется и в панели встречи"
             onChange={(v) => set("assist", "frequency", v)} />

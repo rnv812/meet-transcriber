@@ -106,6 +106,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_chat_click(id, body) / live_chat_react(id, body) / live_chat_stop(body)
     live_chat_remove(id)                  вложение убрали из строки ввода до отправки
     agent_frequency(body)                 «Как часто писать»: в настройки и агенту
+    live_profile(body)                    профиль идущей сессии (только она, не настройки)
     recording_chat(id) -> dict            чат записи после встречи (+ legacy)
     continue_chat(id, body) -> dict       «Продолжить разговор»: сообщение и задача chat
     recording_chat_attach / _paste / _remove / _click / _react
@@ -863,9 +864,11 @@ _ROUTES = {
         h._body()
     ),
     ("POST", "/assistant/local-models"): lambda h, p: _server_of(h).state.local_models(h._body()),
-    ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(),
+    # `{"profile"?}` — профиль сессии ассистента (0.3.7); без тела — по умолчанию.
+    ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(h._body()),
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
-    ("POST", "/live/attach"): lambda h, p: _server_of(h).state.live_attach(),
+    ("POST", "/live/attach"): lambda h, p: _server_of(h).state.live_attach(h._body()),
+    ("PUT", "/live/profile"): lambda h, p: _server_of(h).state.live_profile(h._body()),
     ("POST", "/live/detach"): lambda h, p: _server_of(h).state.live_detach(),
     ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
     ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),

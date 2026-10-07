@@ -36,7 +36,7 @@ import { type Endpoint, getKbDocs, newChatClientId } from "../lib/api";
 import { errorText } from "../lib/format";
 import { openMaterial } from "../lib/shell";
 import type {
-  AgentFrequencyLabel, AgentInfo, ChatAttachResult, ChatEvent, ChatMessage, ChatPartial, ChatReaction, ChatSnapshot,
+  AgentFrequencyLabel, AgentInfo, AgentProfile, ChatAttachResult, ChatEvent, ChatMessage, ChatPartial, ChatReaction, ChatSnapshot,
   KbDocs,
 } from "../lib/types";
 import { type ChatBackend, LIVE_CHAT } from "./chatBackend";
@@ -131,6 +131,8 @@ export type Chat = {
   react: (id: string, emoji: ChatReaction) => Promise<void>;
   stop: () => Promise<void>;
   setFrequency: (label: AgentFrequencyLabel) => Promise<void>;
+  /** Профиль идущей сессии: сразу в шапке, на резиденте — `PUT /live/profile`. */
+  setProfile: (profile: AgentProfile) => Promise<void>;
   paste: (blob: Blob, name?: string) => Promise<ChatAttachResult>;
   attach: (path: string) => Promise<ChatAttachResult>;
   /** Вложение убрали из строки ввода до отправки: у агента его не будет. */
@@ -181,6 +183,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
   stateRef.current = state;
   const previews = useRef(new Map<string, string>());
   const [frequency, setFrequencyLocal] = useState<AgentFrequencyLabel | null>(null);
+  const [profile, setProfileLocal] = useState<AgentProfile | null>(null);
   const [text, setText] = useState("");
   const [drafts, setDraftList] = useState<ChatDraft[]>([]);
   const dropped = useRef(new Set<string>());
@@ -349,6 +352,23 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
     if (frequency && agentFrequency === frequency) setFrequencyLocal(null);
   }, [agentFrequency, frequency]);
 
+  const setProfile = useCallback(async (next: AgentProfile) => {
+    if (!ep) return;
+    setProfileLocal(next);
+    try {
+      await backend.profile(ep, next);
+    } catch (e) {
+      setNote(`Профиль не удалось сменить: ${errorText(e)}`);
+      setProfileLocal(null);
+    }
+  }, [ep, backend]);
+
+  // Пришло состояние агента с тем же профилем — своё значение больше не нужно.
+  const agentProfile = state.agent?.profile;
+  useEffect(() => {
+    if (profile && agentProfile === profile) setProfileLocal(null);
+  }, [agentProfile, profile]);
+
   const paste = useCallback(async (blob: Blob, name?: string) => {
     if (!ep) throw new Error("Нет связи с ассистентом");
     const reply = await backend.paste(ep, blob, name);
@@ -443,8 +463,10 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
 
   const items = useMemo(() => feedItems(state, now), [state, now]);
   const agent = useMemo(
-    () => (state.agent && frequency ? { ...state.agent, frequency } : state.agent),
-    [state.agent, frequency],
+    () => (state.agent && (frequency || profile)
+      ? { ...state.agent, ...(frequency ? { frequency } : {}), ...(profile ? { profile } : {}) }
+      : state.agent),
+    [state.agent, frequency, profile],
   );
   const lastAgent = useMemo(() => {
     for (let k = state.order.length - 1; k >= 0; k--) {
@@ -462,7 +484,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
     used: (id) => used.get(id) ?? null,
-    send, retry, click, react, stop, setFrequency, paste, attach, removeAttachment, hidePin, sources, open, more,
+    send, retry, click, react, stop, setFrequency, setProfile, paste, attach, removeAttachment, hidePin, sources, open, more,
     composer, sink,
   };
 }
