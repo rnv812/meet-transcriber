@@ -197,8 +197,10 @@ test("вкладка «Расшифровка» скрыта: прокрутка
 
 test("важная реплика: полоса отделена от ▷ отступом, колонка текста не сдвигается; «играет» — не вторая полоса", () => {
   const css = readFileSync(resolve(__dirname, "markup.css"), "utf-8");
-  expect(css).toMatch(/\.turn--key \{ margin-left: -12px; padding-left: 12px;/);
-  expect(css).toMatch(/\.turn--key\.turn--selected \{ margin: 0 -8px 0 -12px; padding: 8px 8px 8px 12px;/);
+  // Полоса — отдельный слой у внешнего края (до ▷ 14 px), а не поле и отступ строки, которые
+  // перебивал `.turn { padding }` из card.css (он подключается позже) — тогда полоса липла к ▷.
+  expect(css).toMatch(/\.turn--key::before \{\s*content: ""; position: absolute; left: -16px;/);
+  expect(css).not.toMatch(/\.turn--key[^{]*\{[^}]*(margin|padding)/);
   expect(css).toMatch(/\.turn\[data-now\] \.turn__time \{ color: var\(--accent\)/);
   expect(css).not.toMatch(/\.turn\[data-now\][^{]*\{[^}]*box-shadow/);
 });

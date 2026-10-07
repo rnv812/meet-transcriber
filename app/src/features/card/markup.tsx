@@ -35,7 +35,10 @@ const INSIGHT_ICON: Record<InsightKind, LucideIcon> = {
   followup: CircleArrowRight,
 };
 
-/** Значок типа реплики в начале строки: приглушённый, подпись — в подсказке. */
+/** Есть ли у типа значок (у утверждения — нет). */
+export const hasTypeIcon = (type: PhraseType) => !!TYPE_ICON[type];
+
+/** Значок типа реплики — в колонке перед именем: приглушённый, подпись — в подсказке. */
 export function TypeIcon({ type }: { type: PhraseType }) {
   const Icon = TYPE_ICON[type];
   if (!Icon) return null;

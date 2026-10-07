@@ -8,7 +8,7 @@ import type { PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
 import { LinkedText } from "../../ui/LinkedText";
-import { TypeIcon } from "./markup";
+import { TypeIcon, hasTypeIcon } from "./markup";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
 
@@ -117,6 +117,7 @@ export const Turns = memo(function Turns({
         const text = nfc(t.texts.join(" "));
         const mark = marks?.get(i);
         const on = selected?.has(i) ?? false;
+        const headless = textPhase && t.speaker === NO_SPEAKER;
         return (
           <div className={`turn${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}${key?.[i] ? " turn--key" : ""}`}
             key={`t${i}`}
@@ -138,12 +139,13 @@ export const Turns = memo(function Turns({
             ) : (
               <span className="turn__time num">{clock(t.start)}</span>
             )}
-            <div className="turn__body">
+            {/* Строки имени нет: текст встаёт на одну строку со временем. */}
+            {headless && <span className="sr-only">Спикер ещё не определён</span>}
+            {/* Значок типа — в своей колонке у каждой реплики (пустой, если значка нет): имя и текст не сдвигаются. */}
+            <span className="turn__mark">{types?.[i] && <TypeIcon type={types[i]!} />}</span>
+            {!headless && (
               <div className="turn__head">
-                {types?.[i] && <TypeIcon type={types[i]!} />}
-                {textPhase && t.speaker === NO_SPEAKER ? (
-                  <span className="sr-only">Спикер ещё не определён</span>
-                ) : textPhase ? (
+                {textPhase ? (
                   <span className="turn__speaker">{t.speaker}</span>
                 ) : t.speaker === NO_SPEAKER ? (
                   <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
@@ -173,14 +175,14 @@ export const Turns = memo(function Turns({
                     onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onAskAgent([i]); }} />
                 )}
               </div>
-              {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
-              <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
-                onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
-                {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
-                  links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} />
-                  : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
-              </p>
-            </div>
+            )}
+            {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
+            <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
+              onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
+              {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
+                links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} />
+                : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
+            </p>
           </div>
         );
   };
@@ -212,8 +214,10 @@ export const Turns = memo(function Turns({
       </button>
     );
   };
+  // Колонка значков типа есть у всех реплик, если значок есть хоть у одной; нет значков — нет и колонки.
+  const marked = types?.some((x) => !!x && hasTypeIcon(x)) ?? false;
   return (
-    <div className="turns">
+    <div className={`turns${marked ? " turns--marked" : ""}`}>
       {rows ? rows.map(renderRow) : turns.map((_, i) => renderTurn(i))}
     </div>
   );

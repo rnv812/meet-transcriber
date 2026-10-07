@@ -105,14 +105,22 @@ button.chip:hover { background: var(--surface-hover); }
 }
 .player__seek:focus-visible { outline: none; }
 .player__seek:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-hover); }
-.turn { display: flex; gap: 12px; padding: 8px 0; }
+/* Реплика — сетка: [▷ время] [значок типа] [имя и пометки / текст]. Первая строка (время,
+   значок, имя) одной высоты --turn-line: ▷ и время всегда на строке имени. Значок типа — в своей
+   колонке у всех реплик (у .turns--marked), поэтому имя и текст у всех реплик начинаются ровно. */
+.turn {
+  --turn-line: 20px;
+  position: relative; display: grid; grid-template-columns: 84px var(--turn-mark, 0px) minmax(0, 1fr);
+  align-items: start; padding: 8px 0;
+}
+.turns--marked { --turn-mark: 20px; }
 /* Перерыв между частями объединённой встречи: разделитель, а не реплика. */
 .turn-break { display: flex; align-items: center; gap: 12px; padding: 10px 0; color: var(--text-3); font-size: 12px; }
 .turn-break::before, .turn-break::after { content: ""; flex: 1; border-top: 1px dashed var(--line-2); }
 .turn-break__text { flex: none; }
 .turn__time {
-  flex: none; align-self: flex-start; width: 72px; padding: 2px 0; text-align: left;
-  border: 0; background: none; color: var(--text-3); font: inherit; font-size: 12px; cursor: pointer;
+  grid-column: 1; width: 72px; height: var(--turn-line); padding: 0; text-align: left;
+  border: 0; background: none; color: var(--text-3); font: inherit; font-size: 12px; line-height: var(--turn-line); cursor: pointer;
 }
 .turn__time:hover { color: var(--accent-hover); }
 /* Значок «слушать» — тот же lucide Play (14 px, штрих 1.75), но маской: в длинной
@@ -123,10 +131,14 @@ button.turn__time::before {
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-.turn__body { min-width: 0; }
-.turn__head { display: flex; gap: 8px; align-items: baseline; }
+.turn__mark { grid-column: 2; display: flex; align-items: center; height: var(--turn-line); }
+/* Имя и пометки («в комнате», «(голос под вопросом)», ✦): в узкой карточке пометки переносятся целиком. */
+.turn__head {
+  grid-column: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px;
+  min-width: 0; min-height: var(--turn-line); line-height: var(--turn-line);
+}
 .turn__speaker { font-weight: 600; font-size: 12px; color: var(--text); }
-button.turn__speaker { padding: 0; border: 0; background: none; font-family: inherit; cursor: pointer; }
+button.turn__speaker { padding: 0; border: 0; background: none; font-family: inherit; line-height: inherit; cursor: pointer; }
 .turn__speaker--unnamed { color: var(--text-2); }
 button.turn__speaker:hover { text-decoration: underline; }
 .turn__speaker--unnamed:hover { color: var(--accent-hover); }
@@ -142,7 +154,9 @@ button.turn__speaker:hover { text-decoration: underline; }
 .turn__ask { align-self: center; margin: -3px 0; opacity: 0; }
 .turn:hover .turn__ask, .turn:focus-within .turn__ask, .turn:focus .turn__ask, .turn__ask:focus-visible { opacity: 1; }
 @media (hover: none) { .turn__ask { opacity: 0.7; } }
-.turn__text { margin: 2px 0 0; color: var(--text); line-height: 1.55; }
+.turn__text { grid-column: 3; margin: 0; color: var(--text); line-height: 1.55; }
+/* Без строки имени (текст до спикеров) текст — на строке времени. */
+.turn__mark + .turn__text { margin-top: 0; }
 .popover {
   position: fixed; z-index: 50; max-height: calc(100vh - 16px); overflow-y: auto; max-width: calc(100vw - 16px);
   padding: 10px; background: var(--surface-2);
@@ -219,7 +233,8 @@ mark.hit {
   background: rgba(94, 106, 210, 0.28); box-shadow: 0 0 0 1px rgba(94, 106, 210, 0.35);
 }
 mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent); color: #fff; box-shadow: 0 0 0 1px var(--accent-hover); }
-.turn__text.hit--current { box-shadow: -3px 0 0 var(--accent); padding-left: 6px; }
+/* Текущее совпадение: полоса левее текста, сам текст не сдвигается. */
+.turn__text.hit--current { box-shadow: -3px 0 0 var(--accent); margin-left: -6px; padding-left: 6px; }
 .tmenu__quote { padding: 4px 6px; border-radius: var(--r-sm); background: var(--surface); line-height: 1.45; }
 .tmenu__cut { margin: 0 1px; color: var(--accent-hover); font-weight: 700; }
 
