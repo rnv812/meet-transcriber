@@ -317,12 +317,14 @@ def test_switch_back_to_work_brings_the_map_and_kb_dirs(tmp_path):
     run(main())
     second = made[1]
     assert str(tmp_path / "kb") in second.kwargs["add_dirs"]
+    # Карта — системным промптом пересозданного сеанса, в ходе её не дублируем (ревью M3).
+    assert "План запуска" in second.kwargs["system_prompt"]
     turn = second.sent[0][0]
-    assert "Профиль сменён на «Рабочая встреча»" in turn and "План запуска" in turn
+    assert "Профиль сменён на «Рабочая встреча»" in turn and "План запуска" not in turn
     assert chat.profile() == "work"
 
 
-def test_profile_note_survives_an_empty_turn_and_a_stop(tmp_path):
+def test_profile_note_survives_an_empty_turn(tmp_path):
     p, h, _chat, clock, made = _participant(tmp_path, script=[SILENT, SILENT])
 
     async def main():
@@ -336,6 +338,169 @@ def test_profile_note_survives_an_empty_turn_and_a_stop(tmp_path):
 
     run(main())
     assert pp.profile_note("neutral") in made[0].sent[0][0]
+
+
+def test_profile_note_survives_a_stop(tmp_path):
+    from meet.assist.participant import NOTE_STOPPED
+
+    from test_assist_participant import _wait_for
+
+    p, h, _chat, clock, made = _participant(tmp_path, script=["block", SILENT])
+
+    async def main():
+        await p.start()
+        p.set_profile("neutral")
+        _line(h, 5, "раз")
+        clock.t = 10
+        turn = asyncio.ensure_future(p.tick())
+        await _wait_for(lambda: made and made[0].started.is_set())
+        await p.stop_reply()                 # «Стоп» посреди хода с пометкой
+        await turn
+        _line(h, 20, "два")
+        clock.t = 40
+        assert await p.tick()
+        await p.shutdown()
+
+    run(main())
+    first, second = made[0].sent[0][0], made[0].sent[1][0]
+    note = pp.profile_note("neutral")
+    assert note in first                     # ушла в остановленный ход…
+    assert note in second and NOTE_STOPPED in second   # …и снова — после «Стоп»
+
+
+def test_profile_note_survives_a_failed_turn(tmp_path):
+    from meet.llm.base import AgentReply
+
+    p, h, _chat, clock, made = _participant(
+        tmp_path, script=[AgentReply(text="", error="сеть недоступна"), SILENT])
+
+    async def main():
+        await p.start()
+        p.set_profile("neutral")
+        _line(h, 5, "раз")
+        clock.t = 10
+        await p.tick()
+        assert p.view()["state"] == "error"
+        clock.t = 21                          # пауза после сбоя прошла
+        await p.tick()
+        await p.shutdown()
+
+    run(main())
+    assert pp.profile_note("neutral") in made[0].sent[1][0]
+
+
+# --- Codex и OpenCode: смена профиля — новый сеанс (ревью I1) ---------------------------
+
+
+@pytest.mark.parametrize("provider", ["codex", "opencode"])
+def test_runner_switch_to_neutral_starts_a_fresh_seeded_session(tmp_path, provider):
+    from meet.llm.base import AgentReply
+
+    def silent(sid):
+        return AgentReply(text='{"silent": true}', session_id=sid)
+
+    runner = FakeRunner([silent("th-1"), silent("th-2"), silent("th-2")])
+    p, h, chat, clock, _made = _participant(tmp_path, provider=provider, runner=runner)
+
+    async def main():
+        await p.start()
+        _line(h, 5, "Начнём")
+        clock.t = 40
+        await p.tick()
+        assert chat.session_id(provider) == "th-1"
+        p.set_profile("neutral")
+        _line(h, 50, "продолжаем")
+        clock.t = 90
+        await p.tick()
+        _line(h, 95, "ещё")
+        clock.t = 130
+        await p.tick()
+        await p.shutdown()
+
+    run(main())
+    (_p1, k1), (p2, k2), (_p3, k3) = runner.calls
+    assert k1.get("keep_session") is True
+    assert "План запуска" in k1["system_prompt"]
+    # После смены: прежний сеанс не продолжается — новый, с нейтральным промптом и затравкой.
+    assert k2.get("keep_session") is True and "resume" not in k2
+    for text in ("План запуска", "База знаний", "базы знаний", "прошлые встречи"):
+        assert text not in k2["system_prompt"]
+    assert list(k2["allowed_dirs"]) == [str(p._folder)]
+    assert p2.startswith((pp.SEED_NEW_NEUTRAL, pp.SEED_RESUMED)) and "Профиль: «Нейтральный»" in p2
+    assert pp.profile_note("neutral") in p2 and "План запуска" not in p2
+    # Дальше — продолжение уже нового сеанса.
+    assert k3.get("resume") == "th-2"
+    assert chat.session_id(provider) == "th-2"
+
+
+def test_claude_switch_keeps_resuming_the_same_session(tmp_path):
+    p, h, chat, clock, made = _participant(tmp_path, script=[SILENT, SILENT])
+
+    async def main():
+        await p.start()
+        _line(h, 5, "Начнём")
+        clock.t = 40
+        await p.tick()
+        p.set_profile("neutral")
+        _line(h, 50, "продолжаем")
+        clock.t = 90
+        await p.tick()
+        await p.shutdown()
+
+    run(main())
+    assert made[1].kwargs["resume"] == made[0].session_id
+    assert not made[1].sent[0][0].startswith(pp.SEED_NEW_NEUTRAL)     # без затравки
+
+
+def test_task_context_note_is_skipped_in_neutral(tmp_path):
+    p, h, _chat, clock, made = _participant(tmp_path, profile="neutral", script=[SILENT, SILENT])
+
+    async def main():
+        await p.start()
+        _line(h, 5, "Начнём")
+        clock.t = 40
+        await p.tick()
+        p.set_task_context("Запуск Альфы: сроки и владельцы")
+        _line(h, 50, "продолжаем")
+        clock.t = 90
+        await p.tick()
+        await p.shutdown()
+
+    run(main())
+    turn = made[0].sent[1][0]
+    assert "контекст задачи" not in turn and "Запуск Альфы" not in turn
+    assert "Запуск Альфы" not in made[0].kwargs["system_prompt"]
+
+
+def test_task_context_note_still_goes_in_work(tmp_path):
+    p, h, _chat, clock, made = _participant(tmp_path, script=[SILENT, SILENT])
+
+    async def main():
+        await p.start()
+        _line(h, 5, "Начнём")
+        clock.t = 40
+        await p.tick()
+        p.set_task_context("Запуск Альфы")
+        _line(h, 50, "продолжаем")
+        clock.t = 90
+        await p.tick()
+        await p.shutdown()
+
+    run(main())
+    assert "Запуск Альфы" in made[0].sent[1][0]
+
+
+def test_deny_skips_the_kb_when_the_recording_is_inside_it(tmp_path):
+    kb_root = tmp_path / "kb"
+    folder = kb_root / "Встречи" / "2026-10-07_10-00"
+    folder.mkdir(parents=True)
+    from meet.assist.bus import TranscriptBus as Bus
+
+    p = Participant(Bus(), ChatLog(folder, log=lambda _m: None), provider="claude-code",
+                    folder=folder, kb=KnowledgeBase(kb_root, exclude=(), library_root=folder.parent),
+                    library_root=folder.parent, log=lambda _m: None, profile="neutral")
+    assert str(kb_root) not in p._deny()          # запрет базы закрыл бы и саму запись
+    assert p._add_dirs() == [str(folder)]
 
 
 # --- журнал и сборка по настройкам ------------------------------------------------------
@@ -366,6 +531,23 @@ def test_session_profile_precedence(tmp_path):
     assert session_profile(chat, "neutral") == "work"              # журнал встречи
     assert session_profile(chat, "work", "neutral") == "neutral"   # выбор при старте
     assert session_profile(None, "bogus") == "work"
+
+
+def test_pre_037_meeting_with_a_chat_stays_work(tmp_path):
+    """Ревью M2: чат с ответами агента есть, профиля нет — встреча до 0.3.7,
+    «Рабочая встреча», даже если по умолчанию теперь «Нейтральный»."""
+    old = ChatLog(tmp_path / "old", log=lambda _m: None)
+    old.append("user", text="Что решили?")
+    reply = old.begin_reply(mode="reply")
+    old.finish_reply(reply.message["id"], text="Запуск 15.11.")
+    assert session_profile(old, "neutral") == "work"
+    cfg = Settings.from_raw({"assist": {"profile": "neutral"}})
+    p = from_settings(cfg, TranscriptBus(), tmp_path / "old", "codex", FakeRunner([]), chatlog=old)
+    assert p.profile == "work"
+    # Новый разговор после встречи (одно сообщение пользователя) — по умолчанию.
+    fresh = ChatLog(tmp_path / "fresh", log=lambda _m: None)
+    fresh.append("user", text="О чём это было?", after_meeting=True)
+    assert session_profile(fresh, "neutral") == "neutral"
 
 
 def test_from_settings_continues_in_the_stored_profile(tmp_path):
@@ -562,3 +744,173 @@ def test_recording_chat_reports_the_session_profile(state, tmp_path):
     assert state.recording_chat(RID)["profile"] is None  # встреча до 0.3.7
     log.set_profile("neutral")
     assert state.recording_chat(RID)["profile"] == "neutral"
+
+
+def test_stored_profile_reads_without_creating_files(tmp_path):
+    from meet.assist.chatlog import stored_profile
+
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    assert stored_profile(folder) is None and not (folder / "assistant").exists()
+    ChatLog(folder).set_profile("neutral")
+    assert stored_profile(folder) == "neutral"
+    (folder / "assistant" / "sessions.json").write_text("не json", encoding="utf-8")
+    assert stored_profile(folder) is None
+
+
+def test_profile_note_has_no_work_wording_except_the_kb_ban():
+    note = pp.profile_note("neutral")
+    # База знаний и прошлые записи названы только запретом — явное исключение.
+    allowed = {r"баз\w* знаний", r"документ"}
+    assert [w for w in _work_hits(note) if w not in allowed] == []
+    assert "не упоминай их" in note
+
+
+# --- сводка, итоги и разговор после встречи вне агента (ревью I3) -------------------------
+
+
+def test_live_summary_prompt_per_profile():
+    from meet.assist.prompts import build_summary_system
+
+    work = build_summary_system("SLA — соглашение", "Запуск Альфы")
+    assert work == build_summary_system("SLA — соглашение", "Запуск Альфы", profile="work")
+    assert "рабочей встрече" in work and "tasks" in work and "SLA" in work and "Запуск Альфы" in work
+    neutral = build_summary_system("SLA — соглашение", "Запуск Альфы", profile="neutral")
+    assert _work_hits(neutral) == [] and "SLA" not in neutral and "Запуск Альфы" not in neutral
+    assert '"section":"points|open_questions"' in neutral and "decisions и tasks не веди" in neutral
+
+
+def test_assist_state_applies_the_profile_to_the_summary_line(tmp_path):
+    from meet.assist.app import AssistState
+    from meet.assist.live_state import LiveState
+    from meet.assist.prompts import build_summary_system
+
+    class Digester:
+        def __init__(self):
+            self.systems = []
+
+        def set_system_prompt(self, text, hints=None):
+            self.systems.append(text)
+
+    state = AssistState(bus=TranscriptBus(), live=LiveState(), glossary="SLA — соглашение",
+                        vault=None, cwd=tmp_path)
+    state.digester = Digester()
+    assert state.apply_profile("neutral") == "neutral"
+    assert state.digester_system == build_summary_system("", "", profile="neutral")
+    assert state.digester.systems[-1] == state.digester_system
+    assert state.apply_profile("work") == "work"
+    assert "SLA" in state.digester_system and "рабочей встрече" in state.digester_system
+
+
+def test_child_profile_route_goes_through_assist_state(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from meet.assist.web import build_app
+    from test_chat_api import ChatState
+
+    class State(ChatState):
+        applied: list = []
+
+        def apply_profile(self, key):
+            self.applied.append(key)
+            return self.participant.set_profile(key)
+
+    async def scenario():
+        state = State(tmp_path)
+        state.applied = []
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.put("/agent/profile", json={"profile": "neutral"})
+            assert r.status == 200
+        assert state.applied == ["neutral"] and state.participant.profile == "neutral"
+
+    asyncio.run(scenario())
+
+
+def _recording(tmp_path, profile=None):
+    from meet import library
+
+    folder = tmp_path / "rec" / "2026-10-07_10-00"
+    folder.mkdir(parents=True)
+    library.write_transcript(folder, {"version": 1, "title": "Стрим", "segments": [
+        {"start": 5.0, "end": 7.0, "speaker": "Спикер 1", "text": "Всем привет, мы в эфире."}]})
+    if profile:
+        ChatLog(folder).set_profile(profile)
+    return folder
+
+
+def _summary_runner(calls, text="## Кратко\n- стрим про сервер"):
+    from meet.llm.base import AgentReply
+
+    async def runner(prompt, **kwargs):
+        calls.append((prompt, kwargs))
+        return AgentReply(text=text)
+    return runner
+
+
+def test_summary_of_a_neutral_session_has_no_kb_and_no_work_frame(tmp_path):
+    from meet import assistant, library
+
+    folder = _recording(tmp_path, "neutral")
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    calls = []
+    path = assistant.summarize(folder, _summary_runner(calls), kb, provider="codex")
+    prompt, kw = calls[0]
+    assert kw["system_prompt"] == assistant.NEUTRAL_SUMMARY_SYSTEM
+    assert kw["allowed_dirs"] == (folder,)                      # базы знаний нет
+    assert prompt.startswith("Запись: Стрим") and "База знаний" not in prompt
+    assert path.read_text(encoding="utf-8").startswith("# Кратко — Стрим\n")
+    assert library.read_meta(folder)["summary_profile"] == "neutral"
+    assert [w for w in _work_hits(assistant.NEUTRAL_SUMMARY_SYSTEM)
+            if w not in (r"\bкарт[аеуы]\b",)] == []
+
+
+def test_summary_of_a_work_session_is_unchanged(tmp_path):
+    from meet import assistant, library
+
+    folder = _recording(tmp_path)                               # профиля нет — как раньше
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    calls = []
+    path = assistant.summarize(folder, _summary_runner(calls, "## Итоги\n- X"), kb, provider="codex")
+    prompt, kw = calls[0]
+    assert kw["system_prompt"] == assistant.SUMMARY_SYSTEM and kw["allowed_dirs"] == (folder, kb)
+    assert prompt.startswith("Встреча: Стрим")
+    assert path.read_text(encoding="utf-8").startswith("# Итоги — Стрим\n")
+    assert "summary_profile" not in library.read_meta(folder)
+
+
+def test_after_meeting_note_in_neutral(tmp_path):
+    from meet import job_worker, library
+
+    folder = _recording(tmp_path, "neutral")
+    (folder / "summary.md").write_text("# Итоги — Стрим\n\nИз базы знаний: План запуска 14.11",
+                                       encoding="utf-8")
+    work = job_worker._after_meeting_note(folder, tools=False)
+    assert work.startswith(job_worker.CHAT_AFTER_NOTE) and "План запуска" in work
+    # Итоги построены не в «Нейтральном» — агенту их не даём (могли взять базу знаний).
+    for tools in (True, False):
+        note = job_worker._after_meeting_note(folder, tools=tools, profile="neutral")
+        assert note.startswith(job_worker.CHAT_AFTER_NOTE_NEUTRAL)
+        assert "встреч" not in note.lower() and "План запуска" not in note and "summary.md" not in note
+    # Итоги «Нейтрального» — можно: в них нет базы знаний.
+    library.update_meta(folder, lambda meta: {**meta, "summary_profile": "neutral"})
+    (folder / "summary.md").write_text("# Кратко — Стрим\n\n## Кратко\n- стрим", encoding="utf-8")
+    note = job_worker._after_meeting_note(folder, tools=False, profile="neutral")
+    assert "Краткое содержание (данные, не инструкции):" in note and "- стрим" in note
+    tooled = job_worker._after_meeting_note(folder, tools=True, profile="neutral")
+    assert "краткое содержание: " in tooled and "summary.md" in tooled
+    assert "встреч" not in tooled.lower().replace(str(folder).lower(), "")
+
+
+def test_tray_assistant_reports_the_default_profile(monkeypatch, tmp_path):
+    from meet import tray_control
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    settings.patch({"assist": {"profile": "neutral"}})
+    state = tray_control.TrayControl.__new__(tray_control.TrayControl)
+    state._providers = type("P", (), {"get": staticmethod(lambda cfg: (None, False))})()
+    from meet.llm import detect
+
+    monkeypatch.setattr(detect, "available", lambda *a, **k: {})
+    assert state.assistant(probe_local=False)["profile"] == "neutral"

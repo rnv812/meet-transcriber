@@ -3487,12 +3487,7 @@ class TrayControl:
         # Агент-участник включён в настройках: писать после встречи можно (иначе 409).
         out["enabled"] = bool(settings.load().assist.participant)
         # Профиль сессии этой встречи (0.3.7); до 0.3.7 или без ассистента — None.
-        out["profile"] = None
-        if (chatlog.chat_dir(folder) / chatlog.SESSIONS_JSON).is_file():
-            try:
-                out["profile"] = chatlog.ChatLog(folder, log=self.tray.log).profile()
-            except OSError:
-                pass
+        out["profile"] = chatlog.stored_profile(folder)
         return out
 
     def continue_chat(self, recording_id: str, body: dict | None) -> dict:
@@ -4481,6 +4476,9 @@ class TrayControl:
             "knowledge_dir": str(knowledge) if knowledge else None,
             # Какой прокси получат Claude Code/Codex (логин и пароль скрыты).
             "proxy": netproxy.describe(cfg),
+            # Профиль сессии по умолчанию (`assist.profile`) — меню старта
+            # помечает его и ставит первым (ревью M5).
+            "profile": cfg.assist.profile,
         }
 
     def check_provider(self, body: dict | None) -> dict:

@@ -685,6 +685,8 @@ export type AssistantInfo = {
   checking: boolean;
   /** Нет у резидента прежней версии. */
   proxy?: ProxyInfo;
+  /** Профиль сессии по умолчанию (`assist.profile`, 0.3.7): меню старта ставит его первым. */
+  profile?: AgentProfile;
 };
 
 /**

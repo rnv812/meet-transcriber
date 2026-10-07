@@ -1359,7 +1359,11 @@ def build_app(state) -> web.Application:
         if key is None:
             raise web.HTTPBadRequest(text="profile — work или neutral")
         participant = _participant(state)
-        participant.set_profile(key)
+        apply = getattr(state, "apply_profile", None)
+        if apply is not None:
+            apply(key)               # агенту и линии сводки
+        else:
+            participant.set_profile(key)
         return _json_response({"profile": key, "label": PROFILE_LABELS[key], "live": True})
 
     # Картинка до 10 МБ в теле `/chat/paste` (по умолчанию aiohttp — 1 МБ).

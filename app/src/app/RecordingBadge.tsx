@@ -6,7 +6,7 @@ import { type Endpoint, getAssistant, liveAttach, liveDetach, liveStart, liveSto
 import { clock, errorText } from "../lib/format";
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
-import { PROFILES, PROFILE_LABELS, PROFILE_NOTES } from "../live/profiles";
+import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "../live/profiles";
 import { Button } from "../ui/Button";
 import { floatingStyle, useFloating } from "../ui/floating";
 import { Icon } from "../ui/Icon";
@@ -167,6 +167,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const menuPos = useFloating(menu ? split : null, menuBox, { align: "end", gap: 4 });
   const hintId = useId();
   const blocked = noProvider(assistant);
+  // Профиль по умолчанию (`assist.profile`) — первым и с пометкой (ревью M5);
+  // старый резидент его не присылает — порядок как есть, без пометки.
+  const fallback = assistant?.profile ? profileOf(assistant.profile) : null;
+  const profiles = fallback ? [fallback, ...PROFILES.filter((p) => p !== fallback)] : PROFILES;
+  const mark = (p: AgentProfile) => (p === fallback ? " (по умолчанию)" : "");
   // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню больше не к месту.
   useEffect(() => { setMenu(false); }, [mode]);
   // Открытое меню — фокус на пункт; неактивен (нет провайдера) — остаётся на «▾».
@@ -254,11 +259,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
                   Выключить ассистента
                   <span className="rec-menu__note">запись продолжится, сводка останется в карточке</span>
                 </button>
-              ) : PROFILES.map((p, k) => (
+              ) : profiles.map((p, k) => (
                 <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
                   disabled={blocked} aria-describedby={blocked ? hintId : undefined}
                   onClick={() => runLive(liveAttach, p)}>
-                  Включить ассистента · {PROFILE_LABELS[p]}
+                  Включить ассистента · {PROFILE_LABELS[p]}{mark(p)}
                   <span className="rec-menu__note">догонит начало встречи; {PROFILE_NOTES[p]}</span>
                 </button>
               ))}
@@ -303,11 +308,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
           aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Icon as={ChevronDown} size="sm" /></Button>
         {menu && (
           <div ref={menuBox} className="rec-menu" role="menu" aria-label="Варианты записи" style={floatingStyle(menuPos)}>
-            {PROFILES.map((p, k) => (
+            {profiles.map((p, k) => (
               <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
                 disabled={blocked} aria-describedby={blocked ? hintId : undefined}
                 onClick={() => runLive(liveStart, p)}>
-                С ассистентом · {PROFILE_LABELS[p]}
+                С ассистентом · {PROFILE_LABELS[p]}{mark(p)}
                 <span className="rec-menu__note">{PROFILE_NOTES[p]}</span>
               </button>
             ))}

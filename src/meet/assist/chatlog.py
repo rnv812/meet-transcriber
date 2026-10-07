@@ -242,6 +242,18 @@ def has_chat(folder: Path) -> bool:
     return (chat_dir(folder) / CHAT_JSONL).is_file()
 
 
+def stored_profile(folder: Path) -> str | None:
+    """Профиль сессии ассистента записи (`work` / `neutral`) из
+    `sessions.json` — без замка и без создания файлов (итоги, заметка после
+    встречи, карточка). Нет файла, нет поля, мусор или файл занят — None."""
+    try:
+        data = json.loads((chat_dir(folder) / SESSIONS_JSON).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("profile") if isinstance(data, dict) else None
+    return value if value in PROFILES else None
+
+
 def _print(text: str) -> None:
     print(text, flush=True)
 

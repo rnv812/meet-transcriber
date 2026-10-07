@@ -262,6 +262,18 @@ test("чип-источник: документ базы знаний по пу�
   expect(getKbDocs).toHaveBeenCalledTimes(1);
 });
 
+test("«Нейтральный»: документ базы знаний в тексте — без чипа-источника (ревью M4)", async () => {
+  vi.mocked(getKbDocs).mockResolvedValue({ root: "D:\\KB", docs: ["Проекты/Альфа/Биллинг.md"], more: false });
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({
+    profile: "neutral",
+    seq: 1, messages: [agentMsg("m1", { text: "Раньше упоминался Проекты/Альфа/Биллинг.md.", t: undefined })],
+  }));
+  render(<Tab />);
+  expect(await within(await ready()).findByText(/Биллинг\.md/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Источник: Биллинг.md" })).toBeNull();
+  expect(getKbDocs).not.toHaveBeenCalled();
+});
+
 test("пока встреча расшифровывается — лента видна, писать нельзя, видно почему (ревью I3)", async () => {
   vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
   const transcribing = { ...chatJob("running"), id: "t1", kind: "transcribe" } as Job;

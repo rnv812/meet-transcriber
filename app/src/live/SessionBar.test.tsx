@@ -158,11 +158,14 @@ test("нейтральный: видит «только разговор» и в
   const neutral = (sees: Parameters<typeof agentInfo>[0]) => seesText(agentInfo({ profile: "neutral", ...sees }));
   expect(neutral({ sees: { conversation: true, kb: false, materials: 0, images: 0 } })).toBe("только разговор");
   expect(neutral({ sees: { conversation: true, kb: false, materials: 2, images: 1 } }))
-    .toBe("только разговор, 2 материала, 1 изображение");
+    .toBe("разговор и ваши материалы (2 материала, 1 изображение)");
   // Даже если резидент прислал карту — нейтральный её не показывает.
   expect(neutral({ sees: { conversation: true, kb: true, kb_docs: true, materials: 0, images: 0 } })).toBe("только разговор");
-  render(<SessionBar agent={agentInfo({ profile: "neutral", sees: { conversation: true, kb: false, materials: 1, images: 0 } })}
+  render(<SessionBar agent={agentInfo({ profile: "neutral", deny_enforced: false,
+    sees: { conversation: true, kb: false, materials: 1, images: 0 } })}
     summary={summary} onFrequency={() => {}} />);
-  expect(bar()).toHaveTextContent("видит: только разговор, 1 материал");
+  expect(bar()).toHaveTextContent("видит: разговор и ваши материалы (1 материал)");
   expect(bar()).not.toHaveTextContent("базы знаний");
+  // Пометка об исключённых папках базы — не про «Нейтральный».
+  expect(bar()).not.toHaveTextContent(DENY_NOTE);
 });

@@ -121,6 +121,20 @@ test("профиль выбирается тем же щелчком: два п�
   expect(start).toHaveBeenCalledWith(ep, "neutral");
 });
 
+test("профиль по умолчанию из настроек — первым и с пометкой", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue({ ...assistant(), profile: "neutral" });
+  const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  await openMenu();
+  await waitFor(() => expect(screen.getAllByRole("menuitem")[0])
+    .toHaveTextContent("С ассистентом · Нейтральный (по умолчанию)"));
+  const items = screen.getAllByRole("menuitem");
+  expect(items[1]).toHaveTextContent("С ассистентом · Рабочая встреча");
+  expect(items[1]).not.toHaveTextContent("по умолчанию");
+  await userEvent.click(items[0]!);
+  expect(start).toHaveBeenCalledWith(ep, "neutral");
+});
+
 test("без провайдера неактивны оба пункта профиля", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null }));
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);

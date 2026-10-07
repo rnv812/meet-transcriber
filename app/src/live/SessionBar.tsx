@@ -31,18 +31,21 @@ const NO_FRESH = new Set<string>();
 
 /**
  * «разговор, структура базы знаний, 3 материала»; карта только из прошлых встреч группы — «карта».
- * Профиль «Нейтральный» базу знаний не видит вовсе: «только разговор» и то, что приложил человек.
+ * Профиль «Нейтральный» базу знаний не видит вовсе: «только разговор», а с вложениями —
+ * «разговор и ваши материалы (2 материала)».
  */
 export function seesText(agent: AgentInfo): string {
-  const parts: string[] = [];
   const sees = agent.sees ?? { conversation: true, kb: false, materials: 0, images: 0 };
-  const neutral = profileOf(agent.profile) === "neutral";
-  if (neutral) parts.push("только разговор");
-  else if (sees.conversation !== false) parts.push("разговор");
-  if (sees.kb && !neutral) parts.push(sees.kb_docs === false ? "карта" : "структура базы знаний");
-  if (sees.materials > 0) parts.push(`${sees.materials} ${plural(sees.materials, "материал", "материала", "материалов")}`);
-  if (sees.images > 0) parts.push(`${sees.images} ${plural(sees.images, "изображение", "изображения", "изображений")}`);
-  return parts.join(", ") || "ничего";
+  const own: string[] = [];
+  if (sees.materials > 0) own.push(`${sees.materials} ${plural(sees.materials, "материал", "материала", "материалов")}`);
+  if (sees.images > 0) own.push(`${sees.images} ${plural(sees.images, "изображение", "изображения", "изображений")}`);
+  if (profileOf(agent.profile) === "neutral") {
+    return own.length ? `разговор и ваши материалы (${own.join(", ")})` : "только разговор";
+  }
+  const parts: string[] = [];
+  if (sees.conversation !== false) parts.push("разговор");
+  if (sees.kb) parts.push(sees.kb_docs === false ? "карта" : "структура базы знаний");
+  return [...parts, ...own].join(", ") || "ничего";
 }
 
 const MODEL_TITLE = "Claude Code запустил не ту модель, что указана в настройках («Модель Claude Code»). "
@@ -60,7 +63,8 @@ export function agentNotes(agent: AgentInfo): { text: string; title?: string; wa
   const warning = modelWarning(agent);
   if (warning) notes.push({ text: warning, title: MODEL_TITLE, warn: true });
   if (!agent.vision) notes.push({ text: NO_VISION });
-  if (!agent.deny_enforced) notes.push({ text: DENY_NOTE, title: DENY_TITLE });
+  // Исключённые папки базы знаний — про «Рабочую встречу»: в «Нейтральном» базы нет.
+  if (!agent.deny_enforced && profileOf(agent.profile) !== "neutral") notes.push({ text: DENY_NOTE, title: DENY_TITLE });
   return notes;
 }
 

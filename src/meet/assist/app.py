@@ -106,6 +106,9 @@ class AssistState:
         self._cwd = cwd
         self._knowledge = _knowledge_path(knowledge, vault)
         self._task_context = ""
+        # Профиль сессии агента-участника (0.3.7): в «Нейтральном» и сводка
+        # («Сводка на сейчас», черновик итогов) — без рабочей рамки.
+        self.profile = "work"
         self.qa = None       # проставляет run_assist после создания QAService
         self.digester = None  # аналогично
         # Агент-участник (`assist.participant`, 0.3.6): тогда qa — None, а
@@ -146,7 +149,8 @@ class AssistState:
         return self._knowledge
 
     def _rebuild(self) -> None:
-        self.digester_system = build_summary_system(self._glossary, self._task_context)
+        self.digester_system = build_summary_system(self._glossary, self._task_context,
+                                                    profile=self.profile)
         self.hints_system = build_hints_system(
             self._glossary, self._task_context, max_hints=self.live.max_hints, owner=self._owner)
         self.qa_system = build_qa_system(
@@ -157,6 +161,18 @@ class AssistState:
             self.qa.set_system_prompt(self.qa_system)
         if self.participant is not None:
             self.participant.set_task_context(self._task_context)
+
+    def apply_profile(self, profile: str) -> str:
+        """Профиль сессии (старт, смена по ходу из окна): агенту — пометка и
+        новый сеанс (`Participant.set_profile`), линии сводки — промпт этого
+        профиля со следующего тика. → ключ профиля."""
+        if self.participant is not None:
+            profile = self.participant.set_profile(profile)
+        profile = "neutral" if profile == "neutral" else "work"
+        if profile != self.profile:
+            self.profile = profile
+            self._rebuild()
+        return profile
 
     async def set_task(self, task: str) -> None:
         if self._vault is not None:
@@ -907,6 +923,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         state.participant = _make_participant(
             cfg, bus, out_dir, provider_name, runner, knowledge_dir=knowledge_dir,
             glossary=state._glossary, on_fresh_audio=fresh_audio, log=log, profile=profile)
+        # Сводка — в профиле сессии (выбранном, из журнала или по умолчанию).
+        state.apply_profile(state.participant.profile)
         from meet.assist.web import ChatFeed
 
         state.chat_feed = ChatFeed(state.participant)

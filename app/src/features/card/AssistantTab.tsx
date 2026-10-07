@@ -126,7 +126,7 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
   const [asking, setAsking] = useState(false);
   const jobRef = useRef<Job | null>(null);
   const backend = useMemo(() => recordingChatBackend(id, () => jobRef.current, setInfo), [id]);
-  const chat = useChat(endpoint, backend);
+  const chat = useChat(endpoint, backend, { profile: info?.profile ?? null });
   const chatRef = useRef(chat);
   chatRef.current = chat;
 

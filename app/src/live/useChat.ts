@@ -44,6 +44,7 @@ import {
   type ChatState, EMPTY_CHAT, type FeedItem, REACTIONS, chatReducer, explainPending, feedItems, isFinalAgent,
   nextExplainExpiry, nextReveal, pinnedOf, usedButtons, writingShown,
 } from "./chatModel";
+import { profileOf } from "./profiles";
 import { type KbIndex, type Source, findSources, kbIndex, mayMentionDocs } from "./sources";
 
 /** Обработчики событий чата для `openLiveEvents` (их зовёт `useLive`). */
@@ -173,7 +174,12 @@ export function resetKbDocs(): void {
   kbCache.clear();
 }
 
-export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): Chat {
+/**
+ * `opts.profile` — профиль сессии, когда живого агента нет (чат записи после встречи:
+ * из `GET /recordings/{id}/chat`); у живого — `agent.profile`.
+ */
+export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
+  opts: { profile?: AgentProfile | null } = {}): Chat {
   const [state, dispatch] = useReducer(chatReducer, EMPTY_CHAT);
   const [now, setNow] = useState(() => Date.now());
   const [note, setNote] = useState<string | null>(null);
@@ -420,7 +426,11 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
     const m = state.byId[id];
     return m?.kind === "agent" && typeof m.text === "string" && mayMentionDocs(m.text);
   }), [state.order, state.byId]);
-  const kb = useKbDocs(ep, wantKb);
+  // «Нейтральный»: базы знаний у сессии нет — и чипов её документов тоже (ревью M4):
+  // имя из прежней истории чата не должно выглядеть предложением документа.
+  const neutral = profileOf(profile ?? state.agent?.profile ?? opts.profile) === "neutral";
+  const kbAll = useKbDocs(ep, wantKb && !neutral);
+  const kb = neutral ? null : kbAll;
   const found = useMemo(() => new Map<string, Source[]>(), [attachments, kb]);
   const sources = useCallback((m: ChatMessage) => {
     if (m.kind !== "agent" || !m.text || m.status === "writing") return [];

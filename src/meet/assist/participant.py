@@ -104,6 +104,10 @@ MERGED_MAX = 8_000             # склеенное сообщение — не 
 TASK_NOTE_MAX = 2_000          # контекст задачи в заметке агенту
 WORKDIR = "meet-agent"         # рабочая папка процесса Claude Code агента
 TOOL_PROVIDERS = ("claude-code", "codex", "opencode")
+# Продолжение сеанса с новым системным промптом: Claude Code передаёт его при
+# каждом запуске (`--system-prompt` с `--resume`). Codex (`exec resume`) и
+# OpenCode (длинный промпт — коротким при продолжении) — нет.
+RESUME_RESENDS_SYSTEM = ("claude-code",)
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")
 
 LISTENING, WRITING, ERROR = "listening", "writing", "error"
@@ -625,7 +629,9 @@ class Participant:
         text = text or ""
         changed = text != self._task_context
         self._task_context = text
-        if changed and text and self._session is not None:
+        # «Нейтральный» контекста задачи не знает (его промпт без него); при
+        # переходе в «Рабочую встречу» задача придёт системным промптом сеанса.
+        if changed and text and self._session is not None and self.profile == pp.WORK:
             self.add_note("Пользователь задал контекст задачи встречи (учитывай дальше):\n"
                           + text[:TASK_NOTE_MAX])
 
@@ -734,11 +740,23 @@ class Participant:
 
     async def _ensure_session(self):
         if self._session is not None and self._session_profile != self.profile:
-            # Профиль сменили: у сеанса другие папки и промпт — новый процесс,
-            # тот же сеанс провайдера (id сохранён после прошлого хода).
-            self._log(f"агент: профиль «{pp.PROFILES[self.profile]}» — сеанс модели заново "
-                      "с продолжением")
+            # Профиль сменили: у сеанса другие папки и промпт — новый процесс.
+            # Claude Code продолжает тот же сеанс (системный промпт он берёт
+            # заново при каждом запуске); Codex и OpenCode при продолжении
+            # промпт не перечитывают — их сеанс забывается, новый получает
+            # промпт профиля и затравку из журнала (ревью I1).
             await asyncio.to_thread(self.close)
+            if self.resumable and self.provider not in RESUME_RESENDS_SYSTEM:
+                self._log(f"агент: профиль «{pp.PROFILES[self.profile]}» — новый сеанс "
+                          "модели с затравкой из журнала")
+                self._stored_sid = None
+                try:
+                    await self._io(self._chatlog.set_session_id, self.provider, None)
+                except (OSError, ValueError) as e:
+                    self._log(f"агент: прежний сеанс не забыт ({type(e).__name__}: {e})")
+            else:
+                self._log(f"агент: профиль «{pp.PROFILES[self.profile]}» — сеанс модели заново "
+                          "с продолжением")
         if self._session is not None:
             return self._session
         await self._load_info()
@@ -1097,8 +1115,9 @@ class Participant:
                          owner_speaker=self._owner_speaker, tool_results=inputs.tools,
                          notes=inputs.notes, frequency=inputs.frequency,
                          agent_texts=self._agent_texts, profile=self.profile,
-                         profile_changed=inputs.profile,
-                         kb_map=self._kb_map if inputs.profile else "")
+                         profile_changed=inputs.profile)
+        # Карта при возврате в «Рабочую встречу» — только системным промптом:
+        # сеанс к этому ходу пересоздан с ним (Codex, OpenCode — новый сеанс).
         if delta:
             parts.append(delta)
         return "\n\n".join(parts)
@@ -1801,7 +1820,9 @@ def _drop_files(folder: Path, record: dict, log) -> None:
 def session_profile(chatlog, default, profile=None) -> str:
     """Профиль сессии: выбранный при старте (`profile`), иначе записанный в
     журнале встречи (повторное включение, «Продолжить разговор» после
-    встречи), иначе настройка по умолчанию (`assist.profile`)."""
+    встречи); чат есть, а профиля нет (встреча до 0.3.7) — «Рабочая
+    встреча», как тогда (ревью M2); иначе настройка по умолчанию
+    (`assist.profile`)."""
     if profile is not None:
         return pp.normalize_profile(profile)
     stored = None
@@ -1810,7 +1831,21 @@ def session_profile(chatlog, default, profile=None) -> str:
             stored = chatlog.profile()
         except (OSError, AttributeError):
             stored = None
+        if stored is None and _agent_spoke(chatlog):
+            return pp.WORK
     return pp.normalize_profile(stored or default)
+
+
+def _agent_spoke(chatlog) -> bool:
+    """В журнале уже есть ответы агента: сессия была. Только что записанное
+    сообщение «Продолжить разговор» к новой встрече сессией не считается."""
+    path = getattr(chatlog, "path", None)
+    try:
+        if path is None or not Path(path).is_file():
+            return False
+        return any(m.get("kind") == "agent" for m in chatlog.messages())
+    except Exception:
+        return False
 
 
 def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None,
