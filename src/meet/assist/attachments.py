@@ -153,14 +153,20 @@ def save(folder, data: bytes, *, name: str | None = None) -> dict:
     вложения для журнала: {id, type: "image", name, path, media_type, width,
     height, bytes, sha256, original}."""
     if count(folder) >= MAX_PER_SESSION:
-        raise AttachmentError(TOO_MANY)
+        raise AttachmentError(TOO_MANY)   # быстрый отказ до разбора
     got = normalize(data)
-    aid, path = materials.claim_id(folder, got.ext)
-    try:
-        path.write_bytes(got.data)
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+    # Квота — ещё раз под замком id вместе с записью: два одновременных
+    # сохранения не превысят её (ревью материалов M7). Файл, занятый под id,
+    # пуст до записи и в `count` не входит — поэтому и запись под замком.
+    with materials.id_lock(folder):
+        if count(folder) >= MAX_PER_SESSION:
+            raise AttachmentError(TOO_MANY)
+        aid, path = materials.claim_id_locked(folder, got.ext)
+        try:
+            path.write_bytes(got.data)
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
     return {"id": aid, "type": "image", "name": name or f"{aid}{got.ext}", "path": str(path),
             "media_type": got.media_type, "width": got.width, "height": got.height,
             "bytes": len(got.data), "sha256": hashlib.sha256(got.data).hexdigest(),

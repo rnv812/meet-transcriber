@@ -1056,36 +1056,50 @@ def _taken_ids(folder) -> set[int]:
     return taken
 
 
+def id_lock(folder):
+    """Замок id вложений папки ассистента (`.ids`): и между потоками, и между
+    процессами (ребёнок и задача резидента). Под ним — выдача id
+    (`claim_id`) и проверка квот вместе с записью (`add`,
+    `attachments.save`): иначе два одновременных добавления оба прошли бы
+    проверку и квоту превысили бы на одно (ревью материалов M7)."""
+    return library.file_lock(assistant_dir(folder) / IDS_FILE)
+
+
 def claim_id(folder, ext: str) -> tuple[str, Path]:
     """Новый id вложения `a<N>` — общий для материалов и изображений — и
     занятый под него пустой файл (`materials/<id>.json` или `files/<id>.<ext>`).
     Под замком папки ассистента: два процесса (ребёнок и задача резидента)
     не получат один id."""
+    with id_lock(folder):
+        return claim_id_locked(folder, ext)
+
+
+def claim_id_locked(folder, ext: str) -> tuple[str, Path]:
+    """`claim_id` для того, кто уже держит `id_lock(folder)`."""
     sub = MATERIALS_DIR if ext == ".json" else FILES_DIR
     target_dir = assistant_dir(folder) / sub
     target_dir.mkdir(parents=True, exist_ok=True)
     counter = assistant_dir(folder) / IDS_FILE
-    with library.file_lock(counter):
+    try:
+        last = int(counter.read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        last = 0
+    # Счётчик только растёт: id убранного вложения не выдаётся снова, и
+    # старые ссылки журнала не укажут на новое.
+    n = max(last, max(_taken_ids(folder), default=0)) + 1
+    while True:
+        path = target_dir / f"a{n}{ext}"
         try:
-            last = int(counter.read_text(encoding="utf-8").strip() or 0)
-        except (OSError, ValueError):
-            last = 0
-        # Счётчик только растёт: id убранного вложения не выдаётся снова, и
-        # старые ссылки журнала не укажут на новое.
-        n = max(last, max(_taken_ids(folder), default=0)) + 1
-        while True:
-            path = target_dir / f"a{n}{ext}"
-            try:
-                with open(path, "x", encoding="utf-8"):
-                    pass
-                break
-            except FileExistsError:
-                n += 1
-        try:
-            counter.write_text(str(n), encoding="utf-8")
-        except OSError:
-            pass  # без счётчика — по наибольшему занятому, как раньше
-        return f"a{n}", path
+            with open(path, "x", encoding="utf-8"):
+                pass
+            break
+        except FileExistsError:
+            n += 1
+    try:
+        counter.write_text(str(n), encoding="utf-8")
+    except OSError:
+        pass  # без счётчика — по наибольшему занятому, как раньше
+    return f"a{n}", path
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -1201,6 +1215,25 @@ def _kb_path(path, kb_root) -> tuple[Path, str | None]:
     return full, rel.as_posix()
 
 
+def _duplicate(existing: list[dict], full: Path) -> dict | None:
+    """Тот же файл с тем же содержимым уже в материалах — его описание."""
+    for record in existing:
+        source = (record.get("meta") or {}).get("source") or {}
+        if source.get("path") and _same_path(source["path"], full) and status(record) == "ok":
+            return {**attachment(record, check=False), "duplicate": True}
+    return None
+
+
+def _check_quota(existing: list[dict], group: bool, chars: int) -> None:
+    """Квоты сессии: материалов (свои и группы — отдельно) и всего текста."""
+    count = sum(1 for r in existing if ((r.get("meta") or {}).get("origin") in GROUP_ORIGINS) == group)
+    if count >= (MAX_GROUP_MATERIALS if group else MAX_MATERIALS):
+        raise MaterialError((TOO_MANY_GROUP if group else TOO_MANY).format(count))
+    used = sum(int((r.get("meta") or {}).get("chars") or 0) for r in existing)
+    if chars and used + chars > MAX_SESSION_CHARS:
+        raise MaterialError(TOO_MUCH_TEXT)
+
+
 def add(folder, path, *, origin: str = "file", kb_root=None, exclude=None, summary: str | None = None,
         kind: str | None = None) -> dict:
     """Разобрать файл или папку и положить в материалы записи → описание
@@ -1219,27 +1252,22 @@ def add(folder, path, *, origin: str = "file", kb_root=None, exclude=None, summa
     full, kb_ref = _kb_path(path, kb_root)
     if kb_root is not None and _excluded_in(full, _real(kb_root), kb_index.exclude_prefixes(exclude)):
         raise MaterialError(EXCLUDED_KB.format(kb_ref or Path(path).name))
-    existing = records(folder)
     is_dir = full.is_dir()
-    for record in existing:
-        source = (record.get("meta") or {}).get("source") or {}
-        if source.get("path") and _same_path(source["path"], full) and status(record) == "ok":
-            return {**attachment(record, check=False), "duplicate": True}
+    duplicate = _duplicate(records(folder), full)
+    if duplicate is not None:
+        return duplicate
     group = origin in GROUP_ORIGINS
-    count = sum(1 for r in existing if ((r.get("meta") or {}).get("origin") in GROUP_ORIGINS) == group)
-    if count >= (MAX_GROUP_MATERIALS if group else MAX_MATERIALS):
-        raise MaterialError((TOO_MANY_GROUP if group else TOO_MANY).format(count))
+    # Разбор — дорогой и вне замка; квоты — до разбора (быстрый отказ) и ещё
+    # раз под замком id вместе с записью: параллельное добавление (ребёнок и
+    # задача резидента) не превысит их (ревью материалов M7).
+    _check_quota(records(folder), group, 0)
     parsed = parse_folder(full, exclude=exclude, base=kb_root) if is_dir else parse(full)
-    used = sum(int((r.get("meta") or {}).get("chars") or 0) for r in existing)
-    if used + parsed.chars > MAX_SESSION_CHARS:
-        raise MaterialError(TOO_MUCH_TEXT)
     if summary is None:
         summary = outline(parsed) if origin in ("kb", "kb_folder", "past_meeting") else ""
     if is_dir:
         size, mtime_ns = 0, None
     else:  # то, что прочитано и захэшировано, — не stat после разбора
         size, mtime_ns = parsed.size, parsed.mtime_ns
-    aid, target = claim_id(folder, ".json")
     meta = {"title": parsed.title, "kind": parsed.kind, "origin": origin, "added_at": time.time(),
             "source": {"path": str(full), "sha256": parsed.sha256, "size": size, "mtime_ns": mtime_ns},
             "warnings": parsed.warnings, "chars": parsed.chars}
@@ -1249,12 +1277,20 @@ def add(folder, path, *, origin: str = "file", kb_root=None, exclude=None, summa
         meta["kb_ref"] = kb_ref
     if is_dir and kb_root is not None:
         meta.update(kb_root=str(kb_root), exclude=list(exclude))
-    record = {"v": FORMAT, "id": aid, "meta": meta, "summary": summary or "", "chunks": parsed.chunks}
-    try:
-        _write_json(target, record)
-    except BaseException:
-        target.unlink(missing_ok=True)
-        raise
+    with id_lock(folder):
+        existing = records(folder)
+        duplicate = _duplicate(existing, full)
+        if duplicate is not None:
+            return duplicate
+        _check_quota(existing, group, parsed.chars)
+        aid, target = claim_id_locked(folder, ".json")
+        record = {"v": FORMAT, "id": aid, "meta": meta, "summary": summary or "",
+                  "chunks": parsed.chunks}
+        try:
+            _write_json(target, record)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
     return attachment(record, check=False)
 
 
