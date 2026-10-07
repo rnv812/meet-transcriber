@@ -9,7 +9,8 @@
  *   (`data-chat-drop`); путь уходит резиденту (`attachChatFile`) — он и
  *   проверяет его. «📎» — диалог оболочки.
  * - Вложения видны здесь, с «×», до отправки; в ленту они попадают только с
- *   отправленным сообщением.
+ *   отправленным сообщением. «×» убирает вложение и у ассистента
+ *   (`removeChatAttachment`): оно не дойдёт до агента, файл удаляется.
  * - «Стоп» — пока агент пишет ответ. Писать можно и тогда: сообщение встанет
  *   в очередь.
  * - Поле фокус само не берёт (панель поверх звонка), но после отправки
@@ -71,10 +72,13 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
     return false;
   };
 
+  // Убранные, пока ещё загружались: когда загрузка кончится — убрать и у ассистента.
+  const dropped = useRef(new Set<string>());
+
   const track = (draft: Draft, upload: Promise<{ id: string; status: string; error?: string }>) => {
     setDrafts((cur) => [...cur, draft]);
     upload.then(
-      (r) => update(draft.key, r.status === "failed"
+      (r) => dropped.current.has(draft.key) ? void chatRef.current.removeAttachment(r.id) : update(draft.key, r.status === "failed"
         ? { status: "failed", id: r.id, error: r.error || "не разобрано" }
         : { status: "ready", id: r.id }),
       (e) => update(draft.key, { status: "failed", error: errorText(e) }),
@@ -106,11 +110,11 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
   addPathsRef.current = addPaths;
 
   const remove = (key: string) => {
-    setDrafts((cur) => {
-      const gone = cur.find((d) => d.key === key);
-      if (gone?.preview) URL.revokeObjectURL?.(gone.preview);
-      return cur.filter((d) => d.key !== key);
-    });
+    const gone = drafts.find((d) => d.key === key);
+    if (gone?.preview) URL.revokeObjectURL?.(gone.preview);
+    if (gone?.id) void chat.removeAttachment(gone.id);
+    else if (gone?.status === "uploading") dropped.current.add(key);
+    setDrafts((cur) => cur.filter((d) => d.key !== key));
     field.current?.focus();
   };
 

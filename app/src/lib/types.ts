@@ -876,7 +876,7 @@ export type ChatMessage = {
   /** Секунды записи (во время встречи); после встречи нет. */
   t?: number;
   text?: string;
-  status?: ChatStatus | "parsing" | "ready";
+  status?: ChatStatus | "parsing" | "ready" | "removed";
   mode?: "reply" | "proactive";
   re?: string;
   buttons?: string[];
@@ -900,7 +900,7 @@ export type ChatMessage = {
 };
 
 /** Вложение — запись журнала `kind: "attachment"` (id `a<N>`). */
-export type ChatAttachment = ChatMessage & { kind: "attachment"; name: string; status: "parsing" | "ready" | "failed" };
+export type ChatAttachment = ChatMessage & { kind: "attachment"; name: string; status: "parsing" | "ready" | "failed" | "removed" };
 
 /** «Как часто писать»: ключ настроек (`assist.frequency`). */
 export type AgentFrequency = "less" | "normal" | "more";
@@ -934,7 +934,14 @@ export type ChatSnapshot = {
   partial?: ChatPartial | null;
 };
 
-/** `event: chat`: новое сообщение или правка; `seq` не новее известного — отбросить. */
+/**
+ * `event: chat`: новое сообщение или правка; `seq` не новее известного — отбросить.
+ * Правка может перевести сообщение в скрытый статус (`held`, `dropped`, `superseded`;
+ * у вложения — `removed`) — окно тогда убирает его из ленты. Каждый ход агента
+ * начинается с `add` в статусе `writing`, и ход, кончившийся молчанием, правкой
+ * уходит в `dropped`: окно не показывает «Пишет…», пока нет текста (`chat_partial`)
+ * или пока ответ человеку не пишется ~1,5 с (`live/chatModel.ts`).
+ */
 export type ChatEvent =
   | { seq: number; op: "add"; message: ChatMessage }
   | { seq: number; op: "patch"; id: string; set: Partial<ChatMessage> };

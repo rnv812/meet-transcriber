@@ -12,6 +12,7 @@ vi.mock("../lib/api", async (orig) => ({
   pasteChatImage: vi.fn(),
   attachChatFile: vi.fn(),
   stopChat: vi.fn(async () => ({ ok: true })),
+  removeChatAttachment: vi.fn(async () => ({ ok: true, changed: true })),
   newChatClientId: vi.fn(() => "c1"),
 }));
 vi.mock("../lib/shell", async (orig) => ({
@@ -21,7 +22,7 @@ vi.mock("../lib/shell", async (orig) => ({
   overChatDrop: h.overChat,
   pickChatFiles: h.pick,
 }));
-import { attachChatFile, pasteChatImage, postChat, stopChat } from "../lib/api";
+import { attachChatFile, pasteChatImage, postChat, removeChatAttachment, stopChat } from "../lib/api";
 import type { ChatMessage, ChatSnapshot } from "../lib/types";
 import { agentInfo, agentMsg, attMsg } from "../test/chatFixtures";
 import { ChatComposer } from "./ChatComposer";
@@ -103,7 +104,7 @@ test("Ctrl+V с картинкой — pasteChatImage, превью с «×»; �
   expect(log()).toHaveTextContent("Скриншот.png");
 });
 
-test("убранное вложение не уходит и в ленте не появляется", async () => {
+test("убранное вложение не уходит, в ленте не появляется и убирается у ассистента", async () => {
   vi.mocked(attachChatFile).mockResolvedValue({ id: "a2", status: "ready", attachment: attMsg("a2", { type: "doc", name: "План.pptx" }) } as never);
   render(<Host />);
   load();
@@ -111,6 +112,7 @@ test("убранное вложение не уходит и в ленте не 
   await act(async () => { h.drop!({ type: "drop", x: 10, y: 10, paths: ["C:\\docs\\План.pptx"] }); });
   expect(attachChatFile).toHaveBeenCalledWith(ep, "C:\\docs\\План.pptx");
   await userEvent.click(screen.getByRole("button", { name: "Убрать вложение План.pptx" }));
+  expect(removeChatAttachment).toHaveBeenCalledWith(ep, "a2");
   await userEvent.type(field(), "без файла{Enter}");
   expect(postChat).toHaveBeenCalledWith(ep, { text: "без файла", client_id: "c1", attachments: [] });
   expect(log()).not.toHaveTextContent("План.pptx");
@@ -162,4 +164,18 @@ test("агент выключен — поле недоступно и видн�
   expect(field()).toBeDisabled();
   expect(screen.getByRole("status")).toHaveTextContent("Ассистент выключен");
   expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
+});
+
+test("убрали, пока вложение загружалось, — убирается у ассистента, когда загрузка кончится", async () => {
+  let done!: (v: unknown) => void;
+  vi.mocked(attachChatFile).mockReturnValue(new Promise((r) => { done = r; }) as never);
+  render(<Host />);
+  load();
+  await vi.waitFor(() => expect(h.drop).not.toBeNull());
+  await act(async () => { h.drop!({ type: "drop", x: 10, y: 10, paths: ["C:/docs/Большой.pdf"] }); });
+  await userEvent.click(screen.getByRole("button", { name: "Убрать вложение Большой.pdf" }));
+  expect(removeChatAttachment).not.toHaveBeenCalled();
+  await act(async () => { done({ id: "a5", status: "ready", attachment: attMsg("a5", { type: "doc" }) }); });
+  expect(removeChatAttachment).toHaveBeenCalledWith(ep, "a5");
+  expect(screen.queryByRole("list", { name: "Вложения" })).toBeNull();
 });

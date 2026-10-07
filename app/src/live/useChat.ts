@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 
 import {
   type Endpoint, attachChatFile, clickChat, getChat, newChatClientId, pasteChatImage, postChat, reactChat,
-  setAgentFrequency, stopChat,
+  removeChatAttachment, setAgentFrequency, stopChat,
 } from "../lib/api";
 import { errorText } from "../lib/format";
 import type {
@@ -64,6 +64,8 @@ export type Chat = {
   setFrequency: (label: AgentFrequencyLabel) => Promise<void>;
   paste: (blob: Blob, name?: string) => Promise<ChatAttachResult>;
   attach: (path: string) => Promise<ChatAttachResult>;
+  /** Вложение убрали из строки ввода до отправки: у агента его не будет. */
+  removeAttachment: (id: string) => Promise<void>;
   sink: ChatSink;
 };
 
@@ -201,6 +203,20 @@ export function useChat(ep: Endpoint | null): Chat {
     return attachChatFile(ep, path);
   }, [ep]);
 
+  const removeAttachment = useCallback(async (id: string) => {
+    if (!ep) return;
+    const url = previews.current.get(id);
+    if (url) {
+      URL.revokeObjectURL?.(url);
+      previews.current.delete(id);
+    }
+    try {
+      await removeChatAttachment(ep, id);
+    } catch (e) {
+      setNote(`Вложение не удалось убрать у ассистента: ${errorText(e)}`);
+    }
+  }, [ep]);
+
   const items = useMemo(() => feedItems(state, now), [state, now]);
   const agent = useMemo(
     () => (state.agent && frequency ? { ...state.agent, frequency } : state.agent),
@@ -219,6 +235,6 @@ export function useChat(ep: Endpoint | null): Chat {
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
     used: (id) => usedButton(state, id),
-    send, retry, click, react, stop, setFrequency, paste, attach, sink,
+    send, retry, click, react, stop, setFrequency, paste, attach, removeAttachment, sink,
   };
 }

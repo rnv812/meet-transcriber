@@ -666,6 +666,12 @@ export const clickChat = (ep: Endpoint, id: string, label: string, clientId?: st
 export const reactChat = (ep: Endpoint, id: string, emoji: ChatReaction, on?: boolean) =>
   json<{ ok: boolean; changed: boolean }>(ep, `/live/chat/${enc(id)}/react`,
     body("POST", { emoji, ...(on === undefined ? {} : { on }) }));
+/**
+ * Вложение убрали из строки ввода до отправки («×»): у агента его не будет, файл
+ * удаляется. Уже отправленное — ошибка 400.
+ */
+export const removeChatAttachment = (ep: Endpoint, id: string) =>
+  json<{ ok: boolean; changed: boolean }>(ep, `/live/chat/attachments/${enc(id)}/remove`, body("POST", {}));
 /** «Стоп» у ответа, который пишется (`id` — его сообщение). `ok: false` — такого нет. */
 export const stopChat = (ep: Endpoint, id?: string) =>
   json<{ ok: boolean }>(ep, "/live/chat/stop", body("POST", id ? { id } : {}));

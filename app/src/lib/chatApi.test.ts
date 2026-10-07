@@ -132,3 +132,9 @@ test("openEvents: chat.updated приходит событием резиден�
   source.emit("chat.updated", { kind: "chat.updated", at: 1, id: "r1", partial: { id: "m2", text: "При" } });
   expect(onEvent).toHaveBeenCalledWith({ kind: "chat.updated", at: 1, id: "r1", partial: { id: "m2", text: "При" } });
 });
+
+test("вложение убрали до отправки: POST /live/chat/attachments/{id}/remove", async () => {
+  const f = okFetch({ ok: true, changed: true });
+  expect(await api.removeChatAttachment(ep, "a3")).toEqual({ ok: true, changed: true });
+  expect(calls(f)).toEqual([["http://h/live/chat/attachments/a3/remove", "POST", "{}"]]);
+});
