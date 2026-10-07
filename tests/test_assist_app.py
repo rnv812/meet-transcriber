@@ -685,3 +685,25 @@ def test_fast_ticks_keep_their_model_but_questions_use_the_configured_one(tmp_pa
     _run(tmp_path, open_browser=False, port=0, cfg=cfg)
     assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku", "thinking": "disabled"}
     assert heavy.qa_kwargs["model"] == "opus"
+
+
+def test_state_view_tells_whether_the_mic_has_an_owner_sample(tmp_path):
+    """Окно предлагает записать образец голоса, когда микрофон должен делиться
+    по голосам, а образца нет (встреча за одним ноутбуком — сосед тоже «Вы»)."""
+    import dataclasses
+
+    from meet.assist.app import mic_view
+
+    state = AssistState(bus=TranscriptBus(), live=LiveState(), glossary="", vault=None, cwd=tmp_path)
+    assert "mic" not in state.view()  # неизвестно — окно молчит
+    cfg = Settings()
+    state.mic = mic_view(cfg, False, load_owner=lambda: [])
+    assert state.view()["mic"] == {"split": True, "owner_profile": False}
+    assert mic_view(cfg, False, load_owner=lambda: ["образец"]) == {"split": True, "owner_profile": True}
+    off = dataclasses.replace(cfg, asr=dataclasses.replace(cfg.asr, mic_speakers=False))
+    assert mic_view(off, False, load_owner=lambda: [])["split"] is False
+    assert mic_view(cfg, True, load_owner=lambda: [])["split"] is False  # голоса выключены (--no-voices)
+
+    def broken():
+        raise OSError("нет доступа")
+    assert mic_view(cfg, False, load_owner=broken) is None

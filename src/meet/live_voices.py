@@ -31,11 +31,10 @@
    похожий на образец от T_OTHER. Не найден (образец с другого микрофона) —
    микрофон весь владельца, как без образца. Обратно во владельца — от T_OWN.
    Когда оба голоса известны (якорь и человек рядом), сегмент решается
-   сравнением с их живыми центроидами, а не порогом образца; короткие
-   реплики от SHORT_EMBED_S — тоже; мелкие кластеры, которые ближе к
-   человеку рядом, вливаются в него задним числом. Голос, не похожий на
-   образец, копится в кластере, к которому он заметно ближе, чем к якорю, —
-   человек рядом, говорящий урывками, не рассыпается на мелкие кластеры.
+   сравнением с их живыми центроидами, а не порогом образца (окно, похожее
+   на образец от T_WIN_FAST, — всегда владелец); короткие реплики от
+   SHORT_EMBED_S — тоже; мелкие кластеры, которые ближе к человеку рядом,
+   вливаются в него задним числом. До этого — всё как раньше.
 
 Ключи голосов несут метку сеанса (`3fa1/sys:3`): новый ассистент в той же
 записи начинает нумерацию заново, а панель держит строки прежнего.
@@ -114,11 +113,20 @@ LATCH_VOICED_S = 2 * OWNER_LATCH_S
 # ниже T_OTHER − PRESENT_SLACK (у образца среднего качества оно гуляет у порога).
 PRESENT_SLACK = 0.05
 # Два голоса микрофона известны (якорь владельца от TWO_VOICES_MIN_S речи и
-# человек рядом): сегмент решается сравнением с их центроидами, с отрывом
-# LIVE_MARGIN — по одному окну это надёжнее порога образца: окно владельца с
-# образцом — cos 0.5–0.8, но с живым центроидом владельца оно почти всегда
-# ближе, чем с центроидом соседа. К человеку рядом — не ниже TWO_VOICES_FLOOR:
-# голос, далёкий от обоих, может быть третьим человеком.
+# человек рядом — явно другой голос): сегмент, не похожий на образец,
+# решается сравнением с их живыми центроидами, с отрывом LIVE_MARGIN. Окно с
+# образцом — cos 0.5–0.8 и ниже, но с живым центроидом своего человека оно
+# почти всегда ближе, чем с чужим (v037, встреча за одним ноутбуком: окно
+# против центроида своего — p5 0.60, чужого — p50 0.37, p95 0.49; двумя
+# центроидами окна 1–1,5 с различаются на 97–100 %, см.
+# .superpowers/sdd/v037/mic-live-diar-report.md).
+# TWO_VOICES_FLOOR — нижняя граница сходства с выбранным голосом: ниже p10
+# окна 1–2 с против центроида своего человека (T0: 0.40), чтобы не терять
+# свои короткие окна; голос дальше от обоих — скорее третий человек или шум,
+# ему свой кластер (прежний путь). Порог пологий: на синтетике (разброс окон
+# как у T0, разговор владельца с соседом и третий далёкий голос) при 0.25–0.50
+# сосед подписан верно на 96–97 % секунд, владелец «рядом» — 0.3–0.6 %, третий
+# голос попадает в кластер соседа на 8–12 %; 0.35 — середина, ниже T0 p10.
 TWO_VOICES_MIN_S = 10.0
 TWO_VOICES_FLOOR = 0.35
 # При двух известных голосах реплики от SHORT_EMBED_S до EMBED_MIN_S тоже
@@ -448,17 +456,19 @@ class LiveVoices:
             # между фразами владельца): по сравнению двух голосов, а не по
             # предыдущему сегменту. Кластеров она не растит и не заводит.
             short = self._embedding(clip)
-            pick = self._pick(tv, short) if short is not None else None
+            pick = None
+            if short is not None:
+                pick = self._pick(tv, short, owner_voice.score(short, self._owner, self._device))
             if pick is not None:
                 return self._assigned(track, tv, tv.attach(pick, None, start, end, add=False), None)
         if track == "mic" and emb is not None:
             score = owner_voice.score(emb, self._owner, self._device)
             self._mic_voiced += seconds
-            pick = self._pick(tv, emb)
+            pick = self._pick(tv, emb, score)
             if pick is not None:
-                # Оба голоса известны: сегмент — к тому, к кому он ближе (живой
-                # голос владельца или человек рядом) с отрывом; абсолютный порог
-                # образца тут не решает. Центроиды растут только от уверенных окон.
+                # Оба голоса известны: похожий на образец — владелец, иначе — к
+                # тому, к кому он ближе (живой голос владельца или человек рядом)
+                # с отрывом. Центроиды растут только от уверенных окон.
                 if pick.n == OWNER_N:
                     owner_like = score >= mic_split.T_WIN_FAST
                     if owner_like:
@@ -474,11 +484,7 @@ class LiveVoices:
                 key = tv.observe_owner(emb, start, end)
             else:
                 self._mic_run = 0  # чужой голос — снова считаем каждый сегмент
-                near = self._candidate(tv, emb)
-                if near is not None:
-                    key = tv.attach(near, emb, start, end, add=True)
-                else:
-                    key = tv.observe(emb, start, end)
+                key = tv.observe(emb, start, end)
         else:
             key = tv.observe(emb, start, end)
         return self._assigned(track, tv, key, emb)
@@ -491,44 +497,42 @@ class LiveVoices:
         self._shown.setdefault(key, speaker)
         return Assigned(key, speaker, self._role(track, tv, key, emb))
 
-    def _both(self, tv: TrackVoices) -> bool:
-        """Оба голоса микрофона известны: якорь владельца от TWO_VOICES_MIN_S
-        речи и хотя бы один человек рядом."""
-        anchor = tv.owner()
-        return anchor is not None and anchor.seconds >= TWO_VOICES_MIN_S \
-            and any(self._is_room(c) for c in tv.live())
-
-    def _candidate(self, tv: TrackVoices, emb: np.ndarray) -> _Cluster | None:
-        """Голос микрофона, не похожий на образец, ни к одному кластеру не
-        дотянул до LIVE_ASSIGN — но к одному из них заметно ближе, чем к
-        живому голосу владельца и к другим (отрыв LIVE_MARGIN, не ниже
-        TWO_VOICES_FLOOR): копится в нём, а не рассыпается на мелкие кластеры —
-        иначе человек рядом, который говорит урывками, долго не набирает
-        ROOM_MIN_S речи. Нет якоря владельца — None (прежний путь)."""
+    def _rooms(self, tv: TrackVoices) -> list[_Cluster]:
+        """Люди рядом, по которым решаются сегменты микрофона: якорь владельца
+        от TWO_VOICES_MIN_S речи, человек рядом подтверждён (`_is_room`) и
+        это явно другой голос — его центроид с якорем ниже LIVE_ASSIGN (T0:
+        разные люди — до 0.55 на 15 с). «Второй режим» голоса самого владельца
+        (сел голос, другая интонация), ошибочно ставший «рядом», к якорю ближе:
+        тогда решает прежний путь, как без этих правил."""
         anchor = tv.owner()
         if anchor is None or anchor.seconds < TWO_VOICES_MIN_S:
-            return None
-        scored = sorted(((float(emb @ c.center), c.n) for c in tv.live()), reverse=True)
-        if not scored or scored[0][0] >= tv.assign_at:
-            return None  # к кластеру и так присоединится
-        best, n = scored[0]
-        second = scored[1][0] if len(scored) > 1 else -1.0
-        own = float(emb @ anchor.center)
-        if best >= TWO_VOICES_FLOOR and best - own >= self.margin and best - second >= self.margin:
-            return tv.clusters[n]
-        return None
+            return []
+        return [c for c in tv.live()
+                if self._is_room(c) and float(c.center @ anchor.center) < tv.assign_at]
 
-    def _pick(self, tv: TrackVoices, emb: np.ndarray) -> _Cluster | None:
+    def _both(self, tv: TrackVoices) -> bool:
+        """Оба голоса микрофона известны (см. `_rooms`)."""
+        return bool(self._rooms(tv))
+
+    def _pick(self, tv: TrackVoices, emb: np.ndarray, score: float | None = None) -> _Cluster | None:
         """Кластер сегмента по двум голосам микрофона: якорь владельца или
         ближайший человек рядом — тот, к кому сегмент ближе с отрывом от
         LIVE_MARGIN и не ниже TWO_VOICES_FLOOR (далёкий от обоих голос может
-        быть третьим человеком — ему свой кластер). Голоса не известны оба или
-        отрыва нет — None (решает прежний путь)."""
-        if not self._both(tv):
+        быть третьим человеком — ему свой кластер). Окно, похожее на образец
+        (`score` от T_WIN_FAST, тем более от T_OWN), — всегда владелец, как и
+        без этих правил: образец защищает владельца, какой бы близкой ни была
+        подпись соседа. Иначе второй «режим» голоса самого владельца (cos
+        0.5–0.6 с обычным), ошибочно ставший «рядом», забирал бы и его окна,
+        похожие на образец. Голоса не известны оба или отрыва нет — None
+        (решает прежний путь)."""
+        rooms = self._rooms(tv)
+        if not rooms:
             return None
         anchor = tv.owner()
+        if score is not None and score >= mic_split.T_WIN_FAST:
+            return anchor
         own = float(emb @ anchor.center)
-        room = max((c for c in tv.live() if self._is_room(c)), key=lambda c: float(emb @ c.center))
+        room = max(rooms, key=lambda c: float(emb @ c.center))
         near = float(emb @ room.center)
         if near - own >= self.margin and near >= TWO_VOICES_FLOOR:
             return room
@@ -729,15 +733,18 @@ class LiveVoices:
 
     def _absorb_small(self, tv: TrackVoices) -> None:
         """Мелкие кластеры микрофона (меньше ROOM_MIN_S речи — роли им не
-        решить), которые по двум голосам — человек рядом, вливаются в него:
-        их строки, выданные до того, как сосед стал известен, получают его
-        подпись задним числом. Ближе к владельцу — остаются как есть (и так «Вы»)."""
+        решить), которые по двум голосам — человек рядом и похожи на него не
+        меньше, чем сегмент на свой кластер (cos от LIVE_ASSIGN), вливаются в
+        него: их строки, выданные до того, как сосед стал известен, получают
+        его подпись задним числом. Ближе к владельцу или далеко от обоих —
+        остаются как есть (и так «Вы»): иначе «второй режим» голоса владельца
+        копился бы в «человека рядом»."""
         if not self._both(tv):
             return
         for c in tv.live():
             if c.into is None and c.role != ROOM and c.seconds < ROOM_MIN_S and c.name is None:
-                pick = self._pick(tv, c.center)
-                if pick is not None and pick.n != OWNER_N:
+                pick = self._pick(tv, c.center, owner_voice.score(c.center, self._owner, self._device))
+                if pick is not None and pick.n != OWNER_N and float(c.center @ pick.center) >= tv.assign_at:
                     tv.absorb(pick, c)
 
     def _check_role(self, c: _Cluster) -> None:

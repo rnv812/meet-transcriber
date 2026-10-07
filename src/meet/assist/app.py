@@ -128,6 +128,9 @@ class AssistState:
         self.ready = True
         self.stage: str | None = None
         self.warning: str | None = None
+        # Микрофон по голосам в этом сеансе (`mic_view`): {"split", "owner_profile"};
+        # окно по нему предлагает записать образец голоса. None — неизвестно.
+        self.mic: dict | None = None
         self._rebuild()
 
     @property
@@ -204,6 +207,8 @@ class AssistState:
             out["starting"] = self.stage or "запускается…"
         if self.participant is not None:
             out["agent"] = self.participant.view()
+        if self.mic is not None:
+            out["mic"] = self.mic
         return out
 
     def qa_version(self) -> int:
@@ -266,6 +271,23 @@ class AssistState:
             loop.call_soon_threadsafe(self.request_stop)
         except RuntimeError:
             pass  # цикл уже закрыт — выходим и так
+
+
+def mic_view(cfg, no_voices: bool, load_owner=None) -> dict | None:
+    """Микрофон в живом режиме этого сеанса: `split` — делить ли его по
+    голосам (настройка `asr.mic_speakers`, голоса не выключены), `owner_profile`
+    — есть ли образец голоса владельца. Образец читается тем же
+    `owner_voice.load`, что и у VoiceMatcher при старте, — записанный посреди
+    встречи этот сеанс не изменит. Не прочитался — None (окно молчит)."""
+    try:
+        if load_owner is None:
+            from meet import owner_voice
+
+            load_owner = owner_voice.load
+        return {"split": bool(cfg.asr.mic_speakers) and not no_voices,
+                "owner_profile": bool(load_owner())}
+    except Exception:
+        return None
 
 
 def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
@@ -824,6 +846,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     )
     state.ready = False
     state.control_token = control_token or None
+    state.mic = mic_view(cfg, no_voices)
     # Распознавание: GigaAM короткими окнами для русского (если скачана),
     # иначе Whisper; правила замены и латиница — к каждой реплике. Здесь
     # модель только выбирается — грузится она в prepare.

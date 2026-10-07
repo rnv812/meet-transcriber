@@ -492,16 +492,19 @@ def _toward(rng, o, c):
     return _u(c * o + np.sqrt(1 - c ** 2) * u)
 
 
-def spread_run(c0, plan, seed=0, sample_of="owner", short_share=0.0):
+def spread_run(c0, plan, seed=0, sample_of="owner", short_share=0.0, drift=None):
     """`plan` — [(кто, секунды)]: owner, room или b (третий человек, cos 0.35
     с владельцем). Образец — голоса `sample_of` с качеством c0. `short_share`
-    — доля коротких реплик 1–1,5 с (их эмбеддинг шумнее)."""
+    — доля коротких реплик 1–1,5 с (их эмбеддинг шумнее). `drift` — (cd, p):
+    у владельца второй «режим» голоса (cos cd с обычным), им сказана доля p
+    его окон (сел голос, смех, другая интонация)."""
     rng = np.random.default_rng(seed)
     o = _u(rng.standard_normal(SPREAD_D))
     r = rng.standard_normal(SPREAD_D)
     r = _u(r - (r @ o) * o * 0.6)  # человек рядом: cos с владельцем ≈ 0.3–0.4
     voice = {"owner": o, "room": r, "b": _toward(rng, o, 0.35)}
     sample = _toward(rng, voice[sample_of], c0)
+    second = _toward(rng, o, drift[0]) if drift else None
     nxt = {}
     v = lv.LiveVoices(lambda clip: nxt["v"], {},
                       [OwnerSample(id="a", embedding=sample, source="enroll", date="d", seconds=25.0)],
@@ -513,7 +516,8 @@ def spread_run(c0, plan, seed=0, sample_of="owner", short_share=0.0):
             short = bool(short_share) and rng.random() < short_share
             d = float(rng.uniform(1.0, 1.5)) if short else float(rng.uniform(1.5, 4.0))
             sig = SPREAD_SIG * (1.6 if short else 1.0)
-            nxt["v"] = _u(voice[who] + sig * _u(rng.standard_normal(SPREAD_D)))
+            mode = second if drift and who == "owner" and rng.random() < drift[1] else voice[who]
+            nxt["v"] = _u(mode + sig * _u(rng.standard_normal(SPREAD_D)))
             a = v.assign("mic", np.zeros(int(d * SR), dtype=np.float32), t, t + d)
             lines.append((who, a.voice, d))
             t += d + 0.4
@@ -621,10 +625,28 @@ def _both_known(v):
     return t
 
 
-def test_segment_like_the_sample_but_closer_to_the_room_voice_is_room():
-    """Голос соседа бывает похож на образец выше T_WIN_FAST (cos 0.5): раньше
-    такой сегмент уходил в якорь владельца и подписывался «Вы»."""
-    VOICES[9] = lv._unit(0.5 * OWNER + 0.866 * ROOM)
+def test_window_like_the_sample_stays_owner_even_when_closer_to_the_room_voice():
+    """Образец защищает владельца: окно, похожее на образец (от T_WIN_FAST и
+    тем более от T_OWN), — «Вы», даже если центроид соседа к нему ближе. Иначе
+    второй «режим» голоса владельца, ошибочно ставший «рядом», забирал бы и его
+    окна, похожие на образец."""
+    for code, vec in ((9, 0.5 * OWNER + 0.866 * ROOM), (10, 0.8 * OWNER + 0.6 * ROOM)):
+        VOICES[code] = lv._unit(vec)
+    try:
+        v = voices(owner=owner_samples())
+        t = _both_known(v)
+        near_sample = v.assign("mic", clip(9), t, t + 2.0)  # с образцом 0.5, с соседом 0.87
+        like_sample = v.assign("mic", clip(10), t + 2.2, t + 4.2)  # с образцом 0.8 (от T_OWN)
+    finally:
+        del VOICES[9], VOICES[10]
+    assert near_sample.speaker == "Вы" and near_sample.role == lv.OWNER
+    assert like_sample.speaker == "Вы" and like_sample.voice == "s/mic:owner"
+
+
+def test_segment_unlike_the_sample_and_closer_to_the_room_voice_is_room():
+    """Окно соседа ниже T_WIN_FAST, но до LIVE_ASSIGN с его кластером не
+    дотянуло: раньше — новый кластер («Вы»), теперь — сосед по двум голосам."""
+    VOICES[9] = lv._unit(0.2 * OWNER + 0.5 * ROOM + 0.843 * IVAN)
     try:
         v = voices(owner=owner_samples())
         t = _both_known(v)
@@ -632,7 +654,20 @@ def test_segment_like_the_sample_but_closer_to_the_room_voice_is_room():
     finally:
         del VOICES[9]
     assert got.role == lv.ROOM and got.speaker == lv.ROOM_SPEAKER
-    assert v._tracks["mic"].owner().seconds == 12.0  # якорь владельца чужим окном не вырос
+    tv = v._tracks["mic"]
+    assert tv.resolve(tv.number(got.voice)).seconds == 16.0  # центроид соседа далёким окном не вырос
+
+
+def test_room_too_close_to_the_owner_anchor_turns_two_voices_off():
+    """«Человек рядом», чей центроид близок к якорю владельца (cos от
+    LIVE_ASSIGN), — скорее второй режим голоса самого владельца: сегменты
+    решает прежний путь."""
+    v = voices(owner=owner_samples())
+    _both_known(v)
+    tv = v._tracks["mic"]
+    room = next(c for c in tv.live() if c.role == lv.ROOM)
+    room.total = lv._unit(0.6 * OWNER + 0.8 * ROOM) * room.seconds  # cos с якорем 0.6
+    assert v._is_room(room) and not v._both(tv)
 
 
 def test_owner_segment_below_the_sample_threshold_stays_owner_when_both_known():
@@ -695,26 +730,6 @@ def test_voice_far_from_both_known_voices_gets_its_own_cluster():
     assert c.seconds == pytest.approx(2.5)
 
 
-def test_room_voice_in_pieces_accumulates_in_one_cluster():
-    """Сосед говорит урывками, окна его голоса похожи друг на друга слабо (cos
-    0.5 < LIVE_ASSIGN): раньше каждое заводило свой кластер, и ни один не
-    набирал ROOM_MIN_S речи. Ближе к нему, чем к владельцу, — копится в нём."""
-    VOICES[8] = lv._unit(ROOM + IVAN)
-    VOICES[9] = lv._unit(ROOM + PETR)  # cos(8, 9) = 0.5
-    try:
-        v = voices(owner=owner_samples())
-        _, t = feed(v, "mic", 3, 6)
-        got = []
-        for i in range(8):
-            got.append(v.assign("mic", clip(8 if i % 2 == 0 else 9), t, t + 2.0))
-            t += 2.2
-    finally:
-        del VOICES[8], VOICES[9]
-    tv = v._tracks["mic"]
-    assert len({tv.resolve(tv.number(a.voice)).n for a in got}) == 1
-    assert got[-1].role == lv.ROOM
-
-
 def test_small_fragment_closer_to_the_room_voice_is_relabelled_retroactively():
     """Кусок голоса соседа, сказанный до того, как сосед стал известен, —
     мелкий кластер без роли («Вы»). Когда сосед известен, кусок вливается в
@@ -725,13 +740,15 @@ def test_small_fragment_closer_to_the_room_voice_is_relabelled_retroactively():
     tv = v._tracks["mic"]
     near_room = tv.clusters[tv._new(lv._unit(0.3 * OWNER + 0.6 * ROOM + 0.742 * IVAN), 2.0)]
     near_owner = tv.clusters[tv._new(lv._unit(0.6 * OWNER + 0.3 * ROOM + 0.742 * IVAN), 2.0)]
-    for c in (near_room, near_owner):
+    # Ближе к соседу, но похож на него меньше LIVE_ASSIGN — не вливается.
+    loose = tv.clusters[tv._new(lv._unit(0.2 * OWNER + 0.5 * ROOM + 0.843 * PETR), 2.0)]
+    for c in (near_room, near_owner, loose):
         v._shown[tv.key(c.n)] = v.speaker(tv.key(c.n))
     assert v.speaker(tv.key(near_room.n)) == "Вы"
     room = tv.clusters[tv._new(ROOM, 12.0)]
     room.role, v._present = lv.ROOM, True
     v._review("mic", tv)
-    assert near_room.into == room.n and near_owner.into is None
+    assert near_room.into == room.n and near_owner.into is None and loose.into is None
     assert room.role == lv.ROOM  # роль соседа не сбросилась, как при merge
     assert (tv.key(near_room.n), lv.ROOM_SPEAKER) in v.drain()
     assert v.speaker(tv.key(near_owner.n)) == "Вы"
@@ -754,3 +771,50 @@ def test_fast_turns_with_short_replies_split_owner_and_room():
 def test_fast_turns_with_a_bad_sample_keep_the_whole_mic_as_owner():
     out, _ = spread_run(0.55, [("owner", 8), ("room", 4)] * 60, 0, short_share=0.4)
     assert all(label == "Вы" for (_, label) in out)
+
+
+# --- второй «режим» голоса владельца (ревью v037) -----------------------------------
+# Голос владельца бывает не одним: сел, смех, другая интонация — окна с cos
+# 0.5–0.65 к обычному голосу. Сильный дрейф ломает и прежнюю логику (такой режим
+# становится «рядом»); правила двух голосов не должны делать хуже. База
+# сравнения — те же правила выключенными (TWO_VOICES_MIN_S = ∞: _rooms пуст, и
+# микрофон решается ровно как до них).
+DRIFT_LEVELS = (0.5, 0.55, 0.6, 0.65, 0.8)
+# Шум 4 прогонов по ~600 с речи: доля секунд гуляет на доли процента.
+DRIFT_SLACK = 0.01
+
+
+def _drift_share(plan, c0, cd, **kw):
+    owner_as_room, room_as_you = [], []
+    for seed in range(4):
+        out, _ = spread_run(c0, plan, seed, drift=(cd, 0.3), **kw)
+        owner = sum(x for (who, _), x in out.items() if who == "owner")
+        room = sum(x for (who, _), x in out.items() if who == "room")
+        owner_as_room.append(sum(x for (who, label), x in out.items() if who == "owner" and label != "Вы") / owner)
+        room_as_you.append(out.get(("room", "Вы"), 0.0) / room if room else 0.0)
+    return float(np.mean(owner_as_room)), float(np.mean(room_as_you))
+
+
+def _drift_compare(monkeypatch, plan, **kw):
+    rows = []
+    for c0 in (0.70, 0.86):
+        for cd in DRIFT_LEVELS:
+            new = _drift_share(plan, c0, cd, **kw)
+            with monkeypatch.context() as m:
+                m.setattr(lv, "TWO_VOICES_MIN_S", float("inf"))
+                base = _drift_share(plan, c0, cd, **kw)
+            rows.append((c0, cd, new, base))
+    return rows
+
+
+def test_owner_drift_alone_is_no_worse_than_without_two_voice_rules(monkeypatch):
+    for c0, cd, new, base in _drift_compare(monkeypatch, [("owner", 600)]):
+        assert new[0] <= base[0] + DRIFT_SLACK, (c0, cd, new, base)
+        if cd >= 0.65:
+            assert new[0] <= base[0], (c0, cd, new, base)
+
+
+def test_owner_drift_with_a_neighbour_is_better_than_without_two_voice_rules(monkeypatch):
+    for c0, cd, new, base in _drift_compare(monkeypatch, [("owner", 8), ("room", 4)] * 40, short_share=0.4):
+        assert new[0] <= base[0] + DRIFT_SLACK, (c0, cd, new, base)
+        assert new[1] <= base[1], (c0, cd, new, base)

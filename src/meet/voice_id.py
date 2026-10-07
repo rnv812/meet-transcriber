@@ -101,6 +101,10 @@ def _load_embedder():
     return guarded
 
 
+# Почему микрофон не делится на голоса — одна формулировка во всех строках журнала.
+NO_OWNER_SAMPLE = "нет образца вашего голоса"
+
+
 class VoiceMatcher:
     """База голосов, образец владельца и эмбеддер для живого режима.
 
@@ -159,7 +163,8 @@ class VoiceMatcher:
         if not self.base and not (self.owner and self.mic):
             # Называть некого, микрофон делить не по чему (или выключено) —
             # эмбеддер не нужен ни одной дорожке.
-            self._log("голоса: база пуста и микрофон не делится - live-имена выключены")
+            why = NO_OWNER_SAMPLE if self.mic else "выключено в настройках"
+            self._log(f"голоса: база пуста, микрофон не делится: {why} - live-имена выключены")
             return
         if self._embed is None:
             try:
@@ -175,7 +180,7 @@ class VoiceMatcher:
         elif self.mic:
             # Без образца микрофон весь владельца: люди рядом (встреча за одним
             # ноутбуком) подписываются «Вы» — причина должна быть видна в журнале.
-            parts.append("микрофон не делится: нет образца вашего голоса")
+            parts.append(f"микрофон не делится: {NO_OWNER_SAMPLE}")
         self._log(f"голоса: live-имена включены ({', '.join(parts)}, порог {self.threshold:.2f})")
 
     def live_voices(self, defaults: dict | None = None, log=None):

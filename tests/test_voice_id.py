@@ -263,3 +263,19 @@ def test_load_says_why_the_mic_is_not_split_without_owner_sample(monkeypatch):
     lines.clear()
     VoiceMatcher(threshold=0.7, mic=False, log=lines.append).load()
     assert not any("образца" in line for line in lines)  # делить и не просили
+
+
+def test_empty_base_without_owner_sample_gives_the_same_reason(monkeypatch):
+    import meet.voice_id as vid
+
+    monkeypatch.setattr(vid, "load_voices", lambda: {})
+    monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: [])
+    monkeypatch.setattr(vid, "_load_embedder", lambda: _embed)
+    lines = []
+    VoiceMatcher(threshold=0.7, mic=True, log=lines.append).load()
+    assert any("микрофон не делится: нет образца вашего голоса" in line and "live-имена выключены" in line
+               for line in lines)
+    lines.clear()
+    VoiceMatcher(threshold=0.7, mic=False, log=lines.append).load()
+    assert any("выключено в настройках" in line for line in lines)
+    assert not any("образца" in line for line in lines)
