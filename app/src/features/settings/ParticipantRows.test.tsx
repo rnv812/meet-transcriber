@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { VISION_NOTE } from "./ParticipantRows";
+import { KB_MAP_LABEL, VISION_NOTE } from "./ParticipantRows";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
@@ -61,7 +61,7 @@ test("участник включён (по умолчанию): частота,
   expect(await screen.findByRole("switch", { name: "Ассистент-участник" })).toHaveAttribute("aria-checked", "true");
   const freq = screen.getByRole("radiogroup", { name: "Как часто писать" });
   expect(within(freq).getByRole("radio", { name: "чаще" })).toBeChecked();
-  expect(screen.getByRole("switch", { name: "Показывать ассистенту структуру базы знаний" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("switch", { name: KB_MAP_LABEL })).toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("list", { name: "Исключённые папки базы знаний" })).toHaveTextContent("Личное/");
   expect(screen.getByText(VISION_NOTE)).toBeInTheDocument();
   // Прежние подсказки и их ритм скрыты; «Не отвлекать по умолчанию» — общее.
@@ -70,7 +70,7 @@ test("участник включён (по умолчанию): частота,
   expect(screen.queryByLabelText("Сколько подсказок держать")).toBeNull();
   expect(screen.getByRole("switch", { name: "Не отвлекать по умолчанию" })).toBeInTheDocument();
   await userEvent.click(within(freq).getByRole("radio", { name: "реже" }));
-  await userEvent.click(screen.getByRole("switch", { name: "Показывать ассистенту структуру базы знаний" }));
+  await userEvent.click(screen.getByRole("switch", { name: KB_MAP_LABEL }));
   await save();
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { frequency: "less", kb_map: false } }));
 });

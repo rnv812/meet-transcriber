@@ -5,7 +5,7 @@
  *   пишет в чат как участник; выключен — прежние подсказки и «Спросить»
  *   (запасной режим в 0.3.6), и тогда видны их настройки (`LiveHintsRows`);
  * - «Как часто писать» (`assist.frequency`: less / normal / more);
- * - «Показывать ассистенту структуру базы знаний» (`assist.kb_map`);
+ * - «Показывать ассистенту карту: базу знаний и прошлые встречи группы» (`assist.kb_map`);
  * - «Не показывать ассистенту» — исключённые папки базы (`assist.kb_exclude`,
  *   по умолчанию «Личное/», «.trash/»): список с выбором папки внутри базы.
  *   Claude Code запрещает их чтение правилами; Codex и OpenCode такого не
@@ -40,6 +40,7 @@ const VISION: Record<string, string> = { "claude-code": "Claude Code", codex: "C
 const LABELS: Record<string, string> = {
   "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", "openai-compatible": "Локальная модель",
 };
+export const KB_MAP_LABEL = "Показывать ассистенту карту: базу знаний и прошлые встречи группы";
 export const VISION_NOTE = "Картинки видят Claude Code и Codex; OpenCode и локальная модель получают только текст сообщения";
 export const DENY_NOTE = "исключения — только просьба";
 
@@ -147,9 +148,9 @@ export function ParticipantRows({ draft, set, provider }: {
           <Radio label="Как часто писать" value={frequency} options={FREQUENCIES}
             hint="Просьба к ассистенту в инструкции; меняется и в панели встречи"
             onChange={(v) => set("assist", "frequency", v)} />
-          <Switch label="Показывать ассистенту структуру базы знаний" value={assist.kb_map !== false}
+          <Switch label={KB_MAP_LABEL} value={assist.kb_map !== false}
             onChange={(v) => set("assist", "kb_map", v)}
-            hint="Папки и названия документов, без содержимого. Читает документы он только по вашей просьбе или с согласия" />
+            hint="Папки и названия документов базы и список прошлых встреч группы, без содержимого. Читает он только по вашей просьбе или с согласия" />
           <KbExcludeEditor value={assist.kb_exclude} kbRoot={kbRoot} provider={provider}
             onChange={(v) => set("assist", "kb_exclude", v)} />
           <p className="muted sdesc participant__vision">

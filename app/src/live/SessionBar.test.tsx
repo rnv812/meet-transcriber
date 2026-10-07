@@ -85,3 +85,10 @@ test("что видит: картинки и пусто", () => {
   expect(seesText(agentInfo({ sees: { conversation: true, kb: false, materials: 1, images: 2 } })))
     .toBe("разговор, 1 материал, 2 изображения");
 });
+
+test("что видит: карта только из прошлых встреч группы — «карта», со структурой базы — она", () => {
+  expect(seesText(agentInfo({ sees: { conversation: true, kb: true, kb_docs: false, materials: 0, images: 0 } })))
+    .toBe("разговор, карта");
+  expect(seesText(agentInfo({ sees: { conversation: true, kb: true, kb_docs: true, materials: 0, images: 0 } })))
+    .toBe("разговор, структура базы знаний");
+});

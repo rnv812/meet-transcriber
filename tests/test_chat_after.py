@@ -297,3 +297,11 @@ def test_patch_group_route_passes_kb_folder(monkeypatch, tmp_path):
         assert st.calls[-1] == ("patch_group", "g1", {"kb_folder": "Проекты/Альфа"})
     finally:
         srv.stop(pid=4344)
+
+
+def test_agent_tells_the_window_whether_the_map_has_the_kb():
+    from meet.assist import kb_prep
+
+    assert participant._map_has_kb(kb_prep.MAP_KB_HEAD + "\n- План.md") is True
+    assert participant._map_has_kb("Прошлые встречи группы «Альфа» (путь · дата · название):\n- meet:x") is False
+    assert participant._map_has_kb("") is False

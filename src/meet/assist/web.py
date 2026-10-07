@@ -507,7 +507,7 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     $("model").textContent = a.label || a.provider || "";
     const sees = a.sees || {}, parts = [];
     if (sees.conversation !== false) parts.push("разговор");
-    if (sees.kb) parts.push("структура базы знаний");
+    if (sees.kb) parts.push(sees.kb_docs === false ? "карта" : "структура базы знаний");
     if (sees.materials > 0) parts.push(sees.materials + " " + plural(sees.materials, "материал", "материала", "материалов"));
     if (sees.images > 0) parts.push(sees.images + " " + plural(sees.images, "изображение", "изображения", "изображений"));
     $("sees").textContent = agent ? "видит: " + parts.join(", ") : "";

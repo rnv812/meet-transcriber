@@ -433,7 +433,10 @@ class Participant:
                 "deny_enforced": self.deny_enforced,
                 "frequency": self.frequency, "session": self.session_state,
                 "writing": self._turn.reply_id if self._turn is not None else None,
+                # kb — есть карта (база знаний и/или прошлые встречи группы);
+                # kb_docs — в ней структура базы знаний, а не только встречи.
                 "sees": {"conversation": True, "kb": bool(self._kb_map),
+                         "kb_docs": _map_has_kb(self._kb_map),
                          "materials": self._materials, "images": self._images}}
 
     async def snapshot(self, limit: int | None = 200) -> dict:
@@ -1631,6 +1634,12 @@ class _JournalUntil:
 
     def context(self, budget: int, **kwargs) -> str:
         return self._chatlog.context(budget, until=self._until, **kwargs)
+
+
+def _map_has_kb(text: str) -> bool:
+    from meet.assist.kb_prep import MAP_KB_HEAD
+
+    return bool(text) and MAP_KB_HEAD in text
 
 
 def _max_images() -> int:

@@ -51,6 +51,8 @@ MAP_BUDGET_CHARS = 10_000
 MAP_TOP_TITLES = 5
 MAP_MEETINGS = 10
 MAP_MAX_FILES = 20_000
+# Заголовок части карты о базе знаний (есть он — в карте структура базы, а не только встречи группы).
+MAP_KB_HEAD = "База знаний — папки и названия документов (без содержимого; путь = папка/название):"
 # Папка группы целиком, но не больше этой доли бюджета карты.
 GROUP_SHARE = 0.6
 ROOT_LABEL = "(корень)"
@@ -558,7 +560,7 @@ class KnowledgeBase:
                 except OSError:
                     continue
         if docs:
-            put("База знаний — папки и названия документов (без содержимого; путь = папка/название):")
+            put(MAP_KB_HEAD)
             gfolder = self.group_folder(info) if info else None
             if gfolder is not None:
                 inner = sorted(rel for rel, _m in docs if rel.startswith(gfolder + "/"))

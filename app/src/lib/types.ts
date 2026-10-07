@@ -925,7 +925,8 @@ export type AgentInfo = {
   session: "new" | "resumed" | "seeded" | null;
   /** Id ответа, который пишется сейчас. */
   writing: string | null;
-  sees: { conversation: boolean; kb: boolean; materials: number; images: number };
+  /** `kb` — есть карта (база знаний и/или прошлые встречи группы); `kb_docs` — в ней структура базы знаний. */
+  sees: { conversation: boolean; kb: boolean; kb_docs?: boolean; materials: number; images: number };
 };
 
 /** `event: chat_partial`: текст ответа на сейчас (≤ 10 раз в секунду). */

@@ -25,12 +25,12 @@ export const DENY_NOTE = "Исключённые папки — только п�
 const DENY_TITLE = "Эта модель не умеет запрещать чтение папок: исключённые папки базы знаний указаны ей только просьбой в инструкции";
 const NO_FRESH = new Set<string>();
 
-/** «разговор, структура базы знаний, 3 материала». */
+/** «разговор, структура базы знаний, 3 материала»; карта только из прошлых встреч группы — «карта». */
 export function seesText(agent: AgentInfo): string {
   const parts: string[] = [];
   const sees = agent.sees ?? { conversation: true, kb: false, materials: 0, images: 0 };
   if (sees.conversation !== false) parts.push("разговор");
-  if (sees.kb) parts.push("структура базы знаний");
+  if (sees.kb) parts.push(sees.kb_docs === false ? "карта" : "структура базы знаний");
   if (sees.materials > 0) parts.push(`${sees.materials} ${plural(sees.materials, "материал", "материала", "материалов")}`);
   if (sees.images > 0) parts.push(`${sees.images} ${plural(sees.images, "изображение", "изображения", "изображений")}`);
   return parts.join(", ") || "ничего";
