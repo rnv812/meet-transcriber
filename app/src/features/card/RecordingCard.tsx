@@ -632,7 +632,8 @@ export function RecordingCard({
         <p className="muted card__note" role="note">{asrNoteText(rec.asr_note)}</p>
       )}
       {status.kind === "ready" && (
-        <MicSplitNote info={rec.mic_split} diarization={rec.diarization} onOpenSettings={onOpenSettings}
+        <MicSplitNote info={rec.mic_split} diarization={rec.diarization} endpoint={endpoint}
+          onOpenSettings={onOpenSettings}
           onShowRemoved={showRemoved} />
       )}
       {systemAudioText(rec.system_audio, rec.system_audio_reason) && (

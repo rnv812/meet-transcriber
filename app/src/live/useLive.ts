@@ -32,7 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type Endpoint, liveAsk, liveHint, liveTask, openLiveEvents } from "../lib/api";
 import { errorText } from "../lib/format";
-import type { AgentInfo, LiveCatchup, LiveHint, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
+import type { AgentInfo, LiveCatchup, LiveHint, LiveMic, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
 import { EMPTY_SUMMARY } from "./liveModel";
 import type { ChatSink } from "./useChat";
 
@@ -83,6 +83,8 @@ export type Live = {
   quietDefault: boolean | null;
   /** Ассистент включён посреди записи: ход догонялки начала встречи; null — её нет. */
   catchup: LiveCatchup | null;
+  /** Микрофон по голосам в этом сеансе (`LiveMic`); null — неизвестно. */
+  mic?: LiveMic | null;
   /**
    * Агент-участник (`assist.participant`, 0.3.6): есть — окно показывает чат
    * вместо подсказок и «Спросить»; null/нет — прежний ассистент.
@@ -176,6 +178,7 @@ export function useLive(ep: Endpoint | null, active = true, chat?: ChatSink): Li
   const [hintsEnabled, setHintsEnabled] = useState(true);
   const [quietDefault, setQuietDefault] = useState<boolean | null>(null);
   const [catchup, setCatchup] = useState<LiveCatchup | null>(null);
+  const [mic, setMic] = useState<LiveMic | null>(null);
   const [agent, setAgent] = useState<AgentInfo | null>(null);
   const chatSink = useRef(chat);
   chatSink.current = chat;
@@ -221,6 +224,7 @@ export function useLive(ep: Endpoint | null, active = true, chat?: ChatSink): Li
           setSummary(s.summary ?? EMPTY_SUMMARY);
           setHints(Array.isArray(s.hints) ? s.hints : []);
           setCatchup(s.catchup ?? null);
+          setMic(s.mic && typeof s.mic === "object" ? s.mic : null);
           setAgent(s.agent && typeof s.agent === "object" ? s.agent : null);
           setHintsEnabled(s.hints_enabled !== false);
           setQuietDefault(s.prefs?.quiet_default === true);
@@ -333,7 +337,7 @@ export function useLive(ep: Endpoint | null, active = true, chat?: ChatSink): Li
   );
 
   return {
-    status, lines: linesView, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, agent,
+    status, lines: linesView, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, mic, agent,
     qa: qaView, loaded, error,
     asking, askError, hintError, ask, hint, setTask,
   };

@@ -8,6 +8,7 @@ vi.mock("../lib/api", async (orig) => ({
   liveStop: vi.fn(),
   liveAsk: vi.fn(),
   liveHint: vi.fn(),
+  getOwnerVoice: vi.fn(),
 }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
@@ -15,7 +16,7 @@ vi.mock("../lib/shell", async (orig) => ({
   invoke: vi.fn(async () => undefined),
   onLiveWindow: vi.fn(async () => () => {}),
 }));
-import { NoResidentError, getState, liveAsk, liveHint, liveStop, resolveEndpoint } from "../lib/api";
+import { NoResidentError, getOwnerVoice, getState, liveAsk, liveHint, liveStop, resolveEndpoint } from "../lib/api";
 import { invoke, onLiveWindow } from "../lib/shell";
 import type { LiveStatus, Snapshot } from "../lib/types";
 import { FakeEventSource } from "../test/setup";
@@ -472,4 +473,34 @@ test("ассистент кончился, панель ещё открыта �
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status({ active: false, ready: false }))));
   expect(head()).not.toHaveTextContent("Запускается");
+});
+
+
+test("без образца голоса — строка над лентой; «Записать образец» сразу открывает окно записи с текстом", async () => {
+  vi.mocked(getOwnerVoice).mockResolvedValue(
+    { samples: [], take: null, ready: true, reason: null, recording: true, seconds: 25 });
+  shellWith({ expanded: true });
+  render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null, mic: { split: true, owner_profile: false } }));
+  const nudge = await screen.findByRole("note", { name: "Образец голоса" });
+  expect(nudge).toHaveTextContent("Микрофон не делится на голоса. Запишите образец своего голоса — "
+    + "прочитайте вслух короткий текст (25 с)");
+  await userEvent.click(within(nudge).getByRole("button", { name: "Записать образец" }));
+  const dialog = screen.getByRole("dialog", { name: "Мой голос" });
+  expect(await within(dialog).findByText(/Утро выдалось тихим/)).toBeInTheDocument();
+  // Встреча ещё пишется: образец — после неё, окно об этом говорит и ждёт.
+  expect(within(dialog).getByText(/запишите образец после неё/)).toBeInTheDocument();
+  expect(calls("tray_panel_open")).toEqual([]); // не переход в настройки — окно здесь же
+  await userEvent.click(within(dialog).getAllByRole("button", { name: "Закрыть" })[0]!);
+  expect(screen.queryByRole("dialog", { name: "Мой голос" })).toBeNull();
+});
+
+test("образец есть или микрофон не делится — строки нет", async () => {
+  shellWith({ expanded: true });
+  render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null, mic: { split: true, owner_profile: true } }));
+  expect(await screen.findByRole("log")).toBeInTheDocument();
+  expect(screen.queryByRole("note", { name: "Образец голоса" })).toBeNull();
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null, mic: { split: false, owner_profile: false } }));
+  expect(screen.queryByRole("note", { name: "Образец голоса" })).toBeNull();
 });

@@ -21,6 +21,7 @@ import { useLiveAsk } from "../../live/useLastLook";
 import { useChat } from "../../live/useChat";
 import { useLive } from "../../live/useLive";
 import { useWide } from "../../live/useWide";
+import { LIVE_NUDGE_LEAD, OwnerVoiceNudge, wantsOwnerSample } from "../settings/OwnerVoiceDialog";
 
 export function LiveCard({ endpoint, live, onAskAgent }: {
   endpoint: Endpoint;
@@ -49,6 +50,9 @@ export function LiveCard({ endpoint, live, onAskAgent }: {
           tooltip="Не отвлекать: без подсветки и счётчиков" onClick={() => setQuiet(!quiet)} />
       </div>
       <div className="live-card__body">
+        {wantsOwnerSample(state.mic) && (
+          <OwnerVoiceNudge endpoint={endpoint} lead={LIVE_NUDGE_LEAD} className="live-nudge" />
+        )}
         <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} place="card"
           chat={chat} />
       </div>

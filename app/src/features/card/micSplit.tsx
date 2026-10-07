@@ -1,14 +1,19 @@
 /**
- * Микрофон звонка по голосам (`mic_split`, с 0.3.3): тихая строка в карточке.
+ * Микрофон звонка по голосам (`mic_split`, с 0.3.3): строка в карточке.
  *
  * Разделение не вышло — почему микрофон подписан целиком вами и что с этим
- * сделать (записать образец голоса, настроить Hugging Face). Вышло и убрало
+ * сделать. Нет образца голоса (или он не узнал вас) — заметная строка
+ * `OwnerVoiceNudge`: «Записать образец» сразу открывает окно записи с текстом
+ * для чтения (v037: на встрече за одним ноутбуком сосед иначе тоже «Вы»).
+ * Прочее (мало речи, ошибка, Hugging Face) — тихой строкой. Вышло и убрало
  * повторы — сколько и где их посмотреть: реплики, видные в тексте до
  * спикеров, исчезают с окончательной расшифровкой не молча.
  */
+import type { Endpoint } from "../../lib/api";
 import { plural } from "../../lib/format";
 import type { MicSplitInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { NUDGE_TEXT, OwnerVoiceNudge } from "../settings/OwnerVoiceDialog";
 
 type Hint = { text: string; action?: "sound" | "engine"; button?: string };
 
@@ -21,11 +26,11 @@ export function micSplitHint(info: Pick<MicSplitInfo, "status"> | null | undefin
     case "no_profile":
       // Без доступа к HF образец не записать (та же модель) — баннер уже про Hugging Face.
       if (diarization?.startsWith("skipped_")) return null;
-      return { text: "Запишите образец голоса — тогда люди рядом с вами получат свои подписи. "
-        + "Пока весь микрофон подписан вами", ...RECORD };
+      return { text: "Микрофон не разделён на голоса: без образца вашего голоса он весь подписан вами, "
+        + "и люди рядом с вами — тоже", ...RECORD };
     case "owner_not_found":
-      return { text: "Ваш голос на микрофоне не найден: образец записан с другим микрофоном или в шуме. "
-        + "Весь микрофон подписан вами — запишите образец с этим микрофоном", ...RECORD };
+      return { text: "Ваш голос на микрофоне не найден: образец записан с другим микрофоном или в шуме, "
+        + "поэтому весь микрофон подписан вами", ...RECORD };
     case "no_voice":
       return { text: "На микрофоне слишком мало речи, чтобы различать голоса: он подписан вами целиком" };
     case "skipped_error":
@@ -54,32 +59,40 @@ export function removedSummary(dropped: MicSplitInfo["dropped"] | null | undefin
   return parts.join(", ");
 }
 
-export function MicSplitNote({ info, diarization, onOpenSettings, onShowRemoved }: {
+export function MicSplitNote({ info, diarization, endpoint, onOpenSettings, onShowRemoved }: {
   info: MicSplitInfo | null | undefined;
   diarization?: string | null;
+  /** Резидент: «Записать образец» открывает окно записи сразу (без него — настройки). */
+  endpoint?: Endpoint;
   onOpenSettings?: (section: string) => void;
   /** «Показать»: панель «Спикеры» со списком убранного. */
   onShowRemoved?: () => void;
 }) {
   const hint = micSplitHint(info, diarization);
   const removed = removedSummary(info?.dropped);
-  if (!hint && !removed) return null;
+  const nudge = hint?.action === "sound" && endpoint
+    ? <OwnerVoiceNudge endpoint={endpoint} lead={`${hint.text}.`} className="card__note" /> : null;
+  const quiet = nudge ? null : hint;
+  if (!quiet && !removed) return nudge;
   return (
-    <div className="muted card__note mic-note" role="note">
-      {hint && (
-        <span className="mic-note__line">
-          <span>{hint.text}</span>
-          {hint.action && hint.button && onOpenSettings && (
-            <Button variant="link" size="sm" onClick={() => onOpenSettings(hint.action!)}>{hint.button}</Button>
-          )}
-        </span>
-      )}
-      {removed && (
-        <span className="mic-note__line">
-          <span>{(info?.dropped?.owner_leak ?? 0) > 0 ? "Убраны повторы" : "С микрофона убраны повторы"}: {removed}</span>
-          {onShowRemoved && <Button variant="link" size="sm" onClick={onShowRemoved}>Показать</Button>}
-        </span>
-      )}
-    </div>
+    <>
+      {nudge}
+      <div className="muted card__note mic-note" role="note">
+        {quiet && (
+          <span className="mic-note__line">
+            <span>{quiet.action === "sound" ? `${quiet.text}. ${NUDGE_TEXT}` : quiet.text}</span>
+            {quiet.action && quiet.button && onOpenSettings && (
+              <Button variant="link" size="sm" onClick={() => onOpenSettings(quiet.action!)}>{quiet.button}</Button>
+            )}
+          </span>
+        )}
+        {removed && (
+          <span className="mic-note__line">
+            <span>{(info?.dropped?.owner_leak ?? 0) > 0 ? "Убраны повторы" : "С микрофона убраны повторы"}: {removed}</span>
+            {onShowRemoved && <Button variant="link" size="sm" onClick={onShowRemoved}>Показать</Button>}
+          </span>
+        )}
+      </div>
+    </>
   );
 }

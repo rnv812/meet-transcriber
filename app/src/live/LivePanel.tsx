@@ -43,6 +43,7 @@ import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
 import { useLiveWindow } from "./useLiveWindow";
 import { useWide } from "./useWide";
+import { LIVE_NUDGE_LEAD, OwnerVoiceNudge, wantsOwnerSample } from "../features/settings/OwnerVoiceDialog";
 import "./live.css";
 
 const TICK_MS = 1000;
@@ -264,6 +265,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       </header>
       {open ? (
         <div className="live-panel__body">
+          {wantsOwnerSample(live.mic) && (
+            <OwnerVoiceNudge endpoint={endpoint} lead={LIVE_NUDGE_LEAD} className="live-nudge" />
+          )}
           <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} />
         </div>
       ) : participant ? (

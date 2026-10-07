@@ -18,6 +18,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getQa: vi.fn(),
   getAnalysis: vi.fn(),
   getSpeakers: vi.fn(),
+  getOwnerVoice: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => false,
@@ -53,6 +54,8 @@ beforeEach(() => {
   vi.mocked(api.getQa).mockResolvedValue({ items: [] });
   vi.mocked(api.getAnalysis).mockResolvedValue({ state: "none" });
   vi.mocked(api.getSpeakers).mockResolvedValue(speakersView);
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(
+    { samples: [], take: null, ready: true, reason: null, recording: false, seconds: 25 });
 });
 
 test("человек рядом с вами — «в комнате»; без образца голоса — подсказка записать его", async () => {
@@ -64,8 +67,14 @@ test("человек рядом с вами — «в комнате»; без о
   expect(within(turn).getByText("в комнате")).toBeInTheDocument();
   const mine = screen.getByText(/Да, слышно/).closest("[data-turn]") as HTMLElement;
   expect(within(mine).queryByText("в комнате")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Записать образец" }));
-  expect(onOpenSettings).toHaveBeenCalledWith("sound");
+  // Заметная строка, а не тихая заметка: «Записать образец» сразу открывает окно записи с текстом.
+  const nudge = screen.getByRole("note", { name: "Образец голоса" });
+  expect(nudge).toHaveClass("ownv-nudge");
+  expect(nudge).toHaveTextContent(/Микрофон не разделён на голоса.*Запишите образец своего голоса — прочитайте вслух/);
+  await userEvent.click(within(nudge).getByRole("button", { name: "Записать образец" }));
+  const dialog = screen.getByRole("dialog", { name: "Мой голос" });
+  expect(await within(dialog).findByText(/Утро выдалось тихим/)).toBeInTheDocument();
+  expect(onOpenSettings).not.toHaveBeenCalled();
 });
 
 test("убранные повторы: строка в карточке, «Показать» открывает панель со списком", async () => {

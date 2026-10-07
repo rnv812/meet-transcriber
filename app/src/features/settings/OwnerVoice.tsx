@@ -7,7 +7,8 @@
  * `GET /owner-voice`, пока попытка идёт, и показывает итог словами.
  * Хранится только отпечаток голоса, звук удаляется сразу после разбора.
  *
- * Используется в мастере первого запуска (шаг «Ваш голос») и в настройках «Звук».
+ * Используется в мастере первого запуска (шаг «Ваш голос»), в настройках «Звук»
+ * и в окне записи (OwnerVoiceDialog.tsx: из окна ассистента и карточки записи).
  *
  * «Найти по прошлым встречам» (`POST /owner-voice/derive`): задача ищет ваш
  * голос в последних звонках. Найденное — только предложение: карточка даёт
@@ -28,6 +29,7 @@ import { useConfirm } from "../../ui/ConfirmDialog";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
 import { Row } from "./Section";
+import "./ownv.css";
 
 /** Как часто спрашивать резидент, пока идёт запись или разбор. */
 export const POLL_MS = 1000;
@@ -68,10 +70,14 @@ const active = (status: OwnerVoiceStatus | null) =>
 /**
  * Состояние образца у резидента: загрузка, опрос во время записи, запись и
  * удаление. `watchReady` — перепроверять готовность, пока её нет (мастер:
- * модель разделения на спикеров могла ещё качаться).
+ * модель разделения на спикеров могла ещё качаться); `watchBusy` — и пока идёт
+ * запись встречи (окно записи открыто из окна ассистента: кнопка станет
+ * доступна, как только встреча закончится).
  */
-export function useOwnerVoice(endpoint: Endpoint, { pollMs = POLL_MS, readyPollMs = READY_POLL_MS, watchReady = false }: {
-  pollMs?: number; readyPollMs?: number; watchReady?: boolean;
+export function useOwnerVoice(endpoint: Endpoint, {
+  pollMs = POLL_MS, readyPollMs = READY_POLL_MS, watchReady = false, watchBusy = false,
+}: {
+  pollMs?: number; readyPollMs?: number; watchReady?: boolean; watchBusy?: boolean;
 } = {}) {
   const [status, setStatus] = useState<OwnerVoiceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +99,8 @@ export function useOwnerVoice(endpoint: Endpoint, { pollMs = POLL_MS, readyPollM
   useEffect(() => { void reload(); }, [reload]);
 
   const polling = active(status);
-  const waiting = watchReady && !!status && !status.ready && !polling;
+  const waiting = !!status && !polling
+    && ((watchReady && !status.ready) || (watchBusy && !!status.recording));
   useEffect(() => {
     if (!polling && !waiting) return;
     const timer = setTimeout(() => void reload(), polling ? pollMs : readyPollMs);

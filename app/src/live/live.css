@@ -216,3 +216,6 @@
 @media (prefers-reduced-motion: reduce) {
   .live-summary__item, .live-summary__topic, .live-hint { transition: none; }
 }
+
+/* «Запишите образец своего голоса» над рабочей областью (OwnerVoiceDialog.tsx). */
+.live-nudge { flex: none; margin: 6px 8px 0; }

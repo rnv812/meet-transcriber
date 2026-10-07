@@ -227,7 +227,7 @@ describe("панель «Спикеры»", () => {
 
 describe("подсказки карточки", () => {
   test("текст по каждому статусу разделения", () => {
-    expect(micSplitHint({ status: "no_profile" })?.text).toMatch(/^Запишите образец голоса/);
+    expect(micSplitHint({ status: "no_profile" })?.text).toMatch(/^Микрофон не разделён на голоса/);
     expect(micSplitHint({ status: "no_profile" })?.action).toBe("sound");
     expect(micSplitHint({ status: "owner_not_found" })?.text).toMatch(/не найден/);
     expect(micSplitHint({ status: "owner_not_found" })?.action).toBe("sound");
@@ -255,7 +255,8 @@ describe("подсказки карточки", () => {
     const onShowRemoved = vi.fn();
     const { rerender } = render(<MicSplitNote info={{ status: "no_profile", room_speakers: 0, dropped: {} }}
       onOpenSettings={onOpenSettings} onShowRemoved={onShowRemoved} />);
-    expect(screen.getByRole("note")).toHaveTextContent(/Запишите образец голоса/);
+    // Без резидента (нечем открыть окно записи) — тихая строка и переход в настройки.
+    expect(screen.getByRole("note")).toHaveTextContent(/Запишите образец своего голоса/);
     await userEvent.click(screen.getByRole("button", { name: "Записать образец" }));
     expect(onOpenSettings).toHaveBeenCalledWith("sound");
 
