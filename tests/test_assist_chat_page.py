@@ -301,3 +301,88 @@ def test_streaming_text_changes_only_its_bubble(tmp_path):
     assert out["busy"] == "true" and out["text"] == "Бюджет 120 тысяч"
     # готово — пузырь новый (без aria-busy), остальные на месте
     assert out["done"][:2] == out["before"][:2] and out["done"][2] != out["after"][2]
+
+
+# --- реакции: формальные подписи, что будет, отклик, ❓ ждёт пояснения ---------------------
+
+def test_chat_page_reaction_labels_say_what_happens():
+    script = _script(CHAT_PAGE)
+    for label, hint in (
+        ("Полезно", "Полезно — ассистент будет писать больше такого"),
+        ("Не по теме", "Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать"),
+        ("Поясни", "Поясни — ассистент объяснит, на что опирался"),
+    ):
+        assert f'"{label}"' in script and f'"{hint}"' in script
+    assert '"Учту: такое полезно"' in script and '"Учту: скорректирую, о чём пишу"' in script
+    assert '"Ассистент поясняет…"' in script and '"пояснение"' in script and '"к сообщению"' in script
+    for old in ('"норм"', '"не норм"', '"вопрос"'):
+        assert old not in script
+    # подписи у кнопок видны при наведении и фокусе, у поставленной — всегда; в узком окне — только эмодзи
+    assert ".msg:hover .react .lbl,.msg:focus-within .react .lbl" in CHAT_PAGE
+    assert "@media (max-width:420px){.react .lbl{display:none!important}}" in CHAT_PAGE
+
+
+REACT_HARNESS = RENDER_FEED_HARNESS.split("const snap = ", 1)[0].replace(
+    'body + "; return {applySnapshot, applyEvent, es, setPartial: (p) => { partial = p; render(); }, feed};");\n'
+    "const page = api(document, EventSource);",
+    'body + "; return {applySnapshot, applyEvent, react, feed};");\n'
+    "const page = api(document, EventSource);",
+).replace('const api = new Function("document", "EventSource",',
+          'const timers = [];\nconst api = new Function("document", "EventSource", "setTimeout",') .replace(
+    "const page = api(document, EventSource);", "const page = api(document, EventSource, (f) => timers.push(f));") + r"""
+const flat = (n) => [n, ...n.childNodes.flatMap(flat)];
+const msg = (id) => page.feed.childNodes.find((n) => n.dataset.id === id);
+const cls = (id, c) => flat(msg(id)).filter((n) => n.className.split(" ").includes(c)).map((n) => n.textContent);
+const buttons = (id) => flat(msg(id)).filter((n) => n.tagName === "button" && n.attrs["aria-label"])
+  .map((n) => ({ name: n.attrs["aria-label"], title: n.title, text: n.textContent, pressed: n.attrs["aria-pressed"] }));
+const now = Date.now() / 1000;
+const out = {};
+(async () => {
+  page.applySnapshot({ seq: 1, agent: { state: "listening" }, messages: [
+    { id: "m1", kind: "agent", status: "shown", text: "Риск: интеграция без владельца.", reactions: {}, at: now - 60 } ] });
+  out.buttons = buttons("m1");
+  await page.react("m1", "👎", true);
+  out.dislike = cls("m1", "ack");
+  timers.splice(0).forEach((f) => f());          // отклик гаснет
+  out.faded = cls("m1", "ack");
+  await page.react("m1", "👍", true);
+  out.like = cls("m1", "ack");
+  timers.splice(0).forEach((f) => f());
+  await page.react("m1", "👍", false);
+  out.off = cls("m1", "ack");
+  page.applyEvent({ seq: 2, op: "patch", id: "m1", set: { reactions: { "❓": now } } });
+  out.pending = cls("m1", "pending");
+  page.applyEvent({ seq: 3, op: "add", message: { id: "m2", kind: "agent", status: "writing", mode: "reply",
+    text: "", explains: "m1", at: now + 1 } });
+  out.writing = cls("m1", "pending");
+  page.applyEvent({ seq: 4, op: "patch", id: "m2", set: { status: "shown", text: "Олег не назвал владельца." } });
+  out.done = cls("m1", "pending");
+  out.tag = cls("m2", "tag");
+  out.ref = cls("m2", "ref");
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+
+def test_chat_page_reactions_give_feedback_and_link_the_explanation(tmp_path):
+    import json
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node не найден")
+    page = tmp_path / "chat.js"
+    page.write_text(_script(CHAT_PAGE), encoding="utf-8")
+    harness = tmp_path / "react.js"
+    harness.write_text(REACT_HARNESS, encoding="utf-8")
+    run = subprocess.run([node, str(harness), str(page)], capture_output=True, text=True, encoding="utf-8")
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout)
+    assert [(b["name"], b["text"]) for b in out["buttons"]] == [
+        ("👍 Полезно", "👍Полезно"), ("👎 Не по теме", "👎Не по теме"), ("❓ Поясни", "❓Поясни")]
+    assert out["buttons"][0]["title"] == "Полезно — ассистент будет писать больше такого"
+    assert out["dislike"] == ["Учту: скорректирую, о чём пишу"] and out["faded"] == []
+    assert out["like"] == ["Учту: такое полезно"]
+    assert out["off"] == []                                   # снятая реакция — без отклика
+    assert out["pending"] == ["Ассистент поясняет…"] and out["writing"] == ["Ассистент поясняет…"]
+    assert out["done"] == []
+    assert out["tag"] == ["пояснение"] and out["ref"] == ["к сообщению «Риск: интеграция без владельца.»"]

@@ -183,6 +183,17 @@ button:disabled{cursor:default;opacity:.5}
 button.used{border-color:var(--accent);color:var(--accent)}
 .react button{padding:0 6px;opacity:.55}
 .react button[aria-pressed=true]{opacity:1;border-color:var(--accent)}
+.react .lbl{display:none;margin-left:4px;font-size:12px}
+.msg:hover .react .lbl,.msg:focus-within .react .lbl,.react button[aria-pressed=true] .lbl{display:inline}
+.msg:hover .react button,.msg:focus-within .react button{opacity:1}
+.ack{color:var(--accent);font-size:12px;margin-top:4px;animation:ack 3.5s ease forwards}
+@keyframes ack{0%,70%{opacity:1}100%{opacity:0}}
+.pending{color:var(--muted);font-size:12px;margin-top:4px;font-style:italic}
+.tag{border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:0 6px;font-size:11px}
+button.ref{border:0;padding:0;color:var(--accent);font-size:12px;text-decoration:underline;border-radius:0}
+.msg.flash .body{outline:2px solid var(--accent)}
+@media (max-width:420px){.react .lbl{display:none!important}}
+@media (prefers-reduced-motion:reduce){.ack{animation:none}}
 footer{border-top:1px solid var(--line);padding:8px 16px}
 #chips{display:flex;flex-wrap:wrap;gap:6px}
 #chips:not(:empty){margin-bottom:6px}
@@ -223,7 +234,16 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
 <script>
 (function () {
   const HIDDEN = new Set(["held", "dropped", "superseded", "dismissed"]);
-  const REACTIONS = [["👍", "норм"], ["👎", "не норм"], ["❓", "вопрос"]];
+  // Реакции: эмодзи (ключ журнала), подпись, что будет (подсказка), отклик после нажатия.
+  const REACTIONS = [
+    ["👍", "Полезно", "Полезно — ассистент будет писать больше такого", "Учту: такое полезно"],
+    ["👎", "Не по теме", "Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать",
+     "Учту: скорректирую, о чём пишу"],
+    ["❓", "Поясни", "Поясни — ассистент объяснит, на что опирался", ""],
+  ];
+  const ACK_MS = 3500, EXPLAIN_WAIT_S = 300;
+  // Отклик на реакцию — только в этом окне (не в журнале): id сообщения → текст.
+  const acks = new Map();
   const PASTE_MAX = 10 * 1024 * 1024;
   const $ = (id) => document.getElementById(id);
   const feed = $("feed"), text = $("text");
@@ -383,6 +403,38 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     return node;
   }
 
+  function quoteOf(mid) {
+    const t = msgs.get(mid) && msgs.get(mid).text;
+    if (!t) return "";
+    const flat = String(t).replace(/[*_`#>]/g, "").split(/\s+/).join(" ").trim();
+    return " «" + (flat.length > 40 ? flat.slice(0, 39).trimEnd() + "…" : flat) + "»";
+  }
+
+  function showMessage(mid) {
+    const entry = nodes.get(mid);
+    if (!entry) return;
+    entry.node.scrollIntoView({block: "center"});
+    entry.node.classList.add("flash");
+    setTimeout(() => entry.node.classList.remove("flash"), 1500);
+  }
+
+  // ❓ поставлен недавно, а пояснения (ответа с `explains`) или строки «нечего
+  // добавить» с `re` на это сообщение (или на просьбу после встречи) ещё нет.
+  function explainPending(m) {
+    const at = m.reactions && m.reactions["❓"];
+    if (typeof at !== "number" || Date.now() / 1000 - at > EXPLAIN_WAIT_S) return false;
+    for (const id of order) {
+      const r = msgs.get(id);
+      if (!r || typeof r.at !== "number" || r.at < at - 1) continue;
+      if (r.kind === "agent" && r.explains === m.id && ["shown", "failed", "cancelled"].includes(r.status)) return false;
+      if (r.kind === "system" && r.re) {
+        const asked = msgs.get(r.re);
+        if (r.re === m.id || (asked && asked.via === "reaction" && asked.re === m.id)) return false;
+      }
+    }
+    return true;
+  }
+
   function agentBody(body, m) {
     body.replaceChildren();
     const shown = m.text || partialText(m);
@@ -398,7 +450,17 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     const meta = ["Ассистент", clock(m.t)];
     if (m.pin) meta.push("вопрос вам");
     if (m.status === "cancelled" && !m.note) meta.push("остановлено");
-    box.appendChild(el("div", "meta", meta.filter(Boolean).join(" · ")));
+    const head = el("div", "meta", meta.filter(Boolean).join(" · "));
+    if (typeof m.explains === "string") {
+      head.appendChild(document.createTextNode(" "));
+      head.appendChild(el("span", "tag", "пояснение"));
+      head.appendChild(document.createTextNode(" "));
+      const ref = el("button", "ref", "к сообщению" + quoteOf(m.explains));
+      ref.title = "Показать сообщение, которое поясняет ассистент";
+      ref.addEventListener("click", () => showMessage(m.explains));
+      head.appendChild(ref);
+    }
+    box.appendChild(head);
     const body = el("div", "body");
     agentBody(body, m);
     box.appendChild(body);
@@ -419,16 +481,27 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     if (m.status === "shown") {
       const row = el("div", "row react");
       const set = m.reactions && typeof m.reactions === "object" ? m.reactions : {};
-      for (const [emoji, title] of REACTIONS) {
+      for (const [emoji, label, hint] of REACTIONS) {
         const on = Object.prototype.hasOwnProperty.call(set, emoji);
         const b = el("button", "", emoji);
-        b.title = title;
-        b.setAttribute("aria-label", title);
+        b.appendChild(el("span", "lbl", label));
+        b.title = hint;
+        b.setAttribute("aria-label", emoji + " " + label);
         b.setAttribute("aria-pressed", on ? "true" : "false");
         b.addEventListener("click", () => react(m.id, emoji, !on));
         row.appendChild(b);
       }
       box.appendChild(row);
+      if (acks.has(m.id)) {
+        const ack = el("div", "ack", acks.get(m.id));
+        ack.setAttribute("role", "status");
+        box.appendChild(ack);
+      }
+      if (explainPending(m)) {
+        const wait = el("div", "pending", "Ассистент поясняет…");
+        wait.setAttribute("role", "status");
+        box.appendChild(wait);
+      }
     }
     return box;
   }
@@ -455,8 +528,10 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
       ? m.attachments.map((aid) => { const a = msgs.get(aid) || {}; return [aid, a.name, a.status, a.note]; })
       : null;
     const chosen = used.has(m.id) ? used.get(m.id) : pendingClicks.get(m.id);
+    const extra = m.kind === "agent"
+      ? [acks.get(m.id) || null, explainPending(m), m.explains || null, m.explains ? quoteOf(m.explains) : null] : null;
     return JSON.stringify([m.kind, m.status, m.text, m.t, m.pin, m.note, m.error, m.buttons,
-      m.reactions, m.via, files, chosen === undefined ? null : chosen,
+      m.reactions, m.via, files, chosen === undefined ? null : chosen, extra,
       m.status === "writing" && !m.text && !partialText(m)]);
   }
 
@@ -542,8 +617,20 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
   }
 
   async function react(mid, emoji, on) {
+    // Отклик — сразу, от страницы, не от модели; снятая реакция — без отклика.
+    const ack = on ? (REACTIONS.find((r) => r[0] === emoji) || [])[3] : "";
+    if (ack) {
+      acks.set(mid, ack);
+      render();
+      setTimeout(() => { if (acks.get(mid) === ack) { acks.delete(mid); render(); } }, ACK_MS);
+    }
     try { await api("POST", "/chat/" + encodeURIComponent(mid) + "/react", {emoji: emoji, on: on}); }
-    catch (e) { notice("Реакция не сохранена: " + e.message); }
+    catch (e) {
+      if (acks.get(mid) === ack) { acks.delete(mid); render(); }
+      notice("Реакция не сохранена: " + e.message);
+    }
+    // ❓ ждёт пояснения не дольше EXPLAIN_WAIT_S: потом «поясняет…» снимается.
+    if (on && emoji === "❓") setTimeout(render, EXPLAIN_WAIT_S * 1000 + 50);
   }
 
   async function send() {
