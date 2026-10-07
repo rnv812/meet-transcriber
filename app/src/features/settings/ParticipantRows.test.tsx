@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { KB_MAP_LABEL, VISION_NOTE } from "./ParticipantRows";
+import { KB_MAP_LABEL, PARTICIPANT_LABEL, VISION_NOTE } from "./ParticipantRows";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
@@ -58,7 +58,7 @@ const save = () => userEvent.click(screen.getByRole("button", { name: "Сохр�
 
 test("участник включён (по умолчанию): частота, структура базы, исключения; прежних подсказок нет", async () => {
   open();
-  expect(await screen.findByRole("switch", { name: "Ассистент-участник" })).toHaveAttribute("aria-checked", "true");
+  expect(await screen.findByRole("switch", { name: PARTICIPANT_LABEL })).toHaveAttribute("aria-checked", "true");
   const freq = screen.getByRole("radiogroup", { name: "Как часто писать" });
   expect(within(freq).getByRole("radio", { name: "чаще" })).toBeChecked();
   expect(screen.getByRole("switch", { name: KB_MAP_LABEL })).toHaveAttribute("aria-checked", "true");
@@ -77,7 +77,7 @@ test("участник включён (по умолчанию): частота,
 
 test("участник выключен: прежние подсказки видны (запасной режим), настроек участника нет", async () => {
   open();
-  await userEvent.click(await screen.findByRole("switch", { name: "Ассистент-участник" }));
+  await userEvent.click(await screen.findByRole("switch", { name: PARTICIPANT_LABEL }));
   expect(screen.getByRole("radiogroup", { name: "Активность подсказок" })).toBeInTheDocument();
   expect(screen.getByLabelText("Сколько подсказок держать")).toBeInTheDocument();
   expect(screen.queryByRole("radiogroup", { name: "Как часто писать" })).toBeNull();
@@ -144,4 +144,13 @@ test("осталась «Только сводка» прежнего ассис
   expect(screen.queryByText(/Выбрано «Только сводка»/)).toBeNull();
   await save();
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { activity: "calm" } }));
+});
+
+test("без базы знаний вписать исключение тоже нельзя (ревью M10)", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assistant: { knowledge_dir: null } }));
+  open();
+  const editor = await screen.findByRole("group", { name: "Исключённые папки" });
+  expect(within(editor).getByRole("textbox", { name: "Папка внутри базы знаний" })).toBeDisabled();
+  expect(within(editor).getByRole("button", { name: "Добавить" })).toBeDisabled();
+  expect(PARTICIPANT_LABEL).toBe("Ассистент — участник встречи");
 });

@@ -69,7 +69,8 @@ export function recordingChatBackend(id: string, job: () => Job | null,
     react: (ep, mid, emoji, on) => recordingChatReact(ep, id, mid, emoji, on),
     stop: async (ep) => {
       const running = job();
-      if (running) await cancelJob(ep, running.id);
+      if (!running) throw new Error("ответ уже не готовится");
+      await cancelJob(ep, running.id);
     },
     frequency: async () => undefined,
     paste: (ep, blob, name) => recordingChatPaste(ep, id, blob, name),

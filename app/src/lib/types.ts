@@ -886,7 +886,8 @@ export type ChatMessage = {
   pin?: boolean;
   reactions?: Partial<Record<ChatReaction, number>>;
   attachments?: string[];
-  via?: "button";
+  /** Нажатие кнопки агента; `reaction` — ❓ после встречи (просьба пояснить сообщение `re`). */
+  via?: "button" | "reaction";
   client_id?: string;
   after_meeting?: boolean;
   error?: string;

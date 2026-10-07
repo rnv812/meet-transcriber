@@ -65,7 +65,7 @@ export function GroupMenu({ ui, id, at, anchor, align = "start", onClose }: {
       { label: "Цвет", icon: <Palette {...ICON} />, trailing: <ChevronRight {...ICON} />, autoFocus: back,
         onSelect: () => setColors(true) },
       { label: "Папка базы знаний…", icon: <FolderOpen {...ICON} />,
-        hint: group.kb_folder ? `Сейчас: ${group.kb_folder}` : "Ассистент встреч группы видит её структуру первой",
+        hint: group.kb_folder ? `Сейчас: ${group.kb_folder}` : "Папка группы в базе знаний — для карты ассистента",
         onSelect: run(() => ui.pickKbFolder(id)) },
       ...(group.kb_folder ? [{ label: "Убрать папку базы знаний", icon: <FolderMinus {...ICON} />,
         onSelect: run(() => ui.clearKbFolder(id)) }] : []),

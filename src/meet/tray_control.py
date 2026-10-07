@@ -145,10 +145,93 @@ _CHAT_ATTACHMENT_ID = re.compile(r"a\d{1,9}")
 CHAT_UPDATED = jobs.CHAT_UPDATED
 # Вложение к чату после встречи разбирается не дольше (как `/chat/attach` ребёнка).
 CHAT_ATTACH_TIMEOUT_S = 90.0
+# Пока идёт эта работа над записью, продолжить разговор нельзя: расшифровка
+# перепишет текст, по которому отвечает агент (ревью after-chat, I3).
+CHAT_BUSY_KINDS = (jobs.TRANSCRIBE, jobs.IMPORT, jobs.MERGE, jobs.REDIARIZE)
+TRANSCRIBING = "Встреча ещё расшифровывается — продолжить разговор можно, когда она будет готова"
+# ❓ после встречи — сообщение агенту (ревью after-chat, I2).
+EXPLAIN_TEXT = "❓ Поясни это сообщение"
 # Документов базы знаний для чипов-источников окна — не больше.
 KB_DOCS_MAX = 5000
 # Переписка с ассистентом для вкладки «Агент» (meet.assist.chatlog.ASSISTANT_CHAT_MD).
 ASSISTANT_CHAT_MD = "assistant_chat.md"
+
+
+# Разбор вложения после встречи: один за раз (ревью after-chat, I1).
+_ATTACH_SLOT = threading.Semaphore(1)
+
+
+def _attach_worker_argv(folder: Path, item, vision: bool) -> list[str]:
+    """Команда разборщика вложения (`meet.assist.attach_worker`): тот же
+    интерпретатор, что у резидента. Путь и имя — одним аргументом через «=»
+    (ведущий дефис — не флаг); картинка — в stdin."""
+    argv = [sys.executable, "-m", "meet.assist.attach_worker", str(folder), f"--vision={int(bool(vision))}"]
+    if isinstance(item, dict):
+        if item.get("name"):
+            argv.append(f"--name={item['name']}")
+    else:
+        argv.append(f"--path={item}")
+    return argv
+
+
+def _attachment_files(folder: Path) -> set[Path]:
+    """Файлы вложений встречи: материалы с текстом и картинки."""
+    from meet import materials
+
+    out: set[Path] = set()
+    for sub in (materials.materials_dir(folder), materials.assistant_dir(folder) / materials.FILES_DIR):
+        try:
+            out.update(p for p in sub.iterdir() if p.is_file() and p.name != materials.IDS_FILE)
+        except OSError:
+            continue
+    return out
+
+
+def _parse_attachment_in_child(folder: Path, item, vision: bool, log=print) -> tuple[dict, bool]:
+    """Разобрать вложение в коротком процессе `attach_worker` не дольше
+    CHAT_ATTACH_TIMEOUT_S. → (поля записи журнала, разобрано ли). Срок
+    вышел — процесс убит, файлы, которые он положил в папку встречи, убраны,
+    503. Процесс упал или ответил не то — запись «не разобрано»."""
+    from meet.assist import participant
+
+    before = _attachment_files(folder)
+    data = item.get("data") if isinstance(item, dict) else None
+    try:
+        process = subprocess.Popen(
+            _attach_worker_argv(folder, item, vision), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, creationflags=jobs._creationflags())
+    except OSError as e:
+        return participant.failed_attachment(item, f"разборщик не запустился: {e}"), False
+    try:
+        out, err = process.communicate(input=bytes(data or b""), timeout=CHAT_ATTACH_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        jobs._kill_tree(process)
+        process.communicate()
+        _drop_new_files(folder, before, log)
+        raise _unavailable("Файл разбирается слишком долго — приложите его частями или поменьше")
+    try:
+        reply = json.loads(out.decode("utf-8", "replace").strip().splitlines()[-1])
+        fields = reply["fields"]
+        if not isinstance(fields, dict):
+            raise TypeError("fields")
+    except (ValueError, KeyError, IndexError, TypeError):
+        tail = err.decode("utf-8", "replace").strip().splitlines()[-1:] or [f"код {process.returncode}"]
+        log(f"чат после встречи: разборщик вложения упал ({folder.name}): {tail[0][:300]}")
+        _drop_new_files(folder, before, log)
+        return participant.failed_attachment(item, "разбор не удался"), False
+    return fields, bool(reply.get("ok"))
+
+
+def _drop_new_files(folder: Path, before: set[Path], log=print) -> None:
+    """Файлы вложений, которых не было до разбора (разборщик убит или упал),
+    — убрать: без записи журнала они съедали бы квоту и попадали в затравку.
+    Разбор один за раз, а живого ребёнка у этой записи нет (проверено), так
+    что новые файлы — его."""
+    for path in _attachment_files(folder) - before:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            log(f"чат после встречи: файл брошенного разбора не убран ({path.name}: {e})")
 
 
 class ProviderCache:
@@ -3460,6 +3543,9 @@ class TrayControl:
             raise _conflict("Идёт живой режим этой записи — пишите ассистенту в чат встречи")
         if self._key(folder) in self._busy_now():
             raise _conflict("Запись ещё идёт — продолжить разговор можно после её окончания")
+        if self.queue.active_for(str(folder), CHAT_BUSY_KINDS):
+            # Ревью after-chat, I3: пока встреча (пере)расшифровывается — не писать.
+            raise _conflict(TRANSCRIBING)
         return folder
 
     # --- вложения и реакции после встречи ------------------------------------
@@ -3495,33 +3581,17 @@ class TrayControl:
         folder = self._after_meeting_folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        vision = self._chat_vision(provider)
-        result: dict = {}
-
-        def work():
-            try:
-                result["fields"] = participant.parse_attachment(folder, item, vision=vision)[0]
-                result["parsed"] = True
-            except (ValueError, OSError, TypeError) as e:
-                result["fields"] = participant.failed_attachment(item, e)
-
-        worker = threading.Thread(target=work, name="chat-attach", daemon=True)
-        worker.start()
-        worker.join(CHAT_ATTACH_TIMEOUT_S)
-        if worker.is_alive():
-            def tidy():
-                # Разбор доработает сам; его результат без записи журнала — убрать.
-                worker.join()
-                if result.get("parsed"):
-                    participant.drop_parsed(folder, result["fields"], log=self.tray.log)
-
-            threading.Thread(target=tidy, name="chat-attach-tidy", daemon=True).start()
-            raise _unavailable("Файл разбирается слишком долго — приложите его частями или поменьше")
-        fields = result["fields"]
+        # Один разбор за раз на резидент (ревью after-chat, I1): следующий — 503.
+        if not _ATTACH_SLOT.acquire(blocking=False):
+            raise _unavailable("Разбирается другой файл — повторите через минуту")
+        try:
+            fields, parsed = _parse_attachment_in_child(folder, item, self._chat_vision(provider), self.tray.log)
+        finally:
+            _ATTACH_SLOT.release()
         try:
             added = chatlog.ChatLog(folder, log=self.tray.log).append("attachment", **fields)
         except (chatlog.FileLockTimeout, OSError, RuntimeError) as e:
-            if result.get("parsed"):
+            if parsed:
                 participant.drop_parsed(folder, fields, log=self.tray.log)
             if isinstance(e, chatlog.FileLockTimeout):
                 raise _unavailable("Журнал чата занят — повторите")
@@ -3568,8 +3638,10 @@ class TrayControl:
 
     def recording_chat_react(self, recording_id: str, mid: str, body: dict | None) -> dict:
         """Реакция на сообщение агента после встречи: `{"emoji": "👍|👎|❓",
-        "on"?: bool|null}` → `{"ok", "changed"}`. Агент увидит её в журнале
-        при следующем ответе."""
+        "on"?: bool|null, "provider"?}` → `{"ok", "changed"}`. 👍 и 👎 —
+        только в журнал (агент увидит их при следующем ответе); ❓ поставлен —
+        ещё и просьба пояснить это сообщение: запись `via: "reaction"` и
+        задача ответа (`message`, `job` в ответе; ревью after-chat, I2)."""
         from meet.assist import chatlog
 
         mid = _chat_mid(mid)
@@ -3579,18 +3651,31 @@ class TrayControl:
             raise _bad_request("реакция — 👍, 👎 или ❓")
         if on is not None and not isinstance(on, bool):
             raise _bad_request("on — true, false или null")
+        provider = self._chosen(body)
         folder = self._after_meeting_folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
+        explain = emoji == "❓" and on is not False
+        if explain:
+            self._ready_for_model(folder, provider)   # пояснить некому — реакции не будет
+        log = chatlog.ChatLog(folder, log=self.tray.log)
         try:
-            changed = chatlog.ChatLog(folder, log=self.tray.log).react(mid, emoji, on)
+            changed = log.react(mid, emoji, on)
         except ValueError as e:
             raise _bad_request(str(e))
         except chatlog.FileLockTimeout:
             raise _unavailable("Журнал чата занят — повторите")
-        if changed:
+        if not changed:
+            return {"ok": True, "changed": False}
+        switched_on = next((ev["message"].get("on") for ev in changed if ev.get("op") == "add"), False)
+        if not (explain and switched_on):
             self.bus.emit(CHAT_UPDATED, id=folder.name)
-        return {"ok": True, "changed": bool(changed)}
+            return {"ok": True, "changed": True}
+        try:
+            added = log.append("user", text=EXPLAIN_TEXT, via="reaction", re=mid, after_meeting=True)
+        except chatlog.FileLockTimeout:
+            raise _unavailable("Журнал чата занят — повторите")
+        return {"ok": True, "changed": True, **self._chat_reply_job(folder, log, added, provider)}
 
     def kb_docs(self) -> dict:
         """Документы базы знаний (пути относительно неё, через «/»), без

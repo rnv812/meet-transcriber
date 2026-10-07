@@ -58,6 +58,8 @@ export const SNAPSHOT_LIMIT = 200;
 export const HISTORY_LIMIT = 5000;
 /** Миниатюр вставленных картинок держим не больше (object URL; старые отзываются). */
 export const PREVIEW_MAX = 12;
+/** Чип открыл не исходный файл, а текст, извлечённый Meet. */
+export const COPY_OPENED = "Открыта копия текста — исходный файл вне базы и библиотеки";
 /** Список документов базы знаний для чипов — свежий столько (мс). */
 const KB_TTL_MS = 60_000;
 
@@ -167,7 +169,10 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
   const sink = useMemo<ChatSink>(() => ({
     onChatSnapshot: (snap, fetched) => {
       setNow(Date.now());
-      setSnapSize(snap.messages?.length ?? 0);
+      // Снимок при подключении снова обрезан (последние 200) — «Показать раньше» снова нужна
+      // (ревью after-chat, M6); перечитанный старее учтённого — не применяется и не в счёт.
+      if (!fetched) setHistory(false);
+      if (!fetched || snap.seq >= stateRef.current.seq) setSnapSize(snap.messages?.length ?? 0);
       dispatch({ type: "snapshot", snap, now: Date.now(), fetched });
     },
     onChat: (event) => { setNow(Date.now()); dispatch({ type: "event", event, now: Date.now() }); },
@@ -356,9 +361,11 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
   }, [attachments, kb, found]);
   const open = useCallback(async (source: Source) => {
     let error: unknown = null;
-    for (const path of source.paths) {
+    for (const [k, path] of source.paths.entries()) {
       try {
         await openMaterial(path);
+        // Исходник оболочка не пустила, открылась копия текста во встрече (ревью M5).
+        if (k > 0) setNote(COPY_OPENED);
         return;
       } catch (e) {
         error = e;
@@ -372,6 +379,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
     if (!ep) return;
     try {
       const snap = await backend.get(ep, HISTORY_LIMIT);
+      if (snap.seq < stateRef.current.seq) return;   // старее учтённого — кнопка остаётся
       setHistory(true);
       sink.onChatSnapshot(snap, true);
     } catch (e) {

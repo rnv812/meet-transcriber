@@ -22,9 +22,8 @@
 
 import { MessageSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Endpoint } from "../../lib/api";
+import { type Endpoint, cancelJob } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
-import { Markdown } from "../../lib/markdown";
 import { isModelProgress } from "../../lib/progress";
 import type { AssistantInfo, ChatUpdatedEvent, Job, LegacyAssistant, RecordingChat } from "../../lib/types";
 import { Button } from "../../ui/Button";
@@ -43,6 +42,9 @@ export const AFTER_QUESTIONS = ["Кратко итоги", "Какие реше�
 /** Кто видит картинки (как `llm.VISION_PROVIDERS` у резидента). */
 const VISION = new Set(["claude-code", "codex"]);
 const ACTIVE = new Set(["queued", "running"]);
+/** Пока идёт эта работа над записью, писать нельзя (как `CHAT_BUSY_KINDS` у резидента). */
+const TRANSCRIBING_KINDS = new Set(["transcribe", "import", "merge", "rediarize"]);
+export const TRANSCRIBING = "Встреча ещё расшифровывается — продолжить разговор можно, когда она будет готова";
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
@@ -52,26 +54,40 @@ export function activeChatJob(jobs: Job[], folder: string): Job | null {
   return jobs.find((j) => j.kind === "chat" && ACTIVE.has(j.state) && norm(j.folder) === mine) ?? null;
 }
 
-function Thinking({ job }: { job: Job }) {
+/** Задача ответа идёт, пузыря ещё нет: «думает…» и «Стоп» — и пока задача в очереди (ревью M8). */
+function Thinking({ job, onStop }: { job: Job; onStop: () => void }) {
+  const stop = (
+    <button type="button" className="chat-compose__stop" aria-label="Остановить ответ"
+      title="Снять задачу ответа ассистента" onClick={onStop}>Стоп</button>
+  );
   if (job.state === "running" && isModelProgress(job)) {
-    return <div className="assist__stage assist__stage--progress" role="status"><JobProgress job={job} size="sm" /></div>;
+    return (
+      <div className="assist__stage assist__stage--progress assist-chat__thinking" role="status">
+        <JobProgress job={job} size="sm" />{stop}
+      </div>
+    );
   }
   return (
     <div className="assist__stage assist-chat__thinking" role="status">
       <span className="assist__pulse" aria-hidden="true" />
       Ассистент думает…
+      {stop}
     </div>
   );
 }
 
-/** Прежний ассистент встречи (до 0.3.6): подсказки и вопросы — только чтение. */
+/**
+ * Подсказки прежнего режима ассистента (до 0.3.6 или с выключенным
+ * участником) — только чтение. Прежние вопросы `meet ask` здесь не
+ * показываются: они на вкладке «Агент» (ревью after-chat, I4).
+ */
 function LegacyView({ legacy }: { legacy: LegacyAssistant }) {
   const hints = legacy.hints ?? [];
-  const qa = legacy.qa ?? [];
+  if (!hints.length) return null;
   return (
     <section className="assist-legacy" aria-label="Подсказки (старый ассистент)">
       <h3 className="assist-legacy__title">Подсказки (старый ассистент)</h3>
-      <p className="assist-legacy__note muted">Встреча записана до чата с ассистентом — это только для чтения.</p>
+      <p className="assist-legacy__note muted">Подсказки старого режима ассистента — только для чтения.</p>
       {hints.length > 0 && (
         <ul className="assist-legacy__hints">
           {hints.map((h) => (
@@ -83,19 +99,6 @@ function LegacyView({ legacy }: { legacy: LegacyAssistant }) {
             </li>
           ))}
         </ul>
-      )}
-      {qa.length > 0 && (
-        <>
-          <h4 className="assist-legacy__sub">Вопросы</h4>
-          <ul className="qa__list">
-            {qa.map((item, k) => (
-              <li key={`${item.at}:${k}`} className="qa__item">
-                <div className="qa__q">{item.q}</div>
-                <Markdown source={item.a} className="md" />
-              </li>
-            ))}
-          </ul>
-        </>
       )}
     </section>
   );
@@ -164,7 +167,15 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
   }, [jobId, reload]);
 
   const enabled = info?.enabled !== false;
+  const mine = norm(folder);
+  const transcribing = jobs.some((j) => TRANSCRIBING_KINDS.has(j.kind) && ACTIVE.has(j.state) && norm(j.folder) === mine);
+  const [stopNote, setStopNote] = useState<string | null>(null);
+  const stopJob = (running: Job) => {
+    setStopNote(null);
+    cancelJob(endpoint, running.id).catch((e) => setStopNote(`Не удалось остановить: ${errorText(e)}`));
+  };
   const reason = !enabled ? "Чат с ассистентом выключен в настройках"
+    : transcribing ? TRANSCRIBING
     : info?.live ? "Идёт живой режим этой записи — пишите ассистенту в панели встречи"
     : noProvider(assistant) ? noModelText(assistant) : null;
   const vision = !assistant?.provider || VISION.has(assistant.provider);
@@ -185,7 +196,8 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
         <div className="chat-ws__main assist-chat__main">
           <LiveChat chat={chat} disabled={!!reason}
             empty="Спросите ассистента о встрече: он видит расшифровку, итоги и то, что вы приложите." />
-          {thinking && <Thinking job={thinking} />}
+          {thinking && <Thinking job={thinking} onStop={() => stopJob(thinking)} />}
+          {stopNote && <div className="assist__error" role="alert">{stopNote}</div>}
           <div className="assist-chat__continue" role="group" aria-label="Продолжить разговор">
             <span className="assist-chat__label">Продолжить разговор</span>
             <ChatComposer chat={chat} disabledReason={reason} vision={vision} quick={AFTER_QUESTIONS}
@@ -194,7 +206,7 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
         </div>
       ) : info ? (
         <EmptyState
-          title={info.legacy ? "Чата с ассистентом у этой встречи нет" : "Ассистент на этой встрече не писал"}
+          title={info.legacy?.hints?.length ? "Чата с ассистентом у этой встречи нет" : "Ассистент на этой встрече не писал"}
           hint={reason ?? "Ассистент ответит по расшифровке и итогам встречи; можно приложить файлы."}
           action={reason && !enabled && onOpenSettings ? (
             <Button variant="link" onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>

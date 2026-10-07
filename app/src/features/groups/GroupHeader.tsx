@@ -33,7 +33,7 @@ export function GroupHeader({ ui }: { ui: GroupsUi }) {
         {ui.scopeCount !== null && <span className="group-head__count muted"> · {meetingsText(ui.scopeCount)}</span>}
       </h2>
       {kbFolder && (
-        <span className="group-head__kb muted" title="Папка базы знаний группы: ассистент видит её структуру первой">
+        <span className="group-head__kb muted" title="Папка базы знаний группы: на её встречах она в карте ассистента целиком">
           <Folder size={14} strokeWidth={1.75} aria-hidden="true" />
           <span className="sr-only">Папка базы знаний: </span>{kbFolder}
         </span>

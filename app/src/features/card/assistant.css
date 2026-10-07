@@ -110,3 +110,4 @@
 .assist-legacy__time { color: var(--text-3); font-size: 11px; }
 .assist-legacy__text { color: var(--text); }
 .assist-legacy__why { flex-basis: 100%; font-size: 11.5px; }
+.assist-chat__thinking .chat-compose__stop { margin-left: 8px; }

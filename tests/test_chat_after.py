@@ -7,6 +7,7 @@
 Конфиг и записи — во временной папке (фикстуры `test_chat_resident`)."""
 
 import json
+import sys
 import threading
 import time
 from pathlib import Path
@@ -99,8 +100,12 @@ def test_attach_that_does_not_parse_is_a_failed_record(state, tmp_path):
     assert out["attachment"]["note"].startswith("не разобрано")
 
 
-def test_attach_keeps_the_session_quota(state, tmp_path, monkeypatch):
-    monkeypatch.setattr(attachments, "MAX_PER_SESSION", 1)
+def test_attach_keeps_the_session_quota(state, tmp_path):
+    # Разборщик — отдельный процесс: квоту набираем файлами, а не подменой предела.
+    files = _folder(tmp_path) / "assistant" / "files"
+    files.mkdir(parents=True)
+    for k in range(attachments.MAX_PER_SESSION - 1):
+        (files / f"x{k}.png").write_bytes(b"x")
     assert state.recording_chat_paste(RID, _png(), "image/png")["status"] == "ready"
     second = state.recording_chat_paste(RID, _png(), "image/png")
     assert second["status"] == "failed" and second["error"] == attachments.TOO_MANY
@@ -121,25 +126,131 @@ def test_attach_is_gated_like_continue_chat(state, tmp_path):
     assert not (_folder(tmp_path) / "assistant").exists()
 
 
-def test_attach_timeout_leaves_no_orphan(state, tmp_path, monkeypatch):
-    monkeypatch.setattr(tray_control, "CHAT_ATTACH_TIMEOUT_S", 0.05)
-    release = threading.Event()
-    real = participant.document_fields
+def _fake_worker(monkeypatch, code: str):
+    """Разборщик вложения — свой скрипт вместо `meet.assist.attach_worker`
+    (аргумент — папка встречи)."""
+    def argv(folder, item, vision):
+        return [sys.executable, "-c", code, str(folder)]
 
-    def slow(folder, path):
-        release.wait(5)
-        return real(folder, path)
+    monkeypatch.setattr(tray_control, "_attach_worker_argv", argv)
 
-    monkeypatch.setattr(participant, "document_fields", slow)
+
+REAL_ARGV = tray_control._attach_worker_argv
+SLOW_WORKER = """
+import pathlib, sys, time
+d = pathlib.Path(sys.argv[1]) / "assistant" / "materials"
+d.mkdir(parents=True, exist_ok=True)
+(d / "a1.json").write_text("{}")
+(d / "a1.txt").write_text("x")
+(d / "started").write_text("")
+time.sleep(60)
+"""
+
+
+def test_attach_is_parsed_in_a_child_process(state, tmp_path, monkeypatch):
+    seen = {}
+    real = tray_control._attach_worker_argv
+
+    def argv(folder, item, vision):
+        seen["argv"] = real(folder, item, vision)
+        return seen["argv"]
+
+    monkeypatch.setattr(tray_control, "_attach_worker_argv", argv)
+    doc = _doc(tmp_path)
+    assert state.recording_chat_attach(RID, {"path": str(doc)})["status"] == "ready"
+    assert seen["argv"][1:4] == ["-m", "meet.assist.attach_worker", str(_folder(tmp_path))]
+    assert f"--path={doc}" in seen["argv"]
+    state.recording_chat_paste(RID, _png(), "image/png", "shot.png")
+    assert "--name=shot.png" in seen["argv"]
+
+
+def test_attach_timeout_kills_the_parser_and_leaves_no_orphan(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tray_control, "CHAT_ATTACH_TIMEOUT_S", 3.0)
+    _fake_worker(monkeypatch, SLOW_WORKER)
+    mats = _folder(tmp_path) / "assistant" / "materials"
     with pytest.raises(control.Unavailable, match="слишком долго"):
         state.recording_chat_attach(RID, {"path": str(_doc(tmp_path))})
-    release.set()
-    deadline = time.monotonic() + 5
-    mats = _folder(tmp_path) / "assistant" / "materials"
-    while time.monotonic() < deadline and (mats.exists() and any(p.suffix in (".json", ".txt") for p in mats.iterdir())):
-        time.sleep(0.02)
-    assert not mats.exists() or not any(p.suffix in (".json", ".txt") for p in mats.iterdir())
+    # Разборщик успел положить материал (метка «started») — и после отказа его нет.
+    assert not (mats / "a1.json").exists() and not (mats / "a1.txt").exists()
+    assert not (mats / "started").exists()
     assert state.recording_chat(RID)["messages"] == []
+    # Место свободно: следующий разбор идёт.
+    monkeypatch.setattr(tray_control, "_attach_worker_argv", REAL_ARGV)
+    assert state.recording_chat_attach(RID, {"path": str(_doc(tmp_path))})["status"] == "ready"
+
+
+def test_one_parse_at_a_time(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tray_control, "CHAT_ATTACH_TIMEOUT_S", 4.0)
+    _fake_worker(monkeypatch, SLOW_WORKER)
+    started = _folder(tmp_path) / "assistant" / "materials" / "started"
+    first = {}
+
+    def run():
+        try:
+            state.recording_chat_attach(RID, {"path": str(_doc(tmp_path))})
+        except Exception as e:   # срок выйдет — 503
+            first["error"] = e
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    deadline = time.monotonic() + 10
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert started.exists()
+    with pytest.raises(control.Unavailable, match="Разбирается другой файл"):
+        state.recording_chat_paste(RID, _png(), "image/png")
+    worker.join(15)
+    assert isinstance(first.get("error"), control.Unavailable)
+
+
+def test_parser_crash_is_a_failed_record_without_files(state, tmp_path, monkeypatch):
+    _fake_worker(monkeypatch, """
+import pathlib, sys
+d = pathlib.Path(sys.argv[1]) / "assistant" / "files"
+d.mkdir(parents=True, exist_ok=True)
+(d / "a1.png").write_bytes(b"x")
+sys.exit(3)
+""")
+    out = state.recording_chat_paste(RID, _png(), "image/png", "shot.png")
+    assert out["status"] == "failed" and out["error"]
+    assert not (_folder(tmp_path) / "assistant" / "files" / "a1.png").exists()
+
+
+def test_attach_waits_for_transcription(state, tmp_path):
+    job = state.queue.submit(jobs.TRANSCRIBE, str(_folder(tmp_path)), {})
+    try:
+        for call in (lambda: state.recording_chat_attach(RID, {"path": str(_doc(tmp_path))}),
+                     lambda: state.continue_chat(RID, {"text": "что решили?"}),
+                     lambda: state.recording_chat_paste(RID, _png(), "image/png")):
+            with pytest.raises(control.Conflict, match="ещё расшифровывается"):
+                call()
+    finally:
+        state.queue.cancel(job.id)
+
+
+def test_after_meeting_routes_refuse_a_recording_in_progress_and_unknown_live(state, tmp_path, monkeypatch):
+    reply = _agent_reply(tmp_path)
+    folder = _folder(tmp_path)
+    monkeypatch.setattr(state, "_busy_now", lambda: {state._key(folder)})
+    calls = (
+        lambda: state.recording_chat_attach(RID, {"path": str(_doc(tmp_path))}),
+        lambda: state.recording_chat_paste(RID, _png(), "image/png"),
+        lambda: state.recording_chat_remove(RID, "a1"),
+        lambda: state.recording_chat_click(RID, reply["id"], {"label": "Да"}),
+        lambda: state.recording_chat_react(RID, reply["id"], {"emoji": "👍"}),
+    )
+    for call in calls:
+        with pytest.raises(control.Conflict, match="Запись ещё идёт"):
+            call()
+    monkeypatch.setattr(state, "_busy_now", lambda: set())
+
+    def broken():
+        raise RuntimeError("ребёнок не отвечает")
+
+    state.live.status = broken
+    for call in calls:
+        with pytest.raises(control.Unavailable, match="живой режим"):
+            call()
 
 
 def test_remove_before_sending_after_the_meeting(state, tmp_path):
@@ -194,7 +305,8 @@ def test_react_after_the_meeting(state, app, tmp_path):
     assert "👍" in feed[reply["id"]]["reactions"]
     assert any(e.kind == "chat.updated" for e in got)
     assert state.recording_chat_react(RID, reply["id"], {"emoji": "👍", "on": True})["changed"] is False
-    assert state.recording_chat_react(RID, reply["id"], {"emoji": "👍"})["changed"] is True
+    assert state.recording_chat_react(RID, reply["id"], {"emoji": "👎"}) == {"ok": True, "changed": True}
+    assert state.llm_queue.listing() == []          # 👍 и 👎 — только в журнал
     with pytest.raises(control.BadRequest):
         state.recording_chat_react(RID, reply["id"], {"emoji": "🔥"})
     with pytest.raises(control.BadRequest, match="реплики агента"):
@@ -202,6 +314,40 @@ def test_react_after_the_meeting(state, app, tmp_path):
     state.live.folder = _folder(tmp_path)
     with pytest.raises(control.Conflict):
         state.recording_chat_react(RID, reply["id"], {"emoji": "❓"})
+
+
+def test_question_reaction_after_the_meeting_asks_the_agent_to_explain(state, tmp_path):
+    reply = _agent_reply(tmp_path)
+    out = state.recording_chat_react(RID, reply["id"], {"emoji": "❓"})
+    assert out["changed"] is True and out["job"]["kind"] == jobs.CHAT
+    message = out["message"]
+    assert message["via"] == "reaction" and message["re"] == reply["id"] and message["text"] == tray_control.EXPLAIN_TEXT
+    assert state.llm_queue.get(out["job"]["id"]).options == {"message": message["id"]}
+    # Снять ❓ — без нового вопроса и задачи.
+    off = state.recording_chat_react(RID, reply["id"], {"emoji": "❓"})
+    assert off == {"ok": True, "changed": True}
+    assert len(state.llm_queue.listing()) == 1
+
+
+def test_question_reaction_reaches_the_agent_as_a_request_to_explain(tmp_path, monkeypatch):
+    from meet import job_worker, library
+
+    from test_chat_jobs import Runner
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    folder = tmp_path / "recordings" / RID
+    folder.mkdir(parents=True)
+    library.write_transcript(folder, {"version": 1, "title": "Планёрка", "segments": [
+        {"start": 0.0, "end": 2.0, "speaker": "Демьян", "text": "Релиз переносим на пятницу."}]})
+    log = ChatLog(folder)
+    log.append("agent", text="Риск — у биллинга нет владельца.", status="shown", mode="proactive")
+    asked = log.append("user", text=tray_control.EXPLAIN_TEXT, via="reaction", re="m1", after_meeting=True)
+    runner = Runner('{"say": "Это из этапа 2 плана: там не назначен ответственный."}')
+    assert job_worker._chat(str(folder), asked.message["id"], runner=runner, provider="codex") == 0
+    prompt = runner.calls[0][0]
+    assert participant.EXPLAIN_REQUEST in prompt and "у биллинга нет владельца" in prompt
+    answer = [m for m in log.messages() if m["kind"] == "agent"][-1]
+    assert answer["re"] == asked.message["id"] and answer["status"] == "shown"
 
 
 def test_control_routes_for_the_chat_after_the_meeting(server):
@@ -273,8 +419,8 @@ def test_patch_group_kb_folder(state, tmp_path):
             state.patch_group(gid, {"kb_folder": bad})
     state.patch_group(gid, {"kb_folder": None})
     assert "kb_folder" not in {g["id"]: g for g in state.groups()["groups"]}[gid]
-    assert state.patch_group("g-нет", {"kb_folder": "x"}) == {"error": groups.NoGroup("g-нет").args[0]} \
-        or "error" in state.patch_group("g-нет", {"kb_folder": "x"})
+    missing = state.patch_group("g-нет", {"kb_folder": "x"})
+    assert missing == {"error": "группы нет"}
 
 
 def test_patch_group_route_passes_kb_folder(monkeypatch, tmp_path):

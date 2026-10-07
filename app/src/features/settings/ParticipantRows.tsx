@@ -1,7 +1,7 @@
 /**
  * Настройки агента-участника (раздел «Ассистент» → «Живой ассистент», 0.3.6):
  *
- * - «Ассистент-участник» (`assist.participant`) — во время встречи ассистент
+ * - «Ассистент — участник встречи» (`assist.participant`) — во время встречи ассистент
  *   пишет в чат как участник; выключен — прежние подсказки и «Спросить»
  *   (запасной режим в 0.3.6), и тогда видны их настройки (`LiveHintsRows`);
  * - «Как часто писать» (`assist.frequency`: less / normal / more);
@@ -40,13 +40,14 @@ const VISION: Record<string, string> = { "claude-code": "Claude Code", codex: "C
 const LABELS: Record<string, string> = {
   "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", "openai-compatible": "Локальная модель",
 };
+export const PARTICIPANT_LABEL = "Ассистент — участник встречи";
 export const KB_MAP_LABEL = "Показывать ассистенту карту: базу знаний и прошлые встречи группы";
 export const VISION_NOTE = "Картинки видят Claude Code и Codex; OpenCode и локальная модель получают только текст сообщения";
 export const DENY_NOTE = "исключения — только просьба";
 
 function ParticipantTip() {
   return (
-    <HelpTip label="Что такое ассистент-участник" title="Ассистент-участник">
+    <HelpTip label="Что такое ассистент — участник встречи" title={PARTICIPANT_LABEL}>
       <TipLine>
         Во время встречи ассистент слушает разговор и сам пишет в чат панели — коротко, от первого лица, со
         своими кнопками. Ему можно написать, приложить файл или скриншот и отреагировать 👍 👎 ❓.
@@ -106,9 +107,10 @@ function KbExcludeEditor({ value, kbRoot, provider, onChange }: {
         <div className="kb-exclude__add">
           <Button onClick={() => void pick()} disabled={!kbRoot}>Выбрать папку…</Button>
           <input type="text" aria-label="Папка внутри базы знаний" placeholder="Папка/" value={text} spellCheck={false}
+            disabled={!kbRoot}
             onChange={(e) => { setText(e.target.value); setError(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); typed(); } }} />
-          <Button onClick={typed} disabled={!text.trim()}>Добавить</Button>
+          <Button onClick={typed} disabled={!kbRoot || !text.trim()}>Добавить</Button>
           {!same && <Button variant="link" onClick={() => { setError(null); onChange([...KB_EXCLUDE_DEFAULT]); }}>По умолчанию</Button>}
         </div>
         {error && <span className="error" role="alert">{error}</span>}
@@ -134,7 +136,7 @@ export function ParticipantRows({ draft, set, provider }: {
   const sees = provider ? provider in VISION : null;
   return (
     <>
-      <Switch label="Ассистент-участник" help={<ParticipantTip />} value={on} onChange={(v) => set("assist", "participant", v)}
+      <Switch label={PARTICIPANT_LABEL} help={<ParticipantTip />} value={on} onChange={(v) => set("assist", "participant", v)}
         hint={on ? "Во время встречи ассистент пишет в чат как участник; после — вкладка «Ассистент» в карточке"
           : "Выключен: прежние подсказки и «Спросить» во время встречи"} />
       {on && (

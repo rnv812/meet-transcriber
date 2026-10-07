@@ -377,11 +377,20 @@ pub const REFUSED_EXTS: &[&str] = &[
 /// `root`). → путь на диске, который открыть.
 pub fn material_allowed(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     let text = path.to_string_lossy();
-    if !path.is_absolute() || text.contains('\0') {
+    if !path.is_absolute() || text.contains('\0') || has_stream(&text) {
+        return None;
+    }
+    // До canonicalize — только по тексту: путь вне корней (`\\сервер\…`,
+    // `\\?\GLOBALROOT\…`) не трогает ни сеть, ни устройства (ревью M2).
+    if !roots
+        .iter()
+        .any(|root| lexically_inside(&text, &root.to_string_lossy()))
+    {
         return None;
     }
     let target = path.canonicalize().ok()?;
-    if !target.is_file() {
+    // Поток NTFS (`evil.exe:x.pdf`) canonicalize сохраняет — отказ (ревью M1).
+    if !target.is_file() || has_stream(&plain_path(&target)) {
         return None;
     }
     // Расширение — у пути на диске: ссылка `План.pdf` на `run.bat` — это bat.
@@ -398,6 +407,31 @@ pub fn material_allowed(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
         .filter(|root| root.is_dir())
         .any(|root| target.starts_with(root));
     inside.then_some(target)
+}
+
+/// В пути есть «:» после буквы диска — альтернативный поток NTFS
+/// (`файл:поток`), а не обычный файл.
+pub fn has_stream(path: &str) -> bool {
+    let rest = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\\.\"))
+        .unwrap_or(path);
+    let bytes = rest.as_bytes();
+    let rest = if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        &rest[2..]
+    } else {
+        rest
+    };
+    rest.contains(':')
+}
+
+/// `path` по тексту внутри `root`: разделители — любые, регистр не важен,
+/// сравнение по целым частям (`root2` — не `root`). Без обращения к диску.
+pub fn lexically_inside(path: &str, root: &str) -> bool {
+    let norm = |text: &str| text.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let path = norm(path);
+    let root = norm(root);
+    !root.is_empty() && (path == root || path.starts_with(&format!("{root}/")))
 }
 
 /// Корни `open_material` по `/state`: база знаний (`knowledge_dir`),
@@ -434,7 +468,11 @@ pub async fn open_material(path: String) -> Result<(), String> {
             shell_log!("open_material: отказ: {path}");
             return Err("этот файл приложение не открывает".to_string());
         };
-        shell_execute(&plain_path(&target)).map_err(|code| format!("файл не открылся (код {code})"))
+        shell_execute(&plain_path(&target)).map_err(|code| match code {
+            // SE_ERR_NOASSOC: у типа файла нет программы (часто у `.md`).
+            31 => "нет программы для этого типа файла — откройте его из папки".to_string(),
+            code => format!("файл не открылся (код {code})"),
+        })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -818,6 +856,97 @@ mod tests {
         assert!(material_allowed(&root.join("План.pdf"), &[]).is_none());
         for ext in REFUSED_EXTS {
             assert!(!MATERIAL_EXTS.contains(ext), "{ext} и разрешён, и запрещён");
+        }
+        // Двойное расширение и верхний регистр: решает последнее расширение.
+        std::fs::write(root.join("x.pdf.exe"), b"x").unwrap();
+        std::fs::write(root.join("X.PDF"), b"x").unwrap();
+        assert!(material_allowed(&root.join("x.pdf.exe"), &roots).is_none());
+        assert!(material_allowed(&root.join("X.PDF"), &roots).is_some());
+    }
+
+    #[test]
+    fn open_material_refuses_ntfs_streams() {
+        assert!(has_stream(r"C:\docs\evil.exe:x.pdf"));
+        assert!(has_stream(r"\\?\C:\docs\a.txt:evil.exe"));
+        assert!(!has_stream(r"C:\docs\План.pdf"));
+        assert!(!has_stream(r"\\?\C:\docs\План.pdf"));
+        let tree = Tree::new("stream");
+        let root = tree.0.join("root");
+        let roots = [root.clone()];
+        std::fs::write(root.join("evil.exe"), b"x").unwrap();
+        let stream = PathBuf::from(format!("{}:x.pdf", root.join("evil.exe").display()));
+        // На NTFS поток создаётся записью; где потоков нет — путь просто не файл.
+        let _ = std::fs::write(&stream, b"%PDF");
+        assert!(material_allowed(&stream, &roots).is_none());
+        let stream = PathBuf::from(format!("{}:evil.exe", root.join("a.txt").display()));
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let _ = std::fs::write(&stream, b"MZ");
+        assert!(material_allowed(&stream, &roots).is_none());
+    }
+
+    #[test]
+    fn open_material_checks_roots_before_touching_the_path() {
+        assert!(lexically_inside(r"C:\KB\Проекты\a.pdf", "c:/kb"));
+        assert!(lexically_inside("C:/KB", r"C:\KB\"));
+        assert!(!lexically_inside(r"C:\KB2\a.pdf", r"C:\KB"));
+        assert!(!lexically_inside(r"\\host\share\a.pdf", r"C:\KB"));
+        assert!(!lexically_inside(r"C:\KB\a.pdf", ""));
+        let tree = Tree::new("lexical");
+        let roots = [tree.0.join("root")];
+        // Сетевой путь и пути устройств вне корней — отказ без обращения к ним.
+        for path in [
+            r"\\host\share\x.pdf",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\x.pdf",
+            r"\\.\C:\x.pdf",
+            r"\\?\UNC\host\share\x.pdf",
+        ] {
+            assert!(
+                material_allowed(Path::new(path), &roots).is_none(),
+                "{path}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_material_refuses_a_link_out_of_the_root() {
+        let tree = Tree::new("link");
+        let root = tree.0.join("root");
+        std::fs::write(tree.0.join("outside").join("secret.pdf"), b"x").unwrap();
+        std::os::unix::fs::symlink(
+            tree.0.join("outside").join("secret.pdf"),
+            root.join("link.pdf"),
+        )
+        .unwrap();
+        assert!(material_allowed(&root.join("link.pdf"), &[root]).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn open_material_refuses_a_link_out_of_the_root() {
+        let tree = Tree::new("link");
+        let root = tree.0.join("root");
+        std::fs::write(tree.0.join("outside").join("secret.pdf"), b"x").unwrap();
+        // Ссылку на файл без прав разработчика Windows не даст — тогда пропуск.
+        if std::os::windows::fs::symlink_file(
+            tree.0.join("outside").join("secret.pdf"),
+            root.join("link.pdf"),
+        )
+        .is_ok()
+        {
+            assert!(material_allowed(&root.join("link.pdf"), &[root.clone()]).is_none());
+        }
+        // Junction на папку снаружи создаётся без прав — путь через неё тоже вне корня.
+        let junction = root.join("jn");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(tree.0.join("outside"))
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false);
+        if made {
+            assert!(material_allowed(&junction.join("secret.pdf"), &[root]).is_none());
         }
     }
 

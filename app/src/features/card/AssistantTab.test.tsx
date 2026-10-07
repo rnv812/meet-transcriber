@@ -32,9 +32,9 @@ import {
   recordingChatReact, recordingChatRemove,
 } from "../../lib/api";
 import type { ChatMessage, ChatUpdatedEvent, Job, RecordingChat } from "../../lib/types";
-import { resetKbDocs } from "../../live/useChat";
+import { COPY_OPENED, resetKbDocs } from "../../live/useChat";
 import { agentMsg, attMsg, userMsg } from "../../test/chatFixtures";
-import { AssistantTab } from "./AssistantTab";
+import { AssistantTab, TRANSCRIBING } from "./AssistantTab";
 
 const ep = { base: "http://h", token: "t" };
 const ID = "2026-10-07_10-00";
@@ -129,7 +129,7 @@ test("«Стоп» после встречи снимает задачу отв�
   expect(cancelJob).toHaveBeenCalledWith(ep, "j1");
 });
 
-test("старая встреча: прежние подсказки и вопросы — только чтение, под «Подсказки (старый ассистент)»", async () => {
+test("старая встреча: прежние подсказки — только чтение, под «Подсказки (старый ассистент)»; вопросов meet ask нет", async () => {
   vi.mocked(getRecordingChat).mockResolvedValue(answer({
     legacy: {
       hints: [{ id: "h1", kind: "risk", text: "Нет владельца интеграции", why: "этап 2 без ответственного", source_t: 125,
@@ -143,8 +143,9 @@ test("старая встреча: прежние подсказки и вопр
   expect(within(old).getByText("Нет владельца интеграции")).toBeInTheDocument();
   expect(within(old).getByText("Риск или неясность")).toBeInTheDocument();
   expect(within(old).getByText("02:05")).toBeInTheDocument();
-  expect(within(old).getByText("Какой срок?")).toBeInTheDocument();
-  expect(within(old).getByText("Пятница").tagName).toBe("STRONG");
+  expect(within(old).getByText("Подсказки старого режима ассистента — только для чтения.")).toBeInTheDocument();
+  // Вопросы `meet ask` — на вкладке «Агент» (ревью I4).
+  expect(screen.queryByText("Какой срок?")).toBeNull();
   expect(within(old).queryByRole("button")).toBeNull();
   // Чата нет — можно спросить ассистента.
   expect(screen.getByRole("button", { name: "Спросить ассистента о встрече" })).toBeEnabled();
@@ -221,6 +222,8 @@ test("чип-источник: агент упомянул приложенны�
   await userEvent.click(chip);
   expect(h.open).toHaveBeenNthCalledWith(1, "C:\\docs\\План запуска.pptx");
   expect(h.open).toHaveBeenNthCalledWith(2, `${FOLDER}\\assistant\\materials\\a1.txt`);
+  // Открыта копия текста — об этом сказано (ревью M5).
+  expect(await screen.findByText(COPY_OPENED)).toBeInTheDocument();
 });
 
 test("чип-источник: документ базы знаний по пути — открывается от корня базы", async () => {
@@ -232,4 +235,39 @@ test("чип-источник: документ базы знаний по пу�
   await userEvent.click(await screen.findByRole("button", { name: "Источник: Биллинг.md" }));
   expect(h.open).toHaveBeenCalledWith("D:\\KB\\Проекты\\Альфа\\Биллинг.md");
   expect(getKbDocs).toHaveBeenCalledTimes(1);
+});
+
+test("пока встреча расшифровывается — лента видна, писать нельзя, видно почему (ревью I3)", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
+  const transcribing = { ...chatJob("running"), id: "t1", kind: "transcribe" } as Job;
+  const view = render(<Tab jobs={[transcribing]} />);
+  await within(await ready()).findByText("15 ноября");
+  expect(field()).toBeDisabled();
+  expect(screen.getByText(TRANSCRIBING)).toBeInTheDocument();
+  // Расшифровка другой записи — не мешает.
+  view.rerender(<Tab jobs={[{ ...transcribing, folder: "C:\\rec\\другая" }]} />);
+  expect(field()).toBeEnabled();
+});
+
+test("«Стоп» и пока ответ в очереди: снимает задачу (ревью M8)", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal.slice(0, 1), seq: 1 }));
+  render(<Tab jobs={[chatJob("queued")]} />);
+  expect(await screen.findByText("Ассистент думает…")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Остановить ответ" }));
+  expect(cancelJob).toHaveBeenCalledWith(ep, "j1");
+});
+
+test("❓ после встречи — просьба пояснить: реакция уходит резиденту, просьба видна в ленте (ревью I2)", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
+  const view = render(<Tab />);
+  await within(await ready()).findByText("15 ноября");
+  await userEvent.click(within(log()).getByRole("button", { name: "❓ вопрос" }));
+  expect(recordingChatReact).toHaveBeenCalledWith(ep, ID, "m2", "❓", true);
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({
+    seq: 4, messages: [...journal, userMsg("m3", { text: "❓ Поясни это сообщение", via: "reaction", re: "m2", t: undefined })],
+  }));
+  view.rerender(<Tab ev={event()} jobs={[chatJob("queued")]} />);
+  const asked = (await within(log()).findByText("❓ Поясни это сообщение")).closest("li")!;
+  expect(asked).toHaveTextContent("реакция");
+  expect(screen.getByText("Ассистент думает…")).toBeInTheDocument();
 });

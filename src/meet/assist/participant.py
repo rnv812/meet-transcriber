@@ -97,6 +97,8 @@ LISTENING, WRITING, ERROR = "listening", "writing", "error"
 NOTE_INTERRUPTED = ("Твой прошлый ответ прерван новым сообщением пользователя — "
                     "реплики ниже могли уже прийти тебе.")
 NOTE_STOPPED = "Пользователь остановил твой прошлый ответ — не продолжай его."
+EXPLAIN_REQUEST = ("❓ к твоему сообщению: поясни его — на что ты опирался и что предлагаешь "
+                   "(как реакция ❓ во время встречи).")
 TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
 SHUTDOWN_ERROR = "ассистент остановлен"
 NOTHING_TO_ADD = "Ассистенту нечего добавить"
@@ -1355,9 +1357,13 @@ class Participant:
                 images.append(image)
                 image_ids[str(image)] = record["id"]
         re_id = message.get("re")
-        if message.get("via") == "button" and isinstance(re_id, str) and re_id not in self._agent_texts:
+        if message.get("via") in ("button", "reaction") and isinstance(re_id, str) and re_id not in self._agent_texts:
             agent = await self._io(self._chatlog.get, re_id)
             self._agent_texts[re_id] = (agent or {}).get("text") or ""
+        if message.get("via") == "reaction" and isinstance(re_id, str):
+            # ❓ после встречи (ревью after-chat, I2): просьба пояснить своё сообщение.
+            quote = " ".join((self._agent_texts.get(re_id) or "").split())[:400]
+            message = {**message, "text": EXPLAIN_REQUEST + (f"\nТвоё сообщение: «{quote}»" if quote else "")}
         self._queue_user({**message, "attachments": described, "_images": images,
                           "_image_ids": image_ids})
         self._kick()

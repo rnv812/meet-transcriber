@@ -189,6 +189,7 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
     <li className={`chat-msg chat-msg--user${out ? ` is-${out.state}` : ""}`} data-id={m?.id}
       data-key={m?.id ?? `out:${out?.client_id}`} title={compact && time ? time : undefined}>
       {m?.via === "button" && <div className="chat-msg__via">кнопка</div>}
+      {m?.via === "reaction" && <div className="chat-msg__via">реакция</div>}
       {text && <div className="chat-msg__text chat-msg__text--plain">{text}</div>}
       {atts.length > 0 && (compact ? (
         <span className="chat-msg__att-count" title={names} aria-label={`Вложения: ${names}`}>📎 {atts.length}</span>
@@ -303,6 +304,11 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   // «Бегущий» tabindex: в порядке Tab — одно сообщение и его действия. Через DOM:
   // действия рисуют и Markdown (таймкоды), и вложенные компоненты.
   const rows = () => Array.from(list.current?.querySelectorAll<HTMLElement>(":scope > li[data-key]") ?? []);
+  // Только когда сменились сообщения, их состояние (появились кнопки, реакции) или
+  // выбранное: не на каждый кусок текста ответа (ревью after-chat, M7).
+  const shape = chat.items.map((it) => (it.type === "message"
+    ? `${it.message.id}:${it.message.status ?? ""}:${it.message.buttons?.length ?? 0}:${it.message.text ? 1 : 0}`
+    : `o:${it.out.client_id}:${it.out.state}`)).join("|");
   useLayoutEffect(() => {
     const all = rows();
     if (!all.length) return;
@@ -312,7 +318,7 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
       li.tabIndex = on ? 0 : -1;
       for (const el of li.querySelectorAll<HTMLElement>(ACTIONS)) el.tabIndex = on ? 0 : -1;
     }
-  });
+  }, [shape, active]);
   const onListKey = (e: KeyboardEvent<HTMLOListElement>) => {
     const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : e.key === "Home" ? -Infinity
       : e.key === "End" ? Infinity : 0;

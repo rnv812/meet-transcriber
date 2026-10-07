@@ -186,3 +186,25 @@ test("M15: свёрнутая в «Не отвлекать» держит пок
   act(() => liveStream().emit("chat", { seq: 4, op: "add", message: agentMsg("m3", { text: "Ответить Анне?", pin: true }) }));
   expect(screen.getByRole("button", { name: /Вопрос вам: Ответить Анне\?/ })).toBeInTheDocument();
 });
+
+test("M13 (ревью after-chat M6): после переподключения лента снова обрезана — кнопка возвращается", async () => {
+  const many = Array.from({ length: SNAPSHOT_LIMIT }, (_, k) => agentMsg(`m${k + 10}`, { text: `Сообщение ${k + 10}` }));
+  vi.mocked(getChat).mockResolvedValue({ messages: [agentMsg("m1", { text: "Самое первое" }), ...many], seq: 300 });
+  render(<Host />);
+  load(many, 300);
+  await userEvent.click(screen.getByRole("button", { name: "Показать более ранние сообщения" }));
+  expect(await within(log()).findByText("Самое первое")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Показать более ранние сообщения" })).toBeNull();
+  load(many, 301);          // переподключение: снова последние 200
+  expect(screen.getByRole("button", { name: "Показать более ранние сообщения" })).toBeInTheDocument();
+});
+
+test("M13: дочитанный снимок старее учтённого — не применяется, кнопка остаётся", async () => {
+  const many = Array.from({ length: SNAPSHOT_LIMIT }, (_, k) => agentMsg(`m${k + 10}`, { text: `Сообщение ${k + 10}` }));
+  vi.mocked(getChat).mockResolvedValue({ messages: [agentMsg("m1", { text: "Самое первое" }), ...many], seq: 250 });
+  render(<Host />);
+  load(many, 300);
+  await userEvent.click(screen.getByRole("button", { name: "Показать более ранние сообщения" }));
+  expect(within(log()).queryByText("Самое первое")).toBeNull();
+  expect(screen.getByRole("button", { name: "Показать более ранние сообщения" })).toBeInTheDocument();
+});
