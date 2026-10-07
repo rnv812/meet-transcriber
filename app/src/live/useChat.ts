@@ -13,26 +13,35 @@
  * Хук живёт у владельца окна (панель, карточка), а не в рабочей области: текст
  * строки ввода, вложения до отправки и убранный «×» закреплённый вопрос
  * переживают сворачивание панели и смену раскладки.
+ *
+ * Куда уходят действия — `backend` (`chatBackend.ts`): во время встречи —
+ * `/live/chat*`, после встречи — чат записи (вкладка «Ассистент» карточки).
+ *
+ * Чипы-источники (`sources`): документы, которые агент упомянул (`sources.ts`);
+ * список документов базы знаний спрашивается у резидента, только когда в
+ * ленте есть сообщение, похожее на упоминание файла, и держится минуту.
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import {
-  type Endpoint, attachChatFile, clickChat, getChat, newChatClientId, pasteChatImage, postChat, reactChat,
-  removeChatAttachment, setAgentFrequency, stopChat,
-} from "../lib/api";
+import { type Endpoint, getKbDocs, newChatClientId } from "../lib/api";
 import { errorText } from "../lib/format";
+import { openMaterial } from "../lib/shell";
 import type {
   AgentFrequencyLabel, AgentInfo, ChatAttachResult, ChatEvent, ChatMessage, ChatPartial, ChatReaction, ChatSnapshot,
+  KbDocs,
 } from "../lib/types";
+import { type ChatBackend, LIVE_CHAT } from "./chatBackend";
 import {
   type ChatState, EMPTY_CHAT, type FeedItem, chatReducer, feedItems, isFinalAgent, nextReveal, pinnedOf, usedButtons,
   writingShown,
 } from "./chatModel";
+import { type KbIndex, type Source, findSources, kbIndex, mayMentionDocs } from "./sources";
 
 /** Обработчики событий чата для `openLiveEvents` (их зовёт `useLive`). */
 export type ChatSink = {
-  onChatSnapshot: (s: ChatSnapshot) => void;
+  /** `fetched` — снимок перечитан запросом: старее уже учтённых событий — не применяется. */
+  onChatSnapshot: (s: ChatSnapshot, fetched?: boolean) => void;
   onChat: (e: ChatEvent) => void;
   onChatPartial: (p: ChatPartial) => void;
   onAgent: (a: AgentInfo) => void;
@@ -43,6 +52,14 @@ export const CHAT_NOTE_MS = 8000;
 /** Повтор перечитывания ленты: от и до (мс). */
 const RESYNC_MIN_MS = 1000;
 const RESYNC_MAX_MS = 10_000;
+/** Снимок живого чата — последние столько записей (`GET /chat` ребёнка). */
+export const SNAPSHOT_LIMIT = 200;
+/** «Показать раньше»: столько записей дочитать (предел ребёнка). */
+export const HISTORY_LIMIT = 5000;
+/** Миниатюр вставленных картинок держим не больше (object URL; старые отзываются). */
+export const PREVIEW_MAX = 12;
+/** Список документов базы знаний для чипов — свежий столько (мс). */
+const KB_TTL_MS = 60_000;
 
 /** Вложение в строке ввода до отправки. */
 export type ChatDraft = {
@@ -97,11 +114,41 @@ export type Chat = {
   removeAttachment: (id: string) => Promise<void>;
   /** Убрать закреплённый вопрос («×»): и над лентой, и в свёрнутой панели. */
   hidePin: (id: string) => void;
+  /** Документы, которые упомянуло сообщение агента (чипы-источники). */
+  sources: (m: ChatMessage) => Source[];
+  /** Открыть источник; не вышло — заметка. */
+  open: (source: Source) => Promise<void>;
+  /** Лента обрезана (последние SNAPSHOT_LIMIT): дочитать раньше; null — нечего. */
+  more: (() => Promise<void>) | null;
   composer: ChatComposerState;
   sink: ChatSink;
 };
 
-export function useChat(ep: Endpoint | null): Chat {
+/** Документы базы знаний по адресу резидента: один запрос на всех, свежий KB_TTL_MS. */
+const kbCache = new Map<string, { at: number; got: Promise<KbDocs | null> }>();
+
+function useKbDocs(ep: Endpoint | null, wanted: boolean): KbIndex | null {
+  const [kb, setKb] = useState<KbIndex | null>(null);
+  useEffect(() => {
+    if (!ep || !wanted) return;
+    let gone = false;
+    let hit = kbCache.get(ep.base);
+    if (!hit || Date.now() - hit.at > KB_TTL_MS) {
+      hit = { at: Date.now(), got: getKbDocs(ep).catch(() => null) };
+      kbCache.set(ep.base, hit);
+    }
+    void hit.got.then((docs) => { if (!gone) setKb(kbIndex(docs)); });
+    return () => { gone = true; };
+  }, [ep, wanted]);
+  return kb;
+}
+
+/** Тестам: забыть список документов базы. */
+export function resetKbDocs(): void {
+  kbCache.clear();
+}
+
+export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): Chat {
   const [state, dispatch] = useReducer(chatReducer, EMPTY_CHAT);
   const [now, setNow] = useState(() => Date.now());
   const [note, setNote] = useState<string | null>(null);
@@ -113,9 +160,16 @@ export function useChat(ep: Endpoint | null): Chat {
   const [drafts, setDraftList] = useState<ChatDraft[]>([]);
   const dropped = useRef(new Set<string>());
   const [resync, setResync] = useState(0);
+  /** Сколько записей пришло последним снимком (обрезан ли он) и дочитана ли история. */
+  const [snapSize, setSnapSize] = useState(0);
+  const [history, setHistory] = useState(false);
 
   const sink = useMemo<ChatSink>(() => ({
-    onChatSnapshot: (snap) => { setNow(Date.now()); dispatch({ type: "snapshot", snap, now: Date.now() }); },
+    onChatSnapshot: (snap, fetched) => {
+      setNow(Date.now());
+      setSnapSize(snap.messages?.length ?? 0);
+      dispatch({ type: "snapshot", snap, now: Date.now(), fetched });
+    },
     onChat: (event) => { setNow(Date.now()); dispatch({ type: "event", event, now: Date.now() }); },
     onChatPartial: (partial) => dispatch({ type: "partial", partial }),
     onAgent: (agent) => dispatch({ type: "agent", agent }),
@@ -139,7 +193,7 @@ export function useChat(ep: Endpoint | null): Chat {
       const delay = Math.min(RESYNC_MAX_MS, RESYNC_MIN_MS * 2 ** Math.min(resync, 4));
       timer = setTimeout(() => setResync((n) => n + 1), delay);
     };
-    getChat(ep).then((snap) => {
+    backend.get(ep).then((snap) => {
       if (gone) return;
       if (snap.seq < stateRef.current.seq) again();
       else dispatch({ type: "snapshot", snap, now: Date.now(), fetched: true });
@@ -148,7 +202,7 @@ export function useChat(ep: Endpoint | null): Chat {
       if (!gone) again();
     });
     return () => { gone = true; clearTimeout(timer); };
-  }, [state.stale, ep, resync]);
+  }, [state.stale, ep, resync, backend]);
 
   useEffect(() => {
     if (!note) return;
@@ -164,14 +218,14 @@ export function useChat(ep: Endpoint | null): Chat {
     const out = stateRef.current.outbox.find((o) => o.client_id === clientId);
     if (!ep || !out) return false;
     try {
-      const reply = await postChat(ep, { text: out.text, client_id: clientId, attachments: out.attachments });
+      const reply = await backend.post(ep, { text: out.text, client_id: clientId, attachments: out.attachments });
       dispatch({ type: "sent", client_id: clientId, id: reply.id });
       return true;
     } catch (e) {
       dispatch({ type: "failed", client_id: clientId, error: errorText(e) });
       return false;
     }
-  }, [ep]);
+  }, [ep, backend]);
 
   const send = useCallback(async (text: string, attachments: string[] = []) => {
     if (!ep || (!text.trim() && !attachments.length)) return false;
@@ -191,45 +245,45 @@ export function useChat(ep: Endpoint | null): Chat {
     if (!ep) return;
     dispatch({ type: "click", id, label });
     try {
-      await clickChat(ep, id, label, newChatClientId());
+      await backend.click(ep, id, label, newChatClientId());
     } catch (e) {
       dispatch({ type: "click", id, label: null });
       setNote(`Кнопка не сработала: ${errorText(e)}`);
     }
-  }, [ep]);
+  }, [ep, backend]);
 
   const react = useCallback(async (id: string, emoji: ChatReaction) => {
     if (!ep) return;
     const on = !stateRef.current.byId[id]?.reactions?.[emoji];
     dispatch({ type: "react", id, emoji, on, at: Date.now() / 1000 });
     try {
-      await reactChat(ep, id, emoji, on);
+      await backend.react(ep, id, emoji, on);
     } catch (e) {
       dispatch({ type: "react", id, emoji, on: !on, at: Date.now() / 1000 });
       setNote(`Реакция не дошла: ${errorText(e)}`);
     }
-  }, [ep]);
+  }, [ep, backend]);
 
   const stop = useCallback(async () => {
     if (!ep) return;
     const id = writingShown(stateRef.current, Date.now());
     try {
-      await stopChat(ep, id ?? undefined);
+      await backend.stop(ep, id ?? undefined);
     } catch (e) {
       setNote(`Не удалось остановить: ${errorText(e)}`);
     }
-  }, [ep]);
+  }, [ep, backend]);
 
   const setFrequency = useCallback(async (label: AgentFrequencyLabel) => {
     if (!ep) return;
     setFrequencyLocal(label);
     try {
-      await setAgentFrequency(ep, label);
+      await backend.frequency(ep, label);
     } catch (e) {
       setNote(`Частоту не удалось сменить: ${errorText(e)}`);
       setFrequencyLocal(null);
     }
-  }, [ep]);
+  }, [ep, backend]);
 
   // Пришло состояние агента с той же частотой — своё значение больше не нужно.
   const agentFrequency = state.agent?.frequency;
@@ -239,17 +293,25 @@ export function useChat(ep: Endpoint | null): Chat {
 
   const paste = useCallback(async (blob: Blob, name?: string) => {
     if (!ep) throw new Error("Нет связи с ассистентом");
-    const reply = await pasteChatImage(ep, blob, name);
+    const reply = await backend.paste(ep, blob, name);
     if (reply.status !== "failed" && typeof URL.createObjectURL === "function") {
-      previews.current.set(reply.id, URL.createObjectURL(blob));
+      const keep = previews.current;
+      keep.set(reply.id, URL.createObjectURL(blob));
+      // Миниатюры живут, пока открыто окно: старые отзываем (ревью live-chat, M14) —
+      // у их сообщений остаётся значок с названием.
+      while (keep.size > PREVIEW_MAX) {
+        const [oldest, url] = keep.entries().next().value as [string, string];
+        URL.revokeObjectURL?.(url);
+        keep.delete(oldest);
+      }
     }
     return reply;
-  }, [ep]);
+  }, [ep, backend]);
 
   const attach = useCallback(async (path: string) => {
     if (!ep) throw new Error("Нет связи с ассистентом");
-    return attachChatFile(ep, path);
-  }, [ep]);
+    return backend.attach(ep, path);
+  }, [ep, backend]);
 
   const removeAttachment = useCallback(async (id: string) => {
     if (!ep) return;
@@ -259,17 +321,64 @@ export function useChat(ep: Endpoint | null): Chat {
       previews.current.delete(id);
     }
     try {
-      await removeChatAttachment(ep, id);
+      await backend.remove(ep, id);
     } catch (e) {
       setNote(`Вложение не удалось убрать у ассистента: ${errorText(e)}`);
     }
-  }, [ep]);
+  }, [ep, backend]);
 
   const hidePin = useCallback((id: string) => dispatch({ type: "hidePin", id }), []);
   const setDrafts = useCallback((fn: (cur: ChatDraft[]) => ChatDraft[]) => setDraftList(fn), []);
   const composer = useMemo<ChatComposerState>(
     () => ({ text, setText, drafts, setDrafts, dropped: dropped.current }), [text, drafts, setDrafts]);
   const used = useMemo(() => usedButtons(state), [state.order, state.byId, state.clicked]);
+
+  // Чипы-источники: вложения журнала и документы базы знаний.
+  const attachments = useMemo(
+    () => state.order.map((id) => state.byId[id]).filter((m): m is ChatMessage => m?.kind === "attachment"),
+    [state.order, state.byId],
+  );
+  const wantKb = useMemo(() => state.order.some((id) => {
+    const m = state.byId[id];
+    return m?.kind === "agent" && typeof m.text === "string" && mayMentionDocs(m.text);
+  }), [state.order, state.byId]);
+  const kb = useKbDocs(ep, wantKb);
+  const found = useMemo(() => new Map<string, Source[]>(), [attachments, kb]);
+  const sources = useCallback((m: ChatMessage) => {
+    if (m.kind !== "agent" || !m.text || m.status === "writing") return [];
+    const key = `${m.id}\n${m.text}`;
+    let got = found.get(key);
+    if (!got) {
+      got = findSources(m.text, attachments, kb);
+      found.set(key, got);
+    }
+    return got;
+  }, [attachments, kb, found]);
+  const open = useCallback(async (source: Source) => {
+    let error: unknown = null;
+    for (const path of source.paths) {
+      try {
+        await openMaterial(path);
+        return;
+      } catch (e) {
+        error = e;
+      }
+    }
+    setNote(`Не удалось открыть «${source.label}»${error ? `: ${errorText(error)}` : ""}`);
+  }, []);
+
+  // «Показать раньше» (ревью live-chat, M13): снимок — последние SNAPSHOT_LIMIT записей.
+  const loadMore = useCallback(async () => {
+    if (!ep) return;
+    try {
+      const snap = await backend.get(ep, HISTORY_LIMIT);
+      setHistory(true);
+      sink.onChatSnapshot(snap, true);
+    } catch (e) {
+      setNote(`Не удалось дочитать ленту: ${errorText(e)}`);
+    }
+  }, [ep, backend, sink]);
+  const more = backend.paged && !history && snapSize >= SNAPSHOT_LIMIT ? loadMore : null;
 
   const items = useMemo(() => feedItems(state, now), [state, now]);
   const agent = useMemo(
@@ -289,6 +398,7 @@ export function useChat(ep: Endpoint | null): Chat {
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
     used: (id) => used.get(id) ?? null,
-    send, retry, click, react, stop, setFrequency, paste, attach, removeAttachment, hidePin, composer, sink,
+    send, retry, click, react, stop, setFrequency, paste, attach, removeAttachment, hidePin, sources, open, more,
+    composer, sink,
   };
 }

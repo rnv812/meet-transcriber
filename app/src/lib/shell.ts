@@ -42,6 +42,16 @@ export async function pickChatFiles(): Promise<string[]> {
   return invoke<string[]>("pick_chat_files");
 }
 
+/**
+ * Чип-источник в чате ассистента: открыть документ или картинку приложением по умолчанию.
+ * Оболочка пускает только файлы внутри базы знаний и библиотеки встреч, не исполняемые
+ * (`open_material`); иначе — ошибка. В браузере (dev) — ничего.
+ */
+export async function openMaterial(path: string): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("open_material", { path });
+}
+
 /** Перетаскивание файлов на окно (Tauri: HTML5-перетаскивание WebView2 перехватывает сам). */
 export type FileDrop =
   | { type: "enter" | "over"; x: number; y: number }

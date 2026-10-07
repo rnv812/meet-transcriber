@@ -44,12 +44,20 @@ export const QUICK_QUESTIONS = ["Что я пропустил?", "Что отв�
 const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 let draftSeq = 0;
 
-export function ChatComposer({ chat, disabledReason = null, vision = true }: {
+export function ChatComposer({
+  chat, disabledReason = null, vision = true, quick: questions = QUICK_QUESTIONS, placeholder = "Написать ассистенту…",
+  autoFocus = false,
+}: {
   chat: Chat;
   /** Почему писать нельзя (агент выключен, нет связи); null — можно. */
   disabledReason?: string | null;
   /** Модель видит картинки: иначе у картинки — пометка. */
   vision?: boolean;
+  /** Быстрые вопросы над пустым полем (после встречи — свои). */
+  quick?: string[];
+  placeholder?: string;
+  /** Взять фокус при появлении (после встречи — «Спросить ассистента»; панель поверх звонка — никогда). */
+  autoFocus?: boolean;
 }) {
   const { text, setText, drafts, setDrafts, dropped } = chat.composer;
   const [over, setOver] = useState(false);
@@ -101,6 +109,10 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
   };
   const addPathsRef = useRef(addPaths);
   addPathsRef.current = addPaths;
+
+  useEffect(() => {
+    if (autoFocus) field.current?.focus();
+  }, [autoFocus]);
 
   const remove = (key: string) => {
     const gone = drafts.find((d) => d.key === key);
@@ -185,7 +197,7 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
     void chat.send(question);
     field.current?.focus();
   };
-  const quick = !disabled && !text && drafts.length === 0;
+  const quick = !disabled && !text && drafts.length === 0 && questions.length > 0;
 
   const sendTitle = uploading ? "Вложение ещё разбирается…" : "Отправить (Enter)";
   return (
@@ -196,7 +208,7 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
       {disabledReason && <div className="chat-compose__reason" role="status">{disabledReason}</div>}
       {quick && (
         <div className="chat-compose__quick" role="group" aria-label="Быстрые вопросы">
-          {QUICK_QUESTIONS.map((q) => (
+          {questions.map((q) => (
             <button key={q} type="button" className="live-chip" onClick={() => ask(q)}>{q}</button>
           ))}
         </div>
@@ -221,7 +233,7 @@ export function ChatComposer({ chat, disabledReason = null, vision = true }: {
       <div className="chat-compose__row">
         <textarea ref={field} className="chat-compose__field" rows={1} value={text} disabled={disabled}
           aria-label="Сообщение ассистенту"
-          placeholder={disabled ? "Писать ассистенту сейчас нельзя" : "Написать ассистенту…"}
+          placeholder={disabled ? "Писать ассистенту сейчас нельзя" : placeholder}
           title="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот"
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} />
         {inTauri() && (

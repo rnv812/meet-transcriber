@@ -130,7 +130,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         if (!byId[m.id]) order.push(m.id);
         byId[m.id] = m;
       }
+      // Текст ответа, который пишется, — от прежнего, пока ответ всё ещё пишется (после
+      // встречи текст приходит событием раньше, чем перечитанная лента).
       const partial: Record<string, string> = {};
+      for (const [id, text] of Object.entries(state.partial)) if (byId[id]?.status === "writing") partial[id] = text;
       if (snap.partial && byId[snap.partial.id]?.status === "writing") partial[snap.partial.id] = snap.partial.text;
       return {
         ...state, seq: snap.seq, loaded: true, order, byId, partial,

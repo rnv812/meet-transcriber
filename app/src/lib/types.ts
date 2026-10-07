@@ -188,9 +188,12 @@ export type JiraRefs = { refs: JiraRef[]; phrases: JiraPhrase[] };
 export type RecordingCategory = { id: string | null; source: "ai" | "user" };
 
 /** Группа встреч (`.meet-groups.json` резидента): id стабилен и не переиспользуется. */
-export type Group = { id: string; name: string; color: string; created_at: string };
-/** Группа в `GET /groups`: со счётчиком встреч (у встречи одна группа; с запросом — среди найденного). */
-export type GroupInfo = Pick<Group, "id" | "name" | "color"> & { count: number };
+export type Group = { id: string; name: string; color: string; created_at: string; kb_folder?: string };
+/**
+ * Группа в `GET /groups`: со счётчиком встреч (у встречи одна группа; с запросом — среди найденного).
+ * `kb_folder` — папка базы знаний группы (путь внутри базы через «/»), если задана.
+ */
+export type GroupInfo = Pick<Group, "id" | "name" | "color"> & { count: number; kb_folder?: string };
 /** Id группы, который есть в meta.json встреч, но не в списке: «Группа без названия». */
 export type UnknownGroup = { id: string; count: number };
 export type GroupsInfo = {
@@ -896,6 +899,8 @@ export type ChatMessage = {
   summary?: string;
   vision?: boolean;
   delivered?: boolean;
+  /** У вложения-документа: исходный файл (чип-источник открывает его, если оболочка пустит). */
+  source?: string;
   [key: string]: unknown;
 };
 
@@ -975,7 +980,12 @@ export type RecordingChat = {
   live: boolean;
   /** Задача ответа («Продолжить разговор»), которая ждёт или идёт. */
   job: Job | null;
+  /** Агент-участник включён в настройках (`assist.participant`); выключен — писать нельзя (409). Старый резидент — нет поля. */
+  enabled?: boolean;
 };
+
+/** `GET /assistant/kb-docs`: документы базы знаний (пути от неё через «/», без исключённых). */
+export type KbDocs = { root: string | null; docs: string[]; more: boolean };
 
 /** Ответ `POST /recordings/{id}/chat`. */
 export type ContinueChatResult = { message: ChatMessage; job: Job | null; duplicate?: boolean };

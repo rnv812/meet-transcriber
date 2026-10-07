@@ -9,12 +9,23 @@
  * всегда возвращает к низу.
  *
  * Доступность: лента — `role="log"` (`aria-live="polite"`, в «Не отвлекать» —
- * `off`); реакции и кнопки — обычные кнопки в порядке Tab (реакции видны при
- * наведении и фокусе, поставленные — всегда).
+ * `off`, но закреплённый вопрос объявляется и тогда). Клавиатура — «бегущий»
+ * tabindex (ревью live-chat, M12): в порядке Tab одно сообщение ленты (по
+ * умолчанию последнее) и его действия — кнопки агента, реакции, копирование,
+ * источники; ↑ / ↓ / Home / End переходят между сообщениями. Так строка ввода
+ * в долгой встрече не прячется за десятками кнопок. Реакции видны при
+ * наведении и фокусе, поставленные — всегда.
+ *
+ * Источники: документ, который упомянул агент (вложение чата или документ
+ * базы знаний — `sources.ts`), — чип под сообщением; щелчок открывает его
+ * (`open_material`). В узкой панели у чипа только значок.
+ *
+ * Узкая панель (`compact`): время сообщения — в подсказке, вложения
+ * сообщения — счётчиком «📎 N» (ревью live-chat, M7).
  */
 
-import { Copy, FileText, Image as ImageIcon, X } from "lucide-react";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { BookOpen, Copy, FileText, Image as ImageIcon, X } from "lucide-react";
+import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { plainMarkdown } from "../lib/agentRef";
 import { clock } from "../lib/format";
@@ -23,11 +34,14 @@ import type { ChatMessage } from "../lib/types";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { type FeedItem, type Outgoing, REACTIONS, isFinalAgent } from "./chatModel";
+import type { Source } from "./sources";
 import type { Chat } from "./useChat";
 import "./chat.css";
 
 /** Насколько от низа ещё считается «внизу». */
 const BOTTOM_SLACK_PX = 24;
+/** Действия внутри сообщения ленты (их tabindex «бежит» вместе с сообщением). */
+const ACTIONS = "button, a[href], input, select, textarea, [tabindex]:not(li)";
 /** Сколько держится «Скопировано». */
 export const COPIED_MS = 1500;
 
@@ -95,6 +109,22 @@ function Reactions({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disabled
   );
 }
 
+/** Документы, которые упомянуло сообщение: щелчок — открыть. */
+function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; compact: boolean }) {
+  if (!sources.length) return null;
+  return (
+    <div className="chat-msg__sources" role="group" aria-label="Источники">
+      {sources.map((s) => (
+        <button key={s.key} type="button" className="chat-src" aria-label={`Источник: ${s.label}`}
+          title={`Открыть «${s.label}»`} onClick={() => void chat.open(s)}>
+          <Icon as={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText} size="sm" />
+          {!compact && <span className="chat-src__name">{s.label}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function AgentMessage({ m, chat, onTime, compact, disabled }: {
   m: ChatMessage; chat: Chat; onTime?: (t: number) => void; compact: boolean; disabled: boolean;
 }) {
@@ -105,7 +135,7 @@ function AgentMessage({ m, chat, onTime, compact, disabled }: {
   const reacted = REACTIONS.some((r) => m.reactions?.[r.emoji]);
   return (
     <li className={`chat-msg chat-msg--agent${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
-      data-id={m.id} aria-busy={writing || undefined}>
+      data-id={m.id} data-key={m.id} aria-busy={writing || undefined} title={compact && time ? time : undefined}>
       <div className="chat-msg__head">
         <span className="chat-msg__who">Ассистент</span>
         {time && !compact && <span className="chat-msg__time num">{time}</span>}
@@ -121,6 +151,7 @@ function AgentMessage({ m, chat, onTime, compact, disabled }: {
       ) : null}
       {m.status === "cancelled" && <div className="chat-msg__note">Остановлено</div>}
       {m.status === "failed" && <div className="chat-msg__error">{m.error || "Ассистент не смог ответить"}</div>}
+      {!writing && <Sources sources={chat.sources(m)} chat={chat} compact={compact} />}
       {!writing && <AgentButtons m={m} chat={chat} disabled={disabled} />}
       {!writing && text.trim() && (
         <div className="chat-msg__tools">
@@ -149,18 +180,22 @@ function AttachmentChip({ id, chat }: { id: string; chat: Chat }) {
   );
 }
 
-function UserMessage({ m, chat, out }: { m?: ChatMessage; chat: Chat; out?: Outgoing }) {
+function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat: Chat; out?: Outgoing; compact?: boolean }) {
   const text = m?.text ?? out?.text ?? "";
   const atts = m?.attachments ?? out?.attachments ?? [];
   const time = typeof m?.t === "number" ? clock(m.t) : null;
+  const names = atts.map((id) => chat.attachment(id)?.name || "вложение").join(", ");
   return (
-    <li className={`chat-msg chat-msg--user${out ? ` is-${out.state}` : ""}`} data-id={m?.id}>
+    <li className={`chat-msg chat-msg--user${out ? ` is-${out.state}` : ""}`} data-id={m?.id}
+      data-key={m?.id ?? `out:${out?.client_id}`} title={compact && time ? time : undefined}>
       {m?.via === "button" && <div className="chat-msg__via">кнопка</div>}
       {text && <div className="chat-msg__text chat-msg__text--plain">{text}</div>}
-      {atts.length > 0 && (
+      {atts.length > 0 && (compact ? (
+        <span className="chat-msg__att-count" title={names} aria-label={`Вложения: ${names}`}>📎 {atts.length}</span>
+      ) : (
         <div className="chat-msg__atts">{atts.map((id) => <AttachmentChip key={id} id={id} chat={chat} />)}</div>
-      )}
-      {time && <span className="chat-msg__time num">{time}</span>}
+      ))}
+      {time && !compact && <span className="chat-msg__time num">{time}</span>}
       {out?.state === "sending" && <div className="chat-msg__note">отправляется…</div>}
       {out?.state === "failed" && (
         <div className="chat-msg__error" role="alert">
@@ -175,12 +210,14 @@ function UserMessage({ m, chat, out }: { m?: ChatMessage; chat: Chat; out?: Outg
 function Item({ it, chat, onTime, compact, disabled }: {
   it: FeedItem; chat: Chat; onTime?: (t: number) => void; compact: boolean; disabled: boolean;
 }) {
-  if (it.type === "outgoing") return <UserMessage chat={chat} out={it.out} />;
+  if (it.type === "outgoing") return <UserMessage chat={chat} out={it.out} compact={compact} />;
   const m = it.message;
   if (m.kind === "agent") return <AgentMessage m={m} chat={chat} onTime={onTime} compact={compact} disabled={disabled} />;
-  if (m.kind === "user") return <UserMessage m={m} chat={chat} />;
-  if (m.kind === "meeting") return <li className="chat-divider" data-id={m.id}><span>{m.text || "встреча"}</span></li>;
-  return <li className="chat-sys" data-id={m.id}>{m.text}</li>;
+  if (m.kind === "user") return <UserMessage m={m} chat={chat} compact={compact} />;
+  if (m.kind === "meeting") {
+    return <li className="chat-divider" data-id={m.id} data-key={m.id}><span>{m.text || "встреча"}</span></li>;
+  }
+  return <li className="chat-sys" data-id={m.id} data-key={m.id}>{m.text}</li>;
 }
 
 /** Закреплённый вопрос агента — над лентой; щелчок по тексту — к сообщению в ленте. */
@@ -212,6 +249,9 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   empty?: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  /** Сообщение, которое сейчас в порядке Tab (null — последнее). */
+  const [active, setActive] = useState<string | null>(null);
   const follow = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const seen = useRef<Set<string> | null>(null);
@@ -260,6 +300,40 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
     return () => watch.disconnect();
   }, []);
 
+  // «Бегущий» tabindex: в порядке Tab — одно сообщение и его действия. Через DOM:
+  // действия рисуют и Markdown (таймкоды), и вложенные компоненты.
+  const rows = () => Array.from(list.current?.querySelectorAll<HTMLElement>(":scope > li[data-key]") ?? []);
+  useLayoutEffect(() => {
+    const all = rows();
+    if (!all.length) return;
+    const key = active && all.some((li) => li.dataset.key === active) ? active : all[all.length - 1]!.dataset.key;
+    for (const li of all) {
+      const on = li.dataset.key === key;
+      li.tabIndex = on ? 0 : -1;
+      for (const el of li.querySelectorAll<HTMLElement>(ACTIONS)) el.tabIndex = on ? 0 : -1;
+    }
+  });
+  const onListKey = (e: KeyboardEvent<HTMLOListElement>) => {
+    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : e.key === "Home" ? -Infinity
+      : e.key === "End" ? Infinity : 0;
+    if (!step || e.altKey || e.ctrlKey || e.metaKey) return;
+    const row = (e.target as Element).closest<HTMLElement>("li[data-key]");
+    if (!row) return;
+    const all = rows();
+    const at = all.indexOf(row);
+    const next = all[step === Infinity ? all.length - 1 : step === -Infinity ? 0 : Math.max(0, Math.min(all.length - 1, at + step))];
+    if (!next) return;
+    e.preventDefault();
+    setActive(next.dataset.key ?? null);
+    next.tabIndex = 0;
+    next.focus();
+    next.scrollIntoView?.({ block: "nearest" });
+  };
+  const onListFocus = (e: { target: EventTarget }) => {
+    const row = (e.target as Element).closest?.<HTMLElement>("li[data-key]");
+    if (row?.dataset.key && row.dataset.key !== active) setActive(row.dataset.key);
+  };
+
   const unread = atBottom || quiet || !seen.current ? 0 : ids.filter((id) => !seen.current!.has(id)).length;
   const pinned = chat.pinned;
   const hidePin = (id: string) => {
@@ -279,9 +353,16 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
         <Pinned m={pinned} chat={chat} onTime={onTime} onShow={showPinned} onHide={() => hidePin(pinned.id)}
           disabled={disabled} />
       )}
+      {/* «Не отвлекать» глушит ленту, но вопрос к вам объявляется и тогда (ревью live-chat, M15). */}
+      {quiet && <span className="sr-only" role="status">{pinned ? `Вопрос вам: ${plainMarkdown(pinned.text ?? "")}` : ""}</span>}
       <div ref={box} className="chat__scroll" onScroll={onScroll}>
-        <ol className="chat__list" role="log" aria-live={quiet ? "off" : "polite"} aria-relevant="additions"
-          aria-label="Чат с ассистентом">
+        {chat.more && (
+          <button type="button" className="chat__more" onClick={() => void chat.more?.()}>
+            Показать более ранние сообщения
+          </button>
+        )}
+        <ol ref={list} className="chat__list" role="log" aria-live={quiet ? "off" : "polite"} aria-relevant="additions"
+          aria-label="Чат с ассистентом" onKeyDown={onListKey} onFocus={onListFocus}>
           {chat.items.length === 0 && (
             <li className="chat__empty muted">
               {empty ?? "Ассистент слушает встречу и напишет, когда будет что сказать. Можно написать ему и самому."}

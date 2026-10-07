@@ -34,9 +34,10 @@ import { IconButton } from "../ui/IconButton";
 import { Truncate } from "../ui/Truncate";
 import { isFinalAgent } from "./chatModel";
 import { LiveWorkspace, participantOn, useLiveView } from "./LiveWorkspace";
+import { stateOf } from "./SessionBar";
 import { KIND_LABEL, isUrgent, topHint } from "./liveModel";
 import { useQuiet, useUnseen } from "./useAttention";
-import { useChat } from "./useChat";
+import { type Chat, useChat } from "./useChat";
 import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
@@ -113,6 +114,19 @@ function useShownHint(hints: LiveHint[], quiet: boolean): LiveHint | null {
   return shown;
 }
 
+/**
+ * Сообщение агента в строке свёрнутой панели: закреплённый вопрос, иначе
+ * последнее. «Не отвлекать» — строка держит показанное, пока оно в ленте;
+ * вопрос к вам встаёт в неё и тогда (ревью live-chat, M15).
+ */
+function useShownAgentLine(chat: Chat, quiet: boolean): ChatMessage | null {
+  const shownId = useRef<string | null>(null);
+  const kept = quiet && shownId.current ? chat.state.byId[shownId.current] : undefined;
+  const shown = chat.pinned ?? (kept && isFinalAgent(kept) ? kept : null) ?? chat.lastAgent;
+  shownId.current = shown?.id ?? null;
+  return shown;
+}
+
 export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const status = useLiveStatus(endpoint);
   const [stopRequested, setStopRequested] = useState(false);
@@ -176,13 +190,18 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // Звук уже идёт, а модель распознавания ещё грузится — этап старта.
   const warming = !!status?.active && status.ready === false;
   const stage = status?.stage?.trim();
+  // С агентом-участником шапка говорит, что с ним (как его шапка сессии), а не
+  // всегда «Слушает»: точка одна, и состояния не спорят (ревью live-chat, M6).
+  const agent = participant ? chat.agent ?? live.agent ?? null : null;
+  const agentState = agent ? stateOf(agent, !!chat.writing).text : "слушает";
   const state = stopping ? (attached && !fullStop ? "Выключаю…" : "Останавливаю…")
     : warming ? (stage ? `Запускается: ${stage}` : "Запускается…")
-    : catchup ? `Догоняю ${catchup.percent} %` : "Слушает";
+    : catchup ? `Догоняю ${catchup.percent} %` : agentState[0]!.toUpperCase() + agentState.slice(1);
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
   const last = live.lines.at(-1);
   const newHints = quiet ? 0 : participant ? unseenAgent : ws.unseen.hints;
-  const agentLine = participant ? (chat.pinned ?? chat.lastAgent) : null;
+  const shownAgent = useShownAgentLine(chat, quiet);
+  const agentLine = participant ? shownAgent : null;
   const mods = `${open ? " live-panel--open" : ""}${view.maximized ? " live-panel--maximized" : ""}`;
   // Свёрнутую панель можно тащить за любое свободное место, а не только за шапку.
   const dragAnywhere = (e: MouseEvent) => {

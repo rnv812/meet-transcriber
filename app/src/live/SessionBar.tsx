@@ -44,7 +44,7 @@ export function agentNotes(agent: AgentInfo): { text: string; title?: string }[]
 }
 
 /** Состояние словом: «пишет» — только когда пузырь ответа виден (молчаливый ход — «думает»). */
-function stateOf(agent: AgentInfo, writingShown: boolean): { key: string; text: string } {
+export function stateOf(agent: AgentInfo, writingShown: boolean): { key: string; text: string } {
   if (agent.state === "error") return { key: "error", text: "ошибка" };
   if (agent.state === "writing") return writingShown ? { key: "writing", text: "пишет…" } : { key: "thinking", text: "думает…" };
   return { key: "listening", text: "слушает" };
@@ -97,10 +97,12 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
   return (
     <div className={`session-bar${compact ? " session-bar--compact" : ""}`} role="group" aria-label="Сессия ассистента">
       {/* Состояние меняется на каждом ходе агента — не живая область, иначе
-          экранный диктор говорил бы всю встречу. Объявляется только ошибка. */}
+          экранный диктор говорил бы всю встречу. Объявляется только ошибка.
+          Без точки: точка одна — в шапке панели, и она тоже про агента
+          (ревью live-chat, M6). */}
       <span className={`session-bar__state session-bar__state--${state.key}`}
         title={agent.state === "error" && agent.error ? agent.error : undefined}>
-        <span className="session-bar__dot" aria-hidden="true" />{state.text}
+        {state.text}
       </span>
       <span className="sr-only" role="status">
         {!quiet && agent.state === "error" ? `Ошибка ассистента${agent.error ? `: ${agent.error}` : ""}` : ""}

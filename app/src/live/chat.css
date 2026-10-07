@@ -228,3 +228,28 @@
   padding: 0; background: var(--surface-2);
   border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 8px 24px #0008;
 }
+
+/* Источники: документы, которые упомянул агент, — щелчок открывает. */
+.chat-msg__sources { display: flex; flex-wrap: wrap; gap: 4px; }
+.chat-src {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 22px; padding: 0 8px 0 6px;
+  border: 1px solid var(--line-2); border-radius: 11px; background: var(--surface); color: var(--text-2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.chat-src:hover { color: var(--text); border-color: var(--text-3); }
+.chat-src__name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat--compact .chat-src { padding: 0 6px; }
+
+/* Клавиатура: сообщение ленты в фокусе (↑ / ↓ между сообщениями). */
+.chat__list > li[data-key]:focus { outline: none; }
+.chat__list > li[data-key]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+/* Узкая панель: вложения сообщения — счётчиком. */
+.chat-msg__att-count { align-self: flex-end; color: var(--text-2); font-size: 11.5px; }
+
+/* «Показать более ранние сообщения» (снимок ленты — последние 200). */
+.chat__more {
+  display: block; margin: 2px auto 6px; padding: 0; border: 0; background: none;
+  color: var(--accent-hover); font: inherit; font-size: 11.5px; cursor: pointer; text-decoration: underline;
+}
+.chat__more:hover { color: var(--text); }

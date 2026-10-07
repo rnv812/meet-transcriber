@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
-  ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, RecordingChat,
+  ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, KbDocs, RecordingChat,
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
@@ -21,7 +21,7 @@ import type {
 export type {
   AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, ChatAttachment, ChatAttachResult, ChatEvent, ChatKind,
   ChatMessage, ChatPartial, ChatPost, ChatPostResult, ChatReaction, ChatSnapshot, ChatStatus, ChatUpdatedEvent,
-  ContinueChatResult, LegacyAssistant, RecordingChat,
+  ContinueChatResult, KbDocs, LegacyAssistant, RecordingChat,
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
   ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource, LlmOrigin, ModelChoice,
   TitleSuggestion, Category, RecordingCategory, Facets, Group, GroupInfo, GroupsInfo, GroupMembersResult, GroupWrite, LibraryFilter,
@@ -174,7 +174,8 @@ export const getGroups = (ep: Endpoint, q?: string, filter?: LibraryFilter) =>
 export const createGroup = (ep: Endpoint,
   group: { name: string; color?: string; id?: string; index?: number; created_at?: string }) =>
   json<Group & GroupWrite>(ep, "/groups", body("POST", group));
-export const patchGroup = (ep: Endpoint, id: string, patch: { name?: string; color?: string }) =>
+/** Переименовать, перекрасить или задать папку базы знаний (`kb_folder`: путь внутри базы; null — убрать). */
+export const patchGroup = (ep: Endpoint, id: string, patch: { name?: string; color?: string; kb_folder?: string | null }) =>
   json<Group & GroupWrite>(ep, `/groups/${enc(id)}`, body("PATCH", patch));
 /**
  * Убрать группу из списка: встречи остаются с её id (станет неизвестной); ответ — для «Отменить»
@@ -692,6 +693,31 @@ export const continueChat = (ep: Endpoint, id: string, msg: ChatPost & { provide
     ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
     ...(msg.provider ? { provider: msg.provider } : {}),
   }));
+
+/** Вложение к чату записи после встречи: вставленная картинка (до 10 МБ). */
+export async function recordingChatPaste(ep: Endpoint, id: string, blob: Blob, name?: string): Promise<ChatAttachResult> {
+  const response = await request(ep, `/recordings/${enc(id)}/chat/paste`, {
+    method: "POST", body: blob, headers: name ? { "X-File-Name": enc(name) } : {},
+  }, blob.type || "image/png");
+  return (await response.json()) as ChatAttachResult;
+}
+/** Вложение к чату записи после встречи: файл или папка с диска (те же проверки и пределы, что во время встречи). */
+export const recordingChatAttach = (ep: Endpoint, id: string, path: string) =>
+  json<ChatAttachResult>(ep, `/recordings/${enc(id)}/chat/attach`, body("POST", { path }));
+/** «×» у вложения до отправки (после встречи). */
+export const recordingChatRemove = (ep: Endpoint, id: string, aid: string) =>
+  json<{ ok: boolean; removed: boolean }>(ep, `/recordings/${enc(id)}/chat/attachments/${enc(aid)}/remove`,
+    body("POST", {}));
+/** Кнопка сообщения агента после встречи: сообщение с её надписью и задача ответа. */
+export const recordingChatClick = (ep: Endpoint, id: string, mid: string, label: string, clientId?: string) =>
+  json<ContinueChatResult>(ep, `/recordings/${enc(id)}/chat/${enc(mid)}/click`,
+    body("POST", { label, ...(clientId ? { client_id: clientId } : {}) }));
+/** Реакция на сообщение агента после встречи. */
+export const recordingChatReact = (ep: Endpoint, id: string, mid: string, emoji: ChatReaction, on?: boolean) =>
+  json<{ ok: boolean; changed: boolean }>(ep, `/recordings/${enc(id)}/chat/${enc(mid)}/react`,
+    body("POST", { emoji, ...(on === undefined ? {} : { on }) }));
+/** Документы базы знаний — окно узнаёт их в сообщениях агента (чипы-источники). */
+export const getKbDocs = (ep: Endpoint) => json<KbDocs>(ep, "/assistant/kb-docs");
 
 // --- URL для <audio>/<img> ---------------------------------------------------
 
