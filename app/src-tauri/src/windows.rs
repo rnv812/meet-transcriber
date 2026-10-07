@@ -304,6 +304,142 @@ pub async fn pick_folder(app: AppHandle, start: Option<String>) -> Result<Option
     .map_err(|error| error.to_string())?
 }
 
+/// Что `open_material` открывает приложением по умолчанию: документы и
+/// картинки (материалы встречи, документы базы знаний, расшифровки).
+pub const MATERIAL_EXTS: &[&str] = &[
+    "md", "txt", "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "csv", "odt", "ods", "odp",
+    "rtf", "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff",
+];
+
+/// Никогда — даже если список выше расширят: исполняемое, скрипты, ярлыки и
+/// всё, что ОС «запускает», а не показывает.
+pub const REFUSED_EXTS: &[&str] = &[
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "ps1",
+    "psm1",
+    "psd1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "msi",
+    "msp",
+    "mst",
+    "scr",
+    "pif",
+    "lnk",
+    "url",
+    "hta",
+    "cpl",
+    "jar",
+    "reg",
+    "inf",
+    "py",
+    "pyw",
+    "sh",
+    "app",
+    "dll",
+    "sys",
+    "html",
+    "htm",
+    "mht",
+    "svg",
+    "xml",
+    "xsl",
+    "msc",
+    "scf",
+    "chm",
+    "iso",
+    "img",
+    "vhd",
+    "vhdx",
+    "appref-ms",
+    "application",
+    "gadget",
+    "library-ms",
+    "settingcontent-ms",
+    "command",
+    "tool",
+    "workflow",
+    "applescript",
+    "scpt",
+];
+
+/// Можно ли открыть файл `path` чипом-источника чата: существующий файл
+/// (не папка) с расширением из `MATERIAL_EXTS` и не из `REFUSED_EXTS`, и
+/// внутри одного из корней. Сравнение — после canonicalize (`..`, ссылки,
+/// регистр и короткие имена не выводят за корень; `root2` не путается с
+/// `root`). → путь на диске, который открыть.
+pub fn material_allowed(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    let text = path.to_string_lossy();
+    if !path.is_absolute() || text.contains('\0') {
+        return None;
+    }
+    let target = path.canonicalize().ok()?;
+    if !target.is_file() {
+        return None;
+    }
+    // Расширение — у пути на диске: ссылка `План.pdf` на `run.bat` — это bat.
+    let ext = target
+        .extension()
+        .and_then(|ext| ext.to_str())?
+        .to_ascii_lowercase();
+    if REFUSED_EXTS.contains(&ext.as_str()) || !MATERIAL_EXTS.contains(&ext.as_str()) {
+        return None;
+    }
+    let inside = roots
+        .iter()
+        .filter_map(|root| root.canonicalize().ok())
+        .filter(|root| root.is_dir())
+        .any(|root| target.starts_with(root));
+    inside.then_some(target)
+}
+
+/// Корни `open_material` по `/state`: база знаний (`knowledge_dir`),
+/// библиотека встреч (`recordings_dir` — там и `assistant/materials`,
+/// `assistant/files` каждой встречи) и папка для встреч в базе знаний
+/// (`meetings_dir`).
+pub fn material_roots(state: &serde_json::Value) -> Vec<PathBuf> {
+    ["knowledge_dir", "recordings_dir", "meetings_dir"]
+        .iter()
+        .filter_map(|key| dir_at(state, key))
+        .collect()
+}
+
+/// `\\?\C:\…` после canonicalize → `C:\…`: так путь понимают все программы.
+fn plain_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => rest.to_string(),
+        _ => text.into_owned(),
+    }
+}
+
+/// Чип-источник в чате ассистента: открыть материал встречи или документ
+/// базы знаний приложением по умолчанию. Только файлы из `material_allowed`
+/// (корни — из `/state` резидента; не отвечает — ничего не открывается).
+#[tauri::command]
+pub async fn open_material(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = resident::read_endpoint()
+            .and_then(|endpoint| Client::new(&endpoint).get_state().ok())
+            .map(|state| material_roots(&state))
+            .unwrap_or_default();
+        let Some(target) = material_allowed(Path::new(&path), &roots) else {
+            shell_log!("open_material: отказ: {path}");
+            return Err("этот файл приложение не открывает".to_string());
+        };
+        shell_execute(&plain_path(&target)).map_err(|code| format!("файл не открылся (код {code})"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Страницы, которые окно открывает в браузере: мастер (Hugging Face),
 /// подсказки «не найден — установите» в настройках ассистента, «Скачать
 /// новую версию» и «Что нового» в «О программе» — выпуски публичного
@@ -603,18 +739,103 @@ mod tests {
 
     #[test]
     fn chat_attachments_keep_only_known_local_files() {
-        let root = if cfg!(windows) { r"C:\Users\me\" } else { "/home/me/" };
-        for name in ["План.pptx", "notes.MD", "скрин.PNG", "photo.jpeg", "table.xlsx", "doc.pdf"] {
+        let root = if cfg!(windows) {
+            r"C:\Users\me\"
+        } else {
+            "/home/me/"
+        };
+        for name in [
+            "План.pptx",
+            "notes.MD",
+            "скрин.PNG",
+            "photo.jpeg",
+            "table.xlsx",
+            "doc.pdf",
+        ] {
             let path = PathBuf::from(format!("{root}{name}"));
             assert!(chat_attachable(&path), "{name}");
         }
-        for name in ["setup.exe", "script.ps1", "archive.zip", "noext", "page.html"] {
+        for name in [
+            "setup.exe",
+            "script.ps1",
+            "archive.zip",
+            "noext",
+            "page.html",
+        ] {
             let path = PathBuf::from(format!("{root}{name}"));
             assert!(!chat_attachable(&path), "{name}");
         }
         assert!(!chat_attachable(Path::new("relative/План.pptx")));
         assert!(!chat_attachable(Path::new(r"\\server\share\План.pptx")));
         assert!(!chat_attachable(Path::new("//server/share/План.pptx")));
+    }
+
+    #[test]
+    fn open_material_keeps_to_documents_inside_the_roots() {
+        let tree = Tree::new("material");
+        let root = tree.0.join("root");
+        let meeting = root
+            .join("2026-09-30_16-04")
+            .join("assistant")
+            .join("materials");
+        std::fs::create_dir_all(&meeting).unwrap();
+        std::fs::write(meeting.join("a1.txt"), b"x").unwrap();
+        std::fs::write(root.join("План.pdf"), b"%PDF").unwrap();
+        std::fs::write(root.join("notes.MD"), b"x").unwrap();
+        std::fs::write(root.join("page.html"), b"x").unwrap();
+        std::fs::write(root.join("noext"), b"x").unwrap();
+        std::fs::write(root.join("tool.ps1"), b"x").unwrap();
+        std::fs::write(tree.0.join("outside").join("secret.pdf"), b"x").unwrap();
+        let sibling = tree.0.join("root2");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("near.pdf"), b"x").unwrap();
+        let roots = [root.clone()];
+
+        for ok in [
+            root.join("План.pdf"),
+            root.join("notes.MD"),
+            meeting.join("a1.txt"),
+        ] {
+            assert!(material_allowed(&ok, &roots).is_some(), "{}", ok.display());
+        }
+        // Исполняемое и скрипты — никогда; без расширения и не из списка — нет.
+        for name in ["run.bat", "tool.ps1", "page.html", "noext"] {
+            assert!(
+                material_allowed(&root.join(name), &roots).is_none(),
+                "{name}"
+            );
+        }
+        // Вне корней, через «..», соседний корень с тем же началом имени.
+        assert!(material_allowed(&tree.0.join("outside").join("secret.pdf"), &roots).is_none());
+        let escape = root.join("..").join("outside").join("secret.pdf");
+        assert!(escape.is_file(), "файл есть — отказ только из-за корня");
+        assert!(material_allowed(&escape, &roots).is_none());
+        assert!(material_allowed(&sibling.join("near.pdf"), &roots).is_none());
+        // Папка, несуществующий файл, относительный путь, нет корней.
+        assert!(material_allowed(&root.join("2026-09-30_16-04"), &roots).is_none());
+        assert!(material_allowed(&root.join("нет.pdf"), &roots).is_none());
+        assert!(material_allowed(Path::new("relative/План.pdf"), &roots).is_none());
+        assert!(material_allowed(&root.join("План.pdf"), &[]).is_none());
+        for ext in REFUSED_EXTS {
+            assert!(!MATERIAL_EXTS.contains(ext), "{ext} и разрешён, и запрещён");
+        }
+    }
+
+    #[test]
+    fn open_material_roots_come_from_the_state() {
+        let state = serde_json::json!({
+            "knowledge_dir": "C:/kb", "recordings_dir": "D:/rec", "meetings_dir": null,
+        });
+        assert_eq!(
+            material_roots(&state),
+            vec![PathBuf::from("C:/kb"), PathBuf::from("D:/rec")]
+        );
+        assert!(material_roots(&serde_json::json!({})).is_empty());
+        assert_eq!(plain_path(Path::new(r"\\?\C:\kb\a.pdf")), r"C:\kb\a.pdf");
+        assert_eq!(
+            plain_path(Path::new(r"\\?\UNC\srv\a.pdf")),
+            r"\\?\UNC\srv\a.pdf"
+        );
     }
 
     fn argv(items: &[&str]) -> Vec<String> {
