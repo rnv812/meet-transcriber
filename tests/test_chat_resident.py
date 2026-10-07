@@ -492,7 +492,8 @@ def test_summary_only_switches_the_participant_off():
     assert a.participant is True and a.participant_on is False
     b = settings.Settings.from_raw({"assist": {"participant": True, "activity": "calm"}}).assist
     assert b.participant_on is True
-    assert settings.Settings.from_raw({}).assist.participant_on is False
+    assert settings.Settings.from_raw({}).assist.participant_on is True
+    assert settings.Settings.from_raw({"assist": {"participant": False}}).assist.participant_on is False
 
 
 def test_summary_only_wires_no_participant(tmp_path, monkeypatch):

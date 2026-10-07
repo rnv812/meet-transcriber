@@ -1012,8 +1012,8 @@ class Assist:
 
     Агент-участник (0.3.6, `assist.participant`): включён — во время встречи
     пишет агент-участник (`meet.assist.participant`), прежние подсказки и
-    «Спросить» выключены (сводка остаётся); выключен — как в 0.3.5. По
-    умолчанию выключен, пока в окне нет чата ассистента (задача 7).
+    «Спросить» выключены (сводка остаётся), окно показывает чат с агентом;
+    выключен — как в 0.3.5. По умолчанию включён.
     `frequency` — «Как часто писать»: `less` / `normal` / `more` (по
     умолчанию «чаще» — активное участие). «Только сводка» (`activity:
     summary`) выключает и агента-участника (`participant_on`): человек
@@ -1035,7 +1035,7 @@ class Assist:
     live_asr: str = "auto"
     kb_map: bool = True
     kb_exclude: tuple[str, ...] = KB_EXCLUDE_DEFAULT
-    participant: bool = False
+    participant: bool = True
     frequency: str = "more"
 
     @property
@@ -1065,7 +1065,7 @@ class Assist:
             live_asr=as_choice(raw.get("live_asr"), LIVE_ASR, "auto"),
             kb_map=as_flag(raw.get("kb_map"), True),
             kb_exclude=_kb_exclude(raw.get("kb_exclude")),
-            participant=as_flag(raw.get("participant"), False),
+            participant=as_flag(raw.get("participant"), True),
             frequency=as_choice(raw.get("frequency"), ASSIST_FREQUENCIES, "more"),
         )
 

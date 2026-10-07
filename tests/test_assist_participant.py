@@ -959,8 +959,13 @@ def _wired(tmp_path, monkeypatch, cfg):
     return heavy, seen["state"]
 
 
-def test_participant_is_off_by_default_until_the_chat_window(tmp_path, monkeypatch):
+def test_participant_is_on_by_default_now_that_the_window_has_the_chat(tmp_path, monkeypatch):
     heavy, state = _wired(tmp_path, monkeypatch, Settings.from_raw({}))
+    assert state.participant is not None and state.qa is None and heavy.qa_kwargs is None
+
+
+def test_participant_off_brings_back_the_old_assistant(tmp_path, monkeypatch):
+    heavy, state = _wired(tmp_path, monkeypatch, Settings.from_raw({"assist": {"participant": False}}))
     assert state.participant is None and heavy.qa_kwargs is not None
 
 
@@ -1007,7 +1012,7 @@ def test_summary_lane_still_ticks_with_hints_off():
 
 def test_settings_have_participant_and_frequency():
     a = Settings.from_raw({}).assist
-    assert a.participant is False and a.frequency == "more"
+    assert a.participant is True and a.frequency == "more"
     assert Settings.from_raw({"assist": {"participant": True}}).assist.participant is True
     b = Settings.from_raw({"assist": {"participant": False, "frequency": "less"}}).assist
     assert b.participant is False and b.frequency == "less"
