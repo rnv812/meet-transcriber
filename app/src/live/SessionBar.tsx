@@ -1,6 +1,8 @@
 /**
  * Шапка сессии агента-участника: что с ним (слушает / думает / пишет /
- * ошибка), какая модель, что она видит, пометки (не видит картинок;
+ * ошибка), какая модель (у Claude Code — та, что запустил CLI, из
+ * `system/init`; не та, что в настройках, — предупреждение), что она видит,
+ * пометки (не видит картинок;
  * исключённые папки — только просьба), «Как часто писать» и поповер «Что я
  * знаю» со сводкой на сейчас (сводка по-прежнему ведётся в фоне — на ней
  * держатся итоги и название встречи).
@@ -36,8 +38,20 @@ export function seesText(agent: AgentInfo): string {
   return parts.join(", ") || "ничего";
 }
 
-export function agentNotes(agent: AgentInfo): { text: string; title?: string }[] {
-  const notes: { text: string; title?: string }[] = [];
+const MODEL_TITLE = "Claude Code запустил не ту модель, что указана в настройках («Модель Claude Code»). "
+  + "Проверьте переменные окружения ANTHROPIC_DEFAULT_*_MODEL, управляемые настройки Claude Code "
+  + "(model, availableModels) и ~/.claude/settings.json — или модель недоступна вашей подписке";
+
+/** «Запущена claude-fable-5-1, в настройках — opus»; модель та же или неизвестна — null. */
+export function modelWarning(agent: AgentInfo): string | null {
+  if (!agent.model_mismatch || !agent.model) return null;
+  return `Запущена ${agent.model}, в настройках — ${agent.model_configured || "другая модель"}`;
+}
+
+export function agentNotes(agent: AgentInfo): { text: string; title?: string; warn?: boolean }[] {
+  const notes: { text: string; title?: string; warn?: boolean }[] = [];
+  const warning = modelWarning(agent);
+  if (warning) notes.push({ text: warning, title: MODEL_TITLE, warn: true });
   if (!agent.vision) notes.push({ text: NO_VISION });
   if (!agent.deny_enforced) notes.push({ text: DENY_NOTE, title: DENY_TITLE });
   return notes;
@@ -92,6 +106,7 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const state = stateOf(agent, writing);
   const notes = agentNotes(agent);
+  const warning = modelWarning(agent);
   const sees = seesText(agent);
   const frequency = FREQUENCIES.includes(agent.frequency) ? agent.frequency : "чаще";
   return (
@@ -107,10 +122,15 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
       <span className="sr-only" role="status">
         {!quiet && agent.state === "error" ? `Ошибка ассистента${agent.error ? `: ${agent.error}` : ""}` : ""}
       </span>
-      <span className="session-bar__model" title={agent.provider}>{agent.label || agent.provider}</span>
+      <span className={`session-bar__model${warning ? " session-bar__model--warn" : ""}`}
+        title={warning ? `${warning}. ${MODEL_TITLE}` : agent.provider}>
+        {agent.label || agent.provider}
+        {compact && warning && <span className="sr-only"> ({warning})</span>}
+      </span>
       {!compact && <span className="session-bar__sees">видит: {sees}</span>}
       {!compact && notes.map((n) => (
-        <span key={n.text} className="session-bar__note" title={n.title ?? n.text}>{n.text}</span>
+        <span key={n.text} className={`session-bar__note${n.warn ? " session-bar__note--warn" : ""}`}
+          title={n.title ?? n.text}>{n.text}</span>
       ))}
       <span className="session-bar__end">
         {!compact && <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />}

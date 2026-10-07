@@ -67,6 +67,9 @@
   padding: 0 6px; border-radius: 8px; background: rgba(240, 191, 0, 0.12); color: var(--amber);
   font-size: 11px; line-height: 18px; white-space: nowrap;
 }
+/* Запущена не та модель, что в настройках: пометка заметнее прочих. */
+.session-bar__note--warn { background: rgba(240, 191, 0, 0.22); font-weight: 500; }
+.session-bar__model--warn { color: var(--amber); }
 .session-bar__end { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 .session-bar__know {
   display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px;

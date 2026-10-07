@@ -930,9 +930,16 @@ export type AgentInfo = {
   state: "listening" | "writing" | "error";
   error: string | null;
   provider: string;
+  /** «Claude Code (claude-opus-5-5)»: у Claude Code — модель, которую запустил CLI (`system/init`), до первого хода — заданная. */
   label: string;
   vision: boolean;
   tools: boolean;
+  /** Claude Code: модель, которую запустил CLI (`system/init`); null — ещё не известна (и у других провайдеров). */
+  model?: string | null;
+  /** Claude Code: модель из настроек (`llm.model`). */
+  model_configured?: string | null;
+  /** CLI запустил не ту модель, что в настройках. */
+  model_mismatch?: boolean;
   deny_enforced: boolean;
   frequency: AgentFrequencyLabel;
   session: "new" | "resumed" | "seeded" | null;

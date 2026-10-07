@@ -92,3 +92,23 @@ test("что видит: карта только из прошлых встре�
   expect(seesText(agentInfo({ sees: { conversation: true, kb: true, kb_docs: true, materials: 0, images: 0 } })))
     .toBe("разговор, структура базы знаний");
 });
+
+test("модель — та, что запустил Claude Code (system/init); не та, что в настройках, — предупреждение", () => {
+  const ran = agentInfo({ label: "Claude Code (claude-opus-5-5)", model: "claude-opus-5-5", model_configured: "opus",
+    model_mismatch: false });
+  const { rerender } = render(<SessionBar agent={ran} summary={summary} onFrequency={() => {}} />);
+  expect(bar()).toHaveTextContent("Claude Code (claude-opus-5-5)");
+  expect(bar()).not.toHaveTextContent("в настройках");
+  const wrong = agentInfo({ label: "Claude Code (claude-fable-5-1)", model: "claude-fable-5-1", model_configured: "opus",
+    model_mismatch: true });
+  rerender(<SessionBar agent={wrong} summary={summary} onFrequency={() => {}} />);
+  expect(bar()).toHaveTextContent("Claude Code (claude-fable-5-1)");
+  expect(bar()).toHaveTextContent("Запущена claude-fable-5-1, в настройках — opus");
+  expect(bar().querySelector(".session-bar__model--warn")).not.toBeNull();
+  // Компактная панель: пометок нет, но модель подсвечена и подсказка — текстом для экранного диктора.
+  rerender(<SessionBar agent={wrong} summary={summary} compact onFrequency={() => {}} />);
+  const model = bar().querySelector(".session-bar__model")!;
+  expect(model).toHaveClass("session-bar__model--warn");
+  expect(model).toHaveTextContent("Запущена claude-fable-5-1, в настройках — opus");
+  expect(model.getAttribute("title")).toContain("~/.claude/settings.json");
+});
