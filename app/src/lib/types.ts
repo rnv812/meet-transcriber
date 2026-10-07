@@ -844,7 +844,137 @@ export type LiveState = {
   prefs?: { quiet_default?: boolean; activity?: string };
   /** Ассистент включён посреди записи и догоняет уже записанное. */
   catchup?: LiveCatchup;
+  /** Агент-участник (`assist.participant`, 0.3.6): что с ним и что он видит. */
+  agent?: AgentInfo;
 };
+
+// --- чат агента-участника (V4) ------------------------------------------------
+
+/** Вид записи журнала чата (`assistant/chat.jsonl`). */
+export type ChatKind = "agent" | "user" | "attachment" | "meeting" | "system" | "tool";
+/**
+ * Статус сообщения агента: `writing` — пишется (пузырь «Пишет…»), `shown` — показано,
+ * `cancelled` — остановлено (текст остаётся), `failed` — ошибка (видна); `held`,
+ * `dropped`, `superseded` в ленту не попадают.
+ */
+export type ChatStatus = "writing" | "shown" | "held" | "dropped" | "superseded" | "dismissed" | "cancelled" | "failed";
+/** Реакции на сообщения агента: 👍 «норм», 👎 «не норм», ❓ «вопрос». */
+export type ChatReaction = "👍" | "👎" | "❓";
+
+/**
+ * Сообщение чата — свёрнутая запись журнала (`msg` + `patch`). Поля зависят от вида:
+ * у агента — `text`, `status`, `buttons`, `pin`, `reactions`, `re`; у пользователя —
+ * `text`, `attachments` (id вложений), `via: "button"` (нажатие), `after_meeting`;
+ * у вложения — `type`, `name`, `status`, `path`, `summary`; у события встречи — `event`.
+ */
+export type ChatMessage = {
+  id: string;
+  seq: number;
+  /** Стенное время записи (секунды Unix). */
+  at: number;
+  kind: ChatKind;
+  /** Секунды записи (во время встречи); после встречи нет. */
+  t?: number;
+  text?: string;
+  status?: ChatStatus | "parsing" | "ready";
+  mode?: "reply" | "proactive";
+  re?: string;
+  buttons?: string[];
+  pin?: boolean;
+  reactions?: Partial<Record<ChatReaction, number>>;
+  attachments?: string[];
+  via?: "button";
+  client_id?: string;
+  after_meeting?: boolean;
+  error?: string;
+  note?: string;
+  merged_into?: string;
+  event?: string;
+  type?: "image" | "doc" | "kb_note" | "past_meeting";
+  name?: string;
+  path?: string;
+  summary?: string;
+  vision?: boolean;
+  delivered?: boolean;
+  [key: string]: unknown;
+};
+
+/** Вложение — запись журнала `kind: "attachment"` (id `a<N>`). */
+export type ChatAttachment = ChatMessage & { kind: "attachment"; name: string; status: "parsing" | "ready" | "failed" };
+
+/** «Как часто писать»: ключ настроек (`assist.frequency`). */
+export type AgentFrequency = "less" | "normal" | "more";
+/** Та же настройка подписью — так её видит агент и `AgentInfo.frequency`. */
+export type AgentFrequencyLabel = "реже" | "обычно" | "чаще";
+
+/** `state.agent` и событие `agent`: что с агентом и что он видит. */
+export type AgentInfo = {
+  state: "listening" | "writing" | "error";
+  error: string | null;
+  provider: string;
+  label: string;
+  vision: boolean;
+  tools: boolean;
+  deny_enforced: boolean;
+  frequency: AgentFrequencyLabel;
+  session: "new" | "resumed" | "seeded" | null;
+  /** Id ответа, который пишется сейчас. */
+  writing: string | null;
+  sees: { conversation: boolean; kb: boolean; materials: number; images: number };
+};
+
+/** `event: chat_partial`: текст ответа на сейчас (≤ 10 раз в секунду). */
+export type ChatPartial = { id: string; text: string };
+
+/** `GET /live/chat` и `event: chat_snapshot`: лента целиком (последние 200). */
+export type ChatSnapshot = {
+  messages: ChatMessage[];
+  seq: number;
+  agent?: AgentInfo;
+  partial?: ChatPartial | null;
+};
+
+/** `event: chat`: новое сообщение или правка; `seq` не новее известного — отбросить. */
+export type ChatEvent =
+  | { seq: number; op: "add"; message: ChatMessage }
+  | { seq: number; op: "patch"; id: string; set: Partial<ChatMessage> };
+
+/** Ответ `POST /live/chat` (сразу, 202). `duplicate` — тот же `client_id` уже был. */
+export type ChatPostResult = { id: string; queued: boolean; attachments: string[]; duplicate?: boolean };
+
+/** Сообщение агенту: текст и/или id вложений; `client_id` — один на сообщение (повтор безопасен). */
+export type ChatPost = { text: string; client_id: string; attachments?: string[] };
+
+/** Ответ `/live/chat/paste` и `/live/chat/attach`: запись вложения (может быть `failed`). */
+export type ChatAttachResult = {
+  id: string;
+  status: "parsing" | "ready" | "failed";
+  attachment: ChatAttachment;
+  error?: string;
+};
+
+export type AgentFrequencyResult = { frequency: AgentFrequency; label: AgentFrequencyLabel; live: boolean };
+
+/** Прежний ассистент встречи до 0.3.6: подсказки и вопросы — только для чтения. */
+export type LegacyAssistant = { hints: LiveHint[]; qa: QaItem[] };
+
+/** `GET /recordings/{id}/chat`: чат записи после встречи. */
+export type RecordingChat = {
+  messages: ChatMessage[];
+  seq: number;
+  /** Встреча без чата (до 0.3.6): прежние подсказки и вопросы; иначе null. */
+  legacy: LegacyAssistant | null;
+  /** Идёт живой режим этой записи — писать через `/live/chat`. */
+  live: boolean;
+  /** Задача ответа («Продолжить разговор»), которая ждёт или идёт. */
+  job: Job | null;
+};
+
+/** Ответ `POST /recordings/{id}/chat`. */
+export type ContinueChatResult = { message: ChatMessage; job: Job | null; duplicate?: boolean };
+
+/** Событие резидента `chat.updated`: чат записи изменился — перечитать. */
+export type ChatUpdatedEvent = BusEvent & { kind: "chat.updated"; id: string; partial?: ChatPartial };
 
 /**
  * Догонялка ассистента, включённого посреди записи: распознаёт начало

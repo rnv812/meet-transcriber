@@ -10,6 +10,8 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
+  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
+  ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, RecordingChat,
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
@@ -17,6 +19,9 @@ import type {
 } from "./types";
 
 export type {
+  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, ChatAttachment, ChatAttachResult, ChatEvent, ChatKind,
+  ChatMessage, ChatPartial, ChatPost, ChatPostResult, ChatReaction, ChatSnapshot, ChatStatus, ChatUpdatedEvent,
+  ContinueChatResult, LegacyAssistant, RecordingChat,
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
   ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource, LlmOrigin, ModelChoice,
   TitleSuggestion, Category, RecordingCategory, Facets, Group, GroupInfo, GroupsInfo, GroupMembersResult, GroupWrite, LibraryFilter,
@@ -55,7 +60,10 @@ async function request(ep: Endpoint, path: string, init: RequestInit, contentTyp
   try {
     response = await fetch(`${ep.base}${path}`, {
       ...init,
-      headers: { ...auth(ep), ...(contentType ? { "Content-Type": contentType } : {}) },
+      headers: {
+        ...auth(ep), ...(contentType ? { "Content-Type": contentType } : {}),
+        ...(init.headers as Record<string, string> | undefined),
+      },
     });
   } catch (cause) {
     throw new NoResidentError(`служба записи не отвечает: ${String(cause)}`);
@@ -619,6 +627,66 @@ export const liveHint = (ep: Endpoint, id: string, action: "pin" | "unpin" | "di
 export const liveTask = (ep: Endpoint, task: string) =>
   json<{ ok: boolean }>(ep, "/live/task", body("POST", { task }));
 
+// --- чат агента-участника (V4) ---------------------------------------------------
+
+/** Новый `client_id` сообщения: один на сообщение, повтор с ним не дублирует его. */
+export function newChatClientId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c?.randomUUID) return c.randomUUID();
+  return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Лента чата идущей встречи (последние 200; `limit` — другое число). 409 — агента нет. */
+export const getChat = (ep: Endpoint, limit?: number) =>
+  json<ChatSnapshot>(ep, `/live/chat${limit === undefined ? "" : `?limit=${limit}`}`);
+/**
+ * Сообщение агенту. Ответ сразу (`queued` — агент сейчас занят ответом); повтор с тем же
+ * `client_id` (переподключение) вернёт то же сообщение с `duplicate: true`. Вложения —
+ * id из `pasteChatImage` / `attachChatFile`.
+ */
+export const postChat = (ep: Endpoint, msg: ChatPost) =>
+  json<ChatPostResult>(ep, "/live/chat", body("POST", {
+    text: msg.text, client_id: msg.client_id, ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
+  }));
+/** Ctrl+V: картинка байтами (до 10 МБ) → запись вложения (`status: "failed"` — не разобрана). */
+export async function pasteChatImage(ep: Endpoint, blob: Blob, name?: string): Promise<ChatAttachResult> {
+  const response = await request(ep, "/live/chat/paste", {
+    method: "POST", body: blob, headers: name ? { "X-File-Name": enc(name) } : {},
+  }, blob.type || "image/png");
+  return (await response.json()) as ChatAttachResult;
+}
+/** Файл или папка с диска (выбор файла, перетаскивание): полный путь; разбор — до ~1,5 мин. */
+export const attachChatFile = (ep: Endpoint, path: string) =>
+  json<ChatAttachResult>(ep, "/live/chat/attach", body("POST", { path }));
+/** Нажатие кнопки сообщения агента — сообщение с её надписью. */
+export const clickChat = (ep: Endpoint, id: string, label: string, clientId?: string) =>
+  json<{ ok: boolean; id: string }>(ep, `/live/chat/${enc(id)}/click`,
+    body("POST", { label, ...(clientId ? { client_id: clientId } : {}) }));
+/** Реакция на сообщение агента; `on` — поставить/снять, без него — переключить. */
+export const reactChat = (ep: Endpoint, id: string, emoji: ChatReaction, on?: boolean) =>
+  json<{ ok: boolean; changed: boolean }>(ep, `/live/chat/${enc(id)}/react`,
+    body("POST", { emoji, ...(on === undefined ? {} : { on }) }));
+/** «Стоп» у ответа, который пишется (`id` — его сообщение). `ok: false` — такого нет. */
+export const stopChat = (ep: Endpoint, id?: string) =>
+  json<{ ok: boolean }>(ep, "/live/chat/stop", body("POST", id ? { id } : {}));
+/** «Как часто писать»: сохраняется в настройках и сразу доходит до агента идущей встречи. */
+export const setAgentFrequency = (ep: Endpoint, frequency: AgentFrequency | AgentFrequencyLabel) =>
+  json<AgentFrequencyResult>(ep, "/agent/frequency", body("PUT", { frequency }));
+/** Чат записи после встречи; у встреч до 0.3.6 — `legacy` (прежние подсказки и вопросы). */
+export const getRecordingChat = (ep: Endpoint, id: string) =>
+  json<RecordingChat>(ep, `/recordings/${enc(id)}/chat`);
+/**
+ * «Продолжить разговор» после встречи: сообщение — сразу в чат записи, ответ — задачей
+ * (kind "chat"); ход — событиями `chat.updated` и `job.*`. 409 — идёт живой режим этой
+ * записи (писать через `postChat`) или модель не подключена.
+ */
+export const continueChat = (ep: Endpoint, id: string, msg: ChatPost & { provider?: string }) =>
+  json<ContinueChatResult>(ep, `/recordings/${enc(id)}/chat`, body("POST", {
+    text: msg.text, client_id: msg.client_id,
+    ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
+    ...(msg.provider ? { provider: msg.provider } : {}),
+  }));
+
 // --- URL для <audio>/<img> ---------------------------------------------------
 
 /**
@@ -657,6 +725,8 @@ const EVENT_KINDS = [
   "improve.updated",
   // Группы встреч изменились (список, порядок, членство): одно событие на действие.
   "groups.changed",
+  // Чат ассистента записи после встречи изменился: {"id", "partial"?} — перечитать.
+  "chat.updated",
 ];
 
 function parseEvent(raw: string): unknown {
@@ -718,6 +788,14 @@ export function openLiveEvents(
     onLine?: (l: LiveLine, id: number | null) => void;
     /** Подписи голосов задним числом и спрятанные дубли — состояние целиком. */
     onVoices?: (v: LiveVoices) => void;
+    /** Лента чата целиком: при подключении (и если поток отстал). */
+    onChatSnapshot?: (s: ChatSnapshot) => void;
+    /** Новое сообщение или правка; `seq` не новее последнего снимка — уже учтено. */
+    onChat?: (e: ChatEvent) => void;
+    /** Текст ответа агента, который ещё пишется. */
+    onChatPartial?: (p: ChatPartial) => void;
+    /** Что с агентом (то же, что `state.agent`). */
+    onAgent?: (a: AgentInfo) => void;
     onError?: (closed: boolean) => void;
   },
 ): { close: () => void } {
@@ -755,6 +833,30 @@ export function openLiveEvents(
     const hidden = Array.isArray(data.hidden) ? data.hidden.filter((i): i is number => typeof i === "number") : [];
     const session = typeof data.session === "string" ? data.session : undefined;
     handlers.onVoices?.({ rev: data.rev, speakers, hidden, ...(session ? { session } : {}) });
+  });
+  source.addEventListener("chat_snapshot", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as Partial<ChatSnapshot> | null;
+    if (data && Array.isArray(data.messages) && typeof data.seq === "number") {
+      handlers.onChatSnapshot?.(data as ChatSnapshot);
+    }
+  });
+  source.addEventListener("chat", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as Partial<ChatEvent> | null;
+    if (!data || typeof data.seq !== "number") return;
+    if (data.op === "add" && data.message && typeof data.message === "object") handlers.onChat?.(data as ChatEvent);
+    else if (data.op === "patch" && typeof data.id === "string" && data.set && typeof data.set === "object") {
+      handlers.onChat?.(data as ChatEvent);
+    }
+  });
+  source.addEventListener("chat_partial", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as Partial<ChatPartial> | null;
+    if (data && typeof data.id === "string" && typeof data.text === "string") {
+      handlers.onChatPartial?.({ id: data.id, text: data.text });
+    }
+  });
+  source.addEventListener("agent", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as AgentInfo | null;
+    if (data && typeof data === "object" && typeof data.state === "string") handlers.onAgent?.(data);
   });
   source.onerror = () => handlers.onError?.(source.readyState === EventSource.CLOSED);
   return { close: () => source.close() };
