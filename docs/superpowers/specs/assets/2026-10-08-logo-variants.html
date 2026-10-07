@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Meet — варианты знака</title>
+<style>
+  :root { --canvas:#0f0f0f; --ink:#f7f7f7; --ink2:#c4c4c4; --line:#2b2b2b; }
+  body { margin:0; background:var(--canvas); color:var(--ink); font:14px/1.5 "Onest","Segoe UI",system-ui,sans-serif; padding:32px; }
+  h2 { font-weight:500; font-size:20px; margin:0 0 4px; }
+  p { margin:0 0 16px; color:var(--ink2); max-width:720px; }
+  .row { display:grid; grid-template-columns: 260px 1fr; gap:32px; padding:28px 0; border-top:1px solid var(--line); }
+  .sizes { display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap; }
+  .sizes figure { margin:0; display:flex; flex-direction:column; align-items:center; gap:6px; font-size:12px; color:var(--ink2); }
+  .light { background:#fff; border-radius:12px; padding:12px; display:flex; gap:20px; align-items:flex-end; }
+  .pal { display:flex; gap:12px; margin-top:16px; }
+  .pal figure { margin:0; text-align:center; font-size:12px; color:var(--ink2); }
+  svg { display:block; }
+  .px16 { image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<h2>Знак Meet в Atlas Aurora: три варианта</h2>
+<p>Основа — нынешнее кольцо (те же пропорции: внешний радиус 65, внутренний 29 на плитке 256). Фон плитки — Chaos Black, заливка — фиолетовое сияние: мягкие пятна violet-signal / crest / ice на violet-mid, тень violet-abyss и зерно. Внизу каждого варианта — тот же знак в других палитрах (для окна: знак берёт палитру из настроек).</p>
+
+<div id="variants"></div>
+
+<script>
+const PAL = {
+  violet: { abyss:'oklch(20% 0.06 290)', deep:'oklch(34% 0.11 292)', mid:'oklch(46% 0.16 295)', signal:'oklch(75% 0.12 300)', crest:'oklch(81% 0.1 325)', ice:'oklch(93% 0.04 315)' },
+  green:  { abyss:'oklch(21% 0.05 168)', deep:'oklch(35% 0.08 162)', mid:'oklch(47% 0.11 158)', signal:'oklch(80% 0.14 155)', crest:'oklch(85% 0.12 135)', ice:'oklch(94% 0.06 130)' },
+  blue:   { abyss:'#011d33', deep:'#044660', mid:'#005c8e', signal:'#7cbaee', crest:'#72ccec', ice:'#c0f1ff' },
+  red:    { abyss:'oklch(21% 0.06 20)', deep:'oklch(35% 0.11 22)', mid:'oklch(48% 0.17 25)', signal:'oklch(73% 0.15 25)', crest:'oklch(80% 0.11 45)', ice:'oklch(93% 0.04 50)' },
+  amber:  { abyss:'oklch(22% 0.05 50)', deep:'oklch(36% 0.09 48)', mid:'oklch(47% 0.12 52)', signal:'oklch(82% 0.15 75)', crest:'oklch(88% 0.14 92)', ice:'oklch(96% 0.05 95)' },
+};
+const RING = 'M62.72 128a65.28 65.28 0 1 0 130.56 0a65.28 65.28 0 1 0 -130.56 0zM99.28 128a28.72 28.72 0 1 1 57.45 0a28.72 28.72 0 1 1 -57.45 0z';
+const DISC = 'M50 128a78 78 0 1 0 156 0a78 78 0 1 0 -156 0zM110 128a18 18 0 1 1 36 0a18 18 0 1 1 -36 0z';
+const PLATE = '<rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13"/>';
+let uid = 0;
+function defs(u){ return `<defs>
+  <filter id="soft${u}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18"/></filter>
+  <filter id="grain${u}" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/><feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.12 0"/></filter>
+  <clipPath id="cRing${u}"><path fill-rule="evenodd" clip-rule="evenodd" d="${RING}"/></clipPath>
+  <clipPath id="cDisc${u}"><path fill-rule="evenodd" clip-rule="evenodd" d="${DISC}"/></clipPath>
+  <clipPath id="cPlate${u}">${PLATE}</clipPath></defs>`; }
+function aur(u){ return `<rect x="0" y="0" width="256" height="256" style="fill:var(--a-mid)"/>
+  <g filter="url(#soft${u})">
+    <ellipse cx="70" cy="190" rx="70" ry="60" style="fill:var(--a-abyss)"/>
+    <ellipse cx="200" cy="200" rx="60" ry="50" style="fill:var(--a-deep)"/>
+    <ellipse cx="96" cy="78" rx="62" ry="44" style="fill:var(--a-signal)"/>
+    <ellipse cx="176" cy="96" rx="48" ry="40" style="fill:var(--a-crest)"/>
+    <ellipse cx="120" cy="58" rx="26" ry="16" style="fill:var(--a-ice)"/>
+  </g>
+  <rect x="0" y="0" width="256" height="256" filter="url(#grain${u})"/>`; }
+const PLATE_BLACK = '<rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13" fill="#0f0f0f"/><rect x="18.92" y="18.92" width="218.16" height="218.16" rx="44.13" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="2"/>';
+function vars(p){ return Object.entries(PAL[p]).map(([k,v])=>`--a-${k}:${v}`).join(';'); }
+function A(u){ return PLATE_BLACK + `<g clip-path="url(#cRing${u})">${aur(u)}</g>`; }
+function B(u){ return PLATE_BLACK + `<g clip-path="url(#cDisc${u})">${aur(u)}</g>`; }
+function C(u){ return `<g clip-path="url(#cPlate${u})">${aur(u)}</g><path fill-rule="evenodd" fill="#f7f7f7" d="${RING}"/>`; }
+function svg(fn, p, size){ const u='_'+(++uid); return `<svg width="${size}" height="${size}" viewBox="0 0 256 256" style="${vars(p)}">${defs(u)}${fn(u)}</svg>`; }
+const V = [
+  ['A', 'Кольцо сияния', 'Силуэт и пропорции нынешнего кольца без изменений; вместо сине-фиолетового градиента и свечения — сияние Atlas с зерном. Самый узнаваемый для текущих пользователей.', A],
+  ['B', 'Диск с сердцевиной', 'Кольцо утолщено до диска с маленькой чёрной сердцевиной — как значок в рейке и обложке макетов. Плотнее на 16 px, ближе к «сферам» сияния.', B],
+  ['C', 'Сияние на плитке', 'Плитка целиком — сцена сияния (как экран входа Atlas), кольцо — светлое. Самый яркий в панели задач, кольцо читается контуром.', C],
+];
+document.getElementById('variants').innerHTML = V.map(([id,name,desc,fn]) => `
+  <div class="row">
+    <div><h2>${id}. ${name}</h2><p>${desc}</p></div>
+    <div>
+      <div class="sizes">
+        ${[256,64,32,16].map(s=>`<figure>${svg(fn,'violet',s)}<span>${s}</span></figure>`).join('')}
+        <div class="light">${[64,32,16].map(s=>svg(fn,'violet',s)).join('')}</div>
+      </div>
+      <div class="pal">${['violet','green','blue','red','amber'].map(p=>`<figure>${svg(fn,p,72)}<span>${p}</span></figure>`).join('')}</div>
+    </div>
+  </div>`).join('');
+</script>
+</body>
+</html>
