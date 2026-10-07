@@ -15,7 +15,7 @@ import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/she
 import { keepTranscript } from "../../lib/sameTranscript";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, statusOf } from "../../lib/status";
-import type { Category, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
+import type { Category, ChatUpdatedEvent, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
@@ -82,11 +82,14 @@ const SPEAKERS_PANE = { def: 440, min: 320, max: 760, reserve: (room: number) =>
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
+  chatEvent = null,
   onOpenSettings, find, refreshKey = 0, categories,
 }: {
   id: string;
   endpoint: Endpoint;
   jobs?: Job[];
+  /** Последнее событие `chat.updated` этой записи (вкладка «Ассистент»). */
+  chatEvent?: ChatUpdatedEvent | null;
   snapshot?: Snapshot | null;
   people?: PersonColor[];
   avatarVersion?: Record<string, number>;
@@ -534,7 +537,7 @@ export function RecordingCard({
   const body = (
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
       agentContext={`${rec.transcript_phase ?? "final"}:${rec.transcript_at ?? ""}`}
-      showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk}
+      showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk} chatEvent={chatEvent}
       onAskAgent={askAgent} onAgentTaken={agentTaken} />
   );
 

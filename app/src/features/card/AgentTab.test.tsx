@@ -769,7 +769,7 @@ test("прошлые вопросы видны и без агента", async ()
 
 // --- этапы карточки: агент переживает «живой режим → расшифровка → готово» -----------
 
-test("этапы: «Живой режим · Агент» → «Расшифровка · Агент» → «Расшифровка · Итоги · Агент», сеанс не гаснет", async () => {
+test("этапы: «Живой режим · Агент» → «Расшифровка · Агент» → «Расшифровка · Итоги · Ассистент · Агент», сеанс не гаснет", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue(assistant());
   const props = { endpoint: ep, id: "r1", folder: "C:/r1", jobs: [] };
   const view = render(<CardTabs {...props} stage="live" transcript={<p>лента</p>} />);
@@ -781,7 +781,7 @@ test("этапы: «Живой режим · Агент» → «Расшифро
   view.rerender(<CardTabs {...props} stage="pending" transcript={<p>расшифровка идёт</p>} />);
   expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Агент"]);
   view.rerender(<CardTabs {...props} stage="ready" transcript={<p>текст</p>} />);
-  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Агент"]);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Ассистент", "Агент"]);
   expect(screen.getByRole("tab", { name: "Агент" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText("Работает")).toBeInTheDocument();
   expect(h.FakeTerminal.all).toHaveLength(1);

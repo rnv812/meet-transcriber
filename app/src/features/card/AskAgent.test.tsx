@@ -67,9 +67,9 @@ const rows = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>(".turn")];
 const unsent = () => screen.findByRole("status", { name: "Ссылка не вставлена" });
 const agentTab = () => screen.getByRole("tab", { name: "Агент" });
 
-test("вкладки готовой записи: «Расшифровка · Итоги · Агент» — «Вопросов» больше нет", async () => {
+test("вкладки готовой записи: «Расшифровка · Итоги · Ассистент · Агент» — «Вопросов» больше нет", async () => {
   await card();
-  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Агент"]);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Ассистент", "Агент"]);
   vi.mocked(api.getQa).mockResolvedValue({ items: [{ q: "Кто готовит отчёт?", a: "Олег.", at: 1, provider: null }] });
   await userEvent.click(agentTab());
   expect(await screen.findByRole("group", { name: "Прошлые вопросы" })).toHaveTextContent("Кто готовит отчёт?");

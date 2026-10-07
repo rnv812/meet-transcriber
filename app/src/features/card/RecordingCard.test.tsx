@@ -513,13 +513,13 @@ test("импорт без duration_s: длительность по концу �
   expect(container.querySelector(".card__meta")).toHaveTextContent("2 мин");
 });
 
-test("готовая запись: вкладки «Расшифровка · Итоги · Агент», расшифровка по умолчанию", async () => {
+test("готовая запись: вкладки «Расшифровка · Итоги · Ассистент · Агент», расшифровка по умолчанию", async () => {
   load();
   const onOpenSettings = vi.fn();
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
   await screen.findByText("Привет всем");
   const tabs = screen.getAllByRole("tab");
-  expect(tabs.map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Агент"]);
+  expect(tabs.map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Ассистент", "Агент"]);
   expect(tabs[0]).toHaveAttribute("aria-selected", "true");
   await userEvent.click(tabs[1]!);
   expect(await screen.findByText("Итогов пока нет")).toBeVisible();

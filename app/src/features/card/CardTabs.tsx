@@ -1,8 +1,10 @@
 /**
- * Вкладки записи: у готовой — «Расшифровка · Итоги · Агент»; пока идёт запись
- * с ассистентом — «Живой режим · Агент»; пока запись ждёт расшифровки или
- * расшифровывается — «Расшифровка · Агент» (на первой — ход работы); запись без
- * ассистента — «Запись · Агент».
+ * Вкладки записи: у готовой — «Расшифровка · Итоги · Ассистент · Агент»; пока
+ * идёт запись с ассистентом — «Живой режим · Агент» (чат — в живом режиме);
+ * пока запись ждёт расшифровки или расшифровывается — «Расшифровка · Агент» (на
+ * первой — ход работы); запись без ассистента — «Запись · Агент». «Ассистент» —
+ * чат с агентом-участником после встречи (`AssistantTab`); у текста без
+ * спикеров — «Расшифровка · Ассистент · Агент».
  *
  * Вкладка монтируется при первом открытии и дальше живёт скрытой: прокрутка
  * не теряется при переключении, а итоги не запрашиваются у тех, кто их не
@@ -18,15 +20,16 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AgentRequest } from "../../lib/agentRef";
 import type { Endpoint } from "../../lib/api";
-import type { Job } from "../../lib/types";
+import type { ChatUpdatedEvent, Job } from "../../lib/types";
 import { AgentTab, type AgentInsert } from "./AgentTab";
+import { AssistantTab } from "./AssistantTab";
 import { useAgentLive } from "./agentSessions";
 import { useAssistant } from "./assistant";
 import { SummaryTab } from "./SummaryTab";
 import { TranscriptShown } from "./transcriptShown";
 import "./assistant.css";
 
-type Tab = "transcript" | "summary" | "agent";
+type Tab = "transcript" | "summary" | "assistant" | "agent";
 /**
  * Этап записи: готова, идёт запись с ассистентом, идёт запись без него, ждёт
  * расшифровки или расшифровывается; `text` — текст расшифровки уже есть, а
@@ -41,6 +44,7 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
   ready: [
     { id: "transcript", label: "Расшифровка" },
     { id: "summary", label: "Итоги" },
+    { id: "assistant", label: "Ассистент" },
     { id: "agent", label: "Агент" },
   ],
   live: [
@@ -57,13 +61,14 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
   ],
   text: [
     { id: "transcript", label: "Расшифровка" },
+    { id: "assistant", label: "Ассистент" },
     { id: "agent", label: "Агент" },
   ],
 };
 
 export function CardTabs({
   endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript, stage = "ready", agentRequest = null,
-  onAskAgent, onAgentTaken, agentContext,
+  onAskAgent, onAgentTaken, agentContext, chatEvent = null,
 }: {
   endpoint: Endpoint;
   id: string;
@@ -83,6 +88,8 @@ export function CardTabs({
   onAgentTaken?: () => void;
   /** Версия расшифровки для агента (фаза и время записи): сменилась — агент перечитывает, что получит. */
   agentContext?: string;
+  /** Последнее `chat.updated` этой записи (вкладка «Ассистент»). */
+  chatEvent?: ChatUpdatedEvent | null;
 }) {
   const tabs = TABS[stage];
   const [chosen, setTab] = useState<Tab>("transcript");
@@ -161,6 +168,10 @@ export function CardTabs({
   const panels: Record<Tab, () => ReactNode> = {
     transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
     summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent} />,
+    assistant: () => (
+      <AssistantTab endpoint={endpoint} id={id} folder={folder} jobs={jobs} event={chatEvent} assistant={assistant}
+        onOpenSettings={onOpenSettings} />
+    ),
     agent: () => (
       <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} endpoint={endpoint} insert={agentRequest}
         onTaken={onAgentTaken} contextVersion={agentContext} textPhase={stage === "text"} />

@@ -8,6 +8,7 @@ import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
+import type { ChatUpdatedEvent } from "../lib/types";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
 import { effectiveQuery, refreshDates, withGroupScope, type Chip } from "../lib/libraryQuery";
 import { searchable } from "../lib/search";
@@ -119,6 +120,10 @@ export function App() {
     setSettingsPart((cur) => ({ part, n: (cur?.n ?? 0) + 1 }));
     setSection("settings");
   };
+
+  // Чат ассистента открытой записи изменился (после встречи) — вкладке «Ассистент».
+  const chatEvent = resident.lastEvent?.kind === "chat.updated" && (resident.lastEvent as ChatUpdatedEvent).id === selected
+    ? resident.lastEvent as ChatUpdatedEvent : null;
 
   // Открытая запись изменилась в фоне (обрезка, выгрузка в базу знаний) — карточка перечитывается.
   const changed = resident.lastEvent?.kind === "recording.updated" ? resident.lastEvent : null;
@@ -254,6 +259,7 @@ export function App() {
                 id={selected}
                 endpoint={resident.endpoint}
                 jobs={library.jobs}
+                chatEvent={chatEvent}
                 snapshot={resident.snapshot ?? null}
                 people={people}
                 avatarVersion={avatarVersion}
