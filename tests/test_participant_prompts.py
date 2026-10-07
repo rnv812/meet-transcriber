@@ -220,8 +220,12 @@ def test_dislike_rule_is_about_the_point_not_about_frequency():
     # 👎 не про частоту и не про длину: частоту задаёт только «Как часто писать»
     assert "реже" not in rule and "короче" not in rule
     assert "Как часто писать и длину сообщений 👎 не меняет" in rule
+    assert "можно один раз коротко показать" not in rule      # «Учту» уже показало окно
+    assert "смести фокус на то, что сейчас обсуждают" in rule
     example = s.split("Пример 5", 1)[1].split("Пример 6", 1)[0]
-    assert "👎" in example and "частота та же" in example and '{"silent": true}' in example
+    # мимо темы (бюджет, когда обсуждают сроки), а не «вода»; молча перестроиться — не тише, а о другом
+    assert "👎 «Не по теме» — на твоё m16 «Бюджет на стенд" in example and "частота та же" in example
+    assert "встреча о сроках, а ты написал про бюджет" in example and '{"silent": true}' in example
     assert "👍 «Полезно» — так держать" in s and "❓ «Поясни» — поясни именно это сообщение" in s
 
 
@@ -576,3 +580,13 @@ def test_speaker_cannot_impersonate_owner():
     assert "[00:02] Олег: и это" in lines
     assert f"[00:03] {OWNER_LABEL}: а это владелец" in lines
     assert text.count(OWNER_LABEL) == 1
+
+
+def test_explains_marks_a_say_as_an_explanation():
+    s = build_system()
+    answer = s.split("# Ответ", 1)[1].split("# Стиль", 1)[0]
+    assert '"explains"' in answer and "на каждый ❓ свой say" in answer and "ответ пользователю — свой say без" in answer
+    actions = parse_reply('{"say": "Сроки: 14.11."}\n{"say": "Опирался на [18:20].", "explains": "m15"}\n'
+                          '{"say": "Ещё.", "explains": "мусор"}')
+    assert [a.explains for a in actions] == ["", "m15", ""]
+    assert "explains" not in actions[1].journal_fields()      # связь решает Meet, не модель

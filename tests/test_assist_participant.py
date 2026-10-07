@@ -18,6 +18,7 @@ from meet.assist.chatlog import ChatLog, visible_in_feed
 from meet.assist.kb_prep import KnowledgeBase
 from meet.assist.participant import (
     NOTE_INTERRUPTED,
+    NOTHING_TO_ADD,
     NOTE_STOPPED,
     TOOLS_SPENT,
     Participant,
@@ -561,6 +562,97 @@ def test_silence_on_explain_leaves_a_line_so_the_window_stops_waiting(tmp_path):
     mid = run(main())
     lines = [m for m in h.chat.messages() if m["kind"] == "system"]
     assert lines and lines[-1]["re"] == mid
+
+
+def _lines(*objs):
+    return AgentReply(text="\n".join(json.dumps(o, ensure_ascii=False) for o in objs))
+
+
+def _mixed(tmp_path, reply, *, extra_q=None):
+    """Ход, в котором и ❓ к m1, и вопрос пользователя (и, может быть, ❓ к m2)."""
+    h = _make(tmp_path, script=[say("Риск: интеграция без владельца."), reply])
+
+    async def main():
+        publish(h, 5, "Олег", "интеграцию возьмёт кто-нибудь")
+        h.clock.t = 10
+        await h.p.tick()
+        first = agents(h)[0]["id"]
+        await h.p.react(first, "❓")
+        if extra_q:
+            await extra_q(h)
+        posted = await h.p.post_user_message("а что со сроками?")
+        assert await h.p.tick()
+        await h.p.shutdown()
+        return first, posted["id"]
+
+    first, asked = run(main())
+    return h, first, asked
+
+
+def _system(h):
+    return [(m["text"], m.get("re")) for m in h.chat.messages() if m["kind"] == "system"]
+
+
+def test_explain_with_a_user_message_silent_closes_both(tmp_path):
+    h, first, asked = _mixed(tmp_path, SILENT)
+    assert len(h.made[0].sent) == 2                               # ❓ и вопрос — один ход
+    assert (NOTHING_TO_ADD, asked) in _system(h) and (NOTHING_TO_ADD, first) in _system(h)
+    assert not [m for m in agents(h) if m.get("explains")]
+
+
+def test_answer_to_the_user_is_not_tagged_as_an_explanation(tmp_path):
+    h, first, asked = _mixed(tmp_path, say("Сроки: этап 2 — до 14.11."))
+    reply = agents(h)[-1]
+    assert reply["re"] == asked and not reply.get("explains")    # ответ на вопрос — без метки
+    assert (NOTHING_TO_ADD, first) in _system(h)                 # ❓ не пояснён — строка, не «поясняет…» навсегда
+    assert pp.H_REACTIONS in h.made[0].sent[1][0] and "что со сроками" in h.made[0].sent[1][0]
+
+
+def test_separate_says_link_only_the_explanation(tmp_path):
+    h, first, asked = _mixed(tmp_path, _lines(
+        {"say": "Сроки: этап 2 — до 14.11."},
+        {"say": "Олег в [00:05] не назвал владельца.", "explains": "m1"}))
+    answer, explanation = agents(h)[-2:]
+    assert answer["re"] == asked and not answer.get("explains")
+    assert explanation["explains"] == first == "m1"
+    assert (NOTHING_TO_ADD, first) not in _system(h)
+
+
+def test_several_explains_in_one_turn_each_is_linked_or_closed(tmp_path):
+    script = [say("Риск: интеграция без владельца."), say("Сроки сдвинутся."),
+              _lines({"say": "Про сроки: Олег сказал «к пятнадцатому».", "explains": "m2"})]
+    h = _make(tmp_path, script=script)
+
+    async def main():
+        publish(h, 5, "Олег", "интеграцию возьмёт кто-нибудь")
+        h.clock.t = 10
+        await h.p.tick()
+        publish(h, 30, "Олег", "к пятнадцатому", at=30)
+        h.clock.t = 60
+        await h.p.tick()
+        a, b = (m["id"] for m in agents(h)[:2])
+        await h.p.react(a, "❓")
+        await h.p.react(b, "❓")
+        await h.p.react(b, "❓", False)          # сняли второй — первый остаётся
+        await h.p.react(b, "❓")
+        assert await h.p.tick()
+        await h.p.shutdown()
+        return a, b
+
+    a, b = run(main())
+    assert (a, b) == ("m1", "m2")
+    assert agents(h)[-1]["explains"] == "m2"
+    assert (NOTHING_TO_ADD, "m1") in _system(h) and (NOTHING_TO_ADD, "m2") not in _system(h)
+
+
+def test_explain_targets_keep_earlier_explains_when_a_later_one_is_unset():
+    from meet.assist.participant import _Inputs, _explain_targets
+
+    inputs = _Inputs(reactions=[{"re": "m1", "emoji": "❓", "on": True}, {"re": "m3", "emoji": "❓", "on": True},
+                                {"re": "m3", "emoji": "❓", "on": False}])
+    assert _explain_targets(inputs) == [("m1", None)]
+    inputs.user = [{"id": "m9", "via": "reaction", "re": "m5"}]
+    assert _explain_targets(inputs) == [("m1", None), ("m5", "m9")]
 
 
 def test_dislike_never_changes_the_frequency(tmp_path):

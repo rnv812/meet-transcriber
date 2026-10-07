@@ -49,8 +49,15 @@
 он сам решает по правилам промпта (👎 — сообщение мимо темы; частоту и длину
 ответов это не меняет — частоту задаёт только «Как часто писать»). Ответ на
 ❓ (во время встречи — реакция, после встречи — запись `via: "reaction"`)
-несёт `explains` = id поясняемой реплики; промолчал — строка «нечего
-добавить» с `re` на неё, чтобы окно не ждало пояснения вечно.
+несёт `explains` = id поясняемой реплики. Правило связи (`_explain_targets`):
+- в ходе один ❓ и больше ничего от пользователя — пояснение весь ответ:
+  `explains` у реплики с начала хода (первый `say`);
+- ❓ вместе с сообщением пользователя (или несколько ❓) — агента просят
+  отвечать отдельными `say`, у пояснения — `"explains": "m…"`; пояснением
+  считается только такой `say` (ответ на вопрос пользователя метку не получает);
+- ❓, который ход так и не пояснил (молчание, ответ только на вопрос), —
+  строка «нечего добавить» с `re` на него (после встречи — на просьбу
+  `via: "reaction"`), «Стоп» — «Пояснение остановлено»: окно не ждёт вечно.
 
 Журнал и вызовы модели — блокирующие: журнал пишется в одном своём потоке
 (он же держит порядок записей), разбор вложений и запросы к базе — в
@@ -109,6 +116,8 @@ EXPLAIN_REQUEST = ("❓ к твоему сообщению: поясни его 
 TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
 SHUTDOWN_ERROR = "ассистент остановлен"
 NOTHING_TO_ADD = "Ассистенту нечего добавить"
+# ❓ остался без пояснения: человек остановил ответ.
+EXPLAIN_STOPPED = "Пояснение остановлено"
 _ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
 
 
@@ -279,7 +288,11 @@ class _Turn:
     inputs: _Inputs
     addressed: bool                    # ход отвечает пользователю (и цепочка запросов к Meet)
     re: str | None = None              # на какое сообщение пользователя
-    explains: str | None = None        # какую свою реплику поясняет (❓)
+    # ❓ хода: (поясняемая реплика, просьба `via: "reaction"` после встречи или None).
+    explains: list = field(default_factory=list)
+    implicit: bool = False             # один ❓ и больше ничего: пояснение — весь ответ
+    explained: set = field(default_factory=set)
+    silent_noted: bool = False         # «нечего добавить» к `re` уже записано
     reply_id: str | None = None
     raw: list = field(default_factory=list)
     shown: str = ""
@@ -384,8 +397,8 @@ class Participant:
         self._notes: list[str] = []
         self._frequency_note: str | None = None
         self._tool_rounds = 0
-        # Цепочка запросов: (addressed, re, explains).
-        self._chain: tuple[bool, str | None, str | None] | None = None
+        # Цепочка запросов: (addressed, re, explains, implicit) — продолжение того же хода.
+        self._chain: tuple | None = None
         self._quiet_until = 0.0        # лимит запросов подряд исчерпан: пауза
         self._failures = 0
         self._retry_at = 0.0
@@ -813,11 +826,12 @@ class Participant:
             return None
         addressed = bool(inputs.user or inputs.reactions)
         re_id = inputs.user[-1]["id"] if inputs.user else None
-        explains = _explains(inputs)
+        explains = _explain_targets(inputs)
+        implicit = _implicit_explain(inputs, explains)
         if not addressed and inputs.tools and self._chain is not None:
             # ответ Meet — продолжение ответа пользователю
-            addressed, re_id, explains = self._chain
-        turn = _Turn(inputs=inputs, addressed=addressed, re=re_id, explains=explains)
+            addressed, re_id, explains, implicit = self._chain
+        turn = _Turn(inputs=inputs, addressed=addressed, re=re_id, explains=explains, implicit=implicit)
         self._turn = turn
         self._last_turn_at = now
         turn.task = asyncio.ensure_future(self._run_turn(turn))
@@ -888,8 +902,8 @@ class Participant:
         fields = {"mode": "reply" if turn.addressed else "proactive"}
         if turn.re:
             fields["re"] = turn.re
-        if turn.explains:
-            fields["explains"] = turn.explains
+        if turn.implicit:
+            fields["explains"] = turn.explains[0][0]
         t = self._now_t()
         if t is not None:
             fields["t"] = t
@@ -1045,11 +1059,15 @@ class Participant:
         elif turn.stop == "stop":
             status, note = "cancelled", "остановлено пользователем"
             self._requeue_after_stop(turn.inputs)
+            if turn.implicit:      # остановленная реплика с `explains` сама закрывает ожидание
+                turn.explained.add(turn.explains[0][0])
         else:
             status, note = "cancelled", "ход прерван"
             self._requeue(turn.inputs)
         self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
                                         status=status, text=shown, note=note)])
+        if turn.stop == "stop":
+            await self._close_explains(turn, EXPLAIN_STOPPED)
         self._set_state(LISTENING)
 
     def _requeue_after_stop(self, inputs: _Inputs) -> None:
@@ -1095,17 +1113,38 @@ class Participant:
             if note:
                 fields["note"] = note
             self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, **fields)])
-            if not requests and turn.addressed and (turn.re or turn.explains):
-                # Пользователь спросил (или ❓), а агент промолчал: без строки в
-                # ленте вопрос остался бы без ответа (ревью I2, решение (a)).
-                await self.note_nothing_to_add(turn.re or turn.explains)
+            if not requests and turn.addressed and turn.re:
+                # Пользователь спросил, а агент промолчал: без строки в ленте
+                # вопрос остался бы без ответа (ревью I2, решение (a)).
+                await self.note_nothing_to_add(turn.re)
+                turn.silent_noted = True
         else:
             await self._show(turn, says)
         if requests:
-            self._chain = (turn.addressed, turn.re, turn.explains)
+            self._chain = (turn.addressed, turn.re, turn.explains, turn.implicit)
             await self._run_tools(requests)
         else:
             self._chain = None
+            # ❓, которые ход так и не пояснил, — строкой, чтобы окно не ждало.
+            await self._close_explains(turn, NOTHING_TO_ADD)
+
+    async def _close_explains(self, turn: _Turn, text: str) -> None:
+        """Строка `system` на каждый непоясненный ❓ хода: `re` — поясняемая
+        реплика (после встречи — просьба `via: "reaction"`). Строка «нечего
+        добавить» к той же просьбе (`turn.re`) уже есть — второй не пишем."""
+        for target, request in turn.explains:
+            if target in turn.explained:
+                continue
+            re_id = request or target
+            if request is not None and request == turn.re and text == NOTHING_TO_ADD and turn.silent_noted:
+                continue
+            try:
+                added = await self._io(self._chatlog.append, "system", text=text, re=re_id)
+            except (OSError, RuntimeError) as e:
+                self._log(f"агент: строка о пояснении не записана ({type(e).__name__}: {e})")
+                continue
+            self._emit_chat([added.event])
+            turn.explained.add(target)
 
     async def _mark_dropped(self, turn: _Turn, reply: AgentReply) -> None:
         """Картинки, которые провайдер не отправил модели (негодный файл, не
@@ -1130,9 +1169,17 @@ class Participant:
         now = self._clock()
         target = None if turn.addressed else self._last_shown
         first = True
-        for action in says:
+        tags = _explain_tags(turn, says)
+        for action, tag in zip(says, tags):
             fields = action.journal_fields()
-            if target is not None and now - target[1] < self._merge_window:
+            if tag:
+                fields["explains"] = tag
+                turn.explained.add(tag)
+            elif first and turn.implicit:
+                fields["explains"] = None      # с начала хода стояло — пояснение в другом say
+            # Пояснение — всегда своим сообщением: не склеивается ни с ответом, ни с другим пояснением.
+            same = target is not None and (self._shown.get(target[0]) or {}).get("explains") == (tag or None)
+            if target is not None and same and now - target[1] < self._merge_window:
                 await self._merge(target[0], fields)
                 if first:
                     self._emit_chat([await self._io(
@@ -1630,17 +1677,49 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
 
 # --- помощники ---
 
-def _explains(inputs: _Inputs) -> str | None:
-    """Какую реплику агента просят пояснить в этом ходе: последняя ❓
-    (поставленная, не снятая) или просьба после встречи (`via: "reaction"`)."""
-    found = None
+def _explain_targets(inputs: _Inputs) -> list[tuple[str, str | None]]:
+    """Какие реплики агента просят пояснить в этом ходе, по порядку: ❓,
+    поставленные и не снятые следом (снятая уходит, остальные остаются), и
+    просьбы после встречи (`via: "reaction"`) — `(реплика, id просьбы)`."""
+    out: list[tuple[str, str | None]] = []
     for r in inputs.reactions:
-        if r.get("emoji") == "❓" and isinstance(r.get("re"), str):
-            found = r["re"] if r.get("on") is not False else (None if found == r["re"] else found)
+        mid = r.get("re")
+        if r.get("emoji") != "❓" or not isinstance(mid, str):
+            continue
+        out = [x for x in out if x[0] != mid]
+        if r.get("on") is not False:
+            out.append((mid, None))
     for m in inputs.user:
-        if m.get("via") == "reaction" and isinstance(m.get("re"), str):
-            found = m["re"]
-    return found
+        mid = m.get("re")
+        if m.get("via") == "reaction" and isinstance(mid, str):
+            out = [x for x in out if x[0] != mid]
+            out.append((mid, m.get("id") if isinstance(m.get("id"), str) else None))
+    return out
+
+
+def _implicit_explain(inputs: _Inputs, targets: list) -> bool:
+    """Один ❓ и больше ничего от пользователя (ни сообщения, ни кнопки):
+    пояснение — весь ответ, метка `explains` не нужна."""
+    return len(targets) == 1 and not any(m.get("via") != "reaction" for m in inputs.user)
+
+
+def _explain_tags(turn: _Turn, says) -> list[str | None]:
+    """Какой `say` что поясняет: `"explains"` агента, если это ❓ этого хода
+    (каждый ❓ — один раз); без меток при одном ❓ и ничего больше — первый
+    `say`. Ответ на сообщение пользователя без метки пояснением не считается."""
+    targets = [t for t, _r in turn.explains]
+    tags: list[str | None] = []
+    used: set[str] = set()
+    for action in says:
+        want = getattr(action, "explains", "") or ""
+        if want in targets and want not in used:
+            used.add(want)
+            tags.append(want)
+        else:
+            tags.append(None)
+    if not used and turn.implicit and tags:
+        tags[0] = targets[0]
+    return tags
 
 
 def answered(messages, mid: str) -> bool:
