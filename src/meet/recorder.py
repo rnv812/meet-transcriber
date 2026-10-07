@@ -57,6 +57,35 @@ TAP_STABLE_S = 30.0
 PREFLIGHT_S = 15.0
 
 
+def new_folder(out_root: Path, now: "datetime | None" = None) -> Path:
+    """Новая папка записи `ГГГГ-ММ-ДД_ЧЧ-ММ`, занята (вторая запись в ту же
+    минуту, остаток удалённой) — `_2`, `_3`… Создаётся атомарно (`mkdir` без
+    `exist_ok`): чужую папку запись не переиспользует никогда — иначе новая
+    запись смешалась бы с остатком записи, остановленной без сохранения, и
+    уборка удалила бы её вместе с ним."""
+    out_root = Path(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M")
+    n = 1
+    while True:
+        folder = out_root / (stamp if n == 1 else f"{stamp}_{n}")
+        try:
+            folder.mkdir()
+            return folder
+        except FileExistsError:
+            n += 1
+
+
+def free_folder_name(out_root: Path, now: "datetime | None" = None) -> Path:
+    """Свободное имя папки записи (не создавая её): как `new_folder`."""
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M")
+    folder, n = Path(out_root) / stamp, 2
+    while os.path.lexists(folder):
+        folder = Path(out_root) / f"{stamp}_{n}"
+        n += 1
+    return folder
+
+
 def _pid_alive(pid: int) -> bool:
     """Жив ли процесс. IMPORTANT: os.kill(pid, 0) на Windows НЕ проверка —
     это безусловный TerminateProcess (убьёт запись); см. `plat.pid_alive`."""
@@ -1159,9 +1188,15 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
             mic_device = recording.mic_device
         if output_device is _FROM_SETTINGS:
             output_device = recording.output_device
-    out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    lock = _acquire_lock(Path(out_root), out_dir)
+    out_dir = new_folder(Path(out_root))
+    try:
+        lock = _acquire_lock(Path(out_root), out_dir)
+    except BaseException:
+        try:
+            out_dir.rmdir()  # только что создана и пуста — не оставлять
+        except OSError:
+            pass
+        raise
 
     session = _Session(out_dir, bus, mic_device=mic_device,
                        output_device=output_device, pcm_tap=pcm_tap)

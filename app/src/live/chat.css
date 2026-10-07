@@ -68,7 +68,7 @@
   padding: 0 7px; border: 1px solid var(--line-2); border-radius: 9px; color: var(--text-2);
   font-size: 11px; line-height: 16px; white-space: nowrap;
 }
-.session-bar__profile--neutral { border-color: rgba(94, 106, 210, 0.45); color: var(--accent-hover); }
+.session-bar__profile--personal { border-color: rgba(94, 106, 210, 0.45); color: var(--accent-hover); }
 .session-bar__note {
   padding: 0 6px; border-radius: 8px; background: rgba(240, 191, 0, 0.12); color: var(--amber);
   font-size: 11px; line-height: 18px; white-space: nowrap;
@@ -213,6 +213,7 @@
 .chat-att__note { color: var(--text-3); font-size: 10.5px; }
 
 .chat-sys { align-self: center; max-width: 90%; color: var(--text-3); font-size: 11.5px; text-align: center; }
+.chat-sys--gate { font-style: italic; }
 .chat-divider { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 11px; }
 .chat-divider::before, .chat-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 
@@ -305,3 +306,14 @@
   color: var(--accent-hover); font: inherit; font-size: 11.5px; cursor: pointer; text-decoration: underline;
 }
 .chat__more:hover { color: var(--text); }
+.chat-cards { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.chat-sys--card { align-self: stretch; max-width: none; text-align: left; font-size: inherit; color: inherit; }
+.chat-card { border: 1px solid var(--accent); border-radius: var(--r-md); padding: 6px 10px; background: var(--surface); }
+.chat-card:not(.chat-card--open) { border-color: var(--line); }
+.chat-card__title { font-size: 13px; }
+.chat-card__args { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 50vh; overflow: auto; unicode-bidi: plaintext; text-align: left; }
+.chat-card__more { font-size: 12px; background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; }
+.chat-card__actions { display: flex; gap: 6px; margin-top: 4px; }
+.chat-card__done { font-size: 12px; margin-top: 2px; }
+.chat-card__warn { color: var(--err); font-weight: 600; font-size: 12px; margin: 2px 0; }
+.session-bar__grant { display: inline-flex; align-items: center; gap: 2px; }

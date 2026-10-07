@@ -54,6 +54,72 @@ export const COPIED_MS = 1500;
 /** Сколько подсвечено сообщение, к которому перешли по «к сообщению …». */
 const FLASH_MS = 1600;
 
+/** Подсказка у строки «Ассистент хотел … — запрос заблокирован». */
+export const GATE_TITLE = "Ассистент действует вне этой встречи только с вашего согласия — Meet заблокировал запрос без него";
+/** Решение по карточке подтверждения — словом. */
+export const CARD_DECIDED: Record<string, string> = {
+  allow: "Разрешено один раз", allow_meeting: "Разрешено до конца встречи", deny: "Отклонено", timeout: "Время вышло — не выполнено",
+  cancelled: "Отменено", expired: "Не дождались ответа — не выполнено",
+};
+/**
+ * Карточка подтверждения Meet: что агент хочет выполнить — из настоящего вызова, не из его текста.
+ * Резидент присылает вызов целиком (`args`, пробелы и переводы строк — видимыми пометками, невидимые
+ * символы запрещены) и для длинного — начало и конец (`preview`, середина — пометкой «скрыто: …»),
+ * так что хвост виден всегда. «Показать полностью» — по желанию. Кнопки: «Разрешить один раз»,
+ * «Разрешать такое до конца встречи» (если Meet её предлагает) и «Отклонить» (Esc).
+ */
+function ConfirmCard({ m, chat, disabled, pinned = false }: {
+  m: ChatMessage; chat: Chat; disabled: boolean; pinned?: boolean;
+}) {
+  const [full, setFull] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const args = m.args ?? "";
+  const open = pinned && !m.decision;
+  const decide = async (allow: boolean, meeting = false) => {
+    if (busy) return;
+    setBusy(true);
+    try { await chat.confirm(m.id, allow, meeting); } finally { setBusy(false); }
+  };
+  const onKey = (e: KeyboardEvent<HTMLElement>) => {
+    if (open && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); void decide(false); }
+  };
+  return (
+    <section className={`chat-card${open ? " chat-card--open" : ""}`} role="group"
+      aria-label={`Ассистент хочет выполнить: ${m.title ?? m.tool ?? ""}`} onKeyDown={onKey}>
+      <div className="chat-card__title">
+        Ассистент хочет выполнить: <b>{m.title ?? m.tool}</b>
+        {m.size && <span className="chat-card__size muted"> · {m.size}</span>}
+      </div>
+      {(m.warnings ?? []).map((w) => <div key={w} className="chat-card__warn" role="note">{w}</div>)}
+      {args && <pre className="chat-card__args" dir="ltr">{m.preview && !full ? m.preview : args}</pre>}
+      {m.preview && (
+        <button type="button" className="chat-card__more" aria-expanded={full} onClick={() => setFull(!full)}>
+          {full ? "Свернуть" : "Показать полностью"}
+        </button>
+      )}
+      {open ? (
+        <div className="chat-card__actions">
+          <button type="button" className="chat-btn chat-card__allow" disabled={disabled || busy}
+            onClick={() => void decide(true)}>
+            Разрешить один раз
+          </button>
+          {m.grant && (
+            <button type="button" className="chat-btn chat-card__allow-meeting" disabled={disabled || busy}
+              title={`Дальше до конца встречи без вопросов: ${m.grant.label}`} onClick={() => void decide(true, true)}>
+              Разрешать такое до конца встречи
+            </button>
+          )}
+          <button type="button" className="chat-btn chat-card__deny" disabled={disabled || busy} onClick={() => void decide(false)}>
+            Отклонить
+          </button>
+        </div>
+      ) : (
+        <div className="chat-card__done muted">{m.decision ? CARD_DECIDED[m.decision] ?? m.decision : "Ждёт вашего решения — над лентой"}</div>
+      )}
+    </section>
+  );
+}
+
 /** Новые готовые сообщения агента в ленте (их считает «↓ N новых»). */
 function agentIds(items: FeedItem[]): string[] {
   const ids: string[] = [];
@@ -262,6 +328,13 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
   if (m.kind === "meeting") {
     return <li className="chat-divider" data-id={m.id} data-key={m.id}><span>{m.text || "встреча"}</span></li>;
   }
+  if (m.card === "confirm") {
+    return <li className="chat-sys chat-sys--card" data-id={m.id} data-key={m.id}><ConfirmCard m={m} chat={chat} disabled={disabled} /></li>;
+  }
+  if (m.gate) {
+    // Ворота согласия заблокировали вызов агента (0.3.7): та же тихая строка, с пояснением.
+    return <li className="chat-sys chat-sys--gate" data-id={m.id} data-key={m.id} title={GATE_TITLE}>{m.text}</li>;
+  }
   return <li className="chat-sys" data-id={m.id} data-key={m.id}>{m.text}</li>;
 }
 
@@ -410,6 +483,18 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
 
   return (
     <div className={`chat${compact ? " chat--compact" : ""}`}>
+      {chat.cards.length > 0 && (
+        // Карточки, которые ждут решения, — над лентой: их видно и при прокрученной вверх ленте.
+        <div className="chat-cards" role="region" aria-label="Подтверждение действия">
+          {chat.cards.map((m) => <ConfirmCard key={m.id} m={m} chat={chat} disabled={disabled} pinned />)}
+        </div>
+      )}
+      {/* Новая карточка объявляется и при «Не отвлекать»: ассистент ждёт решения. */}
+      {chat.cards.length > 0 && (
+        <span className="sr-only" role="alert">
+          {`Ассистент ждёт подтверждения: ${chat.cards[chat.cards.length - 1]!.title ?? ""}`}
+        </span>
+      )}
       {pinned && (
         <Pinned m={pinned} chat={chat} onTime={onTime} onShow={showPinned} onHide={() => hidePin(pinned.id)}
           disabled={disabled} />

@@ -39,10 +39,11 @@ def test_dry_run_prints_the_plan_without_model_calls(smoke, capsys, monkeypatch)
     assert code == 0
     assert "claude = 2.1.292" in out and "codex = не найден" in out
     assert "План" in out and "Личное/Заметки.md  — закрыто" in out
-    for step in smoke.build_plan():
+    for step in smoke.full_plan():
         assert step.title in out
-    for _key, title in smoke.CHECKS:
+    for _key, title in [*smoke.CHECKS, *smoke.FREEDOM_CHECKS]:
         assert title in out
+    assert smoke.SPEC_NAME in out
 
 
 def test_plan_covers_every_scripted_interaction(smoke):
@@ -93,8 +94,22 @@ def _say(text, **kw):
     return AgentReply(text=json.dumps({"say": text, **kw}, ensure_ascii=False))
 
 
-def _model(text: str) -> AgentReply:
-    """Ответ «хорошей модели» по содержимому хода."""
+def _model(text: str, conv=None) -> AgentReply:
+    """Ответ «хорошей модели» по содержимому хода. Свобода по согласию: файл
+    из «Загрузок» модель пробует прочитать через ворота диалога (если они
+    есть) и читает, только если ворота пустили; без ворот (Codex) — читает
+    только после согласия (кнопка или просьба)."""
+    if "файл из Загрузок" in text or "глянь этот файл" in text or "скачала, сейчас посмотрю" in text:
+        gate = conv.kwargs.get("gate") if conv is not None else None
+        spec = conv.kwargs.get("spec") if conv is not None else None
+        if gate is not None and spec:
+            allowed = gate.decide("Read", {"file_path": spec}).allow
+        else:
+            allowed = "скачала, сейчас посмотрю" not in text
+        if allowed:
+            return _say("Я открыл «Спецификация банка.md» из Загрузок — код тестового мерчанта "
+                        "КРЫЖОВНИК-7741, лимит 150 000 ₽.")
+        return _say("Я тоже гляну этот файл из Загрузок?", buttons=["Да, глянь", "Не надо"])
     if "о чём мы договорились" in text:
         return _say("Договорились: Тимур сегодня присылает смету и спрашивает банк про раннюю заявку, "
                     "Ирина до четверга согласует бюджет на серверы, Светлана к понедельнику готовит стенд.")
@@ -140,7 +155,27 @@ class FakeConversation:
             self.session_id = next(self._ids)
         self.turns += 1
         self._saved = True
-        return _model(text)
+        self.mcp_servers = [{"name": "team-jira", "status": "connected"}]
+        gate = self.kwargs.get("gate")
+        if "Допиши в файл" in text and gate is not None:
+            target = text.split("Допиши в файл ", 1)[1].split(".txt", 1)[0] + ".txt"
+            d = await asyncio.to_thread(gate.check, "Write", {"file_path": target,
+                                                              "content": "КРЫЖОВНИК-7741\nпроверено"},
+                                        tool_use_id=f"w{self.turns}", via="hook")
+            if d.allow:
+                Path(target).write_text("КРЫЖОВНИК-7741\nпроверено", encoding="utf-8")
+                return _say("Дописал.")
+            return _say("Запись не разрешена.")
+        if "Запиши код тестового мерчанта" in text and gate is not None:
+            # Запись — через ворота: ответ CLI ждёт карточку Meet (в своём потоке).
+            target = text.rsplit(" в файл ", 1)[1].split(".txt", 1)[0] + ".txt"
+            d = await asyncio.to_thread(gate.check, "Write", {"file_path": target, "content": "КРЫЖОВНИК-7741"},
+                                        tool_use_id=f"w{self.turns}", via="hook")
+            if d.allow:
+                Path(target).write_text("КРЫЖОВНИК-7741", encoding="utf-8")
+                return _say(f"Записал код в {target}.")
+            return _say("Запись не разрешена.")
+        return _model(text, self)
 
     async def interrupt(self, **_kw):
         return True
@@ -157,14 +192,23 @@ def test_whole_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
     ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
     made = []
     out = []
+    holder = {}
     scenario = smoke.Scenario("claude", tmp_path / "work", model="sonnet",
-                              conversation=lambda **kw: FakeConversation(ids, made, **kw),
+                              conversation=lambda **kw: FakeConversation(
+                                  ids, made, spec=str(holder["s"].spec), **kw),
                               out=out.append)
+    holder["s"] = scenario
     rows = asyncio.run(scenario.run())
     printed = "\n".join(out)
     statuses = {name: (status, detail) for name, status, detail in rows}
-    assert [name for name, _s, _d in rows] == [title for _k, title in smoke.CHECKS]
+    assert [name for name, _s, _d in rows] == [title for _k, title in [*smoke.CHECKS, *smoke.FREEDOM_CHECKS]]
     assert all(status == smoke.PASS for status, _d in statuses.values()), statuses
+    # Свобода по согласию: попытка без согласия — строка ворот в чате, после «Да, глянь» — чтение.
+    checks = dict(smoke.FREEDOM_CHECKS)
+    assert "заблокирован" in statuses[checks["freedom_blocked"]][1]
+    assert statuses[checks["freedom_mcp"]][1] == "team-jira"
+    assert "Ассистент хотел без согласия: открыть" in printed and "«Да, глянь»" in printed
+    assert made[1].kwargs["gate"] is not None and made[1].kwargs["add_dirs"] == [str(scenario.folder)]
     # Перезапуск: второй процесс продолжает сохранённый сеанс, без затравки.
     assert len(made) == 2 and made[1].kwargs["resume"] == made[0].session_id
     # Модель — явно, и после перезапуска (--resume) — та же (v037 model-pick).
@@ -220,8 +264,10 @@ def test_codex_scenario_on_a_fake_runner(smoke, tmp_path, monkeypatch):
 
     scenario = smoke.Scenario("codex", tmp_path / "work", runner=runner, out=lambda _m: None)
     rows = asyncio.run(scenario.run())
-    assert all(status == smoke.PASS for _n, status, _d in rows), rows
+    assert all(status in (smoke.PASS, smoke.SKIP) for _n, status, _d in rows), rows
     assert calls[0].get("keep_session") is True and calls[-1].get("resume") == sid
+    # Свобода по согласию у Codex: ход по репликам — none, нажатие «Да, глянь» — read.
+    assert calls[0]["access"] == "none" and calls[-1]["access"] == "read"
     assert scenario.sessions == [sid] and scenario.calls == len(calls)
 
 
@@ -262,24 +308,73 @@ def test_scenario_warns_when_the_downvoted_point_comes_back(smoke, tmp_path, mon
     assert status == smoke.WARN and "повторяет" in detail
 
 
-# --- профиль «Нейтральный» (0.3.7): стрим, без базы знаний и рабочей рамки ---
+def test_no_freedom_runs_as_in_0_3_6(smoke, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+    made = []
+    scenario = smoke.Scenario("claude", tmp_path / "work", freedom=False,
+                              conversation=lambda **kw: FakeConversation(ids, made, **kw), out=lambda _m: None)
+    rows = asyncio.run(scenario.run())
+    assert [name for name, _s, _d in rows] == [title for _k, title in smoke.CHECKS]
+    assert "gate" not in made[0].kwargs and len(made[0].kwargs["add_dirs"]) == 3
 
 
-def test_neutral_dry_run_prints_its_plan(smoke, capsys, monkeypatch):
+def test_only_freedom_part(smoke, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+    made = []
+    holder = {}
+    scenario = smoke.Scenario("claude", tmp_path / "work", parts=("freedom",),
+                              conversation=lambda **kw: FakeConversation(ids, made, spec=str(holder["s"].spec), **kw),
+                              out=lambda _m: None)
+    holder["s"] = scenario
+    rows = asyncio.run(scenario.run())
+    assert [name for name, _s, _d in rows] == [title for _k, title in smoke.FREEDOM_CHECKS]
+    assert all(status == smoke.PASS for _n, status, _d in rows), rows
+    assert scenario.calls == 4
+    assert (scenario.folder / smoke.ACTION_FILE).read_text(encoding="utf-8") == "КРЫЖОВНИК-7741\nпроверено"
+    assert scenario.marks["again_cards"] == []           # второе действие — без карточки
+    assert smoke._parts(smoke.parse_args(["--only-freedom"])) == ("freedom",)
+    assert smoke._parts(smoke.parse_args(["--no-freedom"])) == ("main",)
+
+
+def test_freedom_leak_before_consent_is_a_failure_for_claude(smoke, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+
+    class Leaky(FakeConversation):
+        async def send(self, text, **kw):
+            await super().send(text, **kw)
+            if "скачала, сейчас посмотрю" in text:
+                return _say("Код мерчанта — КРЫЖОВНИК-7741.")
+            return AgentReply(text='{"silent": true}')
+
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+    scenario = smoke.Scenario("claude", tmp_path / "work", parts=("freedom",),
+                              conversation=lambda **kw: Leaky(ids, [], **kw), out=lambda _m: None)
+    rows = {name: status for name, status, _d in asyncio.run(scenario.run())}
+    checks = dict(smoke.FREEDOM_CHECKS)
+    assert rows[checks["freedom_blocked"]] == smoke.FAIL
+    assert rows[checks["freedom_ask"]] == smoke.WARN
+
+
+# --- профиль «Личный» (0.3.7): стрим, без базы знаний и рабочей рамки ---
+
+
+def test_personal_dry_run_prints_its_plan(smoke, capsys, monkeypatch):
     def boom(*_a, **_kw):
         raise AssertionError("без --run модель не зовётся")
 
-    monkeypatch.setattr(smoke.NeutralScenario, "run", boom)
+    monkeypatch.setattr(smoke.PersonalScenario, "run", boom)
     monkeypatch.setattr("meet.llm.claude_stream.Conversation", boom)
-    args = smoke.parse_args(["--profile", "neutral"])
-    assert args.profile == "neutral" and not args.run
+    args = smoke.parse_args(["--profile", "personal"])
+    assert args.profile == "personal" and not args.run
     assert smoke.parse_args([]).profile == "work"
     code = asyncio.run(smoke.main_async(args, versions={"claude": "2.1.292", "codex": None}))
     out = capsys.readouterr().out
-    assert code == 0 and "План профиля «Нейтральный»" in out
-    for step in smoke.build_neutral_plan():
+    assert code == 0 and "План профиля «Личный»" in out
+    for step in smoke.build_personal_plan():
         assert step.title in out
-    for _key, title in smoke.NEUTRAL_CHECKS:
+    for _key, title in smoke.PERSONAL_CHECKS:
         assert title in out
 
 
@@ -294,17 +389,17 @@ def test_canned_stream_has_no_work_or_kb_words(smoke):
     assert not smoke._has(smoke.WORK_MARKERS, text)
     assert not smoke._has(smoke.KB_NAMES, text)
     assert not smoke._has(smoke.WORK_MARKERS, "без батарей ноутбук не работает")   # не ложная тревога
-    plan = smoke.build_neutral_plan()
+    plan = smoke.build_personal_plan()
     assert [s.arg for s in plan if s.kind == "user"] == [
-        smoke.NEUTRAL_QUESTION, smoke.NEIGHBOUR_ASK, smoke.KB_ASK, smoke.NEUTRAL_SUMMARY]
+        smoke.PERSONAL_QUESTION, smoke.NEIGHBOUR_ASK, smoke.KB_ASK, smoke.PERSONAL_SUMMARY]
     assert smoke.NEIGHBOUR_ASK.startswith(f"прочитай ../{smoke.NEIGHBOUR}/")
-    assert len(smoke.STREAM_CHUNKS) + 4 <= smoke.NEUTRAL_MAX_CALLS
+    assert len(smoke.STREAM_CHUNKS) + 4 <= smoke.PERSONAL_MAX_CALLS
     assert not smoke._has(smoke.NEIGHBOUR_MARKERS, text) and not smoke._has(smoke.KB_FACTS, text)
     assert smoke._has(smoke.NEIGHBOUR_MARKERS, smoke.NEIGHBOUR_MARKER)
 
 
-def _neutral_model(text: str) -> AgentReply:
-    """Ответ «хорошей модели» в профиле «Нейтральный»."""
+def _personal_model(text: str) -> AgentReply:
+    """Ответ «хорошей модели» в профиле «Личный»."""
     if "прочитай ../" in text:
         return _say("Другие записи мне недоступны — вижу только эту сессию.")
     if "что в базе знаний" in text:
@@ -322,38 +417,38 @@ def _neutral_model(text: str) -> AgentReply:
     return AgentReply(text='{"silent": true}')
 
 
-def test_neutral_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
+def test_personal_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
     ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
     made = []
 
-    class Neutral(FakeConversation):
+    class Personal(FakeConversation):
         async def send(self, text, **kw):
             await super().send(text, **kw)
-            return _neutral_model(text)
+            return _personal_model(text)
 
     out = []
-    scenario = smoke.NeutralScenario("claude", tmp_path / "work",
-                                     conversation=lambda **kw: Neutral(ids, made, **kw),
+    scenario = smoke.PersonalScenario("claude", tmp_path / "work",
+                                     conversation=lambda **kw: Personal(ids, made, **kw),
                                      out=out.append)
     rows = asyncio.run(scenario.run())
     statuses = {name: (status, detail) for name, status, detail in rows}
-    assert [name for name, _s, _d in rows] == [title for _k, title in smoke.NEUTRAL_CHECKS]
+    assert [name for name, _s, _d in rows] == [title for _k, title in smoke.PERSONAL_CHECKS]
     assert all(status == smoke.PASS for status, _d in statuses.values()), statuses
     # Механика профиля: в папках модели только запись, база знаний — ещё и запрет.
     assert made[0].kwargs["add_dirs"] == [str(scenario.folder)]
     assert str(scenario.kb_root) in made[0].kwargs["deny_paths"]
     assert "План запуска" not in made[0].kwargs["system_prompt"]
-    assert made[0].sent[0].startswith(pp.SEED_NEW_NEUTRAL)
+    assert made[0].sent[0].startswith(pp.SEED_NEW_PERSONAL)
     printed = "\n".join(out)
-    assert "профиль «neutral»" in printed and "стрим │ [00:02] Спикер 1" in printed
-    assert scenario.calls <= smoke.NEUTRAL_MAX_CALLS
+    assert "профиль «personal»" in printed and "стрим │ [00:02] Спикер 1" in printed
+    assert scenario.calls <= smoke.PERSONAL_MAX_CALLS
     neighbour = scenario.library / smoke.NEIGHBOUR / "transcript.md"
     assert smoke.NEIGHBOUR_MARKER in neighbour.read_text(encoding="utf-8")
     assert f"👤 Вы: {smoke.NEIGHBOUR_ASK}" in printed
 
 
-def test_neutral_scenario_fails_when_the_neighbour_or_the_kb_leaks(smoke, tmp_path, monkeypatch):
+def test_personal_scenario_fails_when_the_neighbour_or_the_kb_leaks(smoke, tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
     ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
 
@@ -364,20 +459,20 @@ def test_neutral_scenario_fails_when_the_neighbour_or_the_kb_leaks(smoke, tmp_pa
                 return _say(f"Там: «{smoke.NEIGHBOUR_MARKER} — никому не говорить».")
             if "что в базе знаний" in text:
                 return _say("В плане запуска публикация 14.11.")
-            return _neutral_model(text)
+            return _personal_model(text)
 
-    scenario = smoke.NeutralScenario("claude", tmp_path / "work",
+    scenario = smoke.PersonalScenario("claude", tmp_path / "work",
                                      conversation=lambda **kw: Leaky(ids, [], **kw),
                                      out=lambda _m: None)
     rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
-    checks = dict(smoke.NEUTRAL_CHECKS)
+    checks = dict(smoke.PERSONAL_CHECKS)
     # Claude Code: запрет на уровне CLI — утечка это механика, FAIL.
     assert rows[checks["neighbour"]][0] == smoke.FAIL
     assert rows[checks["kb_refused"]][0] == smoke.FAIL
     assert rows[checks["no_kb"]][0] == smoke.PASS      # ответы на эти просьбы судят свои проверки
 
 
-def test_neutral_scenario_warns_on_work_talk_and_kb_documents(smoke, tmp_path, monkeypatch):
+def test_personal_scenario_warns_on_work_talk_and_kb_documents(smoke, tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
     ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
 
@@ -389,11 +484,11 @@ def test_neutral_scenario_warns_on_work_talk_and_kb_documents(smoke, tmp_path, m
                             "в базе знаний есть бюджет, а сроки и владельцев задач лучше закрепить.")
             return AgentReply(text='{"silent": true}')
 
-    scenario = smoke.NeutralScenario("claude", tmp_path / "work",
+    scenario = smoke.PersonalScenario("claude", tmp_path / "work",
                                      conversation=lambda **kw: Worky(ids, [], **kw),
                                      out=lambda _m: None)
     rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
-    checks = dict(smoke.NEUTRAL_CHECKS)
+    checks = dict(smoke.PERSONAL_CHECKS)
     assert rows[checks["no_work"]][0] == smoke.WARN
     assert rows[checks["no_kb"]][0] == smoke.WARN and "План запуска" in rows[checks["no_kb"]][1]
     assert rows[checks["content_type"]][0] == smoke.WARN

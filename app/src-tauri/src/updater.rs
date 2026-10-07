@@ -62,6 +62,9 @@ pub const RATE_LIMITED: &str =
     "Не удалось проверить: GitHub временно ограничил число запросов, попробуйте позже";
 pub const BAD_REPLY: &str = "Не удалось проверить: непонятный ответ GitHub";
 pub const RECORDING: &str = "Остановите запись, чтобы обновиться";
+/// Временная встреча при обновлении удалилась бы — пусть человек решит сам.
+pub const TEMPORARY: &str =
+    "Идёт временная встреча — закончите её, чтобы обновиться (при обновлении она удалилась бы)";
 /// Не отказ, а вопрос: окно показывает его с кнопкой «Обновить сейчас» и
 /// повторяет установку с `confirmed`. Окно сверяет текст дословно.
 pub const WORK_IN_PROGRESS: &str =
@@ -466,7 +469,8 @@ pub fn install_refusal(
 ) -> Option<&'static str> {
     let state = state?;
     if upgrade::resident_busy(state) {
-        return Some(RECORDING);
+        let temporary = state.get("temporary").and_then(Value::as_bool) == Some(true);
+        return Some(if temporary { TEMPORARY } else { RECORDING });
     }
     if !confirmed && upgrade::resident_working(state, jobs) {
         return Some(WORK_IN_PROGRESS);
@@ -1265,6 +1269,12 @@ mod tests {
         let idle = json!({"status": "idle", "live": {"active": false}});
         assert_eq!(install_refusal(Some(&idle), None, false), None);
         assert_eq!(install_refusal(None, None, false), None);
+        // Временная встреча при обновлении удалилась бы — отказ со своим текстом.
+        let temporary = json!({"status": "recording", "temporary": true});
+        assert_eq!(
+            install_refusal(Some(&temporary), None, true),
+            Some(TEMPORARY)
+        );
     }
 
     #[test]

@@ -16,8 +16,11 @@ import type { LiveStatus, Snapshot } from "../lib/types";
 
 const RECONNECT_MS = 2000;
 
-/** Состояние ассистента и откуда идущая запись (`source: "live"` — «Запись с ассистентом»). */
-export type PanelStatus = LiveStatus & { source?: string | null };
+/**
+ * Состояние ассистента и откуда идущая запись (`source: "live"` — «Запись с
+ * ассистентом»); `temporary` — идёт временная встреча (не сохранится).
+ */
+export type PanelStatus = LiveStatus & { source?: string | null; temporary?: boolean; forget_gaps?: string[] };
 
 export function useLiveStatus(ep: Endpoint | null): PanelStatus | null {
   const [live, setLive] = useState<PanelStatus | null>(null);
@@ -30,12 +33,19 @@ export function useLiveStatus(ep: Endpoint | null): PanelStatus | null {
     // Ответы /state приходят в любом порядке: применяется только последний
     // запрошенный, а снимок из потока отменяет все ещё не пришедшие.
     let seq = 0;
-    const apply = (s: Snapshot) => { if (!closed && s.live) setLive({ ...s.live, source: s.source ?? null }); };
+    const apply = (s: Snapshot) => {
+      if (closed || !s.live) return;
+      setLive({
+        ...s.live, source: s.source ?? null, temporary: s.status === "recording" && !!s.temporary,
+        forget_gaps: s.forget_gaps ?? [],
+      });
+    };
     const connect = () => {
       close = openEvents(ep, {
         onSnapshot: (s) => { seq++; apply(s); },
         onEvent: (e) => {
-          if (!e.kind.startsWith("live.")) return;
+          // record.kept — «Сохранить как обычную встречу»: пометка временной снимается.
+          if (!e.kind.startsWith("live.") && e.kind !== "record.kept") return;
           const mine = ++seq;
           getState(ep).then((s) => { if (mine === seq) apply(s); }).catch(() => {});
         },

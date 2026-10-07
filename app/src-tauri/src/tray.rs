@@ -63,7 +63,7 @@ pub const IMPORT_FAILED: &str = "Не удалось импортировать"
 pub const RECORDING_INTERRUPTED: &str = "Запись прервана";
 pub const START_FAILED: &str = "Не удалось начать запись";
 pub const STOP_FAILED: &str = "Не удалось остановить запись";
-pub const CANCEL_FAILED: &str = "Не удалось отменить запись";
+pub const CANCEL_FAILED: &str = "Не удалось остановить без сохранения";
 pub const AUTO_FAILED: &str = "Не удалось переключить автозапись";
 pub const LIVE_LISTENING: &str = "Ассистент слушает встречу";
 pub const LIVE_SAVED: &str = "Ассистент остановлен — запись сохранена";
@@ -80,6 +80,11 @@ pub const LIVE_ATTACHED: &str = "Ассистент включён в запис
 pub const LIVE_DETACHED: &str = "Ассистент выключен";
 pub const LIVE_ATTACH_FAILED: &str = "Не удалось включить ассистента";
 pub const LIVE_DETACH_FAILED: &str = "Не удалось выключить ассистента";
+/// Временная встреча с ассистентом (`/state.temporary`): идёт вне библиотеки,
+/// на «Закончить» удаляется вместе с чатом и сеансами агента.
+pub const TEMP_STARTED: &str = "Временная встреча начата";
+pub const TEMP_ENDED: &str = "Временная встреча удалена";
+pub const KEEP_FAILED: &str = "Не удалось сохранить встречу";
 /// Пункты меню записи для ассистента, включаемого посреди неё.
 pub const ATTACH_LABEL: &str = "Включить ассистента";
 pub const DETACH_LABEL: &str = "Выключить ассистента";
@@ -106,6 +111,7 @@ const IMPORTANT: &[&str] = &[
     LIVE_STOP_FAILED,
     LIVE_ATTACH_FAILED,
     LIVE_DETACH_FAILED,
+    KEEP_FAILED,
     KB_EXPORT_FAILED,
 ];
 
@@ -144,6 +150,11 @@ pub struct View {
     /// Выбранный в настройках микрофон или вывод не найден — идущая запись
     /// (своя или ассистента) пишет с системного (`/state.devices_fallback`).
     pub devices_fallback: Vec<DeviceFallback>,
+    /// Идёт временная встреча (`/state.temporary`): не сохранится.
+    pub temporary: bool,
+    /// Чью историю ассистента «Остановить без сохранения» не удалит
+    /// (`/state.forget_gaps`: «Codex», «OpenCode»).
+    pub forget_gaps: Vec<String>,
 }
 
 /// Длиннее — имя устройства в подсказке трея сокращается: у Windows на всю
@@ -338,6 +349,21 @@ impl View {
             live: state.get("live").map(Live::from_json).unwrap_or_default(),
             kb_failed: state.get("kb_export_failed").and_then(KbFailure::from_json),
             devices_fallback: DeviceFallback::list(state.get("devices_fallback")),
+            temporary: state
+                .get("temporary")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            forget_gaps: state
+                .get("forget_gaps")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
         };
         let items = jobs
             .get("items")
@@ -429,7 +455,13 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
     };
     let mut out = Vec::new();
     if !prev.recording && next.recording {
-        if next.source.as_deref() == Some("auto") {
+        if next.temporary {
+            out.push(Notice::new(
+                TEMP_STARTED,
+                "Не сохранится: после окончания запись и чат с ассистентом удаляются",
+                None,
+            ));
+        } else if next.source.as_deref() == Some("auto") {
             out.push(Notice::new(
                 AUTO_RECORDING_STARTED,
                 "Автозапись по звонку",
@@ -460,7 +492,19 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
         .last_stop
         .as_ref()
         .filter(|stop| prev.last_stop.as_ref() != Some(*stop));
-    let discarded = fresh_stop.is_some_and(|stop| stop.reason == "discarded");
+    // «Остановить без сохранения» и конец временной встречи — не сохранение.
+    let discarded =
+        fresh_stop.is_some_and(|stop| stop.reason == "discarded" || stop.reason == "temporary");
+    if prev.recording
+        && !next.recording
+        && fresh_stop.is_some_and(|stop| stop.reason == "temporary")
+    {
+        out.push(Notice::new(
+            TEMP_ENDED,
+            "Запись, чат и сеансы ассистента удалены",
+            None,
+        ));
+    }
     if prev.recording && !next.recording && !discarded {
         // Будет ли расшифровка (`auto_transcribe`), оболочка не знает — о ней
         // скажет своё уведомление, когда задача закончится.
@@ -757,6 +801,10 @@ pub enum Action {
     /// Ассистент посреди обычной записи: включить / выключить (запись идёт).
     LiveAttach,
     LiveDetach,
+    /// «Временная встреча с ассистентом».
+    LiveStartTemp,
+    /// «Сохранить как обычную встречу» посреди временной.
+    Keep,
 }
 
 impl Action {
@@ -770,12 +818,15 @@ impl Action {
             Action::LiveStop => "/live/stop",
             Action::LiveAttach => "/live/attach",
             Action::LiveDetach => "/live/detach",
+            Action::LiveStartTemp => "/live/start",
+            Action::Keep => "/recording/keep",
         }
     }
 
     fn body(self) -> Value {
         match self {
             Action::AutoRecord(enabled) => json!({ "enabled": enabled }),
+            Action::LiveStartTemp => json!({ "temporary": true }),
             _ => Value::Null,
         }
     }
@@ -790,6 +841,8 @@ impl Action {
             Action::LiveStop => LIVE_STOP_FAILED,
             Action::LiveAttach => LIVE_ATTACH_FAILED,
             Action::LiveDetach => LIVE_DETACH_FAILED,
+            Action::LiveStartTemp => LIVE_START_FAILED,
+            Action::Keep => KEEP_FAILED,
         }
     }
 }
@@ -832,8 +885,10 @@ pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Opti
 /// `/live/start` или `/live/attach` ответил 409: не подключён ни Claude Code,
 /// ни Codex. Кроме уведомления — открыть окно на разделе настроек ассистента.
 pub fn needs_provider(action: Action, reply: Option<&api::Result<Value>>) -> bool {
-    matches!(action, Action::LiveStart | Action::LiveAttach)
-        && matches!(reply, Some(Err(api::Error::Status { code: 409, .. })))
+    matches!(
+        action,
+        Action::LiveStart | Action::LiveStartTemp | Action::LiveAttach
+    ) && matches!(reply, Some(Err(api::Error::Status { code: 409, .. })))
 }
 
 /// Значок трея — кольцо Meet (`scripts/make_app_icons.py`): приглушённое —
@@ -994,7 +1049,14 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
     let text = match view {
         None => "служба записи не запущена".to_string(),
         Some(view) if view.recording => {
-            let mut text = format!("идёт запись {}", clock(view.elapsed_s));
+            let mut text = if view.temporary {
+                format!(
+                    "временная встреча {} (не сохранится)",
+                    clock(view.elapsed_s)
+                )
+            } else {
+                format!("идёт запись {}", clock(view.elapsed_s))
+            };
             if view.source.as_deref() == Some("auto") {
                 text.push_str(" (авто)");
             }
@@ -1053,6 +1115,8 @@ pub struct MenuState {
     /// Резидент отвечает — действия с записью доступны.
     pub online: bool,
     pub recording: bool,
+    /// Идущая запись — временная встреча (не сохранится).
+    pub temporary: bool,
     pub live: LivePhase,
     pub auto: bool,
     /// Журнал упавшего резидента (пункт «Открыть журнал»).
@@ -1092,6 +1156,8 @@ pub const OPEN_LABEL: &str = "Открыть Meet";
 /// «Выход», пока идёт работа: вопрос с безопасной кнопкой первой (по умолчанию).
 pub const QUIT_TITLE: &str = "Выход из Meet";
 pub const QUIT_RECORDING: &str = "Идёт запись — при выходе она остановится и сохранится.";
+/// Временная встреча при выходе не сохраняется — удаляется.
+pub const QUIT_TEMPORARY: &str = "Идёт временная встреча — при выходе она будет удалена.";
 pub const QUIT_TRANSCRIBE: &str =
     "Идёт расшифровка — при выходе она прервётся и начнётся заново при следующем запуске Meet.";
 pub const QUIT_UNSAVED: &str =
@@ -1145,7 +1211,15 @@ pub fn quit_question(
     let mut lines: Vec<String> = Vec::new();
     if let Some(state) = state {
         if crate::upgrade::resident_busy(state) {
-            lines.push(QUIT_RECORDING.to_string());
+            let temporary = state.get("temporary").and_then(Value::as_bool) == Some(true);
+            lines.push(
+                if temporary {
+                    QUIT_TEMPORARY
+                } else {
+                    QUIT_RECORDING
+                }
+                .to_string(),
+            );
         }
         if crate::upgrade::resident_working(state, jobs) {
             let active: Vec<&str> = jobs
@@ -1209,11 +1283,21 @@ pub fn quit_confirmed_by(answer: &rfd::MessageDialogResult) -> bool {
 /// Остановка записи (обычной и с ассистентом): записанное сохраняется.
 pub const STOP_LABEL: &str = "Остановить и сохранить";
 /// Отмена записи: многоточие — перед удалением спрашиваем подтверждение.
-pub const CANCEL_LABEL: &str = "Отменить запись…";
-pub const CANCEL_TITLE: &str = "Отменить запись";
-pub const CANCEL_QUESTION: &str = "Удалить текущую запись? Записанное не сохранится.";
-pub const CANCEL_CONFIRM: &str = "Удалить";
-pub const CANCEL_KEEP: &str = "Продолжить запись";
+pub const CANCEL_LABEL: &str = "Остановить без сохранения…";
+pub const CANCEL_TITLE: &str = "Остановить без сохранения";
+pub const CANCEL_QUESTION: &str = "Остановить без сохранения? Запись и всё, что с ней связано, \
+                                   будут удалены без возможности восстановления.";
+pub const CANCEL_CONFIRM: &str = "Удалить запись";
+pub const CANCEL_KEEP: &str = "Отмена";
+/// Временная встреча с ассистентом: пункт простоя, пометка и действия.
+pub const TEMP_LABEL: &str = "Временная встреча с ассистентом";
+pub const TEMP_BADGE_LABEL: &str = "Временная — не сохранится";
+pub const TEMP_STOP_LABEL: &str = "Закончить временную встречу…";
+pub const TEMP_END_TITLE: &str = "Закончить временную встречу";
+pub const TEMP_END_QUESTION: &str = "Временная встреча закончится и будет удалена.";
+pub const TEMP_END_CONFIRM: &str = "Закончить";
+pub const TEMP_END_KEEP: &str = "Продолжить";
+pub const KEEP_LABEL: &str = "Сохранить как обычную встречу";
 /// Пока был открыт вопрос, запись закончилась или началась другая.
 pub const CANCEL_STALE: &str =
     "Пока был открыт вопрос, запись закончилась или началась новая — ничего не удалено";
@@ -1236,12 +1320,22 @@ pub fn record_items(state: &MenuState) -> Vec<(&'static str, &'static str, bool)
             LivePhase::Active => ("live-detach", DETACH_LABEL, online),
             LivePhase::Stopping => ("live-stopping", "Ассистент выключается…", false),
         };
+        if state.temporary {
+            // Пометка — неактивным пунктом; «Закончить…» спрашивает: встреча удалится.
+            return vec![
+                ("temp-badge", TEMP_BADGE_LABEL, false),
+                ("temp-stop", TEMP_STOP_LABEL, online),
+                ("keep", KEEP_LABEL, online),
+                assistant,
+            ];
+        }
         return vec![("stop", STOP_LABEL, online), assistant];
     }
     match state.live {
         LivePhase::Off => vec![
             ("start", "Начать запись", online),
             ("live-start", "Начать запись с ассистентом", online),
+            ("live-start-temp", TEMP_LABEL, online),
         ],
         LivePhase::Starting => vec![
             ("live-starting", "Ассистент запускается…", false),
@@ -1301,11 +1395,24 @@ pub fn menu_model(state: &MenuState) -> Vec<Entry> {
     if state.restart {
         model.push(item("restart", "Перезапустить службу записи", true));
     }
-    if state.recording {
+    // У временной встречи отдельной отмены нет: «Закончить…» и так её удаляет.
+    if state.recording && !state.temporary {
         model.push(item("cancel", CANCEL_LABEL, state.online));
     }
     model.push(item("quit", "Выход", true));
     model
+}
+
+/// Текст вопроса «Остановить без сохранения?»: если историю ассистента в
+/// каком-то CLI удалить нечем (`forget_gaps`), так и сказано.
+pub fn cancel_question(gaps: &[String]) -> String {
+    let mut text = CANCEL_QUESTION.to_string();
+    for name in gaps {
+        text.push_str(&format!(
+            "\nИстория ассистента в {name} останется в самом {name}."
+        ));
+    }
+    text
 }
 
 /// Отмена всё ещё про ту запись, о которой спрашивали: папка идущей записи
@@ -1316,8 +1423,8 @@ pub fn cancel_still_meant(asked: Option<&str>, now: Option<&str>) -> bool {
     matches!((asked, now), (Some(asked), Some(now)) if asked == now)
 }
 
-/// Ответ на вопрос «Удалить текущую запись?»: удаляем только по явной кнопке
-/// «Удалить». Esc, закрытие окна и «Продолжить запись» запись не трогают.
+/// Ответ на вопрос «Остановить без сохранения?»: удаляем только по явной
+/// кнопке «Удалить запись». Esc, закрытие окна и «Отмена» запись не трогают.
 pub fn cancel_confirmed_by(answer: &rfd::MessageDialogResult) -> bool {
     matches!(answer, rfd::MessageDialogResult::Custom(label) if label == CANCEL_CONFIRM)
 }
@@ -1328,6 +1435,7 @@ pub fn menu_state(view: Option<&View>, status: &ResidentStatus) -> MenuState {
     MenuState {
         online: view.is_some() && !quitting,
         recording: view.is_some_and(|view| view.recording),
+        temporary: view.is_some_and(|view| view.recording && view.temporary),
         live: view
             .map(|view| LivePhase::of(&view.live))
             .unwrap_or_default(),
@@ -1401,8 +1509,10 @@ pub struct TrayState {
     /// галочку «Автозапись» Windows переключает сам по клику, и при неудачном
     /// запросе она врала бы до следующей смены состояния.
     menu_dirty: AtomicBool,
-    /// Вопрос «Удалить текущую запись?» уже на экране — второй не открываем.
+    /// Вопрос «Остановить без сохранения?» уже на экране — второй не открываем.
     cancel_asking: AtomicBool,
+    /// `forget_gaps` идущей записи по последнему опросу — для текста вопроса.
+    forget_gaps: Mutex<Vec<String>>,
 }
 
 /// Показать уведомления с учётом `ui.notifications` (последнего прочитанного).
@@ -1562,13 +1672,14 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
-/// «Отменить запись…»: системный вопрос, кнопка по умолчанию — «Продолжить
-/// запись» (Enter запись не удаляет). Отмена уходит резиденту, только если
-/// нажато «Удалить» (`cancel_confirmed_by`).
+/// «Остановить без сохранения…»: системный вопрос, кнопка по умолчанию —
+/// «Отмена» (Enter запись не удаляет). Отмена уходит резиденту, только если
+/// нажато «Удалить запись» (`cancel_confirmed_by`): удаляются запись, чат
+/// ассистента, вложения и сеансы агента у провайдера.
 ///
 /// rfd напрямую, а не плагин диалогов: плагин выдаёт Esc и закрытие окна за
-/// нажатие второй кнопки, а вторая здесь — «Удалить». Кнопка по умолчанию — первая
-/// (и на Windows, и на macOS), поэтому «Продолжить запись» идёт первой.
+/// нажатие второй кнопки, а вторая здесь — «Удалить запись». Кнопка по
+/// умолчанию — первая (и на Windows, и на macOS), поэтому «Отмена» идёт первой.
 /// Вызывается из обработчика меню — главного потока, как требует macOS.
 fn confirm_cancel(app: &AppHandle) {
     let Some(state) = app.try_state::<TrayState>() else {
@@ -1580,10 +1691,11 @@ fn confirm_cancel(app: &AppHandle) {
     // Какая запись идёт сейчас — параллельно с показом вопроса (запрос к
     // резиденту локальный и быстрый, а показ должен быть в главном потоке).
     let asked = thread::spawn(recording_folder_now);
+    let question = cancel_question(&lock(&state.forget_gaps));
     let dialog = rfd::AsyncMessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
         .set_title(CANCEL_TITLE)
-        .set_description(CANCEL_QUESTION)
+        .set_description(question)
         .set_buttons(rfd::MessageButtons::OkCancelCustom(
             CANCEL_KEEP.to_string(),
             CANCEL_CONFIRM.to_string(),
@@ -1612,6 +1724,48 @@ fn confirm_cancel(app: &AppHandle) {
     });
 }
 
+/// «Закончить временную встречу…»: лёгкий системный вопрос, кнопка по
+/// умолчанию — «Продолжить» (первая; Esc и закрытие окна — тоже она).
+/// Встреча заканчивается (`/live/stop`), только если нажато «Закончить» и
+/// идёт всё та же запись.
+fn confirm_temp_end(app: &AppHandle) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    if state.cancel_asking.swap(true, Ordering::SeqCst) {
+        return; // вопрос уже открыт
+    }
+    let asked = thread::spawn(recording_folder_now);
+    let dialog = rfd::AsyncMessageDialog::new()
+        .set_level(rfd::MessageLevel::Info)
+        .set_title(TEMP_END_TITLE)
+        .set_description(TEMP_END_QUESTION)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+            TEMP_END_KEEP.to_string(),
+            TEMP_END_CONFIRM.to_string(),
+        ))
+        .show();
+    let app = app.clone();
+    thread::spawn(move || {
+        let answer = tauri::async_runtime::block_on(dialog);
+        let asked = asked.join().ok().flatten();
+        if let Some(state) = app.try_state::<TrayState>() {
+            state.cancel_asking.store(false, Ordering::SeqCst);
+        }
+        if !temp_end_confirmed_by(&answer)
+            || !cancel_still_meant(asked.as_deref(), recording_folder_now().as_deref())
+        {
+            return;
+        }
+        command(&app, Action::LiveStop);
+    });
+}
+
+/// Ответ на «Временная встреча закончится и будет удалена.»: только явное «Закончить».
+pub fn temp_end_confirmed_by(answer: &rfd::MessageDialogResult) -> bool {
+    matches!(answer, rfd::MessageDialogResult::Custom(label) if label == TEMP_END_CONFIRM)
+}
+
 /// Папка идущей обычной записи по словам резидента (`/state.folder`); нет
 /// записи или ответа — None.
 fn recording_folder_now() -> Option<String> {
@@ -1629,6 +1783,9 @@ fn on_menu(app: &AppHandle, id: &str) {
         "start" => command(app, Action::Start),
         "stop" => command(app, Action::Stop),
         "live-start" => command(app, Action::LiveStart),
+        "live-start-temp" => command(app, Action::LiveStartTemp),
+        "temp-stop" => confirm_temp_end(app),
+        "keep" => command(app, Action::Keep),
         "live-stop" => command(app, Action::LiveStop),
         "live-attach" => command(app, Action::LiveAttach),
         "live-detach" => command(app, Action::LiveDetach),
@@ -1891,6 +2048,10 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState, icon_size: u32) {
             {
                 shown_tip = Some(text);
             }
+            *lock(&state.forget_gaps) = view
+                .as_ref()
+                .map(|view| view.forget_gaps.clone())
+                .unwrap_or_default();
             let wanted = menu_state(view.as_ref(), &status);
             let dirty = state.menu_dirty.swap(false, Ordering::SeqCst);
             if dirty || shown_menu.as_ref() != Some(&wanted) {
@@ -1932,6 +2093,8 @@ mod tests {
             live: Live::default(),
             kb_failed: None,
             devices_fallback: vec![],
+            temporary: false,
+            forget_gaps: vec![],
         }
     }
 
@@ -2372,6 +2535,7 @@ mod tests {
             MenuState {
                 online: true,
                 recording: true,
+                temporary: false,
                 live: LivePhase::Off,
                 auto: true,
                 log: None,
@@ -2464,7 +2628,7 @@ mod tests {
             "Не удалось импортировать",
             "Не удалось начать запись",
             "Не удалось остановить запись",
-            "Не удалось отменить запись",
+            "Не удалось остановить без сохранения",
             "Не удалось переключить автозапись",
             "Запись прервана",
             "Ассистент слушает встречу",
@@ -2502,7 +2666,7 @@ mod tests {
                 "Не удалось импортировать",
                 "Не удалось начать запись",
                 "Не удалось остановить запись",
-                "Не удалось отменить запись",
+                "Не удалось остановить без сохранения",
                 "Не удалось переключить автозапись",
                 "Запись прервана",
                 "Ассистент остановлен",
@@ -2667,7 +2831,10 @@ mod tests {
         });
         assert_eq!(
             body_of(Action::Cancel, Some(&error)),
-            ("Не удалось отменить запись".into(), "OSError: диск".into())
+            (
+                "Не удалось остановить без сохранения".into(),
+                "OSError: диск".into()
+            )
         );
         let bad: api::Result<Value> = Err(api::Error::Status {
             code: 400,
@@ -3094,6 +3261,7 @@ mod tests {
         record_items(&MenuState {
             online: true,
             recording,
+            temporary: false,
             live,
             auto: false,
             log: None,
@@ -3109,6 +3277,7 @@ mod tests {
             vec![
                 ("start", "Начать запись", true),
                 ("live-start", "Начать запись с ассистентом", true),
+                ("live-start-temp", "Временная встреча с ассистентом", true),
             ]
         );
         assert_eq!(
@@ -3147,6 +3316,7 @@ mod tests {
         let offline = record_items(&MenuState {
             online: false,
             recording: true,
+            temporary: false,
             live: LivePhase::Off,
             auto: false,
             log: None,
@@ -3216,7 +3386,7 @@ mod tests {
                 "Импортировать файл…",
                 "[ ] Автозапись",
                 "—",
-                "Отменить запись…",
+                "Остановить без сохранения…",
                 "Выход",
             ]
         );
@@ -3341,6 +3511,7 @@ mod tests {
         MenuState {
             online: true,
             recording,
+            temporary: false,
             live: LivePhase::Off,
             auto: true,
             log: None,
@@ -3360,7 +3531,7 @@ mod tests {
                 "Импортировать файл…",
                 "[x] Автозапись",
                 "—",
-                "Отменить запись…",
+                "Остановить без сохранения…",
                 "Выход",
             ]
         );
@@ -3393,6 +3564,7 @@ mod tests {
                 "Открыть Meet",
                 "Начать запись",
                 "Начать запись с ассистентом",
+                "Временная встреча с ассистентом",
                 "Импортировать файл…",
                 "[x] Автозапись",
                 "—",
@@ -3403,7 +3575,7 @@ mod tests {
         live.live = LivePhase::Active;
         assert!(!layout(&live)
             .iter()
-            .any(|line| line.starts_with("Отменить")));
+            .any(|line| line.starts_with("Остановить без")));
     }
 
     #[test]
@@ -3419,6 +3591,7 @@ mod tests {
                 "Открыть Meet",
                 "Начать запись (-)",
                 "Начать запись с ассистентом (-)",
+                "Временная встреча с ассистентом (-)",
                 "Импортировать файл… (-)",
                 "[ ] Автозапись",
                 "—",
@@ -3484,21 +3657,134 @@ mod tests {
     #[test]
     fn only_the_delete_button_cancels_the_recording() {
         use rfd::MessageDialogResult as Answer;
-        assert!(cancel_confirmed_by(&Answer::Custom("Удалить".into())));
-        assert!(!cancel_confirmed_by(&Answer::Custom(
-            "Продолжить запись".into()
+        assert!(cancel_confirmed_by(&Answer::Custom(
+            "Удалить запись".into()
         )));
+        assert!(!cancel_confirmed_by(&Answer::Custom("Отмена".into())));
         assert!(!cancel_confirmed_by(&Answer::Cancel)); // Esc, крестик
         assert!(!cancel_confirmed_by(&Answer::Ok));
         assert_eq!(
             CANCEL_QUESTION,
-            "Удалить текущую запись? Записанное не сохранится."
+            "Остановить без сохранения? Запись и всё, что с ней связано, будут удалены \
+             без возможности восстановления."
         );
-        // Кнопка по умолчанию — первая: «Продолжить запись».
+        // Кнопка по умолчанию — первая: «Отмена».
+        assert_eq!((CANCEL_KEEP, CANCEL_CONFIRM), ("Отмена", "Удалить запись"));
+        assert_eq!(CANCEL_LABEL, "Остановить без сохранения…");
+    }
+
+    #[test]
+    fn cancel_question_tells_which_history_stays() {
+        assert_eq!(cancel_question(&[]), CANCEL_QUESTION);
+        let text = cancel_question(&["Codex".to_string()]);
+        assert!(text.starts_with(CANCEL_QUESTION));
+        assert!(text.ends_with("История ассистента в Codex останется в самом Codex."));
+        let v = View::from_json(
+            &json!({"status": "recording", "forget_gaps": ["Codex", "OpenCode"]}),
+            &json!({}),
+        );
+        assert_eq!(v.forget_gaps, vec!["Codex", "OpenCode"]);
+    }
+
+    #[test]
+    fn quit_says_a_temporary_meeting_will_be_deleted() {
+        let temporary = json!({"status": "recording", "temporary": true});
+        let question = quit_question(Some(&temporary), None, false).unwrap();
+        assert!(question.contains(QUIT_TEMPORARY), "{question}");
+        assert!(!question.contains("сохранится"), "{question}");
+        let plain = json!({"status": "recording"});
+        assert!(quit_question(Some(&plain), None, false)
+            .unwrap()
+            .contains(QUIT_RECORDING));
+    }
+
+    #[test]
+    fn only_the_end_button_ends_a_temporary_meeting() {
+        use rfd::MessageDialogResult as Answer;
+        assert!(temp_end_confirmed_by(&Answer::Custom("Закончить".into())));
+        assert!(!temp_end_confirmed_by(&Answer::Custom("Продолжить".into())));
+        assert!(!temp_end_confirmed_by(&Answer::Cancel)); // Esc, крестик
         assert_eq!(
-            (CANCEL_KEEP, CANCEL_CONFIRM),
-            ("Продолжить запись", "Удалить")
+            TEMP_END_QUESTION,
+            "Временная встреча закончится и будет удалена."
         );
+        // Кнопка по умолчанию — первая: «Продолжить».
+        assert_eq!(
+            (TEMP_END_KEEP, TEMP_END_CONFIRM),
+            ("Продолжить", "Закончить")
+        );
+    }
+
+    #[test]
+    fn temporary_meeting_menu_has_badge_end_and_keep_but_no_cancel() {
+        let mut menu = menu_of(true);
+        menu.temporary = true;
+        assert_eq!(
+            layout(&menu),
+            [
+                "Открыть Meet",
+                "Временная — не сохранится (-)",
+                "Закончить временную встречу…",
+                "Сохранить как обычную встречу",
+                "Включить ассистента",
+                "Импортировать файл…",
+                "[x] Автозапись",
+                "—",
+                "Выход",
+            ]
+        );
+        let badge = menu_model(&menu).into_iter().find(|entry| {
+            matches!(
+                entry,
+                Entry::Item {
+                    id: "temp-badge",
+                    ..
+                }
+            )
+        });
+        assert!(matches!(badge, Some(Entry::Item { enabled: false, .. })));
+    }
+
+    #[test]
+    fn temporary_meeting_actions_reach_the_resident() {
+        assert_eq!(Action::LiveStartTemp.path(), "/live/start");
+        assert_eq!(Action::LiveStartTemp.body(), json!({"temporary": true}));
+        assert_eq!(Action::LiveStart.body(), Value::Null);
+        assert_eq!(Action::Keep.path(), "/recording/keep");
+        assert_eq!(Action::Keep.failure_title(), KEEP_FAILED);
+        let conflict: api::Result<Value> = Err(api::Error::Status {
+            code: 409,
+            message: "Подключите Claude Code".into(),
+        });
+        assert!(needs_provider(Action::LiveStartTemp, Some(&conflict)));
+    }
+
+    #[test]
+    fn temporary_meeting_reads_from_state_and_never_says_saved() {
+        let state = json!({"status": "recording", "source": "live", "temporary": true,
+                           "last_stop": null});
+        let v = View::from_json(&state, &json!({}));
+        assert!(v.temporary);
+        let running = ResidentStatus::Running;
+        assert!(menu_state(Some(&v), &running).temporary);
+        assert!(tooltip(Some(&v), &running).contains("временная встреча"));
+        // Начало — своё уведомление.
+        let started = transitions(Some(&idle()), &v);
+        assert_eq!(started[0].title, TEMP_STARTED);
+        // Конец: «удалена», а не «Запись сохранена».
+        let mut after = idle();
+        after.last_stop = Some(LastStop {
+            folder: "C:/data/tmp-meetings/ab/2026-10-07_15-00".into(),
+            reason: "temporary".into(),
+            at: 10.0,
+        });
+        let ended = transitions(Some(&v), &after);
+        let titles: Vec<&str> = ended.iter().map(|n| n.title.as_str()).collect();
+        assert!(titles.contains(&TEMP_ENDED), "{titles:?}");
+        assert!(!titles.contains(&RECORDING_SAVED), "{titles:?}");
+        // Без пометки старый резидент — как раньше.
+        let plain = View::from_json(&json!({"status": "recording"}), &json!({}));
+        assert!(!plain.temporary);
     }
 
     #[test]

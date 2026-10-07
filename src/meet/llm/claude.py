@@ -315,7 +315,18 @@ def forget_session(session_id: str) -> int:
     if not is_uuid(session_id):
         return 0
     removed = 0
-    root = _config_dir() / "projects"
+    config = _config_dir()
+    # Спутники сеанса вне projects/ (история правок файлов, окружение, задачи,
+    # отладка) — тоже по id; их в счёт не берём.
+    for d in (config / "file-history" / session_id, config / "session-env" / session_id):
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+    for f in [*config.glob(f"todos/{session_id}*.json"), config / "debug" / f"{session_id}.txt"]:
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            pass
+    root = config / "projects"
     if not root.is_dir():
         return 0
     for f in root.glob(f"*/{session_id}.jsonl"):
@@ -329,6 +340,163 @@ def forget_session(session_id: str) -> int:
             shutil.rmtree(d, ignore_errors=True)
     return removed
 
+
+
+# --- вкладка «Агент»: проект Claude Code папки записи --------------------------
+
+# Сколько первых строк сеанса смотреть в поисках его рабочей папки (`cwd`).
+_CWD_SCAN_LINES = 50
+
+
+def project_dir_name(folder) -> str:
+    """Имя папки проекта в `projects/` Claude Code: путь, где каждый знак,
+    кроме латиницы и цифр, заменён на «-» (так его кодирует CLI)."""
+    return "".join(c if c.isascii() and c.isalnum() else "-" for c in str(folder))
+
+
+def _same_path(a: str, b) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(str(b)))
+
+
+def _session_cwd(path: Path) -> str | None:
+    """Рабочая папка сеанса по первым строкам его .jsonl; не нашлась — None."""
+    import json
+
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for _, line in zip(range(_CWD_SCAN_LINES), f):
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(data, dict) and isinstance(data.get("cwd"), str):
+                    return data["cwd"]
+    except OSError:
+        return None
+    return None
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        return path.is_symlink() or bool(getattr(os.path, "isjunction", lambda _p: False)(path))
+    except OSError:
+        return True
+
+
+def forget_project(folder, log=None) -> dict:
+    """Следы вкладки «Агент» по папке записи (её агент работал с cwd = папка
+    записи): папка проекта `projects/<закодированный путь>/` (сеансы, память
+    `memory/`) и строки `history.jsonl` с этим `project` или id его сеансов.
+
+    Папку проекта удаляем целиком, только если все её сеансы — из этой папки
+    (имя у разных путей может совпасть: кодирование с потерями); иначе — только
+    свои сеансы. Ссылки не проходим, за пределы `projects/` не выходим.
+    `~/.claude.json` (там запись о проекте) не трогаем: CLI переписывает его
+    целиком, пока работает, и наша правка могла бы потерять его изменения.
+    → {"project": удалена ли папка проекта, "sessions": [id], "history": строк}."""
+    import shutil
+
+    config = _config_dir()
+    projects = config / "projects"
+    report = {"project": False, "sessions": [], "history": 0}
+    target = projects / project_dir_name(folder)
+    try:
+        inside = (target.parent.resolve() == projects.resolve()
+                  and target.name not in ("", ".", ".."))
+    except OSError:
+        inside = False
+    if inside and target.is_dir() and not _is_link(target) and not _is_link(projects):
+        sessions = sorted(p for p in target.glob("*.jsonl") if p.is_file() and not _is_link(p))
+        cwds = {p: _session_cwd(p) for p in sessions}
+        mine = [p for p, cwd in cwds.items() if cwd is not None and _same_path(cwd, folder)]
+        foreign = [p for p, cwd in cwds.items() if cwd is not None and not _same_path(cwd, folder)]
+        report["sessions"] = [p.stem for p in mine]
+        if not foreign:
+            shutil.rmtree(target, ignore_errors=True)
+            report["project"] = not target.exists()
+        else:
+            for p in mine:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+                side = target / p.stem
+                if side.is_dir() and not _is_link(side):
+                    shutil.rmtree(side, ignore_errors=True)
+    report["history"] = forget_history(config / "history.jsonl", folder, report["sessions"],
+                                       log=log)
+    if log and (report["project"] or report["history"]):
+        log(f"вкладка «Агент» забыта: папка проекта {'удалена' if report['project'] else 'не найдена'}, "
+            f"строк истории — {report['history']}")
+    return report
+
+
+# Незнакомая строка в history.jsonl выключает его чистку навсегда — сказать
+# об этом в журнал один раз за жизнь процесса, не на каждое удаление.
+_HISTORY_SKIP_LOGGED = False
+
+
+def _history_skipped(log, why: str) -> int:
+    global _HISTORY_SKIP_LOGGED
+    if log and not _HISTORY_SKIP_LOGGED:
+        _HISTORY_SKIP_LOGGED = True
+        log(f"history.jsonl Claude Code не почищен: {why} — файл не трогаю")
+    return 0
+
+
+def forget_history(path: Path, folder, session_ids=(), log=None) -> int:
+    """Убрать из `history.jsonl` строки этой папки (`project`) или этих сеансов
+    (`sessionId`). Безопасно или никак: формат не тот (строка не JSON-объект)
+    — не трогаем; остальные строки — байт в байт; запись — атомарная, и если
+    файл поменялся, пока мы его читали (CLI дописал строку), — не трогаем.
+    → сколько строк убрано."""
+    import json
+
+    path = Path(path)
+    if _is_link(path) or not path.is_file():
+        return 0
+    try:
+        before = os.stat(path)
+        raw = path.read_bytes()
+    except OSError:
+        return 0
+    ids = {s for s in session_ids if isinstance(s, str)}
+    kept: list[bytes] = []
+    removed = 0
+    for line in raw.splitlines(keepends=True):
+        body = line.strip()
+        if not body:
+            kept.append(line)
+            continue
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return _history_skipped(log, "строка не JSON")  # формат не наш — не трогаем вовсе
+        if not isinstance(data, dict):
+            return _history_skipped(log, "строка не объект JSON")
+        project = data.get("project")
+        sid = data.get("sessionId")
+        if (isinstance(project, str) and _same_path(project, folder)) or (isinstance(sid, str) and sid in ids):
+            removed += 1
+            continue
+        kept.append(line)
+    if not removed:
+        return 0
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.meet-tmp")
+    try:
+        tmp.write_bytes(b"".join(kept))
+        # Проверка — вплотную перед заменой (временный файл уже написан):
+        # CLI дописал строку, пока читали или писали, — его строку не теряем.
+        # Остаётся окно между этой проверкой и самой заменой (микросекунды).
+        now = os.stat(path)
+        if (now.st_size, now.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            return 0
+        os.replace(tmp, path)
+    except OSError:
+        return 0
+    finally:
+        tmp.unlink(missing_ok=True)
+    return removed
 
 async def check_auth(proxy: str | None = None, model: str = "haiku") -> str | None:
     """Проверка авторизации коротким вызовом. None = ок, иначе текст проблемы.

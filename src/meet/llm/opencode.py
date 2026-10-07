@@ -50,6 +50,17 @@ V4 (0.3.6, v4-design §12) — нативное продолжение [не п�
   не с путём, и он вернул бы строки из закрытых файлов;
 * изображения OpenCode не отправляем (`llm.vision` — False): флаг вложения
   `--file` не проверен; в ответе — `dropped_images` и NO_VISION_NOTE.
+
+0.3.7 (A1, fix round 1) — свобода по согласию (`access`, агент-участник)
+[не проверено: OpenCode не установлен; ключи прав — по документации
+opencode.ai/docs/permissions]. Остановить вызов до решения человека OpenCode
+не даёт («ask» в `opencode run` отклоняется сам), поэтому при включённой
+свободе он получает **только чтение файлов** (`permission_for`):
+
+* `none` — как прежде: только чтение и только папка встречи;
+* `read` — чтение где угодно, кроме `kb_exclude`, чувствительных путей
+  (`consent.sensitive_paths`) и `.env`; команды, правка, веб, MCP и
+  подагенты — `deny` (`"*": "deny"`).
 """
 
 import asyncio
@@ -93,6 +104,8 @@ _RESUME_MISSING = re.compile(
 ENV_LIMIT = 30_000
 SHORT_SYSTEM = ("Ты помогаешь приложению meet с записью встречи. Следуй инструкции в "
                 "начале сообщения. Файлы не изменяй, команды не выполняй.")
+SHORT_SYSTEM_FREE = ("Ты помогаешь приложению meet с записью встречи. Следуй инструкции в "
+                     "начале сообщения. Файлы читай только с согласия пользователя.")
 # Переменные, которые меняют поведение вызова в обход нашего конфига.
 _DROP_ENV = ("OPENCODE_CONFIG_CONTENT", "OPENCODE_PERMISSION", "OPENCODE_AUTO_SHARE")
 _SET_ENV = {
@@ -155,7 +168,27 @@ def readonly_permission(dirs, exclude=()) -> dict:
     }
 
 
-def config_content(prompt: str, dirs, max_turns: int, exclude=()) -> dict:
+def permission_for(access: str | None, dirs, exclude=(), sensitive=()) -> dict:
+    """Права агента для уровня согласия хода (`meet.llm.consent`): None и
+    `none` — `readonly_permission(dirs)` (у `none` `dirs` — только папка
+    встречи); `read` — чтение файлов где угодно, кроме закрытых папок
+    (`exclude`), чувствительных путей (`sensitive`) и `.env`; больше ничего.
+    Запреты — последними (побеждает последнее подходящее правило)."""
+    if access != "read":
+        return readonly_permission(dirs, exclude)
+    closed = [v for e in (*(exclude or ()), *(sensitive or ())) if e for v in path_variants(e)]
+    read = {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow"}
+    external = {"*": "allow"}
+    for v in closed:
+        for pattern in (v, str(Path(v) / "*")):
+            read[pattern] = "deny"
+            external[pattern] = "deny"
+    return {"*": "deny", "read": read, "grep": "deny" if closed else "allow", "glob": "allow",
+            "list": "allow", "external_directory": external}
+
+
+def config_content(prompt: str, dirs, max_turns: int, exclude=(), access: str | None = None,
+                   sensitive=()) -> dict:
     """Конфиг поверх конфига человека (`OPENCODE_CONFIG_CONTENT`): агент только
     для чтения, без публикации сеанса, снимков файлов и обновления."""
     return {
@@ -169,7 +202,7 @@ def config_content(prompt: str, dirs, max_turns: int, exclude=()) -> dict:
                 "description": "meet: фоновые вызовы, только чтение",
                 "prompt": prompt,
                 "steps": max(1, int(max_turns)),
-                "permission": readonly_permission(dirs, exclude),
+                "permission": permission_for(access, dirs, exclude, sensitive),
             },
         },
     }
@@ -181,16 +214,17 @@ def _dumps(value) -> str:
 
 
 def prompt_placement(system_prompt: str, prompt: str, dirs, max_turns: int, exclude=(),
-                     resume: bool = False) -> tuple[dict, str]:
+                     resume: bool = False, access: str | None = None, sensitive=()) -> tuple[dict, str]:
     """(конфиг, stdin): системный промпт — в конфиг агента, если переменная
     среды с ним укладывается в ENV_LIMIT; иначе — в начало stdin. У
     продолжения сеанса длинный промпт в stdin не повторяется (он ушёл первым
     сообщением и уже в истории; иначе каждый ход добавлял бы его заново):
     конфиг — с коротким промптом, stdin — только сообщение."""
-    config = config_content(system_prompt, dirs, max_turns, exclude)
+    config = config_content(system_prompt, dirs, max_turns, exclude, access, sensitive)
     if len(_dumps(config)) <= ENV_LIMIT:
         return config, prompt
-    short = config_content(SHORT_SYSTEM, dirs, max_turns, exclude)
+    short = config_content(SHORT_SYSTEM if access is None else SHORT_SYSTEM_FREE, dirs, max_turns,
+                           exclude, access, sensitive)
     if resume:
         return short, prompt
     return short, f"{system_prompt}\n\n{prompt}"
@@ -529,6 +563,7 @@ async def run(
     images=(),
     keep_session: bool = False,
     deny_paths=(),
+    access: str | None = None,
 ) -> AgentReply:
     """Один вызов `opencode run`; ошибки — в AgentReply.error. `model` —
     `llm.opencode_model` («провайдер/модель»), `proxy` — `llm.proxy`. Папки
@@ -538,14 +573,23 @@ async def run(
     `keep_session` — сеанс сохраняется, id — в ответе; `resume` —
     продолжить его. `images` не отправляются (модель их не видит) —
     `dropped_images` и NO_VISION_NOTE. `deny_paths` — закрытые папки
-    (запрет в правах агента)."""
-    if resume and not _SESSION_ID.match(resume):
+    (запрет в правах агента). `access` (0.3.7) — уровень согласия хода
+    (`permission_for`); у `none` читать можно только первую из `allowed_dirs`
+    (папку встречи)."""
+    if resume and not _SESSION_ID.fullmatch(resume):
         return resume_failure(f"неверный id сеанса OpenCode: {resume!r}")
     exe = find_opencode()
     if exe is None:
         return AgentReply(text="", error=OPENCODE_NOT_FOUND)
-    config, stdin_text = prompt_placement(system_prompt, prompt, allowed_dirs, max_turns,
-                                          deny_paths, resume=bool(resume))
+    dirs = tuple(allowed_dirs)[:1] if access == "none" else allowed_dirs
+    sensitive = ()
+    if access == "read":
+        from meet.llm.consent import sensitive_paths
+
+        sensitive = [p for p in sensitive_paths() if p.exists()]
+    config, stdin_text = prompt_placement(system_prompt, prompt, dirs, max_turns,
+                                          deny_paths, resume=bool(resume), access=access,
+                                          sensitive=sensitive)
     env = child_env(proxy, config)
     call = _Call()
     keep = bool(keep_session or resume)
@@ -566,7 +610,7 @@ def forget_session(session_id: str) -> int:
     """Удалить сохранённый сеанс (удалили чат встречи; смоук с `--cleanup`):
     `opencode session delete <id>`. → 1, если команда запускалась, иначе 0."""
     exe = find_opencode()
-    if exe is None or not session_id or not _SESSION_ID.match(session_id):
+    if exe is None or not session_id or not _SESSION_ID.fullmatch(session_id):
         return 0
     env = netproxy.child_env(None)
     drop_session_markers(env)

@@ -452,3 +452,50 @@ def test_agent_tells_the_window_whether_the_map_has_the_kb():
     assert participant._map_has_kb(kb_prep.MAP_KB_HEAD + "\n- План.md") is True
     assert participant._map_has_kb("Прошлые встречи группы «Альфа» (путь · дата · название):\n- meet:x") is False
     assert participant._map_has_kb("") is False
+
+
+# --- карточка подтверждения Meet после встречи (0.3.7, A1) ---------------------------------
+
+
+def test_confirm_card_after_the_meeting_is_written_to_the_journal_once(state, app, tmp_path):
+    _agent_reply(tmp_path)
+    log = ChatLog(_folder(tmp_path))
+    card = log.append("system", text="Ассистент хочет выполнить: команду", card="confirm", tool="Bash",
+                      args="ls").message
+    got = _events(app)
+    assert state.recording_chat_confirm(RID, card["id"], {"allow": False}) == {"ok": True}
+    assert ChatLog(_folder(tmp_path)).get(card["id"])["decision"] == "deny"
+    assert any(e.kind == "chat.updated" for e in got)
+    with pytest.raises(control.BadRequest, match="уже решено"):
+        state.recording_chat_confirm(RID, card["id"], {"allow": True})
+    with pytest.raises(control.BadRequest):
+        state.recording_chat_confirm(RID, card["id"], {"allow": "yes"})
+
+
+def test_a_button_after_the_meeting_is_clicked_once(state, app, tmp_path):
+    reply = _agent_reply(tmp_path, buttons=["Подробнее", "Не надо"])
+    state.recording_chat_click(RID, reply["id"], {"label": "Подробнее", "client_id": "k-1"})
+    with pytest.raises(control.BadRequest, match="уже ответили"):
+        state.recording_chat_click(RID, reply["id"], {"label": "Не надо", "client_id": "k-2"})
+
+
+def test_control_routes_for_confirm_cards(server):
+    calls = server.state_obj.calls
+    _call(server, f"/recordings/{RID}/chat/m4/confirm", {"allow": True})
+    assert calls[-1] == ("recording_chat_confirm", RID, "m4", {"allow": True})
+    _call(server, "/live/chat/m5/confirm", {"allow": False})
+    assert calls[-1] == ("live_chat_confirm", "m5", {"allow": False})
+
+
+def test_confirm_for_the_meeting_after_the_meeting(state, app, tmp_path):
+    _agent_reply(tmp_path)
+    log = ChatLog(_folder(tmp_path))
+    card = log.append("system", text="Ассистент хочет выполнить: MCP", card="confirm", tool="mcp__x__y",
+                      args="{}").message
+    assert state.recording_chat_confirm(RID, card["id"], {"allow": True, "meeting": True}) == {"ok": True}
+    assert ChatLog(_folder(tmp_path)).get(card["id"])["decision"] == "allow_meeting"
+
+
+def test_control_route_for_revoking_a_grant(server):
+    _call(server, "/live/chat/m7/revoke", {})
+    assert server.state_obj.calls[-1] == ("live_chat_revoke", "m7", {})

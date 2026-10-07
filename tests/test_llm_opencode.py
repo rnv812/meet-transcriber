@@ -659,3 +659,48 @@ def test_ignored_images_are_reported(fake, tmp_path):
     img.write_bytes(b"\x89PNG")
     reply = _run(images=[img])
     assert reply.dropped_images == [str(img)] and reply.notes == [NO_VISION_NOTE]
+
+
+# --- 0.3.7 (A1, fix round 1): свобода по согласию — только чтение файлов ----------------
+
+
+def _agent_permission(env):
+    return json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"][opencode.AGENT]["permission"]
+
+
+def test_access_none_reads_only_the_meeting(fake, tmp_path):
+    meeting, kb = tmp_path / "meeting", tmp_path / "kb"
+    _run(allowed_dirs=(meeting, kb), access="none")
+    perm = _agent_permission(FakePopen.calls[0].kw["env"])
+    assert perm["*"] == "deny"
+    assert list(perm["external_directory"]) == ["*", str(meeting / "*")]
+    for tool in ("bash", "edit", "webfetch", "websearch", "task"):
+        assert tool not in perm   # → "*": "deny"
+
+
+def test_access_read_reads_files_anywhere_and_nothing_else(fake, tmp_path, monkeypatch):
+    from meet.llm import consent
+
+    kb, ssh = tmp_path / "kb", tmp_path / "home" / ".ssh"
+    ssh.mkdir(parents=True)
+    monkeypatch.setattr(consent, "sensitive_paths", lambda **kw: [ssh, tmp_path / "missing"])
+    _run(allowed_dirs=(tmp_path / "meeting",), access="read", deny_paths=[kb / "Личное"])
+    perm = _agent_permission(FakePopen.calls[0].kw["env"])
+    assert perm["*"] == "deny"
+    assert perm["read"]["*"] == "allow" and perm["external_directory"]["*"] == "allow"
+    assert perm["read"][str(kb / "Личное" / "*")] == "deny"
+    assert perm["read"][str(ssh / "*")] == "deny" and str(tmp_path / "missing") not in perm["read"]
+    assert perm["read"]["*.env"] == "deny"
+    for tool in ("bash", "edit", "write", "webfetch", "websearch", "task"):
+        assert tool not in perm, tool
+    assert not any("*_" in k for k in perm)        # никаких MCP по шаблону имени
+    assert perm["grep"] == "deny"     # закрытые папки есть — grep выключен
+
+
+def test_without_access_permissions_are_as_in_0_3_6(tmp_path):
+    assert opencode.permission_for(None, (tmp_path,)) == opencode.readonly_permission((tmp_path,))
+    assert opencode.config_content("p", (tmp_path,), 3) == {
+        "share": "disabled", "snapshot": False, "autoupdate": False,
+        "agent": {opencode.AGENT: {"mode": "primary", "hidden": True,
+                                   "description": "meet: фоновые вызовы, только чтение", "prompt": "p",
+                                   "steps": 3, "permission": opencode.readonly_permission((tmp_path,))}}}

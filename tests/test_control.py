@@ -54,6 +54,12 @@ class FakeState:
         self.calls.append("adopt")
         return {"ok": True, "action": "adopted"}
 
+    def keep_recording(self) -> dict:
+        self.calls.append("keep")
+        if not self.recording:
+            raise control.BadRequest("Временная встреча не идёт")
+        return {"ok": True, "action": "kept"}
+
     def settings(self) -> dict:
         return {"version": 1, "auto_record": {"enabled": False}}
 
@@ -302,13 +308,11 @@ class FakeState:
     live_last_id = "нет"
 
     def live_start(self, body=None):
-        if body:
-            self.calls.append(("live.start.body", body))
         if not self.provider_ready:
             raise control.Conflict("Подключите Claude Code, Codex или OpenCode в настройках")
         if self.recording:
             raise control.BadRequest("Идёт обычная запись")
-        self.calls.append("live.start")
+        self.calls.append("live.start.temporary" if (body or {}).get("temporary") else "live.start")
         return {"ok": True, "active": False, "starting": True, "folder": None,
                 "error": None}
 
@@ -1377,3 +1381,13 @@ def test_facets_route(server):
     assert _get(server, "/facets?q=x&groups=g-1&has=summary") == {"total": 0}
     assert ("facets", "x") in server.state_obj.calls
     assert server.state_obj.filters == {"groups": ["g-1"], "has": ["summary"]}
+
+
+def test_temporary_meeting_routes_reach_state(server):
+    """«Временная встреча с ассистентом» — /live/start с {"temporary": true};
+    «Сохранить как обычную встречу» — /recording/keep (не идёт — 400)."""
+    assert _post(server, "/live/start", {"temporary": True})["starting"] is True
+    assert _post(server, "/recording/keep", expect=400) == {"error": "Временная встреча не идёт"}
+    server.state_obj.recording = True
+    assert _post(server, "/recording/keep")["action"] == "kept"
+    assert server.state_obj.calls == ["live.start.temporary", "keep", "keep"]

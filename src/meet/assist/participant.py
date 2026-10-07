@@ -40,6 +40,20 @@
 `read` / `search` / `list` — только у модели без инструментов (иначе —
 пометка в журнал процесса).
 
+**Свобода по согласию** (0.3.7, A1, fix round 1; `freedom`, настройка
+`assist.agent_freedom`, по умолчанию вкл.) — `meet.llm.consent`. Перед
+каждым ходом Meet ставит уровень согласия (`consent_level`): ход по
+репликам, 👍/👎, «Не надо» — NONE (читать можно только папку встречи и
+вложения), сообщение пользователя, ❓, кнопка агента — READ (осторожное
+чтение без вопросов). Claude Code: каждый вызов инструмента решают ворота
+(`ConsentGate`, хук PreToolUse и `can_use_tool`); всё, что не осторожное
+чтение, в ходе READ — **карточка Meet** в чате (`card: "confirm"`, точный
+вызов, [Разрешить один раз] [Отклонить]; `confirm`); ответ CLI держится до
+решения (не дольше `consent.CONFIRM_TIMEOUT_S`). Отказы хода — строкой в
+чате. Повтор хода после сбоя согласия не повторяет (`_replayed`). Codex и
+OpenCode остановить вызов не дают — им со свободой только чтение файлов
+(`access`). Выключено — как в 0.3.6.
+
 **Страховка** — единственная: не больше одного нового сообщения агента за
 `merge_window_s` (15 с). Лишнее склеивается с последним сообщением агента
 (абзацем), чтобы сломанная модель не завалила ленту. Ответ на сообщение,
@@ -80,6 +94,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from meet.assist import participant_prompts as pp
+from meet.llm import consent
 from meet.llm.base import CANCELLED_ERROR, AgentReply, claude_model, model_matches
 
 # --- ритм подачи ---
@@ -118,11 +133,16 @@ NOTE_STOPPED = "Пользователь остановил твой прошл�
 EXPLAIN_REQUEST = ("❓ к твоему сообщению: поясни его — на что ты опирался и что предлагаешь "
                    "(как реакция ❓ во время встречи).")
 TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
-NEUTRAL_NO_KB = "в профиле «Нейтральный» базы знаний и прошлых встреч нет — ответь по тому, что услышал"
+PERSONAL_NO_KB = "в профиле «Личный» базы знаний и прошлых встреч нет — ответь по тому, что услышал"
 SHUTDOWN_ERROR = "ассистент остановлен"
 NOTHING_TO_ADD = "Ассистенту нечего добавить"
 # ❓ остался без пояснения: человек остановил ответ.
 EXPLAIN_STOPPED = "Пояснение остановлено"
+# Ход, остановленный Meet: вызов инструмента прошёл мимо ворот согласия
+# (`claude_stream.GATE_GAP_ERROR`).
+GATE_GAP = "мимо проверки согласия"
+GATE_GAP_LINE = ("Meet остановил ход ассистента: инструмент выполнился мимо проверки согласия. "
+                 "Обновите Meet или Claude Code; до этого лучше выключить расширенные возможности.")
 _ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
 
 
@@ -184,19 +204,34 @@ class _ConversationSession:
     """Claude Code: постоянный процесс `Conversation` (собеседник, сохраняемый
     сеанс)."""
 
-    def __init__(self, conversation) -> None:
+    def __init__(self, conversation, gate=None) -> None:
         self.conv = conversation
+        self.gate = gate
 
     @property
     def session_id(self) -> str | None:
         return getattr(self.conv, "session_id", None)
 
     @property
+    def mcp_servers(self) -> list[dict] | None:
+        return getattr(self.conv, "mcp_servers", None)
+
+    def take_denials(self) -> list:
+        return self.gate.take_denials() if self.gate is not None else []
+
+    @property
     def has_context(self) -> bool:
         return bool(getattr(self.conv, "has_context", False))
 
-    async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S):
-        return await self.conv.send(text, images=list(images or ()), on_text=on_text, timeout_s=timeout_s)
+    async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S,
+                   level: str = consent.NONE):
+        if self.gate is not None:
+            self.gate.begin(level)
+        try:
+            return await self.conv.send(text, images=list(images or ()), on_text=on_text, timeout_s=timeout_s)
+        finally:
+            if self.gate is not None:
+                self.gate.end()
 
     async def interrupt(self) -> bool:
         """Ход останавливает сам процесс (`control_request`); True — `send`
@@ -218,8 +253,12 @@ class _RunnerSession:
     продолжается по id (`llm.session_kwargs`), у локальной — нет (затравка в
     каждом ходе)."""
 
+    mcp_servers = None
+    gate = None
+
     def __init__(self, runner, provider: str, *, system, session_id: str | None,
-                 resumable: bool, allowed_dirs=(), deny_paths=(), call_kwargs=None) -> None:
+                 resumable: bool, allowed_dirs=(), deny_paths=(), call_kwargs=None,
+                 freedom: bool = False) -> None:
         self._runner = runner
         self._provider = provider
         self._system = system          # () -> str: частота могла смениться
@@ -228,15 +267,22 @@ class _RunnerSession:
         self._allowed = tuple(allowed_dirs)
         self._deny = tuple(deny_paths)
         self._kwargs = dict(call_kwargs or {})
+        self._freedom = freedom
 
     @property
     def has_context(self) -> bool:
         return self._resumable and self.session_id is not None
 
-    async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S):
+    def take_denials(self) -> list:
+        return []   # у Codex и OpenCode отказов по вызовам Meet не видит
+
+    async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S,
+                   level: str = consent.NONE):
         extra = {}
         if self._resumable:
             extra = {"resume": self.session_id} if self.session_id else {"keep_session": True}
+        if self._freedom:
+            extra["access"] = level   # уровень согласия хода → флаги и права вызова
         reply = await self._runner(text, system_prompt=self._system(), images=list(images or ()),
                                    deny_paths=self._deny, allowed_dirs=self._allowed,
                                    timeout_s=timeout_s, max_turns=12, on_text=on_text,
@@ -263,7 +309,14 @@ def _default_conversation(**kwargs):
 
     # Своя постоянная служебная папка: сеансы агента в истории Claude Code
     # лежат под ней, а не под папкой встречи («Агент» их не подхватит).
-    return Conversation(cwd=workdir(WORKDIR), **kwargs)
+    kwargs.setdefault("cwd", workdir(WORKDIR))
+    return Conversation(**kwargs)
+
+
+def _agent_cwd():
+    from meet.llm.claude_stream import workdir
+
+    return workdir(WORKDIR)
 
 
 # --- ход ---
@@ -324,9 +377,18 @@ class Participant:
     дорасшифровать хвост речи перед ответом пользователю; `clock` — часы
     (тесты — поддельные); `after_meeting` — разговор после встречи (задача
     «Продолжить разговор»): у записей нет секунд встречи `t`; `profile` —
-    профиль сессии (`work` / `neutral`, 0.3.7): в «Нейтральном» нет карты
+    профиль сессии (`work` / `personal`, 0.3.7): в «Личном» нет карты
     базы знаний, базы и библиотеки в папках модели и запасных запросов к
-    базе (`_profile_blocked_roots` — точка для ворот A1)."""
+    базе; со свободой — ворота отказывают в базе и библиотеке на любом
+    уровне согласия (`_profile_blocked_roots`), MCP пользователя не
+    подключаются. `ephemeral` —
+    временная встреча (`meet.temp_meeting`): сеанс провайдера не сохраняется
+    нигде (Claude Code `--no-session-persistence`, Codex `--ephemeral`,
+    OpenCode — сеанс удаляется после вызова), нового хода без живого
+    контекста — затравка из журнала встречи. `freedom` — свобода по согласию
+    (`assist.agent_freedom`, см. модуль); разрешения «до конца встречи» —
+    записи журнала встречи, у временной встречи они удаляются вместе с её
+    папкой."""
 
     def __init__(self, bus, chatlog, *, provider: str, folder, runner=None, conversation=None,
                  kb=None, library_root=None, group=None, owner_name: str = "",
@@ -338,7 +400,8 @@ class Participant:
                  pause_s: float = PAUSE_S, max_interval_s: float = MAX_INTERVAL_S,
                  min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S,
                  after_meeting: bool = False, seed_until: str | None = None,
-                 profile=pp.DEFAULT_PROFILE) -> None:
+                 profile=pp.DEFAULT_PROFILE, ephemeral: bool = False,
+                 freedom: bool = False) -> None:
         from meet import llm
 
         self._bus = bus
@@ -382,8 +445,21 @@ class Participant:
         self._seed_until = seed_until
 
         self.tools = provider in TOOL_PROVIDERS
+        # Свобода по согласию — только у модели со своими инструментами.
+        self.freedom = bool(freedom) and self.tools
+        self._gate: consent.ConsentGate | None = None
+        self._mcp: list[str] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._cards: dict[str, asyncio.Event] = {}     # карточки, которые ждут решения
+        self._grant_ids: dict[str, str] = {}           # id записи журнала → ключ разрешения
+        self._grant_labels: dict[str, str] = {}
+        if self.freedom and provider == "claude-code":
+            # Ход может ждать карточку подтверждения (до CONFIRM_TIMEOUT_S).
+            self._turn_timeout = max(turn_timeout_s, TURN_TIMEOUT_S + consent.CONFIRM_TIMEOUT_S)
         self.vision = llm.vision(provider)
-        self.resumable = llm.supports_resume(provider)
+        self.ephemeral = bool(ephemeral)
+        # Временная встреча: ни родного продолжения, ни id сеанса в sessions.json.
+        self.resumable = llm.supports_resume(provider) and not self.ephemeral
         self.deny_enforced = llm.deny_enforced(provider)
         self._name = llm.LABELS.get(provider, provider or "модель")
 
@@ -497,7 +573,7 @@ class Participant:
         которую запустил CLI (None — ещё не известна), `model_configured` —
         заданная в настройках, `model_mismatch` — они разные."""
         claude = self.provider == "claude-code"
-        # «Нейтральный»: карта не уходит агенту — и в шапке её нет.
+        # «Личный»: карта не уходит агенту — и в шапке её нет.
         kb_map = self._kb_map if self.profile == pp.WORK else ""
         return {"state": self.state, "error": self.error, "provider": self.provider,
                 "label": self.label, "vision": self.vision, "tools": self.tools,
@@ -507,12 +583,37 @@ class Participant:
                 "deny_enforced": self.deny_enforced,
                 "frequency": self.frequency, "profile": self.profile,
                 "session": self.session_state,
+                "freedom": self.freedom, "can": self._can(),
+                "grants": [{"id": gid, "label": self._grant_labels.get(gid, key)}
+                           for gid, key in self._grant_ids.items()],
                 "writing": self._turn.reply_id if self._turn is not None else None,
                 # kb — есть карта (база знаний и/или прошлые встречи группы);
                 # kb_docs — в ней структура базы знаний, а не только встречи.
                 "sees": {"conversation": True, "kb": bool(kb_map),
                          "kb_docs": _map_has_kb(kb_map),
                          "materials": self._materials, "images": self._images}}
+
+    def _can(self) -> dict:
+        """Что агент может (шапка окна «может: …»): `consent` — Claude Code,
+        всё по согласию (`mcp` — имена MCP-серверов, если CLI их назвал;
+        None — неизвестно); `files` — Codex/OpenCode со свободой: только
+        чтение файлов по просьбе; `read` — без свободы: чтение встречи и базы;
+        `meet` — просит Meet (локальная модель)."""
+        if self.freedom and self.provider == "claude-code":
+            return {"mode": "consent", "mcp": list(self._mcp) if self._mcp is not None else None}
+        if self.freedom:
+            return {"mode": "files", "mcp": None}
+        return {"mode": "read" if self.tools else "meet", "mcp": None}
+
+    def _update_mcp(self, session) -> None:
+        servers = getattr(session, "mcp_servers", None)
+        if not self.freedom or not isinstance(servers, list):
+            return
+        names = [str(x.get("name")) for x in servers
+                 if isinstance(x, dict) and x.get("name") and x.get("status") not in ("failed", "disabled")]
+        if names != self._mcp:
+            self._mcp = names
+            self._changed()
 
     async def snapshot(self, limit: int | None = 200) -> dict:
         """Лента (`ChatLog.snapshot(feed=True)`), состояние агента и текст,
@@ -557,6 +658,9 @@ class Participant:
     async def shutdown(self) -> None:
         """Штатная остановка: идущий ход закрывается (`cancelled`), процесс
         модели закрывается, поток журнала отпускается."""
+        if self._cards:
+            with _quiet():
+                await self._cancel_cards()
         turn = self._turn
         if turn is not None and turn.task is not None and not turn.task.done():
             turn.stop = turn.stop or "shutdown"
@@ -608,15 +712,17 @@ class Participant:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                with _quiet():
-                    self._chatlog.set_profile(name)
+                if not self.ephemeral:
+                    with _quiet():
+                        self._chatlog.set_profile(name)
             else:
                 self._background_task(self._save_profile())
         return name
 
     async def _save_profile(self) -> None:
         set_profile = getattr(self._chatlog, "set_profile", None)
-        if set_profile is None:
+        # Временная встреча следов не оставляет: и профиль — только в памяти.
+        if set_profile is None or self.ephemeral:
             return
         try:
             await self._io(set_profile, self.profile)
@@ -629,7 +735,7 @@ class Participant:
         text = text or ""
         changed = text != self._task_context
         self._task_context = text
-        # «Нейтральный» контекста задачи не знает (его промпт без него); при
+        # «Личный» контекста задачи не знает (его промпт без него); при
         # переходе в «Рабочую встречу» задача придёт системным промптом сеанса.
         if changed and text and self._session is not None and self.profile == pp.WORK:
             self.add_note("Пользователь задал контекст задачи встречи (учитывай дальше):\n"
@@ -638,8 +744,8 @@ class Participant:
     # --- сессия ---
 
     def _folders(self) -> dict[str, str]:
-        if self.profile == pp.NEUTRAL:
-            # «Нейтральный»: ни базы знаний, ни библиотеки — только своя папка
+        if self.profile == pp.PERSONAL:
+            # «Личный»: ни базы знаний, ни библиотеки — только своя папка
             # (вложения пользователя разбираются в неё).
             return {"Папка этой записи": str(self._folder)}
         out = {}
@@ -654,14 +760,14 @@ class Participant:
         """Папки на чтение модели (`add_dirs` Claude Code, `allowed_dirs`
         остальных): папка встречи, в «Рабочей встрече» — ещё база знаний и
         библиотека встреч."""
-        if self.profile == pp.NEUTRAL:
+        if self.profile == pp.PERSONAL:
             return [str(self._folder)]
         return [str(d) for d in (self._folder,
                                  self._kb.root if self._kb is not None and self._kb.configured else None,
                                  self._library_root) if d]
 
     def _profile_blocked_roots(self) -> list[str]:
-        """Что профиль закрывает целиком: в «Нейтральном» — база знаний и
+        """Что профиль закрывает целиком: в «Личном» — база знаний и
         библиотека встреч (кроме папки этой записи, она внутри библиотеки).
 
         Точка подключения для ворот A1 (`v037/agent-freedom`, `llm/consent.py`):
@@ -669,7 +775,7 @@ class Participant:
         уровне согласия — как `kb_exclude`. Здесь, без ворот, барьер — папки
         модели (`_add_dirs`) и правила запрета Claude Code (`_deny`) для
         базы знаний, если папка записи не внутри неё."""
-        if self.profile != pp.NEUTRAL:
+        if self.profile != pp.PERSONAL:
             return []
         out = []
         if self._kb is not None and getattr(self._kb, "configured", False):
@@ -679,7 +785,7 @@ class Participant:
         return out
 
     def _deny(self) -> list[str]:
-        """Запреты сеанса: `kb_exclude`, в «Нейтральном» — и корни профиля,
+        """Запреты сеанса: `kb_exclude`, в «Личном» — и корни профиля,
         которые не содержат папку записи (запрет библиотеки закрыл бы и её)."""
         deny = list(self._deny_paths)
         folder = self._folder.resolve() if self._folder.exists() else self._folder
@@ -694,16 +800,18 @@ class Participant:
         return deny
 
     def system_prompt(self) -> str:
-        if self.profile == pp.NEUTRAL:
+        if self.profile == pp.PERSONAL:
             return pp.build_system(
                 frequency=self.frequency, tools_available=self.tools, owner_name=self._owner_name,
-                folders=self._folders() if self.tools else None, profile=pp.NEUTRAL)
+                folders=self._folders() if self.tools else None, profile=pp.PERSONAL,
+                freedom=self.freedom, actions=self.provider == "claude-code")
         return pp.build_system(
             frequency=self.frequency, tools_available=self.tools, kb_map=self._kb_map,
             owner_name=self._owner_name,
             kb_exclude=tuple(getattr(self._kb, "exclude", ()) or ()) if self._kb is not None else (),
             folders=self._folders() if self.tools else None,
-            glossary=self._glossary, task_context=self._task_context)
+            glossary=self._glossary, task_context=self._task_context, freedom=self.freedom,
+            actions=self.provider == "claude-code")
 
     def _gather(self) -> dict:
         """Карта, запреты, материалы — один раз на сессию (в потоке)."""
@@ -761,23 +869,237 @@ class Participant:
             return self._session
         await self._load_info()
         dirs = self._add_dirs()
+        # `kb_exclude` и — в «Личном» — корень базы знаний, если запись не
+        # внутри неё (правило CLI у Claude Code, права у OpenCode, просьба у Codex).
         deny = self._deny()
         if self.provider == "claude-code":
+            extra = {}
+            if self.freedom:
+                # Свобода по согласию: без вопросов CLI — только папка встречи;
+                # остальное (база, библиотека, «Загрузки», MCP…) решают ворота,
+                # действия — карточкой Meet по каждому вызову.
+                self._loop = asyncio.get_running_loop()
+                cwd = await asyncio.to_thread(_agent_cwd)
+                sensitive = await asyncio.to_thread(consent.sensitive_paths, library_root=self._library_root)
+                # «Личный»: база знаний и библиотека (кроме своей папки)
+                # закрыты на любом уровне согласия, разрешения их не открывают.
+                self._gate = consent.ConsentGate(own_dirs=[self._folder], deny_paths=self._deny_paths,
+                                                 sensitive=sensitive, cwd=cwd, log=self._log,
+                                                 confirmer=self._confirm_sync,
+                                                 blocked_roots=self._profile_blocked_roots())
+                self._gate.allow_paths(await self._io(self._attached_paths))
+                for gid, key, label in await self._io(self._load_grants):
+                    self._grant_ids[gid], self._grant_labels[gid] = key, label
+                    self._gate.add_grant(key, label)
+                dirs = [str(self._folder)]
+                extra.update(gate=self._gate, cwd=cwd)
+                if self.profile == pp.PERSONAL:
+                    # MCP пользователя (корпоративная база, Jira…) — та же база
+                    # знаний другим путём: в «Личном» их нет.
+                    extra["mcp"] = False
+                # Закрытые данные — ещё и правилами CLI (Grep по папке выше их не прочтёт).
+                deny += [str(p) for p in sensitive if p.exists()]
             conv = self._conversation(
                 system_prompt=self.system_prompt(), model=self._model, proxy=self._proxy,
                 log=self._log, responder=True, add_dirs=dirs, deny_paths=deny,
-                persist=True, resume=self._stored_sid, on_model=self._on_model)
-            self._session = _ConversationSession(conv)
+                persist=not self.ephemeral, resume=self._stored_sid, on_model=self._on_model,
+                **extra)
+            self._session = _ConversationSession(conv, self._gate)
         else:
             if self._runner is None:
                 raise RuntimeError(f"нет вызова модели для {self.provider}")
+            if self.freedom:
+                # Codex — запрет просьбой в промпте, OpenCode — в правах.
+                deny += [str(p) for p in await asyncio.to_thread(
+                    consent.sensitive_paths, library_root=self._library_root) if p.exists()]
             self._session = _RunnerSession(
                 self._runner, self.provider, system=self.system_prompt,
                 session_id=self._stored_sid, resumable=self.resumable,
-                allowed_dirs=dirs, deny_paths=deny, call_kwargs=self._call_kwargs)
+                allowed_dirs=dirs, deny_paths=deny, call_kwargs=self._call_kwargs,
+                freedom=self.freedom)
         self._session_profile = self.profile
         self._changed()
         return self._session
+
+    def _attached_paths(self) -> list[str]:
+        """Что пользователь уже приложил к чату (вложения журнала): их можно
+        читать и без согласия, даже если источник лежит вне встречи."""
+        out = []
+        try:
+            for m in self._chatlog.messages():
+                if m.get("kind") == "attachment" and m.get("status") not in ("failed", "removed"):
+                    out += [str(m[k]) for k in ("path", "source") if isinstance(m.get(k), str) and m[k]]
+        except Exception:
+            pass
+        return out
+
+    def consent_level(self, inputs) -> str:
+        """Согласие хода (`meet.llm.consent`): сообщение пользователя, ❓,
+        кнопка агента — READ (кроме «Не надо»: `click_level`); реплики
+        встречи, 👍/👎 — NONE. Повтор после сбоя (`_replayed`) согласия не
+        даёт: его даёт только свежий ввод пользователя."""
+        level = consent.NONE
+        for m in inputs.user:
+            if m.get("_replayed"):
+                continue
+            if m.get("via") == "button":
+                level = consent.higher(level, consent.click_level(m.get("text") or ""))
+            else:
+                level = consent.higher(level, consent.READ)
+        for r in inputs.reactions:
+            if r.get("emoji") == "❓" and r.get("on") is not False and not r.get("_replayed"):
+                level = consent.higher(level, consent.READ)
+        return level
+
+    # --- карточки подтверждения (Claude Code, свобода по согласию) ---
+
+    def _confirm_sync(self, card: dict) -> str:
+        """Ворота (поток ответа CLI): показать карточку и дождаться решения.
+        → allow / deny / timeout / cancelled."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return "cancelled"
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._ask_card(card), loop)
+            return future.result(timeout=consent.CONFIRM_TIMEOUT_S + 30)
+        except Exception as e:
+            self._log(f"агент: карточка подтверждения не дождалась ответа ({type(e).__name__}: {e})")
+            return "cancelled"
+
+    async def _ask_card(self, card: dict) -> str:
+        """Карточка в журнал (`system`, `card: "confirm"`), ожидание решения:
+        событием (`confirm` в этом процессе) или по журналу (решение записал
+        резидент — чат после встречи), до CONFIRM_TIMEOUT_S."""
+        import time as _time
+
+        timeout = consent.CONFIRM_TIMEOUT_S
+        fields = {"text": f"Ассистент хочет выполнить: {card.get('title') or card.get('tool')}",
+                  "card": "confirm", "tool": card.get("tool"), "title": card.get("title"),
+                  "args": card.get("args") or "", "what": card.get("what") or "",
+                  "size": card.get("size") or "", "expires_at": round(_time.time() + timeout, 3)}
+        for key in ("preview", "warnings", "grant"):
+            if card.get(key):
+                fields[key] = card[key]
+        t = self._now_t()
+        if t is not None:
+            fields["t"] = t
+        added = await self._io(self._chatlog.append, "system", **fields)
+        mid = added.message["id"]
+        event = self._cards[mid] = asyncio.Event()
+        self._emit_chat([added.event])
+        self._changed()
+        loop = asyncio.get_running_loop()
+        end = loop.time() + timeout
+        try:
+            while True:
+                left = end - loop.time()
+                if left <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(event.wait(), min(left, 0.5))
+                except asyncio.TimeoutError:
+                    pass
+                turn = self._turn
+                if turn is not None and turn.stop in ("stop", "shutdown") and mid in self._cards:
+                    # «Стоп» пришёл, пока карточка записывалась, — она уже не нужна.
+                    with _quiet():
+                        self._emit_chat([await self._io(self._chatlog.decide_card, mid, "cancelled")])
+                msg = await self._io(self._chatlog.get, mid)
+                decision = (msg or {}).get("decision")
+                if decision == consent.ALLOW_MEETING and card.get("grant"):
+                    await self._record_grant(card["grant"])
+                    return consent.ALLOW_MEETING
+                if decision:
+                    return "allow" if decision in ("allow", consent.ALLOW_MEETING) else (
+                        "timeout" if decision == "timeout" else "deny" if decision == "deny" else "cancelled")
+            try:
+                ev = await self._io(self._chatlog.decide_card, mid, "timeout")
+                self._emit_chat([ev])
+                return "timeout"
+            except ValueError:   # решили в последний момент
+                msg = await self._io(self._chatlog.get, mid)
+                return "allow" if (msg or {}).get("decision") == "allow" else "deny"
+        finally:
+            self._cards.pop(mid, None)
+            self._changed()
+
+    async def confirm(self, mid: str, allow: bool, *, meeting: bool = False) -> dict:
+        """Решение человека по карточке подтверждения (один раз; решённая
+        карточка — ValueError): разрешить один раз, «разрешать такое до конца
+        встречи» (`meeting`) или отклонить. → событие журнала."""
+        decision = (consent.ALLOW_MEETING if meeting else "allow") if allow else "deny"
+        ev = await self._io(self._chatlog.decide_card, mid, decision)
+        self._emit_chat([ev])
+        event = self._cards.get(mid)
+        if event is not None:
+            event.set()
+        return ev
+
+    # --- «Разрешать такое до конца встречи» ---
+
+    async def _record_grant(self, grant: dict) -> None:
+        """Разрешение до конца встречи — запись журнала (`system`, `grant`):
+        переживает перезапуск ассистента в этой встрече; после встречи —
+        не действует (`after_meeting`)."""
+        key, label = str(grant.get("key") or ""), str(grant.get("label") or "")
+        if not key or key in self._grant_ids.values():
+            return
+        added = await self._io(self._chatlog.append, "system", grant=key, label=label,
+                               text=f"Разрешено до конца встречи: {label}", after_meeting=self._after_meeting)
+        self._grant_ids[added.message["id"]] = key
+        self._grant_labels[added.message["id"]] = label
+        if self._gate is not None:
+            self._gate.add_grant(key, label)
+        self._emit_chat([added.event])
+        self._changed()
+
+    def _load_grants(self) -> list[tuple[str, str, str]]:
+        """Действующие разрешения этой встречи из журнала: (id, ключ, подпись)."""
+        out = []
+        try:
+            for m in self._chatlog.messages():
+                if (m.get("kind") == "system" and isinstance(m.get("grant"), str) and not m.get("revoked")
+                        and bool(m.get("after_meeting")) == self._after_meeting):
+                    out.append((m["id"], str(m["grant"]), str(m.get("label") or m["grant"])))
+        except Exception:
+            pass
+        return out
+
+    async def revoke_grant(self, gid: str) -> dict:
+        """Отозвать «разрешать до конца встречи» (× в шапке). Нет такого — ValueError."""
+        if gid not in self._grant_ids:
+            raise ValueError(f"{gid}: нет такого разрешения")
+        ev = await self._io(self._chatlog.patch, gid, {"revoked": True})
+        key = self._grant_ids.pop(gid)
+        self._grant_labels.pop(gid, None)
+        if self._gate is not None:
+            self._gate.remove_grant(key)
+        if ev:
+            self._emit_chat([ev])
+        self._changed()
+        return ev or {}
+
+    async def _cancel_cards(self) -> None:
+        """«Стоп», остановка ассистента: карточки, которые ждут, — отменены."""
+        for mid, event in list(self._cards.items()):
+            try:
+                self._emit_chat([await self._io(self._chatlog.decide_card, mid, "cancelled")])
+            except (ValueError, OSError, RuntimeError):
+                pass
+            event.set()
+
+    async def _note_denials(self, session) -> None:
+        """Ворота отказали агенту в этом ходе — короткая строка в чате."""
+        take = getattr(session, "take_denials", None)
+        line = consent.denial_line(take() if take is not None else [])
+        if not line:
+            return
+        try:
+            added = await self._io(self._chatlog.append, "system", text=line, gate=True)
+        except (OSError, RuntimeError, ValueError) as e:
+            self._log(f"агент: строка об отказе не записана ({type(e).__name__}: {e})")
+            return
+        self._emit_chat([added.event])
 
     async def _store_session(self, session) -> None:
         """Id сеанса — после каждого хода: ветка после картинки его меняет."""
@@ -957,15 +1279,18 @@ class Participant:
         self._user_fresh = False
         return inputs
 
-    def _requeue(self, inputs: _Inputs, *, transcript=True, user=True, others=True) -> None:
-        """Недоставленное — назад, в начало очереди."""
+    def _requeue(self, inputs: _Inputs, *, transcript=True, user=True, others=True,
+                 replay: bool = False) -> None:
+        """Недоставленное — назад, в начало очереди. `replay` — повтор после
+        сбоя хода: согласие этого ввода не повторяется (`_replayed`)."""
         if transcript and inputs.end > inputs.start:
             self._cursor = min(self._cursor, inputs.start)
             self._first_pending_at = inputs.first_pending_at or self._clock()
+        mark = (lambda xs: [{**x, "_replayed": True} for x in xs]) if replay else (lambda xs: xs)
         if user:
-            self._user = inputs.user + self._user
+            self._user = mark(inputs.user) + self._user
         if others:
-            self._reactions = inputs.reactions + self._reactions
+            self._reactions = mark(inputs.reactions) + self._reactions
             self._tool_results = inputs.tools + self._tool_results
             self._notes = inputs.notes + self._notes
             if inputs.frequency and self._frequency_note is None:
@@ -1010,7 +1335,7 @@ class Participant:
             if not turn.answered:
                 # Модель ответила — входы она уже видела: повтор задублировал
                 # бы показанное сообщение (сбой журнала посреди показа, M5).
-                self._requeue(turn.inputs)
+                self._requeue(turn.inputs, replay=True)
             if turn.reply_id is not None:
                 with _quiet():
                     self._emit_chat([await self._io(
@@ -1085,6 +1410,12 @@ class Participant:
         if reply.cancelled or turn.stop == "stop" or (turn.stop and reply.error):
             await self._finish_stopped(turn, reply)
             return
+        if reply.error and GATE_GAP in reply.error:
+            # Инструмент выполнился мимо ворот согласия — видно в ленте (ревью R5).
+            with _quiet():
+                added = await self._io(self._chatlog.append, "system", gate=True, level="error",
+                                       text=GATE_GAP_LINE)
+                self._emit_chat([added.event])
         if reply.error:
             await self._finish_failed(turn, reply)
             return
@@ -1157,9 +1488,10 @@ class Participant:
         return "\n".join(lines)
 
     async def _send(self, turn: _Turn, session, text: str) -> AgentReply:
+        kwargs = {"level": self.consent_level(turn.inputs)} if self.freedom else {}
         task = asyncio.ensure_future(session.send(
             text, images=turn.inputs.images if self.vision else (),
-            on_text=partial(self._on_text, turn), timeout_s=self._turn_timeout))
+            on_text=partial(self._on_text, turn), timeout_s=self._turn_timeout, **kwargs))
         turn.send_task = task
         try:
             await asyncio.wait({task})
@@ -1168,6 +1500,15 @@ class Participant:
             raise
         finally:
             turn.send_task = None
+        if self.freedom:
+            if self._cards:
+                # Ход кончился — его карточки больше не ждут (вызов, ради
+                # которого их показали, уже не выполнится; ревью R4).
+                with _quiet():
+                    await self._cancel_cards()
+            self._update_mcp(session)
+            with _quiet():
+                await self._note_denials(session)
         if task.cancelled():
             return AgentReply(text="".join(turn.raw), error=CANCELLED_ERROR, cancelled=True)
         exc = task.exception()
@@ -1194,6 +1535,8 @@ class Participant:
             self._emit("chat_partial", dict(self._partial))
 
     async def _interrupt(self, turn: _Turn, why: str) -> None:
+        if why in ("stop", "shutdown") and self._cards:
+            await self._cancel_cards()
         if turn.stop and not (why == "stop" and turn.stop == "message"):
             return
         already = turn.stop is not None
@@ -1252,7 +1595,7 @@ class Participant:
     async def _finish_failed(self, turn: _Turn, reply: AgentReply) -> None:
         error = (reply.error or "ошибка модели")[:300]
         self._log(f"агент: модель не ответила ({error}); повтор позже")
-        self._requeue(turn.inputs)
+        self._requeue(turn.inputs, replay=True)
         # Ответ пользователю — видимая ошибка; ход по репликам — молча.
         status = "failed" if turn.addressed else "dropped"
         self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
@@ -1419,10 +1762,10 @@ class Participant:
     def _tool_call(self, action) -> tuple[str, str | None]:
         from meet.assist.kb_prep import KnowledgeBase
 
-        if self.profile == pp.NEUTRAL:
+        if self.profile == pp.PERSONAL:
             # Запасной путь — только база знаний и прошлые встречи: в
-            # «Нейтральном» их нет (вложения уходят агенту в ходе сами).
-            return "", NEUTRAL_NO_KB
+            # «Личном» их нет (вложения уходят агенту в ходе сами).
+            return "", PERSONAL_NO_KB
         kb = self._kb or KnowledgeBase(None, library_root=self._library_root)
         if action.kind == "read":
             return _read_text(kb.kb_read(list(action.paths)))
@@ -1647,6 +1990,8 @@ class Participant:
             fields, image = failed_attachment(item, e), None
         added = await self._io(self._chatlog.append, "attachment", **fields)
         self._emit_chat([added.event])
+        if self._gate is not None and fields.get("status") == "ready":
+            self._gate.allow_paths([fields[k] for k in ("path", "source") if isinstance(fields.get(k), str)])
         if image:
             self._images += 1
         elif fields.get("type") == "doc" and fields.get("status") == "ready":
@@ -1865,6 +2210,10 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
     knowledge = knowledge_dir or cfg.assistant.knowledge_dir
     knowledge = knowledge if knowledge and Path(knowledge).is_dir() else None
     library_root = folder.parent
+    if "ephemeral" not in kwargs:
+        from meet import temp_meeting
+
+        kwargs["ephemeral"] = temp_meeting.is_temporary(folder)
     kb = KnowledgeBase(knowledge, exclude=cfg.assist.kb_exclude, library_root=library_root,
                        show_map=cfg.assist.kb_map)
     chatlog = chatlog if chatlog is not None else ChatLog(folder, log=log)
@@ -1875,7 +2224,8 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
         owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
         frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
         proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
-        profile=session_profile(chatlog, cfg.assist.profile, profile), **kwargs)
+        profile=session_profile(chatlog, cfg.assist.profile, profile),
+        freedom=getattr(cfg.assist, "agent_freedom", False), **kwargs)
 
 
 # --- помощники ---

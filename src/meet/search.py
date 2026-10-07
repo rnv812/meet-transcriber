@@ -568,7 +568,9 @@ def _cards(root: Path):
     каталога о вложенной папке обновляется с запаздыванием."""
     try:
         with os.scandir(root) as it:
-            folders = sorted(((e.name, e.path) for e in it if e.is_dir()), reverse=True)
+            # С точки — служебные (`.deleting-`, `.partial-`), как в library.listing.
+            folders = sorted(((e.name, e.path) for e in it
+                              if e.is_dir() and not e.name.startswith(".")), reverse=True)
     except OSError:
         return
     _CACHE.forget_except({path for _, path in folders})

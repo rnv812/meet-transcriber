@@ -21,7 +21,7 @@ test("фаза по снимку", () => {
   expect(phaseOf(snap(), false).kind).toBe("offline");
   expect(phaseOf(snap(), true).kind).toBe("idle");
   expect(phaseOf(snap({ status: "recording", source: "auto" }), true))
-    .toEqual({ kind: "recording", liveOnly: false, assistant: null, auto: true });
+    .toEqual({ kind: "recording", liveOnly: false, assistant: null, auto: true, temporary: false });
   expect(phaseOf(snap({ status: "recording", live: live({ active: true, attached: true }) }), true))
     .toMatchObject({ kind: "recording", assistant: "on" });
   expect(phaseOf(snap({ live: live({ active: true }) }), true))
@@ -83,4 +83,24 @@ test("звук идёт, модель грузится (ready: false) — асс
   // Ассистент, пишущий сам: «Запись уже идёт — ассистент загружает модель».
   expect(phaseOf(snap({ live: live({ active: true, ready: false }) }), true).kind).toBe("live-starting");
   expect(phaseOf(snap({ live: live({ active: true, ready: true }) }), true).kind).toBe("recording");
+});
+
+test("временная встреча: пометка в фазе, «только что сохранена» после неё не бывает", () => {
+  const temp = snap({ status: "recording", source: "live", folder: "C:/data/tmp-meetings/ab/2026-10-07_15-00", temporary: true });
+  expect(phaseOf(temp, true)).toMatchObject({ kind: "recording", temporary: true });
+  expect(stoppedBetween(temp, snap())).toBeNull();
+  const now = Date.now();
+  const ended = (reason: "temporary" | "discarded" | "saved") =>
+    snap({ last_stop: { folder: "D:/rec/2026-10-07_15-00", reason, at: now / 1000 } });
+  expect(freshStop(ended("temporary"), now)).toBeNull();
+  expect(freshStop(ended("discarded"), now)).toBeNull();
+  expect(freshStop(ended("saved"), now)).toBe("2026-10-07_15-00");
+});
+
+test("сохранённая временная встреча: «Открыть запись» — по имени в библиотеке от резидента, не по папке сеанса", () => {
+  const kept = snap({ status: "recording", source: "live", folder: "C:/data/tmp-meetings/ab12cd34ef56/2026-10-07_15-00" });
+  expect(stoppedBetween(kept, snap())).toBeNull();
+  const now = Date.now();
+  const saved = snap({ last_stop: { folder: "D:/rec/2026-10-07_15-00_2", reason: "saved", at: now / 1000 } });
+  expect(freshStop(saved, now)).toBe("2026-10-07_15-00_2");
 });

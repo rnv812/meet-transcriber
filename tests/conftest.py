@@ -90,6 +90,20 @@ def _isolated_secrets(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_agent_homes(monkeypatch, tmp_path_factory):
+    """Папки настроек Claude Code, Codex и OpenCode — временные: «Остановить без
+    сохранения» и временная встреча забывают сеансы и проект вкладки «Агент»
+    (`claude.forget_project` читает `history.jsonl`), и тесты не должны даже
+    читать настоящие `~/.claude` и `~/.codex` разработчика. Тесты со своими
+    папками ставят переменные сами."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path_factory.mktemp("claude-config")))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path_factory.mktemp("codex-home")))
+    # OpenCode хранит сеансы в `$XDG_DATA_HOME/opencode` (по умолчанию
+    # ~/.local/share/opencode): тоже временная.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg-data")))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_repo_root(monkeypatch, tmp_path_factory):
     """Корень репозитория dev-режима (`paths.repo_root()`) — пустая временная
     папка с `pyproject.toml`: режим остаётся dev, но `voices/`, `recordings/`,
@@ -212,6 +226,13 @@ def _no_model_process(monkeypatch):
     except ImportError:
         return
     monkeypatch.setattr(claude_stream, "default_cli", lambda: None)
+    try:
+        from meet.llm import codex
+    except ImportError:
+        return
+    # Список MCP-серверов Codex (свобода по согласию, 0.3.7) — без запуска CLI.
+    monkeypatch.setattr(codex, "_mcp_list_json", lambda exe, env: "[]")
+    monkeypatch.setattr(codex, "_mcp_cache", {})
 
 
 _AGENT_STEMS = ("claude", "codex", "opencode")

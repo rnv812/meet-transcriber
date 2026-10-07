@@ -17,6 +17,14 @@
  * «Стоп» — «Выключить ассистента», запись при этом идёт дальше; пока он
  * догоняет начало встречи, в шапке — «Догоняю N %».
  *
+ * Запись ведёт резидент (ассистент к ней подключён) — в шапке и «Остановить
+ * без сохранения» (корзина, с вопросом: запись, чат и материалы удаляются).
+ * Временная встреча (`status.temporary`): пометка «Временная — не
+ * сохранится», «Стоп» спрашивает «Временная встреча закончится и будет
+ * удалена.», рядом — «Сохранить как обычную встречу». Вопрос встаёт на место
+ * содержимого панели (свёрнутую на это время разворачиваем — в строку он не
+ * помещается).
+ *
  * Размер и место помнит оболочка (`useLiveWindow`). Фокус панель не берёт:
  * окно создаётся без фокуса, и ни один элемент не фокусируется сам —
  * клавиатура остаётся у звонка, пока человек не щёлкнет в панель.
@@ -25,11 +33,17 @@
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 import { plainMarkdown } from "../lib/agentRef";
-import { type Endpoint, NoResidentError, liveDetach, liveStop, resolveEndpoint } from "../lib/api";
+import { type Endpoint, NoResidentError, liveDetach, liveStop, recordingCommand, resolveEndpoint } from "../lib/api";
 import { clock, errorText } from "../lib/format";
+import {
+  DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_NOTE, TEMP_STOP_LABEL,
+} from "../lib/recordingStop";
 import { inTauri, invoke } from "../lib/shell";
 import type { ChatMessage, LiveHint } from "../lib/types";
-import { Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, PowerOff, Square } from "lucide-react";
+import {
+  Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, PowerOff, Save, Square, Trash2,
+} from "lucide-react";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { IconButton } from "../ui/IconButton";
 import { Truncate } from "../ui/Truncate";
 import { isFinalAgent } from "./chatModel";
@@ -180,6 +194,36 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       setStopError(errorText(e));
     });
   };
+  // Временная встреча (идёт запись резидента с ассистентом в ней).
+  const temporary = attached && !!status?.temporary;
+  // Вопрос «Остановить без сохранения?» / конец временной встречи. Свёрнутую
+  // панель на время вопроса разворачиваем (в строку он не помещается), потом — обратно.
+  const [asking, setAsking] = useState<"discard" | "temp-end" | null>(null);
+  const unfolded = useRef(false);
+  const askStop = (what: "discard" | "temp-end") => {
+    unfolded.current = !(view.expanded || view.maximized);
+    if (unfolded.current) setExpanded(true);
+    setAsking(what);
+  };
+  const closeAsk = () => {
+    setAsking(null);
+    if (unfolded.current) setExpanded(false);
+    unfolded.current = false;
+  };
+  const discard = () => {
+    closeAsk();
+    setFullStop(true);
+    setStopRequested(true);
+    setStopError(null);
+    recordingCommand(endpoint, "cancel").catch((e) => {
+      setStopRequested(false);
+      setStopError(errorText(e));
+    });
+  };
+  const keep = () => {
+    setStopError(null);
+    recordingCommand(endpoint, "keep").catch((e) => setStopError(errorText(e)));
+  };
 
   const openHints = () => {
     ws.setTab(shown ? "hints" : "feed");
@@ -256,14 +300,49 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
               className={withAssistant ? "live-head__detach" : "live-head__stop"}
               tooltip="Выключить ассистента — запись продолжится" onClick={() => stop(true)} disabled={stopping} />
           )}
-          {(!attached || withAssistant) && (
-            <IconButton icon={Square} label={withAssistant ? "Остановить и сохранить" : "Стоп"} variant="danger"
-              className="live-head__stop" tooltip="Остановить и сохранить запись" onClick={() => stop(false)}
+          {temporary && (
+            <IconButton icon={Save} label={KEEP_LABEL} className="live-head__keep"
+              tooltip={`${KEEP_LABEL}: запись ляжет в библиотеку и расшифруется`} onClick={keep}
               disabled={stopping} />
+          )}
+          {attached && !temporary && (
+            <IconButton icon={Trash2} label={DISCARD_LABEL} variant="danger" className="live-head__discard"
+              tooltip={`${DISCARD_LABEL}: запись, чат и материалы удалятся`} onClick={() => askStop("discard")}
+              disabled={stopping} />
+          )}
+          {(!attached || withAssistant) && (
+            temporary ? (
+              <IconButton icon={Square} label={TEMP_STOP_LABEL} variant="danger" className="live-head__stop"
+                tooltip={`${TEMP_STOP_LABEL} — она будет удалена`} onClick={() => askStop("temp-end")}
+                disabled={stopping} />
+            ) : (
+              <IconButton icon={Square} label={withAssistant ? "Остановить и сохранить" : "Стоп"} variant="danger"
+                className="live-head__stop" tooltip="Остановить и сохранить запись" onClick={() => stop(false)}
+                disabled={stopping} />
+            )
           )}
         </span>
       </header>
-      {open ? (
+      {/* Отдельной строкой под шапкой: в шапке узкой панели метка обрезалась бы. */}
+      {temporary && (
+        <div className="live-temp" role="note" title={TEMP_NOTE}>
+          <span className="live-temp__badge">{TEMP_BADGE}</span>
+          <span className="live-temp__note">удалится вместе с чатом</span>
+        </div>
+      )}
+      {asking ? (
+        <div className="live-panel__confirm">
+          <ConfirmDialog inline {...(asking === "discard" ? discardConfirm(status?.forget_gaps) : TEMP_END_CONFIRM)}
+            onCancel={closeAsk}
+            onConfirm={() => {
+              if (asking === "discard") discard();
+              else {
+                closeAsk();
+                stop(false);
+              }
+            }} />
+        </div>
+      ) : open ? (
         <div className="live-panel__body">
           {wantsOwnerSample(live.mic) && (
             <OwnerVoiceNudge endpoint={endpoint} lead={LIVE_NUDGE_LEAD} className="live-nudge" />

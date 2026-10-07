@@ -209,21 +209,25 @@ def frequency_key(value) -> str | None:
 
 
 # Профиль сессии ассистента (0.3.7): «Рабочая встреча» — база знаний, прошлые
-# встречи, подсказки по делу; «Нейтральный» — созвон, стрим, видео: без базы
+# встречи, подсказки по делу; «Личный» — созвон, стрим, видео: без базы
 # знаний и рабочей рамки. Ключ → подпись (`participant_prompts.PROFILES`).
-ASSIST_PROFILES = ("work", "neutral")
+ASSIST_PROFILES = ("work", "personal")
 DEFAULT_PROFILE = "work"
-PROFILE_LABELS = {"work": "Рабочая встреча", "neutral": "Нейтральный"}
+PROFILE_LABELS = {"work": "Рабочая встреча", "personal": "Личный"}
+# Прежнее имя «Личного» до выпуска: конфиг и API со `neutral` читаются как `personal`.
+PROFILE_ALIASES = {"neutral": "personal", "нейтральный": "personal"}
 
 
 def profile_key(value) -> str | None:
-    """Ключ `assist.profile` по ключу (`neutral`) или подписи («Нейтральный»),
-    без учёта регистра и пробелов по краям; иное — None."""
+    """Ключ `assist.profile` по ключу (`personal`, прежнее `neutral`) или
+    подписи («Личный»), без учёта регистра и пробелов по краям; иное — None."""
     if not isinstance(value, str):
         return None
     text = value.strip().lower()
     if text in PROFILE_LABELS:
         return text
+    if text in PROFILE_ALIASES:
+        return PROFILE_ALIASES[text]
     return next((key for key, label in PROFILE_LABELS.items() if label.lower() == text), None)
 # Распознавание живого режима: `auto` — GigaAM короткими окнами, если язык
 # русский и модель GigaAM скачана (иначе Whisper); `whisper` — всегда Whisper.
@@ -1041,9 +1045,19 @@ class Assist:
     summary`) выключает и агента-участника (`participant_on`): человек
     просил не писать ему во время встречи.
     `profile` — профиль сессии по умолчанию (0.3.7): `work` («Рабочая
-    встреча», как в 0.3.6) или `neutral` («Нейтральный»: без базы знаний и
+    встреча», как в 0.3.6) или `personal` («Личный»: без базы знаний и
     прошлых встреч, без рабочей рамки). Его выбирают и при старте записи с
-    ассистентом, и по ходу встречи — там он только на эту сессию."""
+    ассистентом, и по ходу встречи — там он только на эту сессию.
+
+    `agent_freedom` (0.3.7, A1) — «Расширенные возможности ассистента (файлы
+    вне встречи, MCP, веб) — по согласию»: агенту доступно всё, что умеет его
+    CLI (любые файлы, веб, MCP-серверы и настройки пользователя, команды), а
+    действует он только по согласию: без просьбы — читает лишь папку встречи
+    и вложения, изменения — только после кнопки, которая их называет
+    (`meet.llm.consent`). По умолчанию включено (решение пользователя);
+    выключено — как в 0.3.6 (только чтение встречи, базы знаний и
+    библиотеки). Как и `participant`, значение по умолчанию в файл не
+    пишется."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -1064,6 +1078,7 @@ class Assist:
     participant: bool = True
     frequency: str = "more"
     profile: str = DEFAULT_PROFILE
+    agent_freedom: bool = True
 
     @property
     def participant_on(self) -> bool:
@@ -1094,7 +1109,8 @@ class Assist:
             kb_exclude=_kb_exclude(raw.get("kb_exclude")),
             participant=as_flag(raw.get("participant"), True),
             frequency=as_choice(raw.get("frequency"), ASSIST_FREQUENCIES, "more"),
-            profile=as_choice(raw.get("profile"), ASSIST_PROFILES, DEFAULT_PROFILE),
+            profile=profile_key(raw.get("profile")) or DEFAULT_PROFILE,
+            agent_freedom=as_flag(raw.get("agent_freedom"), True),
         )
 
     def to_raw(self) -> dict:
@@ -1116,6 +1132,7 @@ class Assist:
             "participant": self.participant,
             "frequency": self.frequency,
             "profile": self.profile,
+            "agent_freedom": self.agent_freedom,
         }
 
 
@@ -1886,16 +1903,22 @@ def save(settings: Settings, path: Path | None = None) -> None:
         _write_raw(target, merged)
 
 
+# Флаги ассистента, чьё значение по умолчанию в файл не пишется.
+_UNSET_DEFAULTS = ("participant", "agent_freedom")
+
+
 def _keep_default_participant_unset(merged: dict, before: dict) -> None:
-    """`assist.participant` по умолчанию в файл не пишется: сохранение любой
-    настройки ассистента иначе закрепляло бы в файле значение по умолчанию
-    этой версии. Ключ, который в файле уже есть, и значение не по умолчанию
-    пишутся как обычно."""
+    """`assist.participant` и `assist.agent_freedom` по умолчанию в файл не
+    пишутся: сохранение любой настройки ассистента иначе закрепляло бы в
+    файле значение по умолчанию этой версии. Ключ, который в файле уже есть,
+    и значение не по умолчанию пишутся как обычно."""
     assist = merged.get("assist")
     had = before.get("assist") if isinstance(before.get("assist"), dict) else {}
-    if (isinstance(assist, dict) and assist.get("participant") is Assist.participant
-            and "participant" not in had):
-        assist.pop("participant", None)
+    if not isinstance(assist, dict):
+        return
+    for key in _UNSET_DEFAULTS:
+        if assist.get(key) is getattr(Assist, key) and key not in had:
+            assist.pop(key, None)
 
 
 def drop_retired(path: Path | None = None) -> bool:

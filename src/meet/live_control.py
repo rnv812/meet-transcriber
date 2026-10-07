@@ -74,7 +74,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from meet import paths
+from meet import paths, temp_meeting
 
 LIVE_STARTING = "live.starting"
 # Этап старта сменился: {"stage": текст или None, "ready": готов ли}.
@@ -636,7 +636,7 @@ class LiveControl:
 
         `attach` — включить посреди обычной записи: {"folder": папка записи,
         "server": TapServer отвода звука, "started_at": стенное время начала
-        записи, "profile"?: профиль сессии `work` / `neutral`, выбранный при
+        записи, "profile"?: профиль сессии `work` / `personal`, выбранный при
         старте — ребёнку `--profile`; нет — из журнала встречи или
         настроек}. Сервер отвода закрывается, когда ассистент кончился (или не
         запустился)."""
@@ -976,7 +976,8 @@ class LiveControl:
         if cut_folder and _mark_cut(cut_folder):
             # До событий: кто их ждёт (название, итоги), читает уже с пометкой.
             _note_log(path, "ассистент убит до финального прохода — сводка помечена неполной")
-            self._log(f"сводка ассистента помечена неполной (хвост оборван): {cut_folder}")
+            self._log("сводка ассистента помечена неполной (хвост оборван): "
+                      f"{temp_meeting.loggable(cut_folder)}")
         with self._emit_lock:
             with self._lock:
                 stop_requested = self._stop_requested
@@ -1069,7 +1070,8 @@ class LiveControl:
             self._close_server(attach)
             attached = attach is not None
             if kind == LIVE_STOPPED:
-                self._log(f"ассистент {'выключен' if detached else 'остановлен'}: {folder}"
+                self._log(f"ассистент {'выключен' if detached else 'остановлен'}: "
+                          f"{temp_meeting.loggable(folder)}"
                           + (f" ({error})" if error else ""))
                 # discarded — запись отменена (abort): её папку удаляют.
                 self.bus.emit(LIVE_STOPPED, folder=folder, error=error,
@@ -1166,11 +1168,11 @@ class LiveControl:
                     self._ready = True
                 folder = self._folder
             if started:
-                self._log(f"ассистент пишет звук: {folder}")
+                self._log(f"ассистент пишет звук: {temp_meeting.loggable(folder)}")
                 self.bus.emit(LIVE_STARTED, folder=folder)
             if changed:
                 if ready:
-                    self._log(f"ассистент слушает встречу: {folder}")
+                    self._log(f"ассистент слушает встречу: {temp_meeting.loggable(folder)}")
                 elif stage:
                     self._log(f"ассистент запускается: {stage}")
                 self.bus.emit(LIVE_STAGE, stage=stage, ready=ready)
@@ -1267,6 +1269,15 @@ class LiveControl:
         return self._request(self._active_port(), f"/chat/{mid}/click", payload,
                              REQUEST_TIMEOUT_S)
 
+    def chat_confirm(self, mid: str, payload: dict) -> dict:
+        """Решение по карточке подтверждения Meet: `{"allow": bool}`."""
+        return self._request(self._active_port(), f"/chat/{mid}/confirm", payload,
+                             REQUEST_TIMEOUT_S)
+
+    def chat_revoke(self, mid: str) -> dict:
+        """Отозвать разрешение «до конца встречи»."""
+        return self._request(self._active_port(), f"/chat/{mid}/revoke", {}, REQUEST_TIMEOUT_S)
+
     def chat_react(self, mid: str, payload: dict) -> dict:
         return self._request(self._active_port(), f"/chat/{mid}/react", payload,
                              REQUEST_TIMEOUT_S)
@@ -1287,7 +1298,7 @@ class LiveControl:
                              method="PUT")
 
     def agent_profile(self, key: str) -> dict:
-        """Профиль сессии (`work` / `neutral`) — агенту идущей встречи; только
+        """Профиль сессии (`work` / `personal`) — агенту идущей встречи; только
         эта сессия, настройки не трогаются."""
         return self._request(self._active_port(), "/agent/profile", {"profile": key},
                              REQUEST_TIMEOUT_S, method="PUT")

@@ -1066,7 +1066,9 @@ class LiveEngine:
         self._tap_reader = threading.Thread(target=self._read_tap, name="meet-live-tap",
                                             daemon=True)
         self._tap_reader.start()
-        print(f"Ассистент подключён к записи: {self.out_dir}")
+        from meet import temp_meeting
+
+        print(f"Ассистент подключён к записи: {temp_meeting.loggable(self.out_dir)}")
 
     def _read_tap(self) -> None:
         """Кадры отвода → буферы дорожек. Дыру (резидент выбросил кадры, пока

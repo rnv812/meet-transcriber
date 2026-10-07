@@ -160,7 +160,14 @@ DEFAULT_HEAD = "agent"
 HEADS = (DEFAULT_HEAD,)
 # Профиль сессии (0.3.7, `participant_prompts.PROFILES`) — поле `profile` в
 # `sessions.json`, одно на встречу (не на провайдера).
-PROFILES = ("work", "neutral")
+PROFILES = ("work", "personal")
+# Прежнее имя «Личного» до выпуска — читается как он.
+_PROFILE_ALIASES = {"neutral": "personal"}
+
+
+def _profile_value(value) -> str | None:
+    value = _PROFILE_ALIASES.get(value, value) if isinstance(value, str) else value
+    return value if value in PROFILES else None
 # Кнопки реплики агента (v4-simple §2): 0–3, придумывает агент.
 BUTTONS_MAX = 3
 BUTTON_MAX_CHARS = 60
@@ -176,6 +183,9 @@ WRITING = "writing"
 STATUSES = (WRITING, "shown", "held", "dropped", "superseded", "dismissed", "cancelled", "failed")
 # Реплики агента, которых в чате не было видно.
 HIDDEN_STATUSES = ("held", "dropped", "superseded")
+# Карточка подтверждения Meet (`system`, `card: "confirm"`) и решения по ней.
+CONFIRM_CARD = "confirm"
+CARD_DECISIONS = ("allow", "allow_meeting", "deny", "timeout", "cancelled", "expired")
 # Вложение, убранное из строки ввода до отправки (окно, «×»): его нет ни в
 # ленте, ни в затравке, ни в `assistant_chat.md` (ревью chat-api, M8).
 REMOVED = "removed"
@@ -185,6 +195,8 @@ REACTIONS = {"👍": "Полезно", "👎": "Не по теме", "❓": "П�
 RECORD_KEYS = ("v", "seq", "at", "rec")
 PROTECTED = (*RECORD_KEYS, "id", "kind", "client_id")
 SESSION_KEYS = ("id", "used_at")
+# Сколько прежних id сеансов помнить (`past` в sessions.json).
+PAST_MAX = 100
 
 # Запись ждёт замок столько (fsync на медленном диске, антивирус), потом
 # FileLockTimeout; чтение — столько, потом читает без замка.
@@ -243,15 +255,14 @@ def has_chat(folder: Path) -> bool:
 
 
 def stored_profile(folder: Path) -> str | None:
-    """Профиль сессии ассистента записи (`work` / `neutral`) из
+    """Профиль сессии ассистента записи (`work` / `personal`) из
     `sessions.json` — без замка и без создания файлов (итоги, заметка после
     встречи, карточка). Нет файла, нет поля, мусор или файл занят — None."""
     try:
         data = json.loads((chat_dir(folder) / SESSIONS_JSON).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    value = data.get("profile") if isinstance(data, dict) else None
-    return value if value in PROFILES else None
+    return _profile_value(data.get("profile") if isinstance(data, dict) else None)
 
 
 def _print(text: str) -> None:
@@ -897,9 +908,10 @@ class ChatLog:
 
     def close_interrupted(self, error: str = "ответ прерван: ассистент перезапущен") -> list[dict]:
         """Писатель при старте: реплики `writing`, оставшиеся от убитого
-        процесса, → `cancelled` с `error`. События patch (для SSE). Только
-        для единственного живого писателя (резидент во время живой записи
-        отвечает 409, §7.2): чужой идущий ход тоже был бы закрыт."""
+        процесса, → `cancelled` с `error`; карточки подтверждения без решения
+        (их никто уже не ждёт) → `decision: "expired"`. События patch (для
+        SSE). Только для единственного живого писателя (резидент во время
+        живой записи отвечает 409, §7.2): чужой идущий ход тоже был бы закрыт."""
         with self._write_lock():
             self._sync()
             stuck = [rid for rid in self._order if self._view[rid].get("status") == WRITING]
@@ -908,7 +920,34 @@ class ChatLog:
                 ev = self._patch_locked(rid, {"status": "cancelled", "error": error})
                 if ev is not None:
                     events.append(ev)
+            for rid in self._order:
+                msg = self._view[rid]
+                if msg.get("card") == CONFIRM_CARD and not msg.get("decision"):
+                    ev = self._patch_locked(rid, {"decision": "expired"})
+                    if ev is not None:
+                        events.append(ev)
             return events
+
+    # --- карточки подтверждения Meet (0.3.7, A1) ---
+
+    def decide_card(self, mid: str, decision: str) -> dict:
+        """Решение по карточке подтверждения (`system`, `card: "confirm"`):
+        `allow` / `allow_meeting` («разрешать такое до конца встречи») / `deny`
+        / `timeout` / `cancelled`. Один раз: решённая карточка
+        или не карточка — ValueError. → событие patch."""
+        if decision not in CARD_DECISIONS:
+            raise ValueError(f"неизвестное решение: {decision!r}")
+        with self._write_lock():
+            self._sync()
+            msg = self._view.get(mid)
+            if msg is None or msg.get("kind") != "system" or msg.get("card") != CONFIRM_CARD:
+                raise ValueError(f"{mid}: нет такой карточки подтверждения")
+            if msg.get("decision"):
+                raise ValueError("по этой карточке уже решено")
+            ev = self._patch_locked(mid, {"decision": decision, "decided_at": round(float(self._clock()), 3)})
+            if ev is None:
+                raise ValueError("по этой карточке уже решено")
+            return ev
 
     # --- кнопки реплик агента ---
 
@@ -917,7 +956,9 @@ class ChatLog:
         """Нажатие кнопки реплики агента — сообщение человека: `text` = надпись,
         `via: "button"`, `re` = id реплики (v4-simple §2). Кнопки нет у этой
         реплики или реплика не агента — ValueError. `client_id` — как у
-        `append` (повторное нажатие при переподключении не дублируется)."""
+        `append` (повторное нажатие при переподключении не дублируется).
+        Кнопки сообщения нажимаются один раз (0.3.7): второе нажатие с другим
+        `client_id` — ValueError."""
         if not isinstance(label, str) or not label:
             raise ValueError("надпись кнопки — непустая строка")
         if client_id is not None and (not isinstance(client_id, str) or not client_id):
@@ -933,7 +974,12 @@ class ChatLog:
                 raise ValueError(f"{mid}: нет такой реплики агента")
             if label not in (msg.get("buttons") or []):
                 raise ValueError(f"у {mid} нет кнопки {label!r}")
-            return self._append_locked("user", _clean(client_id), fields)
+            cid = _clean(client_id)
+            if not (cid and cid in self._by_client) and any(
+                    self._view[r].get("kind") == "user" and self._view[r].get("via") == "button"
+                    and self._view[r].get("re") == mid for r in self._order):
+                raise ValueError(f"на сообщение {mid} уже ответили кнопкой")
+            return self._append_locked("user", cid, fields)
 
     # --- сеансы провайдеров (родное продолжение контекста) ---
 
@@ -1010,6 +1056,16 @@ class ChatLog:
                 doc = {}                          # битый — заменяется
             heads = doc.get("heads") if isinstance(doc.get("heads"), dict) else {}
             providers = heads.get(head) if isinstance(heads.get(head), dict) else {}
+            # Прежний id (сменился или забыт) — в `past`: удаление записи без
+            # следа (`meet.temp_meeting`) забывает у провайдера и его.
+            old_entry = providers.get(provider)
+            old_id = old_entry.get("id") if isinstance(old_entry, dict) else None
+            if isinstance(old_id, str) and old_id and old_id != session_id:
+                past = doc.get("past") if isinstance(doc.get("past"), list) else []
+                mark = {"provider": provider, "id": old_id}
+                if mark not in past:
+                    past = (past + [mark])[-PAST_MAX:]
+                doc["past"] = past
             if session_id is None:
                 if provider not in providers:
                     return
@@ -1029,20 +1085,20 @@ class ChatLog:
             self._write_json(self.sessions_path, doc)
 
     def profile(self) -> str | None:
-        """Профиль сессии ассистента этой встречи (`work` / `neutral`, 0.3.7) —
+        """Профиль сессии ассистента этой встречи (`work` / `personal`, 0.3.7) —
         поле `profile` в `sessions.json`; не задан (встреча до 0.3.7) или
         негодный — None. Файл занят дольше повторов — OSError."""
         with self._read_lock():
             doc = self._load_sessions() or {}
-        value = doc.get("profile")
-        return value if value in PROFILES else None
+        return _profile_value(doc.get("profile"))
 
     def set_profile(self, profile: str) -> None:
         """Запомнить профиль сессии (старт, смена по ходу): «Продолжить
         разговор» после встречи продолжит в нём же. Атомарно, под строгим
         замком; сеансы провайдеров и неизвестные поля сохраняются. Файл не
         прочитался — OSError, и он не перезаписывается."""
-        if profile not in PROFILES:
+        profile = _profile_value(profile)
+        if profile is None:
             raise ValueError(f"профиль — {' или '.join(PROFILES)}")
         with self._write_lock():
             doc = self._load_sessions()

@@ -1,10 +1,11 @@
 /**
  * Шапка сессии агента-участника: что с ним (слушает / думает / пишет /
  * ошибка), какая модель (у Claude Code — та, что запустил CLI, из
- * `system/init`; не та, что в настройках, — предупреждение), что она видит,
- * пометки (не видит картинок;
+ * `system/init`; не та, что в настройках, — предупреждение), что она видит
+ * и что может (0.3.7: файлы, MCP, веб — по вашему согласию), пометки (не
+ * видит картинок;
  * исключённые папки — только просьба), профиль сессии (0.3.7: чип и
- * переключатель «Профиль» — «Рабочая встреча» / «Нейтральный», только на эту
+ * переключатель «Профиль» — «Рабочая встреча» / «Личный», только на эту
  * сессию), «Как часто писать» и поповер «Что я знаю» со сводкой на сейчас
  * (сводка по-прежнему ведётся в фоне — на ней держатся итоги и название встречи).
  *
@@ -31,7 +32,7 @@ const NO_FRESH = new Set<string>();
 
 /**
  * «разговор, структура базы знаний, 3 материала»; карта только из прошлых встреч группы — «карта».
- * Профиль «Нейтральный» базу знаний не видит вовсе: «только разговор», а с вложениями —
+ * Профиль «Личный» базу знаний не видит вовсе: «только разговор», а с вложениями —
  * «разговор и ваши материалы (2 материала)».
  */
 export function seesText(agent: AgentInfo): string {
@@ -39,7 +40,7 @@ export function seesText(agent: AgentInfo): string {
   const own: string[] = [];
   if (sees.materials > 0) own.push(`${sees.materials} ${plural(sees.materials, "материал", "материала", "материалов")}`);
   if (sees.images > 0) own.push(`${sees.images} ${plural(sees.images, "изображение", "изображения", "изображений")}`);
-  if (profileOf(agent.profile) === "neutral") {
+  if (profileOf(agent.profile) === "personal") {
     return own.length ? `разговор и ваши материалы (${own.join(", ")})` : "только разговор";
   }
   const parts: string[] = [];
@@ -58,13 +59,54 @@ export function modelWarning(agent: AgentInfo): string | null {
   return `Запущена ${agent.model}, в настройках — ${agent.model_configured || "другая модель"}`;
 }
 
+export const CAN_CONSENT_TITLE = "Без вашей просьбы ассистент читает только эту встречу и ваши вложения; по просьбе — "
+  + "читает файлы, ищет в вебе и смотрит через MCP; каждое действие (команда, запись, правка задачи, открытие страницы) "
+  + "Meet покажет карточкой и выполнит только после «Разрешить один раз»";
+export const CAN_PERSONAL_TITLE = "Без вашей просьбы ассистент читает только эту запись и ваши вложения; по просьбе — "
+  + "читает файлы и ищет в вебе; каждое действие Meet покажет карточкой. База знаний, другие записи и MCP-серверы "
+  + "в профиле «Личный» закрыты";
+export const CAN_FILES_TITLE ="Codex/OpenCode: только чтение файлов по вашей просьбе; MCP, веб и действия — только с Claude Code";
+/** Сколько имён MCP-серверов показать в «может: …», дальше — «…». */
+const MCP_SHOWN = 3;
+
+/**
+ * «файлы, MCP (Jira, GitLab…), веб — по вашему согласию» при расширенных возможностях;
+ * «читать встречу и базу знаний» без них; пусто — модель без своих инструментов.
+ */
+export function canText(agent: AgentInfo): string {
+  const can = agent.can ?? (agent.tools ? { mode: "read" as const, mcp: null } : { mode: "meet" as const, mcp: null });
+  const personal = profileOf(agent.profile) === "personal";
+  if (can.mode === "consent") {
+    // «Личный»: MCP пользователя не подключаются (база знаний другим путём).
+    if (personal) return "файлы, веб — по вашему согласию";
+    const names = (can.mcp ?? []).filter(Boolean);
+    const mcp = names.length
+      ? `MCP (${names.slice(0, MCP_SHOWN).join(", ")}${names.length > MCP_SHOWN ? "…" : ""})`
+      : "MCP";
+    return `файлы, ${mcp}, веб — по вашему согласию`;
+  }
+  if (can.mode === "files") return "читать файлы по вашей просьбе";
+  if (can.mode === "read") return personal ? "читать эту запись и ваши вложения" : "читать встречу и базу знаний";
+  return "";
+}
+
+/** «Личный» у Codex: база знаний и другие записи закрыты только просьбой в инструкции. */
+export const PERSONAL_DENY_NOTE = "База знаний закрыта только просьбой";
+const PERSONAL_DENY_TITLE = "Эта модель не умеет запрещать чтение папок: база знаний и другие записи закрыты ей "
+  + "только просьбой в инструкции. Надёжно закрывает их Claude Code";
+
 export function agentNotes(agent: AgentInfo): { text: string; title?: string; warn?: boolean }[] {
   const notes: { text: string; title?: string; warn?: boolean }[] = [];
   const warning = modelWarning(agent);
   if (warning) notes.push({ text: warning, title: MODEL_TITLE, warn: true });
   if (!agent.vision) notes.push({ text: NO_VISION });
-  // Исключённые папки базы знаний — про «Рабочую встречу»: в «Нейтральном» базы нет.
-  if (!agent.deny_enforced && profileOf(agent.profile) !== "neutral") notes.push({ text: DENY_NOTE, title: DENY_TITLE });
+  // Исключённые папки базы знаний — про «Рабочую встречу»; в «Личном» — своя пометка:
+  // базу и другие записи эта модель не запрещает, только просит (ревью I2, п. 8).
+  if (!agent.deny_enforced) {
+    notes.push(profileOf(agent.profile) === "personal"
+      ? { text: PERSONAL_DENY_NOTE, title: PERSONAL_DENY_TITLE }
+      : { text: DENY_NOTE, title: DENY_TITLE });
+  }
   return notes;
 }
 
@@ -128,7 +170,7 @@ export function profileTitle(profile: AgentProfile): string {
 }
 
 export function SessionBar({ agent, summary, writing = false, compact = false, quiet = false, onFrequency, onProfile,
-  disabled = false }: {
+  disabled = false, onRevokeGrant }: {
   agent: AgentInfo;
   summary: Summary;
   /** Ответ пишется и виден в ленте. */
@@ -140,12 +182,18 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
   /** Сменить профиль идущей сессии; нет — только чип, без переключателя. */
   onProfile?: (v: AgentProfile) => void;
   disabled?: boolean;
+  /** Отозвать «Разрешать такое до конца встречи». */
+  onRevokeGrant?: (id: string) => void;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const state = stateOf(agent, writing);
   const notes = agentNotes(agent);
   const warning = modelWarning(agent);
   const sees = seesText(agent);
+  const can = canText(agent);
+  const canTitle = agent.can?.mode === "consent"
+    ? (profileOf(agent.profile) === "personal" ? CAN_PERSONAL_TITLE : CAN_CONSENT_TITLE)
+    : agent.can?.mode === "files" ? CAN_FILES_TITLE : undefined;
   const frequency = FREQUENCIES.includes(agent.frequency) ? agent.frequency : "чаще";
   const profile = profileOf(agent.profile);
   return (
@@ -170,6 +218,21 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
         {PROFILE_LABELS[profile]}
       </span>
       {!compact && <span className="session-bar__sees">видит: {sees}</span>}
+      {!compact && can && <span className="session-bar__sees session-bar__can" title={canTitle}>может: {can}</span>}
+      {!compact && (agent.grants?.length ?? 0) > 0 && (
+        <span className="session-bar__sees session-bar__grants" title="Разрешено до конца встречи — без карточки">
+          разрешено:{" "}
+          {agent.grants!.map((g, k) => (
+            <span key={g.id} className="session-bar__grant">
+              {k > 0 && ", "}{g.label}
+              {onRevokeGrant && (
+                <button type="button" className="session-bar__revoke" aria-label={`Отозвать: ${g.label}`}
+                  onClick={() => onRevokeGrant(g.id)}>×</button>
+              )}
+            </span>
+          ))}
+        </span>
+      )}
       {!compact && notes.map((n) => (
         <span key={n.text} className={`session-bar__note${n.warn ? " session-bar__note--warn" : ""}`}
           title={n.title ?? n.text}>{n.text}</span>
@@ -188,6 +251,7 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
             <p className="session-know__line"><span className="muted">Модель:</span> {agent.label || agent.provider}</p>
             <p className="session-know__line"><span className="muted">Профиль:</span> {PROFILE_LABELS[profile]}</p>
             <p className="session-know__line"><span className="muted">Видит:</span> {sees}</p>
+            {can && <p className="session-know__line" title={canTitle}><span className="muted">Может:</span> {can}</p>}
             {notes.map((n) => <p key={n.text} className="session-know__note" title={n.title}>{n.text}</p>)}
             {compact && onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
             {compact && <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />}

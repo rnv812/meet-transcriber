@@ -47,6 +47,11 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
   `/chat/paste`;
 - `POST /chat/{id}/click` `{"label", "client_id"?}` → `{"ok", "id"}`;
 - `POST /chat/{id}/react` `{"emoji", "on"?}` → `{"ok", "changed"}`;
+- `POST /chat/{id}/confirm` `{"allow": bool, "meeting"?: bool}` → `{"ok"}`:
+  решение по карточке подтверждения Meet (свобода по согласию, 0.3.7);
+  `meeting` — «разрешать такое до конца встречи»; один раз — решённая
+  карточка — 400;
+- `POST /chat/{id}/revoke` → `{"ok"}`: отозвать разрешение «до конца встречи»;
 - `POST /chat/stop` `{"id"?}` → `{"ok"}`;
 - `POST /chat/attachments/{aid}/remove` → `{"ok", "changed"}`: вложение
   убрали из строки ввода до отправки (запись — `removed`, файлы — с диска);
@@ -55,7 +60,7 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
   "persist"?}` → `{"frequency", "label", "live", "saved"}`: агенту — сразу,
   в настройки (`assist.frequency`) — ключом, если не `persist: false`
   (резидент сохраняет сам);
-- `PUT /agent/profile` `{"profile": "work|neutral"}` → `{"profile", "label",
+- `PUT /agent/profile` `{"profile": "work|personal"}` → `{"profile", "label",
   "live"}`: профиль только этой сессии (0.3.7) — агенту пометка в ближайший
   ход, журналу встречи — новое значение; настройка по умолчанию не меняется.
 
@@ -209,6 +214,13 @@ footer{border-top:1px solid var(--line);padding:8px 16px}
 details{border-top:1px solid var(--line);padding:4px 16px;max-height:24vh;overflow:auto}
 #transcript{white-space:pre-wrap;color:var(--muted);font-size:12px}
 body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
+.card{max-width:46rem;margin:0 auto 12px;border:1px solid var(--accent);border-radius:10px;padding:8px 10px}
+.card pre{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.4 Consolas,monospace;unicode-bidi:plaintext;text-align:left;max-height:50vh;overflow:auto}
+.card .done{color:var(--muted);font-size:12px}
+.card .warn{color:var(--err);font-weight:600;font-size:12px}
+#grants button{padding:0 6px;margin-left:2px}
+#pending{padding:0 16px}
+#pending:not(:empty){padding-top:8px;border-bottom:1px solid var(--line)}
 </style></head><body>
 <header>
   <h1>Ассистент</h1>
@@ -216,12 +228,14 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
   <span id="model" class="muted"></span>
   <span id="sees" class="muted"></span>
   <span id="notes" class="muted"></span>
+  <span id="grants" class="muted"></span>
   <label class="muted">Как часто писать
     <select id="frequency"><option>реже</option><option>обычно</option><option>чаще</option></select>
   </label>
   <span id="status" class="muted"></span>
   <span id="link"></span>
 </header>
+<section id="pending" aria-label="Подтверждение действия"></section>
 <main id="feed" role="log" aria-live="polite"></main>
 <span id="announce" class="sr" role="status" aria-live="polite"></span>
 <footer>
@@ -545,14 +559,83 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     const chosen = used.has(m.id) ? used.get(m.id) : pendingClicks.get(m.id);
     const extra = m.kind === "agent"
       ? [acks.get(m.id) || null, explainPending(m), m.explains || null, m.explains ? quoteOf(m.explains) : null] : null;
-    return JSON.stringify([m.kind, m.status, m.text, m.t, m.pin, m.note, m.error, m.buttons,
+    return JSON.stringify([m.kind, m.status, m.text, m.t, m.pin, m.note, m.error, m.buttons, m.decision, m.args, m.preview,
       m.reactions, m.via, files, chosen === undefined ? null : chosen, extra,
       m.status === "writing" && !m.text && !partialText(m)]);
+  }
+
+  // --- карточка подтверждения Meet (свобода по согласию) ---
+
+  const DECIDED = {allow: "Разрешено один раз", allow_meeting: "Разрешено до конца встречи", deny: "Отклонено", timeout: "Время вышло — не выполнено",
+    cancelled: "Отменено", expired: "Не дождались ответа — не выполнено"};
+
+  function cardOpen(m) {
+    return !m.decision && !(typeof m.expires_at === "number" && m.expires_at * 1000 < Date.now());
+  }
+
+  function cardNode(m) {
+    const box = el("div", "card");
+    box.dataset.id = m.id;
+    box.setAttribute("role", "group");
+    box.setAttribute("aria-label", "Ассистент хочет выполнить: " + (m.title || m.tool || ""));
+    box.appendChild(el("div", "", "Ассистент хочет выполнить: " + (m.title || m.tool || "") + (m.size ? " · " + m.size : "")));
+    for (const w of Array.isArray(m.warnings) ? m.warnings : []) box.appendChild(el("div", "warn", w));
+    // Вызов целиком или, если длинный, начало и конец (резидент прислал оба, с видимыми
+    // пометками пробелов и переводов строк): хвост виден всегда, «Показать полностью» — по желанию.
+    const args = String(m.args || "");
+    const pre = el("pre", "", m.preview || args);
+    pre.setAttribute("dir", "ltr");
+    if (args) box.appendChild(pre);
+    if (m.preview) {
+      const more = el("button", "", "Показать полностью");
+      more.addEventListener("click", () => { pre.textContent = args; more.remove(); });
+      box.appendChild(more);
+    }
+    if (cardOpen(m)) {
+      const row = el("div", "row");
+      const yes = el("button", "", "Разрешить один раз");
+      yes.addEventListener("click", () => decide(m.id, true, false));
+      row.append(yes);
+      if (m.grant && m.grant.label) {
+        const all = el("button", "", "Разрешать такое до конца встречи");
+        all.title = "Дальше до конца встречи без вопросов: " + m.grant.label;
+        all.addEventListener("click", () => decide(m.id, true, true));
+        row.append(all);
+      }
+      const no = el("button", "", "Отклонить");
+      no.addEventListener("click", () => decide(m.id, false, false));
+      row.append(no);
+      box.appendChild(row);
+      box.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); decide(m.id, false, false); } });
+    } else {
+      box.appendChild(el("div", "done", DECIDED[m.decision] || DECIDED.expired));
+    }
+    return box;
+  }
+
+  const deciding = new Set();
+  async function decide(mid, allow, meeting) {
+    if (deciding.has(mid)) return;
+    deciding.add(mid);
+    try { await api("POST", "/chat/" + encodeURIComponent(mid) + "/confirm", {allow: allow, meeting: !!meeting}); }
+    catch (e) { notice("Решение не сохранено: " + e.message); }
+    finally { deciding.delete(mid); }
+  }
+
+  function renderPending() {
+    // Карточки, которые ждут решения, — над лентой: их видно, даже если лента прокручена вверх.
+    const box = $("pending");
+    box.replaceChildren();
+    for (const id of order) {
+      const m = msgs.get(id);
+      if (m && m.kind === "system" && m.card === "confirm" && cardOpen(m)) box.appendChild(cardNode(m));
+    }
   }
 
   function build(m, used) {
     if (m.kind === "agent") return agentNode(m, used);
     if (m.kind === "user") return userNode(m);
+    if (m.kind === "system" && m.card === "confirm") return cardOpen(m) ? el("div", "line", m.text + " — ждёт решения (выше)") : cardNode(m);
     return el("div", "line", m.text);
   }
 
@@ -584,6 +667,7 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     while (feed.children.length > want.length) feed.lastChild.remove();
     if (atBottom) feed.scrollTop = feed.scrollHeight;
     armExplainExpiry();
+    renderPending();
     renderAgent();
   }
 
@@ -601,11 +685,29 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     if (sees.kb) parts.push(sees.kb_docs === false ? "карта" : "структура базы знаний");
     if (sees.materials > 0) parts.push(sees.materials + " " + plural(sees.materials, "материал", "материала", "материалов"));
     if (sees.images > 0) parts.push(sees.images + " " + plural(sees.images, "изображение", "изображения", "изображений"));
-    $("sees").textContent = agent ? "видит: " + parts.join(", ") : "";
+    const can = a.can || {};
+    const mcp = Array.isArray(can.mcp) && can.mcp.length ? "MCP (" + can.mcp.slice(0, 3).join(", ") + (can.mcp.length > 3 ? "…" : "") + ")" : "MCP";
+    const canText = can.mode === "consent" ? "файлы, " + mcp + ", веб — по вашему согласию"
+      : can.mode === "files" ? "читать файлы по вашей просьбе" : "";
+    $("sees").textContent = agent ? "видит: " + parts.join(", ") + (canText ? " · может: " + canText : "") : "";
     const notes = [];
     if (agent && !a.vision) notes.push("модель не видит изображения — уходит только текст");
     if (agent && !a.deny_enforced) notes.push("исключённые папки — только просьба в инструкции");
     $("notes").textContent = notes.join(" · ");
+    // Разрешено «до конца встречи» — с «×», чтобы отозвать.
+    const grants = $("grants");
+    grants.replaceChildren();
+    const list = Array.isArray(a.grants) ? a.grants : [];
+    if (list.length) grants.appendChild(document.createTextNode("разрешено: "));
+    list.forEach((g, i) => {
+      if (i) grants.appendChild(document.createTextNode(", "));
+      grants.appendChild(document.createTextNode(g.label));
+      const x = el("button", "", "×");
+      x.setAttribute("aria-label", "Отозвать: " + g.label);
+      x.addEventListener("click", () => api("POST", "/chat/" + encodeURIComponent(g.id) + "/revoke", {})
+        .catch((e) => notice("Не отозвано: " + e.message)));
+      grants.appendChild(x);
+    });
     if (a.frequency && document.activeElement !== $("frequency")) $("frequency").value = a.frequency;
     $("stop").hidden = !bubble;
   }
@@ -1050,7 +1152,7 @@ def build_app(state) -> web.Application:
     async def events(request):
         resp = web.StreamResponse(headers={
             "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-store",
         })
         await resp.prepare(request)
         sent: tuple | None = None
@@ -1310,6 +1412,21 @@ def build_app(state) -> web.Application:
         changes = await _guarded(participant.react(mid, emoji, on))
         return _json_response({"ok": True, "changed": bool(changes)})
 
+    async def chat_confirm(request):
+        participant = _participant(state)
+        mid = _message_id(request)
+        body = await _json_body(request)
+        allow, meeting = body.get("allow"), body.get("meeting", False)
+        if not isinstance(allow, bool) or not isinstance(meeting, bool):
+            raise web.HTTPBadRequest(text="allow, meeting — true или false")
+        await _guarded(participant.confirm(mid, allow, meeting=meeting))
+        return _json_response({"ok": True})
+
+    async def chat_revoke(request):
+        participant = _participant(state)
+        await _guarded(participant.revoke_grant(_message_id(request)))
+        return _json_response({"ok": True})
+
     async def chat_stop(request):
         participant = _participant(state)
         body = await _json_body(request)
@@ -1357,7 +1474,7 @@ def build_app(state) -> web.Application:
         body = await _json_body(request)
         key = profile_key(body.get("profile"))
         if key is None:
-            raise web.HTTPBadRequest(text="profile — work или neutral")
+            raise web.HTTPBadRequest(text="profile — work или personal")
         participant = _participant(state)
         apply = getattr(state, "apply_profile", None)
         if apply is not None:
@@ -1369,6 +1486,12 @@ def build_app(state) -> web.Application:
     # Картинка до 10 МБ в теле `/chat/paste` (по умолчанию aiohttp — 1 МБ).
     app = web.Application(middlewares=[_own_host, _same_origin_posts],
                           client_max_size=PASTE_MAX_BYTES + 64 * 1024)
+
+    async def _no_store(request, response):
+        # Чат, расшифровка, вложения — личное: в дисковый кеш браузера не класть.
+        response.headers["Cache-Control"] = "no-store"
+
+    app.on_response_prepare.append(_no_store)
     app.add_routes([
         web.get("/", index),
         web.get("/events", events),
@@ -1384,6 +1507,8 @@ def build_app(state) -> web.Application:
         web.post("/chat/attachments/{aid}/remove", chat_remove),
         web.post("/chat/{mid}/click", chat_click),
         web.post("/chat/{mid}/react", chat_react),
+        web.post("/chat/{mid}/confirm", chat_confirm),
+        web.post("/chat/{mid}/revoke", chat_revoke),
         web.put("/agent/frequency", agent_frequency),
         web.put("/agent/profile", agent_profile),
     ])

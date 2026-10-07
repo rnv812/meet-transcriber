@@ -605,7 +605,14 @@ def test_concurrent_stops_run_exactly_once(monkeypatch, tmp_path):
     hooks = []
     monkeypatch.setattr(tray, "_run_post_hook", lambda f: hooks.append(f))
     removed = []
-    monkeypatch.setattr(tray.shutil, "rmtree", lambda f, **k: removed.append(f))
+    real_rmtree = tray.shutil.rmtree
+
+    def rmtree(f, **k):
+        # Удаление без следа проходит, пока папка не исчезнет: удаляем по-настоящему.
+        removed.append(f)
+        real_rmtree(f, ignore_errors=True)
+
+    monkeypatch.setattr(tray.shutil, "rmtree", rmtree)
     app = _recording_app(monkeypatch, tmp_path, folder, finalize=0.3)
     ready = threading.Barrier(2)
 
@@ -888,7 +895,7 @@ def test_auto_stop_remembers_when_the_call_signal_ended(monkeypatch, tmp_path):
 
 
 def test_cancel_from_the_menu_asks_first(monkeypatch, tmp_path):
-    """«Отменить запись…» спрашивает; «Нет» (по умолчанию) — запись идёт дальше."""
+    """«Остановить без сохранения…» спрашивает; «Нет» (по умолчанию) — запись идёт дальше."""
     import types
 
     app = _app(monkeypatch, tmp_path)
@@ -915,7 +922,7 @@ def test_cancel_from_the_menu_asks_first(monkeypatch, tmp_path):
     assert stopped == []
     app._on_cancel_asked()
     assert stopped == [{"discard": True}]
-    assert tray.CANCEL_QUESTION == "Удалить текущую запись? Записанное не сохранится."
+    assert tray.CANCEL_QUESTION.startswith("Остановить без сохранения? Запись и всё, что с ней связано")
     # Пока вопрос висел, началась другая запись — «Да» ничего не удаляет.
     def switch_then_yes():
         folder[0] = "D:/rec/b"

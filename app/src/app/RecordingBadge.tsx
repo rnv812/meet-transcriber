@@ -4,10 +4,14 @@ import { useEffect, useId, useRef, useState } from "react";
 import { noProvider } from "../features/card/assistant";
 import { type Endpoint, getAssistant, liveAttach, liveDetach, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, errorText } from "../lib/format";
+import {
+  DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_LABEL, TEMP_NOTE,
+} from "../lib/recordingStop";
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "../live/profiles";
 import { Button } from "../ui/Button";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { floatingStyle, useFloating } from "../ui/floating";
 import { Icon } from "../ui/Icon";
 
@@ -72,10 +76,18 @@ const warmingUp = (live: LiveStatus | undefined) => !!live?.active && live.ready
  * (запись не прерывается: ассистент догоняет уже записанное и слушает
  * дальше) или, когда он включён (`live.attached`), «Выключить ассистента»
  * (запись идёт дальше). Без подключённой модели пункт неактивен с подсказкой.
+ * Там же — «Остановить без сохранения…» (с вопросом: запись и всё, что с ней
+ * связано, удаляется).
  *
  * Профиль сессии (0.3.7) выбирается тем же щелчком: и «С ассистентом», и
  * «Включить ассистента» — по пункту на профиль («Рабочая встреча»,
- * «Нейтральный»); в шапке сессии его можно сменить по ходу.
+ * «Личный»; профиль из настроек — первым, с пометкой); в шапке сессии
+ * его можно сменить по ходу.
+ *
+ * «Временная встреча с ассистентом» (в меню «▾» простоя): запись идёт вне
+ * библиотеки и на «Стоп» удаляется. Пока она идёт — пометка «Временная — не
+ * сохранится», «Стоп» спрашивает «Временная встреча закончится и будет
+ * удалена.», а в «▾» — «Сохранить как обычную встречу».
  */
 export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, onSnapshot }: {
   endpoint: Endpoint | null;
@@ -87,6 +99,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   onSnapshot?: (s: Snapshot) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  // Открытый вопрос: «Остановить без сохранения?» или конец временной встречи.
+  const [asking, setAsking] = useState<"discard" | "temp-end" | null>(null);
   const [seenAt, setSeenAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -95,6 +109,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     return () => clearTimeout(t);
   }, [error]);
   const recording = snapshot?.status === "recording";
+  const temporary = recording && !!snapshot?.temporary;
   const live = snapshot?.live;
   // Ошибка прошлого живого режима — уведомление о событии, а не состояние:
   // показываем, только когда она появилась (переход), а не всё время
@@ -172,8 +187,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const fallback = assistant?.profile ? profileOf(assistant.profile) : null;
   const profiles = fallback ? [fallback, ...PROFILES.filter((p) => p !== fallback)] : PROFILES;
   const mark = (p: AgentProfile) => (p === fallback ? " (по умолчанию)" : "");
-  // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню больше не к месту.
-  useEffect(() => { setMenu(false); }, [mode]);
+  // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню и вопрос больше не к месту.
+  useEffect(() => { setMenu(false); setAsking(null); }, [mode]);
   // Открытое меню — фокус на пункт; неактивен (нет провайдера) — остаётся на «▾».
   useEffect(() => {
     if (!menu) return;
@@ -209,24 +224,28 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   // Подмена устройства — про идущую запись (свою или ассистента), не про простой.
   const fallbacks = recording || liveActive ? snapshot.devices_fallback ?? [] : [];
   const since = Math.max(0, now - (snapshotAt ?? seenAt)) / 1000;
-  const run = (cmd: "start" | "stop") => {
+  const run = (cmd: "start" | "stop" | "cancel" | "keep") => {
+    setMenu(false);
     setError(null);
     recordingCommand(endpoint, cmd)
       .then((result) => onSnapshot?.(result))
       .catch((e) => setError(errorText(e)));
   };
-  const runLive = (call: typeof liveStart | typeof liveStop | typeof liveAttach | typeof liveDetach,
-    profile?: AgentProfile) => {
+  /** `failed` — текст, если ответ 200 с ok:false (не запустился сразу: например, нет интерпретатора). */
+  const runLive = (call: (ep: Endpoint) => Promise<{ ok: boolean } & LiveStatus>, failed?: string) => {
     setMenu(false);
     setError(null);
-    (profile ? (call as typeof liveStart)(endpoint, profile) : call(endpoint))
+    call(endpoint)
       .then((result) => {
-        // Не запустился сразу (например, нет интерпретатора): ответ 200 с ok:false.
-        if (call === liveStart && !result.ok) setError(result.error || START_FAILED);
-        if (call === liveAttach && !result.ok) setError(result.error || ATTACH_FAILED);
+        if (failed && !result.ok) setError(result.error || failed);
         onSnapshot?.({ ...snapshot, live: liveOf(result) });
       })
       .catch((e) => setError(errorText(e)));
+  };
+  const startTemporary = () => runLive((ep) => liveStart(ep, { temporary: true }), START_FAILED);
+  const ask = (what: "discard" | "temp-end") => {
+    setMenu(false);
+    setAsking(what);
   };
   // Ошибка прошлого ассистента — не поверх нового (запускается, слушает,
   // дописывает), но и во время обычной записи: подключённый упал, запись идёт.
@@ -246,13 +265,15 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       <>
         <span className="rec-badge__live num">● REC {clock(snapshot.elapsed_s + since)}{listening ? " · ассистент" : ""}</span>
         {snapshot.source === "auto" && <span className="badge">авто</span>}
+        {temporary && <span className="badge badge--temp" title={TEMP_NOTE}>{TEMP_BADGE}</span>}
         {note && <span className="muted">{note}</span>}
         <span className="split split--plain" ref={split}>
-          <Button variant="danger" className="split__main" onClick={() => run("stop")}>Стоп</Button>
-          <Button ref={more} variant="danger" className="split__more" aria-label="Ассистент в этой записи"
+          <Button variant="danger" className="split__main"
+            onClick={() => (temporary ? ask("temp-end") : run("stop"))}>Стоп</Button>
+          <Button ref={more} variant="danger" className="split__more" aria-label="Ещё действия с записью"
             aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Icon as={ChevronDown} size="sm" /></Button>
           {menu && (
-            <div ref={menuBox} className="rec-menu" role="menu" aria-label="Ассистент в этой записи" style={floatingStyle(menuPos)}>
+            <div ref={menuBox} className="rec-menu" role="menu" aria-label="Ещё действия с записью" style={floatingStyle(menuPos)}>
               {attached ? (
                 <button ref={item} type="button" role="menuitem" className="rec-menu__item"
                   disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)}>
@@ -262,12 +283,24 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
               ) : profiles.map((p, k) => (
                 <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
                   disabled={blocked} aria-describedby={blocked ? hintId : undefined}
-                  onClick={() => runLive(liveAttach, p)}>
+                  onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)}>
                   Включить ассистента · {PROFILE_LABELS[p]}{mark(p)}
                   <span className="rec-menu__note">догонит начало встречи; {PROFILE_NOTES[p]}</span>
                 </button>
               ))}
               {blocked && !attached && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+              {temporary ? (
+                <button type="button" role="menuitem" className="rec-menu__item" onClick={() => run("keep")}>
+                  {KEEP_LABEL}
+                  <span className="rec-menu__note">запись ляжет в библиотеку и расшифруется, как обычная</span>
+                </button>
+              ) : (
+                <button type="button" role="menuitem" className="rec-menu__item rec-menu__item--danger"
+                  onClick={() => ask("discard")}>
+                  {DISCARD_LABEL}…
+                  <span className="rec-menu__note">запись, чат и материалы удалятся</span>
+                </button>
+              )}
             </div>
           )}
         </span>
@@ -311,11 +344,16 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
             {profiles.map((p, k) => (
               <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
                 disabled={blocked} aria-describedby={blocked ? hintId : undefined}
-                onClick={() => runLive(liveStart, p)}>
+                onClick={() => runLive((ep) => liveStart(ep, { profile: p }), START_FAILED)}>
                 С ассистентом · {PROFILE_LABELS[p]}{mark(p)}
                 <span className="rec-menu__note">{PROFILE_NOTES[p]}</span>
               </button>
             ))}
+            <button type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
+              aria-describedby={blocked ? hintId : undefined} onClick={startTemporary}>
+              {TEMP_LABEL}
+              <span className="rec-menu__note">{TEMP_NOTE}</span>
+            </button>
             {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
           </div>
         )}
@@ -351,6 +389,15 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         </span>
       ))}
       {main}
+      {asking && (
+        <ConfirmDialog {...(asking === "discard" ? discardConfirm(snapshot.forget_gaps) : TEMP_END_CONFIRM)}
+          returnFocus={more}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => {
+            setAsking(null);
+            run(asking === "discard" ? "cancel" : "stop");
+          }} />
+      )}
     </div>
   );
 }

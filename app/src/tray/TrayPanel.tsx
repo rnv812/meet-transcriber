@@ -1,11 +1,15 @@
-import { AudioLines, Check, ChevronRight, Circle, LoaderCircle, Sparkles, Square, X } from "lucide-react";
+import { AudioLines, Check, ChevronRight, Circle, Clock3, LoaderCircle, Save, Sparkles, Square, Trash2, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { fallbackText, liveOf } from "../app/RecordingBadge";
 import { noProvider } from "../features/card/assistant";
 import { ApiError, type Endpoint, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, dayLabel, duration, errorText } from "../lib/format";
+import {
+  DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_LABEL, TEMP_NOTE,
+} from "../lib/recordingStop";
 import type { AssistantInfo, Recording, Snapshot } from "../lib/types";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Icon } from "../ui/Icon";
 import { elapsedOf, phaseOf } from "./trayModel";
 
@@ -25,6 +29,11 @@ export type OpenTarget = { recording?: string; section?: string };
  * (`RecordingBadge`) и пунктов меню значка: `/recording/start|stop`,
  * `/live/start|stop`. Ответ команды — новый снимок, он применяется сразу.
  * Пауза не предусмотрена.
+ *
+ * «Остановить без сохранения» (запись резидента) и конец временной встречи
+ * спрашивают — вопрос встаёт в панель вместо кнопок (окно панели маленькое,
+ * модальное окно в нём не поместилось бы); фокус на «Отмена» / «Продолжить»,
+ * Esc — тоже она (и панель при этом не прячется).
  */
 export function TrayPanel({
   endpoint, snapshot, snapshotAt, online, recent, justStopped, assistant, visible = true,
@@ -51,7 +60,11 @@ export function TrayPanel({
   const [error, setError] = useState<string | null>(null);
   const [needsProvider, setNeedsProvider] = useState(false);
   const [pending, setPending] = useState(false);
+  const [asking, setAsking] = useState<"discard" | "temp-end" | null>(null);
   const phase = phaseOf(snapshot, online);
+  const recordingNow = phase.kind === "recording";
+  // Запись кончилась (или началась другая) — вопрос про неё больше не к месту.
+  useEffect(() => { if (!recordingNow) setAsking(null); }, [recordingNow]);
   const ticking = visible && phase.kind === "recording";
 
   useEffect(() => { setNow(Date.now()); }, [snapshotAt]);
@@ -79,11 +92,11 @@ export function TrayPanel({
       })
       .finally(() => setPending(false));
   };
-  const record = (command: "start" | "stop") => act(async () => {
+  const record = (command: "start" | "stop" | "cancel" | "keep") => act(async () => {
     onSnapshot(await recordingCommand(endpoint!, command));
   });
-  const startLive = () => act(async () => {
-    const result = await liveStart(endpoint!);
+  const startLive = (temporary = false) => act(async () => {
+    const result = await (temporary ? liveStart(endpoint!, { temporary: true }) : liveStart(endpoint!));
     if (!result.ok) setError(result.error || START_FAILED);
     onSnapshot({ ...snapshot!, live: liveOf(result) });
   });
@@ -110,7 +123,7 @@ export function TrayPanel({
     hero = (
       <>
         <Status tone="rec">
-          Идёт запись
+          {phase.temporary ? "Идёт временная встреча" : "Идёт запись"}
           {phase.auto && <span className="tp__tag">авто</span>}
         </Status>
         <div className="tp__timer tp__num" role="timer" aria-live="off"
@@ -125,14 +138,45 @@ export function TrayPanel({
               : phase.assistant === "starting" ? "ассистент запускается…" : "ассистент выключается…"}
           </span>
         )}
+        {phase.temporary && (
+          <span className="tp__chip tp__chip--temp" title={TEMP_NOTE}>
+            <Icon as={Clock3} size="sm" />
+            {TEMP_BADGE}
+          </span>
+        )}
         {[...fallbacks.map(fallbackText), ...(sysAudio ? [sysAudio] : [])].map((text) => (
           <p key={text} className="tp__warn">{text}</p>
         ))}
-        <button type="button" className="tp__primary tp__primary--stop" disabled={pending}
-          onClick={() => (phase.liveOnly ? stopLive() : record("stop"))}>
-          <Icon as={Square} size="sm" className="tp__glyph-fill" />
-          Остановить
-        </button>
+        {asking ? (
+          <ConfirmDialog inline className="tp__confirm"
+            {...(asking === "discard" ? discardConfirm(snapshot.forget_gaps) : TEMP_END_CONFIRM)}
+            onCancel={() => setAsking(null)}
+            onConfirm={() => {
+              const what = asking;
+              setAsking(null);
+              record(what === "discard" ? "cancel" : "stop");
+            }} />
+        ) : (
+          <>
+            <button type="button" className="tp__primary tp__primary--stop" disabled={pending}
+              onClick={() => (phase.liveOnly ? stopLive() : phase.temporary ? setAsking("temp-end") : record("stop"))}>
+              <Icon as={Square} size="sm" className="tp__glyph-fill" />
+              {phase.temporary ? "Закончить" : "Остановить"}
+            </button>
+            {phase.temporary && (
+              <button type="button" className="tp__secondary" disabled={pending} onClick={() => record("keep")}>
+                <Icon as={Save} size="sm" />
+                {KEEP_LABEL}
+              </button>
+            )}
+            {!phase.liveOnly && !phase.temporary && (
+              <button type="button" className="tp__danger-link" disabled={pending} onClick={() => setAsking("discard")}>
+                <Icon as={Trash2} size="sm" />
+                {DISCARD_LABEL}…
+              </button>
+            )}
+          </>
+        )}
       </>
     );
   } else if (phase.kind === "live-starting") {
@@ -187,9 +231,15 @@ export function TrayPanel({
           Начать запись
         </button>
         <button type="button" className="tp__secondary" disabled={pending || blocked}
-          aria-describedby={blocked ? "tp-provider" : undefined} onClick={startLive}>
+          aria-describedby={blocked ? "tp-provider" : undefined} onClick={() => startLive()}>
           <Icon as={Sparkles} size="sm" className="tp__glyph-accent" />
           С ассистентом
+        </button>
+        <button type="button" className="tp__secondary tp__secondary--quiet" disabled={pending || blocked}
+          title={`Временная встреча ${TEMP_NOTE}`}
+          aria-describedby={blocked ? "tp-provider" : undefined} onClick={() => startLive(true)}>
+          <Icon as={Clock3} size="sm" />
+          {TEMP_LABEL}
         </button>
         {blocked && (
           <p id="tp-provider" className="tp__note">

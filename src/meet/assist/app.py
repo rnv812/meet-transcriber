@@ -106,7 +106,7 @@ class AssistState:
         self._cwd = cwd
         self._knowledge = _knowledge_path(knowledge, vault)
         self._task_context = ""
-        # Профиль сессии агента-участника (0.3.7): в «Нейтральном» и сводка
+        # Профиль сессии агента-участника (0.3.7): в «Личном» и сводка
         # («Сводка на сейчас», черновик итогов) — без рабочей рамки.
         self.profile = "work"
         self.qa = None       # проставляет run_assist после создания QAService
@@ -168,7 +168,9 @@ class AssistState:
         профиля со следующего тика. → ключ профиля."""
         if self.participant is not None:
             profile = self.participant.set_profile(profile)
-        profile = "neutral" if profile == "neutral" else "work"
+        from meet.assist.participant_prompts import normalize_profile
+
+        profile = normalize_profile(profile)
         if profile != self.profile:
             self.profile = profile
             self._rebuild()
@@ -578,7 +580,7 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     `attach_to`/`tap_port`/`tap_token` — подключиться к идущей обычной записи
     (папка и отвод звука резидента); `control_token` — токен резидента для
     доверенных маршрутов чата (`POST /chat/attach`); `profile` — профиль
-    сессии агента-участника (`work` / `neutral`), выбранный при старте; None
+    сессии агента-участника (`work` / `personal`), выбранный при старте; None
     — из журнала встречи или `assist.profile`."""
     from meet import tempdirs
 
@@ -819,7 +821,12 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             raise SystemExit("Нет отвода звука записи (порт и токен) — включите "
                              "ассистента из приложения или `meet assist --attach`")
     else:
-        out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
+        # Своя запись — в новой папке, чужую (ту же минуту) не переиспользовать.
+        # Создаёт её движок после lock (отказ — без пустой папки), поэтому здесь
+        # только свободное имя; второй записи в тот же корень lock не даст.
+        from meet.recorder import free_folder_name
+
+        out_dir = free_folder_name(Path(out_root))
     bus = TranscriptBus()
     cadence = cadence_of(cfg.assist)
     # «Только сводка» выключает и агента-участника (ревью участника M10):
@@ -1055,8 +1062,12 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             # нужны следующему включению.
             _save_state()
         if started:
-            print(f"\nОстановлено: {out_dir}", flush=True)
-            print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
+            from meet import temp_meeting
+
+            # Временная встреча — без пути (и времени) в журнале live.log.
+            print(f"\nОстановлено: {temp_meeting.loggable(out_dir)}", flush=True)
+            if not temp_meeting.is_temporary(out_dir):
+                print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
 
 
 def _make_participant(cfg, bus: TranscriptBus, out_dir: Path, provider: str, runner, *,

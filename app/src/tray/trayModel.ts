@@ -3,6 +3,7 @@
  * резидента. Компонент (`TrayPanel`) только рисует то, что решено здесь.
  */
 
+import { notSaved } from "../lib/recordingStop";
 import type { Recording, Snapshot } from "../lib/types";
 
 /** Сколько после остановки панель предлагает «Открыть запись» крупно. */
@@ -19,9 +20,10 @@ export type Phase =
   /**
    * Идёт запись: обычная (`liveOnly: false`, остановка — `/recording/stop`)
    * или с ассистентом с самого начала (`liveOnly: true`, остановка —
-   * `/live/stop`), как у кнопки записи в окне.
+   * `/live/stop`), как у кнопки записи в окне. `temporary` — временная
+   * встреча (не сохранится).
    */
-  | { kind: "recording"; liveOnly: boolean; assistant: AssistantMark; auto: boolean }
+  | { kind: "recording"; liveOnly: boolean; assistant: AssistantMark; auto: boolean; temporary: boolean }
   /** Запись с ассистентом запускается (грузится модель). */
   | { kind: "live-starting" }
   /** Запись с ассистентом останавливается: ассистент дописывает запись. */
@@ -39,11 +41,14 @@ export function phaseOf(snapshot: Snapshot | null, online: boolean | null): Phas
     const attached = !!live?.attached;
     const assistant: AssistantMark = !attached ? null
       : live?.stopping ? "stopping" : live?.starting || warming ? "starting" : live?.active ? "on" : null;
-    return { kind: "recording", liveOnly: false, assistant, auto: snapshot.source === "auto" };
+    return {
+      kind: "recording", liveOnly: false, assistant, auto: snapshot.source === "auto",
+      temporary: !!snapshot.temporary,
+    };
   }
   if (live?.stopping) return { kind: "saving" };
   if (warming || live?.starting) return { kind: "live-starting" };
-  if (live?.active) return { kind: "recording", liveOnly: true, assistant: "on", auto: false };
+  if (live?.active) return { kind: "recording", liveOnly: true, assistant: "on", auto: false, temporary: false };
   return { kind: "idle" };
 }
 
@@ -81,7 +86,10 @@ export function runningFolder(snapshot: Snapshot | null): string | null {
  * самого начала (у включённого посреди записи ассистента запись — обычная).
  */
 export function stoppedBetween(prev: Snapshot | null, next: Snapshot): string | null {
-  if (!prev) return null;
+  // Временная встреча не сохраняется: «Открыть запись» после неё не к чему. А
+  // сохранённая как обычная получает имя в библиотеке только при переносе
+  // (может быть «…_2») — его скажет резидент (`last_stop`, `freshStop`).
+  if (!prev || (prev.status === "recording" && (prev.temporary || inTemporaryRoot(prev.folder)))) return null;
   if (prev.status === "recording" && next.status !== "recording") return folderId(prev.folder);
   const was = prev.live;
   const now = next.live;
@@ -91,10 +99,13 @@ export function stoppedBetween(prev: Snapshot | null, next: Snapshot): string | 
   return null;
 }
 
-/** Остановка, о которой сказал сам резидент (`last_stop`): свежая и не отменённая. */
+/** Папка внутри корня временных встреч (`…/tmp-meetings/<сеанс>/…`). */
+export const inTemporaryRoot = (path: string | null | undefined) => !!path && /[\\/]tmp-meetings[\\/]/.test(path);
+
+/** Остановка, о которой сказал сам резидент (`last_stop`): свежая и сохранённая. */
 export function freshStop(snapshot: Snapshot | null, nowMs: number): string | null {
   const stop = snapshot?.last_stop;
-  if (!stop || stop.reason === "discarded") return null;
+  if (!stop || notSaved(stop.reason)) return null;
   if (nowMs - stop.at * 1000 > JUST_STOPPED_MS) return null;
   return folderId(stop.folder);
 }

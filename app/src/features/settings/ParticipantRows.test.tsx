@@ -1,7 +1,10 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL, VISION_NOTE } from "./ParticipantRows";
+import {
+  FREEDOM_FILES_NOTE, FREEDOM_LABEL, FREEDOM_OFF_HINT, KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL,
+  VISION_NOTE,
+} from "./ParticipantRows";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
@@ -75,17 +78,17 @@ test("участник включён (по умолчанию): частота,
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { frequency: "less", kb_map: false } }));
 });
 
-test("«Профиль по умолчанию»: рабочая встреча, если не задан; нейтральный сохраняется ключом", async () => {
+test("«Профиль по умолчанию»: рабочая встреча, если не задан; личный сохраняется ключом", async () => {
   open();
   const group = await screen.findByRole("radiogroup", { name: PROFILE_DEFAULT_LABEL });
   expect(within(group).getAllByRole("radio").map((r) => r.closest("label")?.textContent))
-    .toEqual(["Рабочая встреча", "Нейтральный"]);
+    .toEqual(["Рабочая встреча", "Личный"]);
   expect(within(group).getByRole("radio", { name: "Рабочая встреча" })).toBeChecked();
   expect(screen.getByText(/база знаний, прошлые встречи, подсказки по встрече/)).toBeInTheDocument();
-  await userEvent.click(within(group).getByRole("radio", { name: "Нейтральный" }));
+  await userEvent.click(within(group).getByRole("radio", { name: "Личный" }));
   expect(screen.getByText(/без базы знаний и рабочих советов/)).toBeInTheDocument();
   await save();
-  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { profile: "neutral" } }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { profile: "personal" } }));
 });
 
 test("участник выключен: прежние подсказки видны (запасной режим), настроек участника нет", async () => {
@@ -166,4 +169,26 @@ test("без базы знаний вписать исключение тоже 
   expect(within(editor).getByRole("textbox", { name: "Папка внутри базы знаний" })).toBeDisabled();
   expect(within(editor).getByRole("button", { name: "Добавить" })).toBeDisabled();
   expect(PARTICIPANT_LABEL).toBe("Ассистент — участник встречи");
+});
+
+test("расширенные возможности по согласию: вкл. по умолчанию, честная подсказка, выключение сохраняется (0.3.7)", async () => {
+  open();
+  const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
+  expect(sw).toHaveAttribute("aria-checked", "true");
+  const row = sw.closest(".srow")!;
+  expect(row).toHaveTextContent("с вашими правами");
+  expect(row).toHaveTextContent("Meet покажет карточкой и выполнит только после «Разрешить один раз»");
+  expect(row).toHaveTextContent("Без вашей просьбы — только эта встреча и вложения");
+  await userEvent.click(sw);
+  expect(sw).toHaveAttribute("aria-checked", "false");
+  expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_OFF_HINT);
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { agent_freedom: false } }));
+});
+
+test("расширенные возможности у Codex: только чтение файлов по просьбе, MCP и веб — только с Claude Code", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(info("codex"));
+  open();
+  const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
+  await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_FILES_NOTE));
 });

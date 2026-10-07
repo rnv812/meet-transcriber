@@ -48,8 +48,9 @@ git не попадают.
 
 - **Вход агенту:** отрезки расшифровки в паузах (не реже ~25 с при речи;
   реплики владельца — «Вы (вслух)»), сообщения пользователя (вне очереди:
-  прерывают ход по расшифровке), нажатые кнопки — текстом, реакции 👍/👎/❓,
-  вложения. Системный промпт и затравка — `assist/participant_prompts.py`.
+  прерывают ход по расшифровке), нажатые кнопки — текстом, реакции 👍 «Полезно» /
+  👎 «Не по теме» / ❓ «Поясни» (👎 — «мимо темы», частоту не меняет; ответ на ❓
+  несёт `explains` = id поясняемого сообщения), вложения. Системный промпт и затравка — `assist/participant_prompts.py`.
 - **Ответ агента** — JSON-строки: `{"say", "buttons" (0–3), "pin"}`,
   `{"silent": true}`; `read`/`search`/`list` — только запасной путь локальной
   модели без инструментов (`kb_prep.kb_read/kb_search/kb_list`). Остальные
@@ -90,12 +91,36 @@ git не попадают.
   `jobs.CHAT` → `job_worker._chat` (тот же `Participant` с resume, до 6 ходов —
   цепочки запросов локальной модели),
   событие `chat.updated`.
+- **Временная встреча и «Остановить без сохранения»** (0.3.7) —
+  `meet/temp_meeting.py`: временная встреча (`POST /live/start
+  {"temporary": true}`) пишется в `<data_dir>/tmp-meetings/<сеанс>/`, вне
+  библиотеки; агент её — `Participant(ephemeral=True)` (сеанс провайдера не
+  сохраняется). Любой её «Стоп» удаляет папку сеанса и забывает сеансы агента
+  (`llm.forget_session` по `assistant/sessions.json`, включая `past`; Codex —
+  `codex delete --force`), без `_on_saved` и хука. `POST /recording/keep` —
+  «Сохранить как обычную встречу»: отметка `keep`, после «Стоп» перенос в
+  библиотеку в фоне (никогда внутрь существующей папки). `/recording/cancel`
+  удаляет так же (`temp_meeting.wipe` + `claude.forget_project`); занятый
+  остаток — `.deleting-` или отметка `library.DISCARDED_MARK`. Ссылки
+  (symlink, junction) не проходить. Остатки после сбоя — `sweep` при старте
+  резидента. Тексты окна — `app/src/lib/recordingStop.ts`.
 - **Окно:** `app/src/live/` (`useChat`, `LiveChat`, `ChatComposer`,
   `SessionBar`, `ChatWorkspace`); вкладка «Ассистент» карточки — после встречи.
 - **Настройки:** `assist.participant` (по умолчанию вкл.; в файл не пишется,
   пока равен умолчанию), `assist.frequency` (`less`/`normal`/`more`, по
   умолчанию `more`), `assist.kb_map`, `assist.kb_exclude`. `activity:
   summary` («Только сводка») выключает и участника (`participant_on`).
+- **Профиль сессии (0.3.7):** `assist.profile` — `work` («Рабочая встреча»,
+  как 0.3.6) или `personal` («Личный»: свой промпт без базы знаний и
+  рабочей рамки, `add_dirs` — только папка записи, без запасных запросов к
+  базе; со свободой — `ConsentGate(blocked_roots=…)`: база и библиотека,
+  кроме своей записи, закрыты на любом уровне, без MCP пользователя).
+  Прежнее `neutral` читается как `personal`. Выбирается при старте
+  (`/live/start`, `/live/attach` `{"profile"}` → `meet assist --profile`),
+  меняется по ходу (`PUT /live/profile` → ребёнку `/agent/profile`, пометка
+  агенту и пересоздание сеанса: Claude Code — с продолжением, Codex и
+  OpenCode — новый с затравкой), хранится в `assistant/sessions.json`
+  (`ChatLog.profile`).
 - **Прежний режим** (`assist.participant=false`): подсказки и «Спросить»
   (`digester.py`, `qa.py`, `LiveHints`/`LiveAsk`/`LiveSummary`, `web.PAGE`)
   — запасной в 0.3.6, удаление запланировано на 0.3.7. Пока он есть, оба

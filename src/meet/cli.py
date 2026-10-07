@@ -442,10 +442,10 @@ def main(argv: list[str] | None = None) -> int | None:
     p_as.add_argument("--attach-to", default=None, help=argparse.SUPPRESS)
     p_as.add_argument("--tap-port", type=int, default=None, help=argparse.SUPPRESS)
     p_as.add_argument(
-        "--profile", default=None, choices=("work", "neutral"),
+        "--profile", default=None, choices=("work", "personal", "neutral"),
         help="профиль сессии: work — рабочая встреча (база знаний, прошлые встречи), "
-        "neutral — нейтральный (созвон, стрим, видео, без базы знаний); "
-        "по умолчанию — из журнала встречи или настроек",
+        "personal — личный (созвон, стрим, видео, без базы знаний); "
+        "по умолчанию — из журнала встречи или настроек; neutral — прежнее имя personal",
     )
 
     p_en = sub.add_parser(

@@ -34,6 +34,28 @@ V4 (0.3.6, v4-design §5.1, §12):
 * `deny_paths` (`kb_exclude`) у Codex — только правило в тексте каждого
   вызова: песочница read-only читает весь диск, запрета по путям в 0.159
   нет (`llm.deny_enforced("codex")` — False).
+
+0.3.7 (A1, fix round 1) — свобода по согласию (`access`, у агента-участника).
+Обратного вызова на каждый инструмент у `codex exec` нет — остановить вызов
+до решения человека нельзя. Поэтому Codex при включённой свободе получает
+**только чтение файлов** (честно и с отказом в закрытую сторону;
+`access_args`, проверено разбором на 0.159.0 без модели):
+
+* любой ход (`none` — без просьбы, `read` — по просьбе): `--sandbox
+  read-only`; MCP-серверы пользователя выключены (`-c
+  mcp_servers.<имя>.enabled=false` по списку `codex mcp list --json`);
+  список не прочитался или есть имя, которое так не выключить, — весь
+  `config.toml` пользователя не загружается (`--ignore-user-config`, вход
+  остаётся); выключены приложения, браузер, управление компьютером (`--disable
+  apps browser_use computer_use in_app_browser`) и веб-поиск (`-c
+  web_search="disabled"` — [ключ не проверен]);
+* `none` — рабочая папка (`-C`) — папка встречи; читать файлы вне неё
+  песочнице не запретить — только инструкция; `read` — постоянная папка
+  сеансов.
+
+Без свободы (`access=None`) — как в 0.3.6: песочница только-чтение, а
+MCP-серверы из `config.toml` пользователя Codex загружает сам (так было и в
+0.3.6).
 """
 
 import asyncio
@@ -48,7 +70,7 @@ from pathlib import Path
 from meet import netproxy, tempdirs
 from meet.llm.base import (
     CANCELLED_ERROR, EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, deny_prompt, drop_session_markers, image_note,
-    is_uuid, kill_tree, resume_failure, split_images,
+    is_uuid, kill_tree, resume_failure, run_tree, split_images,
 )
 from meet.llm.detect import find_codex
 
@@ -73,6 +95,72 @@ def _kill_tree(proc) -> None:
     kill_tree(proc)
 
 
+# Имя MCP-сервера, которое можно выключить ключом `-c mcp_servers.<имя>.enabled=false`:
+# точки и кавычки ключ разбирает по-своему (проверено: `"имя"` — новый сервер).
+_MCP_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+# Что выключить в ходе без согласия (`codex features list`, 0.159.0: stable).
+_NONE_FEATURES = ("apps", "browser_use", "computer_use", "in_app_browser")
+_mcp_cache: dict[str, tuple[float, list[dict] | None]] = {}
+_MCP_CACHE_S = 60.0     # список серверов — не дольше минуты (добавили сервер — увидим)
+
+
+def mcp_servers(exe: str | None = None, env: dict | None = None, *, refresh: bool = False) -> list[dict] | None:
+    """MCP-серверы из настроек Codex пользователя (`codex mcp list --json`,
+    0.159.0: `name`, `enabled`) — `[{"name", "enabled"}]`; Codex не найден —
+    пусто; список не прочитался — None (вызывающий отказывает в закрытую
+    сторону). Кэш — _MCP_CACHE_S. Блокирующее."""
+    import time
+
+    exe = exe or find_codex()
+    if not exe:
+        return []
+    cached = _mcp_cache.get(exe)
+    if cached is not None and not refresh and time.monotonic() - cached[0] < _MCP_CACHE_S:
+        return cached[1]
+    found: list[dict] | None
+    try:
+        data = json.loads(_mcp_list_json(exe, env))
+        if not isinstance(data, list):
+            raise ValueError("не список")
+        found = [{"name": str(x["name"]), "enabled": x.get("enabled") is not False}
+                 for x in data if isinstance(x, dict) and isinstance(x.get("name"), str)]
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        found = None
+    _mcp_cache[exe] = (time.monotonic(), found)
+    return found
+
+
+def _mcp_list_json(exe: str, env: dict | None) -> str:
+    """Вывод `codex mcp list --json` (тесты подменяют: CLI не запускается)."""
+    res = subprocess.run([exe, "mcp", "list", "--json"], capture_output=True, timeout=30,
+                         creationflags=_NO_WINDOW, env=env)
+    return (res.stdout or b"").decode("utf-8", errors="replace")
+
+
+def access_args(access: str | None, servers=()) -> list[str]:
+    """Флаги exec для свободы по согласию (до подкоманды `resume`). None —
+    как в 0.3.6 (песочница только-чтение). Любой уровень (`none`, `read`) —
+    только чтение файлов: песочница только-чтение, MCP `servers` выключены
+    (`servers` None — список не прочитался — или имя, которое ключом не
+    выключить, → `--ignore-user-config`), приложения, браузер, управление
+    компьютером и веб-поиск выключены."""
+    out = ["--sandbox", "read-only"]
+    if access is None:
+        return out
+    enabled = [s for s in servers or () if not isinstance(s, dict) or s.get("enabled", True)] \
+        if servers is not None else None
+    names = [s.get("name") if isinstance(s, dict) else s for s in enabled or ()]
+    if enabled is None or any(not (isinstance(n, str) and _MCP_KEY.match(n)) for n in names):
+        out.append("--ignore-user-config")     # в закрытую сторону: без config.toml — без MCP
+    else:
+        for name in names:
+            out += ["-c", f"mcp_servers.{name}.enabled=false"]
+    for feature in _NONE_FEATURES:
+        out += ["--disable", feature]
+    out += ["-c", 'web_search="disabled"']
+    return out
+
+
 def _workdir(allowed_dirs, cwd) -> str:
     for d in tuple(allowed_dirs)[1:]:
         if d and Path(d).is_dir():
@@ -85,11 +173,13 @@ def _workdir(allowed_dirs, cwd) -> str:
 
 
 def build_command(exe: str, workdir: str, out_file: str, *, effort: str | None = None,
-                  images=(), keep_session: bool = False, resume: str | None = None) -> list[str]:
+                  images=(), keep_session: bool = False, resume: str | None = None,
+                  access: str | None = None, servers=()) -> list[str]:
     """Командная строка `codex exec` (prompt — в stdin, `-` последним).
     Продолжение: песочница и папка — до `resume` (у подкоманды их нет),
-    остальное — после неё, id сеанса — перед `-`."""
-    head = [exe, "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+    остальное — после неё, id сеанса — перед `-`. `access` — уровень
+    согласия хода (`access_args`; `servers` — MCP-серверы, что выключить)."""
+    head = [exe, "exec", *access_args(access, servers), "--skip-git-repo-check"]
     # Сохраняемый сеанс — события JSON (id в thread.started; проверено на 0.159.0).
     events = ["--json"] if keep_session or resume else []
     rest = [*events, "--output-last-message", out_file,
@@ -167,15 +257,17 @@ class _Call:
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
           env: dict | None = None, effort: str | None = None, images=(),
           keep_session: bool = False, resume: str | None = None,
-          call: _Call | None = None) -> AgentReply:
+          call: _Call | None = None, access: str | None = None) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
     # Папка с pid в имени (meet.tempdirs): процесс убили посреди ответа — файл
     # с ответом модели о встрече удалит резидент.
     with tempfile.TemporaryDirectory(prefix=tempdirs.prefix("codex-"),
                                      ignore_cleanup_errors=True) as tmp:
         out_file = Path(tmp) / "last-message.txt"
+        servers = mcp_servers(exe, env) if access is not None else ()
         cmd = build_command(exe, workdir, str(out_file), effort=effort, images=images,
-                            keep_session=keep_session, resume=resume)
+                            keep_session=keep_session, resume=resume, access=access,
+                            servers=servers)
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -243,6 +335,7 @@ async def run(
     images=(),
     keep_session: bool = False,
     deny_paths=(),
+    access: str | None = None,
 ) -> AgentReply:
     """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
     `llm.proxy`: Codex системный прокси Windows сам не видит.
@@ -253,7 +346,12 @@ async def run(
     (UUID). Оба — в постоянной папке KEEP_WORKDIR. Системный промпт
     продолжению не повторяется: он уже в сеансе. `deny_paths` — правило в
     тексте (не запрет песочницы). Отмена задачи (CancelledError, «Стоп»)
-    убивает дерево процессов Codex."""
+    убивает дерево процессов Codex.
+
+    `access` (0.3.7, агент-участник со свободой) — уровень согласия хода
+    (`none` / `read`, см. модуль: в обоих — только чтение файлов, без MCP и
+    веба); у `none` рабочая папка — первая из `allowed_dirs` (папка встречи).
+    None — как в 0.3.6."""
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса Codex: {resume!r}")
     exe = find_codex()
@@ -267,13 +365,15 @@ async def run(
         body = f"{body}\n\n{rule}"
     stdin_text = body if resume else f"{system_prompt}\n\n{body}"
     workdir = keep_dir() if (keep_session or resume) else _workdir(allowed_dirs, cwd)
+    if access == "none" and allowed_dirs and allowed_dirs[0] and Path(allowed_dirs[0]).is_dir():
+        workdir = str(allowed_dirs[0])   # ход без согласия: рабочая папка — встреча
     env = netproxy.child_env(proxy)
     drop_session_markers(env)  # сеанс сам по себе, не «вложенный» (llm.base)
     call = _Call()
     try:
         reply = await asyncio.to_thread(
             _exec, exe, workdir, stdin_text, timeout_s, env, effort,
-            sent, keep_session, resume, call,
+            sent, keep_session, resume, call, access,
         )
     except asyncio.CancelledError:
         call.cancel()  # «Стоп»: процесс Codex убит, поток дочитает и выйдет
@@ -288,13 +388,38 @@ def _home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def forget_session(session_id: str) -> int:
-    """Удалить сохранённый сеанс Codex из его хранилища (у CLI нет команды
-    удаления): файлы `rollout-*-<id>.jsonl` в `sessions/` и
-    `archived_sessions/` CODEX_HOME. Только UUID; → сколько удалено."""
+# `codex delete --force <uuid>` — локальная команда, сеть не нужна (проверено
+# на 0.159.0 с мёртвым прокси): секунды.
+DELETE_TIMEOUT_S = 30.0
+
+
+def _cli_delete(session_id: str, run=None) -> bool:
+    """Официальное удаление сеанса: `codex delete --force <uuid>` — убирает
+    поток и из sqlite-хранилищ Codex (`state_5`, `thread_history_1`), которые
+    сами мы не трогаем (их схема — внутреннее дело Codex). → удалось ли."""
+    exe = find_codex()
+    if exe is None:
+        return False
+    run = run or run_tree
+    env = netproxy.child_env(None)
+    drop_session_markers(env)
+    try:
+        code, _out, _err = run([exe, "delete", "--force", session_id],
+                               timeout=DELETE_TIMEOUT_S, env=env)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return code == 0
+
+
+def forget_session(session_id: str, run=None) -> int:
+    """Удалить сохранённый сеанс Codex: официальной командой `codex delete
+    --force` (поток в sqlite Codex и его rollout), затем — на случай старого
+    CLI без неё — файлы `rollout-*-<id>.jsonl` в `sessions/` и
+    `archived_sessions/` CODEX_HOME. Только UUID; → сколько удалено (удача
+    команды считается за один)."""
     if not is_uuid(session_id):
         return 0
-    removed = 0
+    removed = 1 if _cli_delete(session_id, run) else 0
     for sub_dir in ("sessions", "archived_sessions"):
         root = _home() / sub_dir
         if not root.is_dir():

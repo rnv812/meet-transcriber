@@ -21,7 +21,7 @@ const recording = (l: LiveStatus = live()): Snapshot => ({
 const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
   provider: "claude", setting: "auto", available: {}, knowledge_dir: null, checking: false, ...o,
 });
-const openMenu = () => userEvent.click(screen.getByRole("button", { name: "Ассистент в этой записи" }));
+const openMenu = () => userEvent.click(screen.getByRole("button", { name: "Ещё действия с записью" }));
 
 test("во время записи «Стоп ▾»: «Включить ассистента» — ответ применяется сразу", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
@@ -46,18 +46,18 @@ test("во время записи «Стоп ▾»: «Включить асси
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
-test("«Включить ассистента · Нейтральный» — подключает с нейтральным профилем", async () => {
+test("«Включить ассистента · Личный» — подключает с профилем «Личный»", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
     { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Нейтральный/ });
-  expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Личный/ });
+  expect(screen.getAllByRole("menuitem", { name: /Включить ассистента/ })).toHaveLength(2);
   await waitFor(() => expect(item).toBeEnabled());
   expect(item).toHaveTextContent("без базы знаний");
   await userEvent.click(item);
-  expect(attach).toHaveBeenCalledWith(ep, "neutral");
+  expect(attach).toHaveBeenCalledWith(ep, "personal");
 });
 
 test("без подключённой модели «Включить ассистента» неактивен, с подсказкой", async () => {

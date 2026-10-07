@@ -295,7 +295,12 @@ export const getJobs = (ep: Endpoint) => json<{ items: Job[] }>(ep, "/jobs");
 export const cancelJob = (ep: Endpoint, id: string) =>
   json<{ ok: boolean }>(ep, `/jobs/${enc(id)}`, { method: "DELETE" });
 
-export const recordingCommand = (ep: Endpoint, command: "start" | "stop" | "cancel") =>
+/**
+ * `cancel` — «Остановить без сохранения»: запись, чат ассистента, вложения и
+ * его сеансы у провайдера удаляются; `keep` — «Сохранить как обычную встречу»
+ * посреди временной.
+ */
+export const recordingCommand = (ep: Endpoint, command: "start" | "stop" | "cancel" | "keep") =>
   json<CommandResult>(ep, `/recording/${command}`, { method: "POST" });
 export const setAutoRecord = (ep: Endpoint, enabled: boolean) =>
   json<Snapshot>(ep, "/auto-record", body("POST", { enabled }));
@@ -608,11 +613,16 @@ const profileInit = (profile?: AgentProfile): RequestInit =>
   (profile ? body("POST", { profile }) : { method: "POST" });
 
 /**
- * Ответ сразу (`starting`); дальше — события `live.started` / `live.failed`. 409/400 — ApiError.
- * `profile` — профиль сессии ассистента; без него — `assist.profile` из настроек.
+ * «Запись с ассистентом». Ответ сразу (`starting`); дальше — события `live.started` /
+ * `live.failed`. 409/400 — ApiError. `temporary` — «Временная встреча с ассистентом»: идёт
+ * вне библиотеки и на «Стоп» удаляется вместе с чатом и сеансами агента; `profile` —
+ * профиль сессии ассистента (без него — `assist.profile` из настроек).
  */
-export const liveStart = (ep: Endpoint, profile?: AgentProfile) =>
-  json<{ ok: boolean } & LiveStatus>(ep, "/live/start", profileInit(profile));
+export const liveStart = (ep: Endpoint, opts: { temporary?: boolean; profile?: AgentProfile } = {}) => {
+  const data = { ...(opts.temporary ? { temporary: true } : {}), ...(opts.profile ? { profile: opts.profile } : {}) };
+  return json<{ ok: boolean } & LiveStatus>(ep, "/live/start",
+    Object.keys(data).length ? body("POST", data) : { method: "POST" });
+};
 /** Ответ сразу; конец — событием `live.stopped`. */
 export const liveStop = (ep: Endpoint) =>
   json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/stop", { method: "POST" });
@@ -672,6 +682,12 @@ export const attachChatFile = (ep: Endpoint, path: string) =>
 export const clickChat = (ep: Endpoint, id: string, label: string, clientId?: string) =>
   json<{ ok: boolean; id: string }>(ep, `/live/chat/${enc(id)}/click`,
     body("POST", { label, ...(clientId ? { client_id: clientId } : {}) }));
+/** Решение по карточке подтверждения Meet: разрешить этот один вызов агента или отклонить. */
+export const confirmChat = (ep: Endpoint, id: string, allow: boolean, meeting = false) =>
+  json<{ ok: boolean }>(ep, `/live/chat/${enc(id)}/confirm`, body("POST", { allow, meeting }));
+/** Отозвать «Разрешать такое до конца встречи». */
+export const revokeChatGrant = (ep: Endpoint, id: string) =>
+  json<{ ok: boolean }>(ep, `/live/chat/${enc(id)}/revoke`, body("POST", {}));
 /** Реакция на сообщение агента; `on` — поставить/снять, без него — переключить. */
 export const reactChat = (ep: Endpoint, id: string, emoji: ChatReaction, on?: boolean) =>
   json<{ ok: boolean; changed: boolean }>(ep, `/live/chat/${enc(id)}/react`,
@@ -721,6 +737,9 @@ export const recordingChatRemove = (ep: Endpoint, id: string, aid: string) =>
   json<{ ok: boolean; removed: boolean }>(ep, `/recordings/${enc(id)}/chat/attachments/${enc(aid)}/remove`,
     body("POST", {}));
 /** Кнопка сообщения агента после встречи: сообщение с её надписью и задача ответа. */
+/** Карточка подтверждения Meet после встречи: решение пишется в журнал записи. */
+export const recordingChatConfirm = (ep: Endpoint, id: string, mid: string, allow: boolean, meeting = false) =>
+  json<{ ok: boolean }>(ep, `/recordings/${enc(id)}/chat/${enc(mid)}/confirm`, body("POST", { allow, meeting }));
 export const recordingChatClick = (ep: Endpoint, id: string, mid: string, label: string, clientId?: string) =>
   json<ContinueChatResult>(ep, `/recordings/${enc(id)}/chat/${enc(mid)}/click`,
     body("POST", { label, ...(clientId ? { client_id: clientId } : {}) }));
@@ -756,7 +775,7 @@ export function avatarUrl(ep: Endpoint, name: string, version: number): string {
 
 const EVENT_KINDS = [
   "job.queued", "job.started", "job.progress", "job.done", "job.failed",
-  "record.started", "record.stopped", "record.discarded", "record.device", "record.device_fallback", "record.device_pinned",
+  "record.started", "record.stopped", "record.discarded", "record.kept", "record.device", "record.device_fallback", "record.device_pinned",
   "record.waiting", "record.silence", "record.level", "record.system_audio", "progress", "log", "error",
   "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
   // Этап старта ассистента сменился («загружаю модель распознавания…», готов).

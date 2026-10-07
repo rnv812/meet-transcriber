@@ -12,6 +12,7 @@ vi.mock("../../lib/api", async (orig) => ({
   continueChat: vi.fn(),
   recordingChatClick: vi.fn(async () => ({ message: {}, job: null })),
   recordingChatReact: vi.fn(async () => ({ ok: true, changed: true })),
+  recordingChatConfirm: vi.fn(async () => ({ ok: true })),
   recordingChatPaste: vi.fn(),
   recordingChatAttach: vi.fn(),
   recordingChatRemove: vi.fn(async () => ({ ok: true, removed: true })),
@@ -28,13 +29,13 @@ vi.mock("../../lib/shell", async (orig) => ({
   openMaterial: h.open,
 }));
 import {
-  cancelJob, continueChat, getKbDocs, getRecordingChat, recordingChatAttach, recordingChatClick, recordingChatPaste,
-  recordingChatReact, recordingChatRemove,
+  cancelJob, continueChat, getKbDocs, getRecordingChat, recordingChatAttach, recordingChatClick, recordingChatConfirm,
+  recordingChatPaste, recordingChatReact, recordingChatRemove,
 } from "../../lib/api";
 import type { ChatMessage, ChatUpdatedEvent, Job, RecordingChat } from "../../lib/types";
 import { COPY_OPENED, resetKbDocs } from "../../live/useChat";
 import { agentMsg, attMsg, userMsg } from "../../test/chatFixtures";
-import { AssistantTab, NEUTRAL_QUESTIONS, TRANSCRIBING } from "./AssistantTab";
+import { AssistantTab, PERSONAL_QUESTIONS, TRANSCRIBING } from "./AssistantTab";
 
 const ep = { base: "http://h", token: "t" };
 const ID = "2026-10-07_10-00";
@@ -162,13 +163,13 @@ test("чата нет: «Спросить ассистента о встрече
   expect(continueChat).toHaveBeenCalledWith(ep, ID, { text: "Кратко итоги", client_id: "c1", attachments: [] });
 });
 
-test("профиль сессии виден; в нейтральном — свои быстрые вопросы, без рабочих", async () => {
-  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2, profile: "neutral" }));
+test("профиль сессии виден; в «Личном» — свои быстрые вопросы, без рабочих", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2, profile: "personal" }));
   const view = render(<Tab />);
   await within(await ready()).findByText("15 ноября");
-  expect(screen.getByText("Профиль:").parentElement).toHaveTextContent("Профиль: Нейтральный");
+  expect(screen.getByText("Профиль:").parentElement).toHaveTextContent("Профиль: Личный");
   const quick = screen.getByRole("group", { name: "Быстрые вопросы" });
-  for (const q of NEUTRAL_QUESTIONS) expect(quick).toHaveTextContent(q);
+  for (const q of PERSONAL_QUESTIONS) expect(quick).toHaveTextContent(q);
   expect(quick).not.toHaveTextContent("Что мне сделать?");
   expect(quick).not.toHaveTextContent("Какие решения приняли?");
   view.unmount();
@@ -262,10 +263,10 @@ test("чип-источник: документ базы знаний по пу�
   expect(getKbDocs).toHaveBeenCalledTimes(1);
 });
 
-test("«Нейтральный»: документ базы знаний в тексте — без чипа-источника (ревью M4)", async () => {
+test("«Личный»: документ базы знаний в тексте — без чипа-источника (ревью M4)", async () => {
   vi.mocked(getKbDocs).mockResolvedValue({ root: "D:\\KB", docs: ["Проекты/Альфа/Биллинг.md"], more: false });
   vi.mocked(getRecordingChat).mockResolvedValue(answer({
-    profile: "neutral",
+    profile: "personal",
     seq: 1, messages: [agentMsg("m1", { text: "Раньше упоминался Проекты/Альфа/Биллинг.md.", t: undefined })],
   }));
   render(<Tab />);
@@ -338,4 +339,16 @@ test("после встречи: отклик на 👎, ❓ «поясняет�
   expect(within(reply).getByText("пояснение")).toBeInTheDocument();
   expect(within(reply).getByRole("button", { name: "к сообщению «Запуск — 15 ноября.»" })).toBeInTheDocument();
   expect(within(m2()).queryByText("Ассистент поясняет…")).toBeNull();
+});
+
+test("карточка подтверждения Meet после встречи: решение уходит в журнал записи (0.3.7)", async () => {
+  const card: ChatMessage = {
+    ...agentMsg("m3"), kind: "system", status: undefined, mode: undefined, t: undefined, card: "confirm", tool: "Bash",
+    title: "команду", text: "Ассистент хочет выполнить: команду", args: "ls", expires_at: Date.now() / 1000 + 100,
+  };
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: [...journal, card], seq: 3 }));
+  render(<Tab />);
+  const region = await screen.findByRole("region", { name: "Подтверждение действия" });
+  await userEvent.click(within(region).getByRole("button", { name: "Отклонить" }));
+  expect(recordingChatConfirm).toHaveBeenCalledWith(ep, ID, "m3", false, false);
 });

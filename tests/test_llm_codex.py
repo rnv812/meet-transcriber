@@ -1,5 +1,8 @@
 import asyncio
+import json
 import subprocess
+
+import pytest
 
 from meet.llm import codex
 
@@ -421,6 +424,7 @@ def test_deny_paths_are_a_prompt_rule_every_turn(monkeypatch, tmp_path):
 
 def test_forget_session_deletes_only_that_rollout(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(codex, "find_codex", lambda: None)  # старый CLI: команды нет
     day = tmp_path / "sessions" / "2026" / "10" / "07"
     day.mkdir(parents=True)
     mine = day / f"rollout-2026-10-07T10-00-00-{SID}.jsonl"
@@ -430,3 +434,125 @@ def test_forget_session_deletes_only_that_rollout(monkeypatch, tmp_path):
     assert codex.forget_session(SID) == 1
     assert not mine.exists() and other.exists()
     assert codex.forget_session("*") == 0 and other.exists()
+
+
+def test_forget_session_uses_the_official_delete_command(monkeypatch, tmp_path):
+    """`codex delete --force <uuid>` убирает поток и из sqlite Codex; аргументы —
+    списком, без шелла, только UUID (путь или «*» до CLI не доходят)."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(codex, "find_codex", lambda: "codex.exe")
+    calls = []
+
+    def run(cmd, *, timeout, **kw):
+        calls.append(cmd)
+        return 0, b"Deleted session", b""
+
+    assert codex.forget_session(SID, run=run) == 1
+    assert calls == [["codex.exe", "delete", "--force", SID]]
+    for bad in ("*", "../../x", SID + chr(10), "-rf", "C:/Windows"):
+        assert codex.forget_session(bad, run=run) == 0
+    assert len(calls) == 1
+
+    def failing(cmd, *, timeout, **kw):
+        return 1, b"", b"Error: failed to delete session"
+
+    assert codex.forget_session(SID, run=failing) == 0
+
+
+# --- 0.3.7 (A1, fix round 1): свобода по согласию — только чтение файлов ----------------
+
+ACCESS_SID = "019a1b2c-3d4e-7f00-8a9b-0c1d2e3f4a5b"
+FEATURES = ["apps", "browser_use", "computer_use", "in_app_browser"]
+
+
+def _access_setup(monkeypatch, tmp_path, servers):
+    _setup(monkeypatch)
+    (tmp_path / "tmp").mkdir(exist_ok=True)
+    monkeypatch.setattr(codex.tempdirs, "system_temp", lambda: tmp_path / "tmp")
+    listed = []
+
+    def fake_list(exe=None, env=None, *, refresh=False):
+        listed.append(exe)
+        return servers
+
+    monkeypatch.setattr(codex, "mcp_servers", fake_list)
+    return listed
+
+
+def _access_cmd(tmp_path, access, **kw):
+    meeting = tmp_path / "meeting"
+    meeting.mkdir(exist_ok=True)
+    reply = _run(allowed_dirs=(meeting, tmp_path / "kb"), access=access, keep_session=True, **kw)
+    assert reply.error is None
+    return FakePopen.calls[-1].cmd, meeting
+
+
+SERVERS = [{"name": "team-jira", "enabled": True}, {"name": "team-gitlab", "enabled": True},
+           {"name": "off", "enabled": False}]
+
+
+@pytest.mark.parametrize("access", ["none", "read"])
+def test_every_free_turn_is_read_only_without_mcp_apps_or_web(monkeypatch, tmp_path, access):
+    _access_setup(monkeypatch, tmp_path, SERVERS)
+    cmd, meeting = _access_cmd(tmp_path, access)
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    overrides = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-c"]
+    assert "mcp_servers.team-jira.enabled=false" in overrides
+    assert "mcp_servers.team-gitlab.enabled=false" in overrides
+    assert not any("off" in o for o in overrides)
+    assert 'web_search="disabled"' in overrides
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--disable"] == FEATURES
+    assert "--ignore-user-config" not in cmd
+    assert (cmd[cmd.index("-C") + 1] == str(meeting)) is (access == "none")
+
+
+@pytest.mark.parametrize("servers", [None, [{"name": "my.server", "enabled": True}],
+                                     [{"name": "имя с пробелом", "enabled": True}]])
+def test_unreadable_mcp_list_or_unaddressable_name_fails_closed(monkeypatch, tmp_path, servers):
+    """Список не прочитался или имя не выключить ключом — без config.toml целиком."""
+    _access_setup(monkeypatch, tmp_path, servers)
+    cmd, _meeting = _access_cmd(tmp_path, "read")
+    assert "--ignore-user-config" in cmd
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    assert not any(a.startswith("mcp_servers.") for a in cmd)
+
+
+def test_access_flags_go_before_resume(monkeypatch, tmp_path):
+    _access_setup(monkeypatch, tmp_path, None)
+    cmd, meeting = _access_cmd(tmp_path, "none", resume=ACCESS_SID)
+    i = cmd.index("resume")
+    for flag in ("--sandbox", "-C", "--ignore-user-config"):
+        assert cmd.index(flag) < i
+    assert all(j < i for j, a in enumerate(cmd) if a == "--disable")
+    assert cmd[cmd.index("-C") + 1] == str(meeting)
+    assert cmd[-2:] == [ACCESS_SID, "-"]
+
+
+def test_without_access_the_command_is_as_in_0_3_6():
+    assert codex.build_command("codex", "D:/w", "o.txt") == [
+        "codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "-C", "D:/w",
+        "--output-last-message", "o.txt", "-"]
+    assert codex.access_args(None) == ["--sandbox", "read-only"]
+
+
+def test_mcp_list_is_parsed_cached_and_failure_is_none(monkeypatch):
+    calls = []
+
+    def listed(exe, env):
+        calls.append(exe)
+        return json.dumps([{"name": "team-jira", "enabled": True}, {"name": "x", "enabled": False},
+                           {"oops": 1}])
+
+    monkeypatch.setattr(codex, "_mcp_list_json", listed)
+    monkeypatch.setattr(codex, "_mcp_cache", {})
+    first = codex.mcp_servers("C:/codex.exe")
+    assert first == [{"name": "team-jira", "enabled": True}, {"name": "x", "enabled": False}]
+    assert codex.mcp_servers("C:/codex.exe") == first and calls == ["C:/codex.exe"]
+    monkeypatch.setattr(codex, "_mcp_list_json", lambda exe, env: "not json")
+    assert codex.mcp_servers("C:/other.exe") is None
+
+    def boom(exe, env):
+        raise OSError("нет")
+
+    monkeypatch.setattr(codex, "_mcp_list_json", boom)
+    assert codex.mcp_servers("C:/third.exe") is None

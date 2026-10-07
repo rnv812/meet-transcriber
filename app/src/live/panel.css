@@ -31,6 +31,17 @@ html, body { background: transparent; }
   flex: none; padding: 0 6px; border-radius: 8px; background: var(--surface-2);
   color: var(--text-2); font-size: 11px; font-weight: 400; line-height: 16px;
 }
+/* Временная встреча: не сохранится — видно всегда, и в свёрнутой панели. */
+.live-temp { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: -2px; font-size: 11px; line-height: 16px; }
+.live-temp__badge {
+  flex: none; padding: 0 6px; border-radius: 8px; background: rgba(245, 165, 36, 0.14);
+  color: var(--amber); font-weight: 500;
+}
+.live-temp__note { min-width: 0; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-head__discard:hover:not(:disabled) { color: var(--red); background: rgba(229, 72, 77, 0.12); }
+/* Вопрос «Остановить без сохранения?» / конец временной встречи — на месте содержимого. */
+.live-panel__confirm { flex: 1; min-height: 0; overflow: auto; }
+.live-panel__confirm .confirm { margin: 0; }
 
 
 

@@ -153,6 +153,8 @@
 }
 .rec-menu__item:hover:not(:disabled) { background: var(--surface-hover); }
 .rec-menu__item:disabled { opacity: 0.5; cursor: default; }
+/* «Остановить без сохранения…» — внизу меню и красным: удаляет запись. */
+.rec-menu__item--danger { color: var(--red); border-top: 1px solid var(--line-2); border-radius: 0 0 var(--r-md) var(--r-md); }
 .rec-menu__note { color: var(--text-3); font-size: 11px; }
 .rec-menu__hint { padding: 0 8px 6px; color: var(--amber); font-size: 12px; }
 

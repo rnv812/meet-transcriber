@@ -137,7 +137,8 @@ def resume_failure(detail: str | None) -> AgentReply:
 
 
 def is_uuid(value) -> bool:
-    return isinstance(value, str) and bool(_UUID.match(value))
+    # fullmatch, а не match с `$`: `$` пропускает хвостовой перевод строки.
+    return isinstance(value, str) and bool(_UUID.fullmatch(value))
 
 
 def image_media_type(path) -> str | None:

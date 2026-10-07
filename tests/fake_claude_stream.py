@@ -15,6 +15,13 @@
   tool   — перед ответом спрашивает разрешение инструмента (`control_request`
            can_use_tool) и ждёт ответа хозяина; затем текст пояснения, новое
            сообщение модели и ответ.
+  gate   — ворота согласия (0.3.7): на `initialize` отвечает успехом (с
+           FAKE_CLAUDE_NO_INIT=1 — молчит); строки сообщения «TOOL {json}»
+           (`name`, `input`, `ask`) — по каждой хук PreToolUse
+           (`hook_callback`), а если хук не отказал и `ask` — ещё
+           `can_use_tool`; ответ модели — JSON-список исходов
+           (`{"name","result":"allowed"|"denied","reason"}`). В init —
+           `mcp_servers` из FAKE_CLAUDE_MCP (имена через запятую).
 FAKE_CLAUDE_REJECT_IMAGES=1 — сообщение с блоком image отвергается, как API
 (result с ошибкой «…image… Could not process image»).
 `--resume=<id>`: id из FAKE_CLAUDE_KNOWN (через запятую) продолжается, иначе —
@@ -100,9 +107,74 @@ def main() -> int:
 
     n = 0
     pending = False  # ход начат и ждёт остановки (slow/deaf/finish)
+    hook_ids: list[str] = []
+    asked = 0
+
+    def ask_host(request: dict) -> dict:
+        """Запрос хозяину (`control_request`) и его ответ из stdin."""
+        nonlocal asked
+        asked += 1
+        emit({"type": "control_request", "request_id": f"cli_{asked}", "request": request})
+        reply = json.loads(sys.stdin.readline())
+        note({"message": reply})
+        return ((reply.get("response") or {}).get("response")) or {}
+
+    def gate_turn(content) -> list:
+        text = content if isinstance(content, str) else "\n".join(
+            str(b.get("text") or "") for b in content or [] if isinstance(b, dict))
+        calls = [json.loads(line[5:]) for line in text.splitlines() if line.startswith("TOOL ")]
+        ids = [f"toolu_{n}_{uuid.uuid4().hex[:6]}" for n in range(len(calls))]
+        if calls:   # ответ модели с вызовами инструментов (их id сверяет хозяин)
+            emit({"type": "assistant", "uuid": str(uuid.uuid4()), "session_id": session, "message": {
+                "content": [{"type": "tool_use", "id": i, "name": c["name"], "input": c.get("input") or {}}
+                            for i, c in zip(ids, calls)]}})
+        out = []
+
+        def result_of(tid, denied):
+            emit({"type": "user", "session_id": session, "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "is_error": denied, "content": "x"}]}})
+
+        for tid, call in zip(ids, calls):
+            before = len(out)
+            gate_one(tid, call, out)
+            result_of(tid, out[before]["result"] == "denied")
+        return out
+
+    def gate_one(tid, call, out):
+        if True:
+            if call.get("skip_hook"):   # дыра: CLI не позвал хук
+                out.append({"name": call["name"], "result": "allowed", "by": "no-hook"})
+                return
+            hook = ask_host({"subtype": "hook_callback", "callback_id": hook_ids[0] if hook_ids else "?",
+                             "tool_use_id": tid,
+                             "input": {"hook_event_name": "PreToolUse", "tool_name": call["name"],
+                                       "tool_use_id": tid, "tool_input": call.get("input") or {}}})
+            spec = hook.get("hookSpecificOutput") or {}
+            if spec.get("permissionDecision") == "deny":
+                out.append({"name": call["name"], "result": "denied", "by": "hook",
+                            "reason": spec.get("permissionDecisionReason")})
+                return
+            if call.get("ask"):
+                perm = ask_host({"subtype": "can_use_tool", "tool_name": call["name"], "tool_use_id": tid,
+                                 "input": call.get("input") or {}})
+                if perm.get("behavior") != "allow":
+                    out.append({"name": call["name"], "result": "denied", "by": "can_use_tool",
+                                "reason": perm.get("message")})
+                    return
+            out.append({"name": call["name"], "result": "allowed"})
+
+
     for raw in sys.stdin:
         msg = json.loads(raw)
         note({"message": msg})
+        if msg.get("type") == "control_request" and (msg.get("request") or {}).get("subtype") == "initialize":
+            for matchers in ((msg["request"].get("hooks") or {}).get("PreToolUse") or []):
+                hook_ids.extend(matchers.get("hookCallbackIds") or [])
+            if os.environ.get("FAKE_CLAUDE_NO_INIT") == "1":
+                continue
+            emit({"type": "control_response", "response": {
+                "subtype": "success", "request_id": msg.get("request_id"), "response": {"commands": []}}})
+            continue
         if msg.get("type") == "control_request":
             if mode == "deaf":
                 continue
@@ -135,7 +207,10 @@ def main() -> int:
             wanted = _arg(argv, "--model")
             model = (os.environ.get("FAKE_CLAUDE_INIT_MODEL")
                      or (MODELS.get(wanted, wanted) if wanted else CLI_DEFAULT))
-            emit({"type": "system", "subtype": "init", "session_id": session, "model": model})
+            servers = [{"name": x, "status": "connected"}
+                       for x in os.environ.get("FAKE_CLAUDE_MCP", "").split(",") if x]
+            emit({"type": "system", "subtype": "init", "session_id": session, "model": model,
+                  **({"mcp_servers": servers} if mode == "gate" else {})})
         content = (msg.get("message") or {}).get("content")
         if reject_images and isinstance(content, list) and any(
                 isinstance(b, dict) and b.get("type") == "image" for b in content):
@@ -145,6 +220,12 @@ def main() -> int:
         if mode in ("slow", "deaf", "finish"):
             delta("начало ответа")
             pending = True
+            continue
+        if mode == "gate":
+            text = json.dumps(gate_turn(content), ensure_ascii=False)
+            delta(text)
+            assistant(text)
+            result(n, text)
             continue
         if mode == "tool":
             emit({"type": "control_request", "request_id": "cli_1", "request": {

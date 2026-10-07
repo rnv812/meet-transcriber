@@ -2,7 +2,7 @@
 клиенте конференций и сам её останавливает, когда звонок кончился.
 
 Дежурит с серой иконкой, на записи — синяя с секундомером и пунктами
-«Остановить и сохранить» / «Отменить запись…» (внизу, с вопросом). Ярлык на
+«Остановить и сохранить» / «Остановить без сохранения…» (внизу, с вопросом). Ярлык на
 рабочем столе запускает `meet-tray` без аргументов — это по-прежнему означает «начать запись», и такую
 запись детектор не останавливает никогда: писать можно не только конференцию.
 Дежурный режим — флаг `--watch`, с ним трей стоит в автозагрузке.
@@ -244,11 +244,16 @@ def _run_post_hook(folder: str) -> None:
         pass
 
 
-def _stop_reason(discard: bool, hook: bool) -> str:
-    """Причина остановки для `last_stop` в снимке состояния.
+def _stop_reason(discard: bool, hook: bool, temporary: bool = False) -> str:
+    """Причина остановки для `last_stop` в снимке состояния: "saved",
+    "short", "discarded" («Остановить без сохранения») или "temporary"
+    (временная встреча закончилась и удалена). Последние две — не сохранение:
+    оболочка и панель не говорят «Запись сохранена».
 
     «interrupted» здесь не бывает: оборвавшуюся запись резидент не переживает
     и сказать о ней не может — это оболочка выводит сама, по обрыву связи."""
+    if temporary:
+        return "temporary"
     if discard:
         return "discarded"
     return "saved" if hook else "short"
@@ -288,8 +293,12 @@ class _NoIcon:
     visible = False
 
 
-CANCEL_TITLE = "Отменить запись"
-CANCEL_QUESTION = "Удалить текущую запись? Записанное не сохранится."
+CANCEL_TITLE = "Остановить без сохранения"
+CANCEL_QUESTION = ("Остановить без сохранения? Запись и всё, что с ней связано, будут удалены "
+                   "без возможности восстановления.")
+# Поток записи временной встречи не закончился за join — удалить её, когда
+# закончится, но не ждать дольше этого.
+TEMP_LATE_WAIT_S = 600.0
 
 
 def _confirm_cancel() -> bool:
@@ -357,7 +366,7 @@ class TrayApp:
         # пустой цикл, так что на работу без UI она не влияет.
         self.bus = events.EventBus()
         self.log = _BusLog(watch.WatchLog(watch.default_log_path()), self.bus)
-        # Вопрос «Удалить текущую запись?» на экране (см. _on_cancel_asked).
+        # Вопрос «Остановить без сохранения?» на экране (см. _on_cancel_asked).
         self._cancel_asking = threading.Event()
         self.watcher = watch.Watcher(self.cfg["grace_minutes"] * 60.0)
         self.signals = watch.Signals(
@@ -392,6 +401,17 @@ class TrayApp:
         self.stop_event = None
         self.result: dict = {}
         self.started = 0.0
+        # Временная встреча (meet.temp_meeting): идёт вне библиотеки, в своей
+        # папке сеанса (`temp_session`); `temporary_kept` — «Сохранить как
+        # обычную встречу»: на «Стоп» переносится в библиотеку.
+        self.temporary = False
+        self.temporary_kept = False
+        self.temp_session: Path | None = None
+        # () -> None: дождаться хвоста подключённого ассистента (TrayControl)
+        # перед переносом сохраняемой временной встречи в библиотеку.
+        self.settle_after_stop = None
+        # Фоновый перенос сохраняемой временной встречи (`_finish_kept`).
+        self._keep_thread: threading.Thread | None = None
         self._mutex = threading.Lock()
         self._alive = True
         self._call_end = None
@@ -411,24 +431,34 @@ class TrayApp:
 
     # --- запись ---------------------------------------------------------
 
-    def start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
+    def start_recording(self, source: str, attempt: "RecordAttempt | None" = None,
+                        temporary: bool = False) -> bool:
         """Поднять запись. False — если запись уже идёт (своя или ассистента).
         Резидент удержан для переключения папки движка (`storage.HOLD`) —
         `storage.Held`: проверка удержания и начало записи — один шаг под
         одним замком, и причина отказа доходит до вызывающего (409 «идёт
         перенос», повтор автозаписи), а не превращается в «уже идёт».
         `attempt` — канал этой попытки: чем кончился поток записи (ошибка
-        старта не теряется, даже когда тикер уже забрал её из `result`)."""
+        старта не теряется, даже когда тикер уже забрал её из `result`).
+        `temporary` — временная встреча: пишется вне библиотеки (своя папка
+        сеанса, `meet.temp_meeting`) и на «Стоп» удаляется."""
         from meet import storage
 
         with storage.HOLD.gate():
-            return self._start_recording(source, attempt)
+            return self._start_recording(source, attempt, temporary)
 
-    def _start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
+    def _start_recording(self, source: str, attempt: "RecordAttempt | None" = None,
+                         temporary: bool = False) -> bool:
+        from meet import temp_meeting
+
         with self._mutex:
             if self.recording or self._live_busy():
                 return False
             self._clear_own_lock()
+            session = temp_meeting.new_session() if temporary else None
+            self.temporary = bool(temporary)
+            self.temporary_kept = False
+            self.temp_session = session
             result: dict = {}
             stop_event = threading.Event()
             self.result = result
@@ -443,7 +473,7 @@ class TrayApp:
             # если join истечёт по таймауту, доживающий поток допишет их в свой
             # словарь, а не в состояние следующей записи
             self.thread = threading.Thread(
-                target=self._run_record, args=(result, stop_event, attempt), daemon=True
+                target=self._run_record, args=(result, stop_event, attempt, session), daemon=True
             )
             self.thread.start()
         self._refresh()
@@ -456,11 +486,11 @@ class TrayApp:
             return False  # сбой проверки не должен запрещать запись
 
     def _run_record(self, result: dict, stop_event: threading.Event,
-                    attempt: "RecordAttempt | None" = None) -> None:
+                    attempt: "RecordAttempt | None" = None, root: Path | None = None) -> None:
         unwatch = attempt.watch(self.bus) if attempt is not None else None
         try:
             result["folder"] = record(
-                str(_out_root()), stop_event=stop_event, bus=self.bus,
+                str(root or _out_root()), stop_event=stop_event, bus=self.bus,
                 pcm_tap=self.pcm_tap,
             )
             if attempt is not None:
@@ -502,11 +532,22 @@ class TrayApp:
             pass
 
     def stop_recording(self, discard: bool = False, hook: bool = True) -> None:
-        """Штатно остановить запись. discard — отменить: удалить папку и не
-        звать Claude (автозапись поймала то, что писать не надо)."""
+        """Штатно остановить запись. discard — «Остановить без сохранения»:
+        удалить папку записи (и забыть сеансы её агента у провайдеров), ни
+        расшифровки, ни хука.
+
+        Временная встреча (`temporary`) не сохраняется и без discard: папка
+        её сеанса удаляется целиком, сеансы агента забываются. Если во время
+        неё нажали «Сохранить как обычную встречу» (`temporary_kept`), запись
+        после остановки переносится в библиотеку и дальше — как обычная."""
+        from meet import temp_meeting
+
         with self._mutex:
             if not self.recording:
                 return
+            temporary, kept, session = self.temporary, self.temporary_kept, self.temp_session
+            # Временную встречу, которую не просили сохранить, не сохраняем никогда.
+            drop = discard or (temporary and not kept)
             # Захват кончается в момент «Стоп»; подключённый ассистент своё
             # дописывает после (after_stop), сохранение записи его не ждёт.
             self.stopping = True
@@ -519,15 +560,21 @@ class TrayApp:
             # видеть и её, иначе отмена, пойманная опросом до удаления папки,
             # прочиталась бы оболочкой как «Запись сохранена». Поток, не
             # успевший за join, дописывает дорожки и папку не удаляет — это
-            # сохранение, даже если просили отмену.
+            # сохранение, даже если просили отмену (кроме временной встречи:
+            # её удалим, когда поток закончит).
             stopped = result.get("folder") or (self._current_folder() if alive else None)
-            if stopped:
+            # Сохраняемая временная встреча: причину («saved» и папку в
+            # библиотеке) скажет перенос — имя выбирается в момент переноса.
+            if stopped and not (kept and not drop):
                 self.last_stop = {
                     "folder": str(stopped),
-                    "reason": _stop_reason(discard and not alive, hook),
+                    "reason": _stop_reason(drop and (temporary or not alive), hook,
+                                           temporary=temporary and drop and not discard),
                     "at": time.time(),
                 }
             self.recording = False
+            self.temporary = self.temporary_kept = False
+            self.temp_session = None
             source, self.source = self.source, None
             # Обнуляем ссылку только если поток действительно завершился. Иначе
             # доживающий поток (join истёк за 60 с — ffmpeg ещё финализирует)
@@ -537,10 +584,25 @@ class TrayApp:
             self.stopping = False
         if self.after_stop is not None:
             try:
-                self.after_stop(discard)
+                self.after_stop(drop)
             except Exception as e:  # ассистент не должен мешать сохранению записи
                 self.log(f"после остановки записи: {e!r}")
         folder = result.get("folder")
+        if temporary and drop:
+            self._drop_temporary(session, stopped, thread if alive else None, discard)
+            self._refresh()
+            return
+        if kept:
+            # Перенос — в фоне: хвост ассистента (до 30 с), копия на другой том —
+            # «Стоп» оболочки столько не ждёт. Поток записи не успел за join —
+            # перенос дождётся его.
+            self._keep_thread = threading.Thread(
+                target=self._finish_kept, args=(session, result, thread if alive else None,
+                                                source, hook),
+                name="meet-temp-keep", daemon=True)
+            self._keep_thread.start()
+            self._refresh()
+            return
         if folder is None and alive:
             # поток жив и дописывает дорожки — данные целы, просто ещё не наши
             folder = self._current_folder()
@@ -554,27 +616,125 @@ class TrayApp:
             self._refresh()
             return
         if discard:
-            shutil.rmtree(folder, ignore_errors=True)
-            gone = not Path(folder).exists()
-            self.log(f"запись отменена, папка {'удалена' if gone else 'удалена не до конца'}: {folder}")
-            self._notify(f"{'Удалено' if gone else 'Удалено частично'}: {folder}")
+            gone = temp_meeting.wipe(folder, log=self.log)
+            if not gone:
+                # Что-то держит другая программа: спрятать остаток из библиотеки
+                # и доудалить, когда отпустят (или при следующем запуске).
+                hidden = temp_meeting.hide_leftover(folder)
+                if hidden is not None and Path(hidden) == Path(folder):
+                    temp_meeting.finish_later(
+                        folder, log=self.log,
+                        active=lambda: self._current_folder() if self.recording else None)
+            # Без пути и времени в журнале: запись удалена, и следов не нужно.
+            self.log("запись остановлена без сохранения: " + (
+                "удалена" if gone else "удалена не до конца — доудалю при следующем запуске"))
+            self._notify("Запись удалена" if gone else "Запись удалена не до конца")
             # Отдельное событие после удаления: recorder уже отправил
             # record.stopped{folder} (он про discard не знает), и панель успела
             # предложить расшифровать уже удалённую папку. Это отменяет предложение.
             self.bus.emit(events.RECORD_DISCARDED, folder=str(folder))
+            self._refresh()
+            return
+        self.log(f"запись остановлена ({source}): {folder}")
+        self._notify(f"Сохранено: {folder}")
+        if self.on_saved is not None:
+            try:
+                self.on_saved(str(folder), source, hook)
+            except Exception as e:  # колбэк UI не должен ломать остановку
+                self.log(f"после сохранения: {e!r}")
+        if hook:
+            _run_post_hook(str(folder))
         else:
-            self.log(f"запись остановлена ({source}): {folder}")
-            self._notify(f"Сохранено: {folder}")
-            if self.on_saved is not None:
-                try:
-                    self.on_saved(str(folder), source, hook)
-                except Exception as e:  # колбэк UI не должен ломать остановку
-                    self.log(f"после сохранения: {e!r}")
-            if hook:
-                _run_post_hook(str(folder))
-            else:
-                self.log("звонок был короткий — Claude не зову, папка осталась")
+            self.log("звонок был короткий — Claude не зову, папка осталась")
         self._refresh()
+
+    def _drop_temporary(self, session, stopped, late_thread, discard: bool) -> None:
+        """Временная встреча кончилась: ассистент уже убит (after_stop), папку
+        сеанса — удалить целиком, сеансы агента — забыть. Поток записи не
+        успел за join — удалить, когда он закончит (в фоне)."""
+        from meet import temp_meeting
+
+        def drop() -> None:
+            if late_thread is not None:
+                late_thread.join(timeout=TEMP_LATE_WAIT_S)
+            gone = temp_meeting.wipe(session, log=self.log) if session is not None else True
+            self.log("временная встреча закончена и удалена" if gone
+                     else "временная встреча удалена не до конца — доудалю при следующем запуске")
+            self.bus.emit(events.RECORD_DISCARDED, folder=str(stopped or ""), temporary=True)
+
+        if late_thread is not None:
+            threading.Thread(target=drop, name="meet-temp-drop", daemon=True).start()
+        else:
+            drop()
+        self._notify("Остановлено без сохранения" if discard else "Временная встреча удалена")
+
+    def _finish_kept(self, session, result: dict, late_thread, source, hook: bool) -> None:
+        """«Сохранить как обычную встречу», после «Стоп» (в фоне): дождаться
+        потока записи (если не успел за join) и хвоста ассистента (он пишет в
+        папку записи), перенести запись в библиотеку и дальше — как обычная
+        сохранённая: причина остановки, расшифровка, название, хук. Не вышло —
+        отметка `keep` остаётся, перенесёт и обработает следующий запуск."""
+        from meet import temp_meeting
+
+        if late_thread is not None:
+            late_thread.join(timeout=TEMP_LATE_WAIT_S)
+        folder = result.get("folder")
+        if folder is None:
+            self.log("временная встреча не сохранена: папка записи не получена")
+            self._notify("Встреча сохранится при следующем запуске Meet")
+            return
+        if self.settle_after_stop is not None:
+            try:
+                self.settle_after_stop()
+            except Exception as e:
+                self.log(f"хвост ассистента временной встречи: {type(e).__name__}")
+        try:
+            moved = temp_meeting.move_to_library(folder, _out_root(), log=self.log)
+        except OSError as e:
+            self.log(f"временная встреча не перенесена в библиотеку ({type(e).__name__}) — "
+                     f"перенесу при следующем запуске")
+            self._notify("Встреча сохранится при следующем запуске Meet")
+            return
+        if session is not None:
+            temp_meeting._rmtree(Path(session))
+        self.last_stop = {"folder": str(moved), "reason": _stop_reason(False, hook),
+                          "at": time.time()}
+        self.log(f"временная встреча сохранена как обычная: {moved}")
+        self._notify(f"Сохранено: {moved}")
+        # Окно перечитает список и снимок: запись появилась в библиотеке.
+        self.bus.emit("recording.updated", id=Path(moved).name)
+        if self.on_saved is not None:
+            try:
+                self.on_saved(str(moved), source, hook)
+            except Exception as e:
+                self.log(f"после сохранения: {e!r}")
+        if hook:
+            _run_post_hook(str(moved))
+        self._refresh()
+
+    def wait_kept(self, timeout: float) -> None:
+        """Выход резидента: дать фоновому переносу сохраняемой временной
+        встречи закончиться (не успеет — доделает следующий запуск)."""
+        thread = getattr(self, "_keep_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+
+    def keep_temporary(self) -> bool:
+        """«Сохранить как обычную встречу» посреди временной: отметка в папке
+        сеанса (переживает сбой). False — временная встреча не идёт."""
+        from meet import temp_meeting
+
+        with self._mutex:
+            if not (self.recording and self.temporary) or self.stopping:
+                return False
+            if not self.temporary_kept and self.temp_session is not None:
+                temp_meeting.mark_keep(self.temp_session)
+            self.temporary_kept = True
+        self.log("временная встреча будет сохранена как обычная")
+        self.bus.emit(events.RECORD_KEPT)
+        self._refresh()
+        return True
+
 
     # --- пункты меню ----------------------------------------------------
 
@@ -607,8 +767,10 @@ class TrayApp:
         folder = self.result.get("folder")
         if folder:
             return str(folder)
+        # Временная встреча держит lock в своей папке сеанса, не в библиотеке.
+        root = self.temp_session if self.temporary and self.temp_session else _out_root()
         try:
-            data = json.loads((_out_root() / LOCK_NAME).read_text(encoding="utf-8"))
+            data = json.loads((root / LOCK_NAME).read_text(encoding="utf-8"))
             return str(data.get("folder") or "папка ещё не создана")
         except (OSError, ValueError, TypeError):
             return "папка ещё не создана"
@@ -628,7 +790,7 @@ class TrayApp:
             self.watcher.suppress()
 
     def _on_cancel_asked(self, icon=None, item=None) -> None:
-        """«Отменить запись…» из меню: сначала вопрос (в своём потоке —
+        """«Остановить без сохранения…» из меню: сначала вопрос (в своём потоке —
         цикл иконки не ждёт ответа), отмена — только по «Да» и только той
         записи, о которой спрашивали (пока вопрос висел, автозапись могла
         закончить её и начать новую). Второй вопрос поверх первого не
@@ -838,6 +1000,10 @@ class TrayApp:
 
     # --- UI -------------------------------------------------------------
 
+    def _temporary_now(self) -> bool:
+        """Идёт временная встреча, которую не решили сохранить."""
+        return bool(self.temporary and not self.temporary_kept)
+
     def _notify(self, message: str) -> None:
         if self.icon is None:
             return
@@ -878,12 +1044,19 @@ class TrayApp:
                 "Начать запись", self._on_start, visible=lambda i: not self.recording
             ),
             pystray.MenuItem(
-                "Остановить и сохранить", self._on_stop, visible=lambda i: self.recording
+                "Остановить и сохранить", self._on_stop,
+                visible=lambda i: self.recording and not self._temporary_now(),
+            ),
+            # Временная встреча удаляется на «Стоп» — так и подписано.
+            pystray.MenuItem(
+                "Закончить временную встречу (удалится)", self._on_stop,
+                visible=lambda i: self.recording and self._temporary_now(),
             ),
             # Отмена — внизу, отдельно от остановки: рядом их легко перепутать.
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Отменить запись…", self._on_cancel_asked, visible=lambda i: self.recording
+                "Остановить без сохранения…", self._on_cancel_asked,
+                visible=lambda i: self.recording and not self._temporary_now(),
             ),
             pystray.MenuItem("Выход", self._on_exit),
         )

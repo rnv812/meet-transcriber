@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   setAgentFrequency: vi.fn(async () => ({ frequency: "less", label: "реже", live: true })),
-  setAgentProfile: vi.fn(async () => ({ profile: "neutral", label: "Нейтральный", live: true })),
+  setAgentProfile: vi.fn(async () => ({ profile: "personal", label: "Личный", live: true })),
   pasteChatImage: vi.fn(async () => ({ id: "a1", status: "ready", attachment: { id: "a1", kind: "attachment" } })),
   postChat: vi.fn(async () => ({ id: "m9", queued: false, attachments: [] })),
   newChatClientId: vi.fn(() => "c1"),
@@ -108,10 +108,10 @@ test("«Профиль» уходит setAgentProfile, чип и выбор ме
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
   const group = screen.getByRole("radiogroup", { name: "Профиль" });
-  await userEvent.click(within(group).getByRole("radio", { name: "нейтральный" }));
-  expect(setAgentProfile).toHaveBeenCalledWith(ep, "neutral");
-  expect(within(group).getByRole("radio", { name: "нейтральный" })).toHaveAttribute("aria-checked", "true");
-  expect(document.querySelector(".session-bar__profile")).toHaveTextContent("Нейтральный");
+  await userEvent.click(within(group).getByRole("radio", { name: "личный" }));
+  expect(setAgentProfile).toHaveBeenCalledWith(ep, "personal");
+  expect(within(group).getByRole("radio", { name: "личный" })).toHaveAttribute("aria-checked", "true");
+  expect(document.querySelector(".session-bar__profile")).toHaveTextContent("Личный");
   vi.mocked(setAgentProfile).mockRejectedValueOnce(new Error("ассистент не запущен"));
   await userEvent.click(within(group).getByRole("radio", { name: "рабочая встреча" }));
   expect(await screen.findByText(/Профиль не удалось сменить: ассистент не запущен/)).toBeInTheDocument();

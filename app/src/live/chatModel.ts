@@ -311,6 +311,22 @@ export function pinnedOf(state: ChatState): ChatMessage | null {
   return pin && pin.id !== state.hiddenPin ? pin : null;
 }
 
+/** Карточка подтверждения Meet ещё ждёт решения (не решена и срок не вышел; `now` — мс). */
+export function cardOpen(m: ChatMessage, now: number): boolean {
+  return m.kind === "system" && m.card === "confirm" && !m.decision
+    && !(typeof m.expires_at === "number" && m.expires_at * 1000 < now);
+}
+
+/** Карточки подтверждения, которые ждут решения, по порядку журнала. */
+export function pendingCards(state: ChatState, now: number): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const id of state.order) {
+    const m = state.byId[id];
+    if (m && cardOpen(m, now)) out.push(m);
+  }
+  return out;
+}
+
 /** Нажатые кнопки: id сообщения агента → надпись (из журнала и только что нажатые). Один проход. */
 export function usedButtons(state: ChatState): Map<string, string> {
   const used = new Map<string, string>();

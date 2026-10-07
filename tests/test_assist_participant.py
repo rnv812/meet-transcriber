@@ -1412,3 +1412,68 @@ def test_map_switch_off_hides_kb_structure_and_past_meetings_from_the_agent(tmp_
     assert "Синк по запуску" not in off and "Сертификация" not in off
     assert "План запуска.md" not in off and "Прошлые встречи группы" not in off
     assert off_sees is False
+
+
+# --- временная встреча: сеанс провайдера не сохраняется -------------------------
+
+
+def test_ephemeral_claude_runs_without_persistence_and_stores_no_session(tmp_path):
+    """Временная встреча: Claude Code — без сохранения сеанса на диск
+    (`persist=False` → `--no-session-persistence`), id в sessions.json нет."""
+    h = _make(tmp_path, script=[SILENT, SILENT], ephemeral=True)
+    h.chat.set_session_id("claude-code", "old-sess")  # даже если откуда-то есть — не продолжаем
+
+    async def main():
+        publish(h, 5, "Олег", "первое")
+        h.clock.t = 10
+        assert await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    kw = h.made[0].kwargs
+    assert kw["persist"] is False and kw["resume"] is None
+    assert h.made[0].sent[0][0].startswith((pp.SEED_NEW, pp.SEED_RESUMED))
+    assert h.chat.session_id("claude-code") == "old-sess"   # не перезаписан нашим
+
+
+def test_ephemeral_codex_never_keeps_or_resumes_and_seeds_each_turn(tmp_path):
+    """Codex временной встречи — без `keep_session` (значит, `--ephemeral`) и
+    без `resume`; каждый ход — затравка из журнала встречи."""
+    runner = FakeRunner([AgentReply(text='{"silent": true}', session_id="x"),
+                         AgentReply(text='{"silent": true}', session_id="y")])
+    h = _make(tmp_path, provider="codex", runner=runner, ephemeral=True)
+
+    async def main():
+        publish(h, 5, "Олег", "первое")
+        h.clock.t = 10
+        assert await h.p.tick()
+        publish(h, 12, "Анна", "второе", at=12)
+        h.clock.t = 30
+        assert await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    for prompt, kw in runner.calls:
+        assert "resume" not in kw and "keep_session" not in kw
+    assert runner.calls[1][0].startswith(pp.SEED_RESUMED)
+    assert "[00:05] Олег: первое" in runner.calls[1][0]
+    assert h.chat.sessions() == {}
+
+
+def test_from_settings_marks_a_temporary_meeting_ephemeral(tmp_path, monkeypatch):
+    from meet import settings, temp_meeting
+    from meet.assist import participant as participant_mod
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    cfg = settings.Settings.from_raw({})
+    temp = temp_meeting.new_session() / "2026-10-07_15-00"
+    temp.mkdir()
+    normal = tmp_path / "lib" / "2026-10-07_15-00"
+    normal.mkdir(parents=True)
+    bus = TranscriptBus()
+    made = participant_mod.from_settings(cfg, bus, temp, "codex", FakeRunner([]),
+                                         log=lambda _m: None)
+    assert made.ephemeral is True and made.resumable is False
+    plain = participant_mod.from_settings(cfg, bus, normal, "codex", FakeRunner([]),
+                                          log=lambda _m: None)
+    assert plain.ephemeral is False and plain.resumable is True

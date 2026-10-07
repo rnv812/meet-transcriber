@@ -54,6 +54,36 @@ V4 (0.3.6, v4-design §3, §5.1, §12; v4-simple §1, §6):
   забывает id: следующий `send` начнёт новый сеанс (вызывающий — с
   затравкой из журнала). Рабочая папка сохраняемых сеансов — постоянная
   (`workdir()`): старые CLI ищут сеанс только в папке проекта.
+
+0.3.7 (A1) — **свобода по согласию** (`gate=ConsentGate`, собеседник):
+
+* все инструменты CLI, настройки и MCP-серверы пользователя — как в его
+  собственном Claude Code: без `--restricted`, `--tools`,
+  `--setting-sources ""`, `--strict-mcp-config` и `--disable-slash-commands`;
+  `--permission-mode default` (поверх `defaultMode` из настроек
+  пользователя) и `--permission-prompt-tool stdio` — разрешения CLI
+  спрашивает у нас (`control_request` `can_use_tool`). `--add-dir` — только
+  папка встречи; `kb_exclude` — те же правила `Read(//…/**)`;
+* сразу после запуска процесса — `control_request` `initialize` с хуком
+  PreToolUse (как `claude_agent_sdk`): хук приходит на **каждый** вызов
+  инструмента, в том числе на те, что CLI разрешил бы сам (чтение вне
+  `--add-dir`, `ls`, правила `allow` пользователя), — и хук, и `can_use_tool`
+  отвечают решением `ConsentGate.check` (согласие ставит вызывающий на ход:
+  `gate.begin(level)` / `gate.end()`). Вызовы, которым нужна карточка
+  подтверждения, ответ держат, пока человек не решит: каждый запрос CLI
+  отвечается в своём потоке, чтение вывода не останавливается;
+* хуки самого пользователя выключены (`--settings <файл>` с
+  `disableAllHooks: true`): они получали бы текст встречи и могли бы
+  действовать мимо ворот; хук Meet при этом работает (проверено без модели,
+  `scripts/probe_claude_gate.py`);
+* вызовы инструментов хода, которые не прошли через хук (`tool_use` в
+  ответе модели без PreToolUse), — в журнал процесса: дыра в проверке видна. Проверено на claude 2.1.292 без
+  модели (поддельный API): хук на Read/Bash/MCP/Write/WebFetch,
+  `can_use_tool` — на запись, команду с записью, MCP без правила, WebFetch;
+  отказ хука доходит до модели результатом инструмента с нашей причиной;
+  MCP-серверы пользователя загружаются (`system/init` → `mcp_servers`,
+  они — `mcp_servers` диалога). Нет ответа на `initialize` — процесс убит,
+  ход — ошибка (старый CLI без хуков ворота обошёл бы).
 """
 
 import asyncio
@@ -85,6 +115,22 @@ INTERRUPT_WAIT_S = 5.0
 RESPONDER_TOOLS = "Read,Grep,Glob"
 # Агент сам ищет в базе знаний: Glob → Grep → несколько Read — ходов нужно больше.
 RESPONDER_MAX_TURNS = 12
+# Свобода по согласию (0.3.7): MCP, веб и файлы вне встречи — ходов ещё больше.
+FREE_MAX_TURNS = 24
+# Хук PreToolUse ворот согласия (id обратного вызова в `initialize`).
+GATE_HOOK_ID = "meet_consent_gate"
+# Начало ошибки хода, остановленного Meet: инструмент выполнился мимо хука ворот.
+GATE_GAP_ERROR = "Meet остановил ход: вызов инструмента прошёл мимо проверки согласия"
+# Сколько ждать ответа на `initialize` (MCP-серверы пользователя могут подниматься долго).
+INIT_WAIT_S = 30.0
+# Свой вопрос пользователю окном CLI агенту не нужен: он спрашивает say с кнопками.
+# Фоновое выполнение (подагенты, фоновые команды, расписания) — тоже: оно
+# пережило бы ход и его согласие (ворота отказывают и сами).
+FREE_DISALLOWED = ("AskUserQuestion", "Agent", "Task", "BashOutput", "KillShell", "CronCreate",
+                   "CronDelete", "ScheduleWakeup")
+# Файл настроек свободного режима (`--settings`): хуки пользователя выключены.
+FREE_SETTINGS = {"disableAllHooks": True}
+FREE_SETTINGS_NAME = "meet-agent-settings.json"
 # Что пишет CLI, когда сеанса для --resume нет (2.1.292, проверено без модели:
 # пустая папка настроек, без входа): stderr и `errors` у result, код выхода 1.
 _RESUME_MISSING = "no conversation found"
@@ -114,7 +160,9 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
                   thinking: str | None = None, effort: str | None = None,
                   responder: bool = False, add_dirs=(), deny_paths=(), max_turns: int | None = None,
                   session_id: str | None = None, resume: str | None = None,
-                  fork_at: str | None = None, drop_turn: str | None = None) -> list[str]:
+                  fork_at: str | None = None, drop_turn: str | None = None,
+                  freedom: bool = False, settings_file: str | None = None,
+                  mcp: bool = True) -> list[str]:
     """Командная строка постоянного процесса (флаги сверены с claude 2.1.292
     `--help`; `--max-turns`, `--thinking`, `--resume-session-at`,
     `--resume-drops-turn` в справке не показаны — их передаёт
@@ -124,6 +172,13 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
     (`responder`) — чтение в `add_dirs` (папка встречи, база знаний,
     библиотека — что передал вызывающий), кроме `deny_paths` (правила
     `Read(//…/**)`), до RESPONDER_MAX_TURNS ходов.
+    `freedom` (с `responder`, 0.3.7) — все инструменты, настройки и MCP
+    пользователя, разрешения спрашиваются у нас (`--permission-prompt-tool
+    stdio`, режим `default`; `--permission-prompt-tool` в справке скрыт —
+    его передаёт claude_agent_sdk, проверен без модели), `add_dirs` — папки,
+    которые читаются без вопросов CLI (папка встречи); `mcp=False` (профиль
+    сессии «Личный») — те же права, но без MCP-серверов пользователя
+    (`--strict-mcp-config` без `--mcp-config`: набор пуст).
     Сеанс: без `session_id`/`resume` — не сохраняется; `session_id` — новый
     сохраняемый с этим UUID; `resume` — продолжить сохранённый; с `fork_at` —
     новый сеанс-ветка до записи `fork_at` без хода `drop_turn`. Значения —
@@ -136,7 +191,18 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
     cmd = [*cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
            "--verbose", "--include-partial-messages",
            "--system-prompt", system_prompt]
-    if responder:
+    free = bool(responder and freedom)
+    if free:
+        cmd += ["--permission-mode", "default", "--permission-prompt-tool", "stdio"]
+        for d in add_dirs or ():
+            if d:
+                cmd += ["--add-dir", str(d)]
+        cmd += ["--disallowedTools", *FREE_DISALLOWED, *claude_deny_rules(deny_paths)]
+        if settings_file:
+            cmd += ["--settings", str(settings_file)]
+        if not mcp:
+            cmd.append("--strict-mcp-config")
+    elif responder:
         cmd += ["--restricted", "--tools", RESPONDER_TOOLS, "--allowedTools", RESPONDER_TOOLS,
                 "--permission-mode", "dontAsk"]
         for d in add_dirs or ():
@@ -149,7 +215,8 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
             cmd += ["--disallowedTools", *rules]
     else:
         cmd += ["--tools", ""]
-    cmd += ["--setting-sources", "", "--strict-mcp-config"]
+    if not free:
+        cmd += ["--setting-sources", "", "--strict-mcp-config"]
     if resume:
         cmd.append(f"--resume={resume}")
         if fork_at:
@@ -160,8 +227,10 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
         cmd.append(f"--session-id={session_id}")
     else:
         cmd.append("--no-session-persistence")
-    turns = max_turns or (RESPONDER_MAX_TURNS if responder else 1)
-    cmd += ["--disable-slash-commands", "--max-turns", str(turns)]
+    turns = max_turns or (FREE_MAX_TURNS if free else RESPONDER_MAX_TURNS if responder else 1)
+    if not free:
+        cmd.append("--disable-slash-commands")   # свобода: навыки пользователя — тоже его
+    cmd += ["--max-turns", str(turns)]
     cmd.append(f"--model={claude_model(model)}")
     if thinking:
         cmd += ["--thinking", thinking]
@@ -213,6 +282,10 @@ class Conversation:
 
     `responder` — агент-собеседник: инструменты чтения в `add_dirs` (папка
     встречи, база знаний, библиотека), кроме `deny_paths` (`kb_exclude`).
+    `gate` (`meet.llm.consent.ConsentGate`, с `responder`) — свобода по
+    согласию: все инструменты и MCP пользователя, каждый вызов решают ворота
+    (см. модуль). `mcp_servers` — MCP-серверы из `system/init` (`name`,
+    `status`) после первого хода.
     `persist` — сеанс сохраняется и продолжается нативно (`session_id`);
     `resume` — id сохранённого сеанса, с которого начать (из
     `assistant/sessions.json`), подразумевает `persist`. `model` — модель
@@ -229,8 +302,11 @@ class Conversation:
                  proxy: str | None = None, cwd: str | Path | None = None,
                  cli: list[str] | None = None, popen=subprocess.Popen, log=None,
                  responder: bool = False, add_dirs=(), deny_paths=(), max_turns: int | None = None,
-                 persist: bool = False, resume: str | None = None, on_model=None) -> None:
+                 persist: bool = False, resume: str | None = None, on_model=None,
+                 gate=None, mcp: bool = True) -> None:
         self._system = system_prompt
+        # MCP пользователя со свободой (профиль «Личный» — без них).
+        self._mcp = mcp
         self._model = claude_model(model)
         # Модель, которую CLI на самом деле запустил (`model` из `system/init`);
         # None — процесс ещё не начинал хода. `on_model(имя)` — узнали или
@@ -248,6 +324,10 @@ class Conversation:
         self._add_dirs = tuple(add_dirs or ())
         self._deny_paths = tuple(deny_paths or ())
         self._max_turns = max_turns
+        self._gate = gate if responder else None
+        self._needs_init = False
+        self.mcp_servers: list[dict] | None = None
+        self.unseen_tools: list[str] = []
         self._persist = bool(persist or resume)
         # Id сеанса (persist) и есть ли он уже на диске: тогда процесс
         # поднимается с --resume, иначе — новый сеанс с новым id.
@@ -324,7 +404,9 @@ class Conversation:
                             thinking=self._thinking, effort=self._effort,
                             responder=self._responder, add_dirs=self._add_dirs,
                             deny_paths=self._deny_paths, max_turns=self._max_turns,
-                            session_id=session_id, resume=resume, fork_at=fork_at, drop_turn=drop_turn)
+                            session_id=session_id, resume=resume, fork_at=fork_at, drop_turn=drop_turn,
+                            freedom=self._gate is not None,
+                            settings_file=self._free_settings(), mcp=self._mcp)
         cwd = str(self._cwd) if self._cwd else str(workdir())
         try:
             proc = self._popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -333,6 +415,7 @@ class Conversation:
         except OSError as e:
             return f"не удалось запустить Claude Code: {e}"
         procjob.bind_to_this_process(proc.pid)
+        self._needs_init = self._gate is not None
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         self._proc, self._queue = proc, queue
@@ -360,7 +443,7 @@ class Conversation:
                     if kind == "control_response":
                         call(self._on_control_response, msg)
                     elif kind == "control_request":
-                        self._refuse_control(proc, msg)
+                        self._answer_control(proc, msg)
                     else:
                         call(queue.put_nowait, msg)
             except (OSError, ValueError):
@@ -400,10 +483,56 @@ class Conversation:
         if fut is not None and not fut.done():
             fut.set_result(response)
 
+    def _free_settings(self) -> str | None:
+        """Файл настроек свободного режима (в рабочей папке процесса)."""
+        if self._gate is None:
+            return None
+        folder = Path(self._cwd) if self._cwd else workdir()
+        path = folder / FREE_SETTINGS_NAME
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(FREE_SETTINGS), encoding="utf-8")
+        except OSError as e:
+            self._log(f"диалог: настройки свободного режима не записаны ({e})")
+            return None
+        return str(path)
+
+    def _answer_control(self, proc, msg: dict) -> None:
+        """Запрос от CLI (поток чтения). С воротами согласия — разрешение
+        инструмента (`can_use_tool`) и хук PreToolUse решает `gate.check`;
+        без них (и на прочее) — отказ, чтобы ход не ждал ответа вечно."""
+        request = msg.get("request") if isinstance(msg.get("request"), dict) else {}
+        if self._gate is not None and request.get("subtype") in ("can_use_tool", "hook_callback"):
+            # Свой поток: ответ может ждать карточку подтверждения, а чтение
+            # вывода CLI (и другие запросы того же хода) ждать не должны.
+            threading.Thread(target=self._answer_gate, args=(proc, msg), name="claude-gate",
+                             daemon=True).start()
+            return
+        self._refuse_control(proc, msg)
+
+    def _answer_gate(self, proc, msg: dict) -> None:
+        request = msg.get("request") if isinstance(msg.get("request"), dict) else {}
+        rid = msg.get("request_id")
+        gate = self._gate
+        if gate is not None:
+            try:
+                body = _gate_answer(gate, request)
+            except Exception as e:  # ворота не роняют поток чтения: отказ
+                self._log(f"диалог: сбой ворот согласия ({type(e).__name__}: {e})")
+                body = ({"behavior": "deny", "message": f"проверка согласия не удалась: {type(e).__name__}"}
+                        if request.get("subtype") == "can_use_tool" else
+                        {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                "permissionDecisionReason": "проверка согласия не удалась"}})
+            try:
+                self._write_line(proc, {"type": "control_response", "response": {
+                    "subtype": "success", "request_id": rid, "response": body}})
+            except (OSError, ValueError):
+                pass
+
     def _refuse_control(self, proc, msg: dict) -> None:
-        """Запрос от CLI (разрешение инструмента и т. п.): хозяина-SDK у нас
-        нет — отказываем, чтобы ход не ждал ответа вечно. При dontAsk таких
-        запросов быть не должно."""
+        """Запрос от CLI (разрешение инструмента и т. п.) без ворот согласия:
+        отказываем, чтобы ход не ждал ответа вечно. При dontAsk таких запросов
+        быть не должно."""
         request = msg.get("request") if isinstance(msg.get("request"), dict) else {}
         rid = msg.get("request_id")
         if request.get("subtype") == "can_use_tool":
@@ -532,6 +661,16 @@ class Conversation:
                     self._log(f"диалог: перезапуск не удался: {error}")
         return False
 
+    def _note_unseen(self, tool_ids) -> None:
+        """Вызовы хода, которые не прошли через хук ворот, — в журнал процесса."""
+        if self._gate is None or not tool_ids:
+            return
+        missing = self._gate.unseen(tool_ids)
+        self.unseen_tools = list(missing)
+        if missing:
+            self._log(f"диалог: {len(missing)} вызов(ов) инструментов не прошли проверку согласия "
+                      f"(хук PreToolUse не пришёл): {', '.join(missing[:5])}")
+
     def _resume_failed(self, detail: str) -> AgentReply:
         sid = self.session_id
         self.forget_session()
@@ -553,14 +692,60 @@ class Conversation:
         if not self.alive:
             if self._proc is not None:
                 await asyncio.to_thread(self._kill_if, self._proc)
-            return self._spawn()
+            error = self._spawn()
+            if error:
+                return error
+        if self._needs_init:
+            return await self._handshake()
         return None
+
+    async def _handshake(self):
+        """`initialize` с хуком PreToolUse ворот согласия (формат —
+        `claude_agent_sdk` `Query.initialize`). None — ок; иначе текст ошибки
+        или ответ «сеанс не продолжить» (процесс с `--resume` умер сразу)."""
+        proc = self._proc
+        self._requests += 1
+        rid = f"req_{self._requests}_{os.urandom(4).hex()}"
+        fut = asyncio.get_running_loop().create_future()
+        self._pending[rid] = fut
+        response = None
+        try:
+            await asyncio.to_thread(self._write_line, proc, {
+                "type": "control_request", "request_id": rid, "request": {
+                    "subtype": "initialize",
+                    "hooks": {"PreToolUse": [{"matcher": None, "hookCallbackIds": [GATE_HOOK_ID]}]}}})
+            deadline = time.monotonic() + INIT_WAIT_S
+            while response is None:
+                try:
+                    response = await asyncio.wait_for(asyncio.shield(fut), 0.25)
+                except asyncio.TimeoutError:
+                    if proc.poll() is not None or time.monotonic() > deadline:
+                        break
+        except (OSError, ValueError):
+            response = None
+        finally:
+            self._pending.pop(rid, None)
+        if response is not None and response.get("subtype") != "error":
+            self._needs_init = False
+            return None
+        await asyncio.sleep(0.2)   # хвост stderr («сеанс не найден» и т. п.)
+        dead = proc.poll() is not None
+        detail = self._stderr_tail() or (str(response.get("error")) if response else "") or (
+            "процесс завершился" if dead else f"нет ответа за {INIT_WAIT_S:g} с")
+        await asyncio.to_thread(self._kill_if, proc)
+        if self._resuming:
+            return self._resume_failed(detail)
+        return netproxy.with_hint(
+            f"Claude Code не включил проверку согласия ({detail[:300]}) — обновите Claude Code "
+            "или выключите «Расширенные возможности ассистента» в настройках")
 
     async def _send(self, content, on_text, timeout_s: float, image_paths: list) -> AgentReply:
         deadline = time.monotonic() + timeout_s
         if not self.alive and self._persist and self._saved and not is_uuid(self.session_id):
             return self._resume_failed(f"неверный id сеанса: {self.session_id!r}")
         error = await self._ensure_process()
+        if isinstance(error, AgentReply):
+            return error
         if error:
             return AgentReply(text="", error=error)
         if self._cancel:  # «Стоп» до отправки: хода не было
@@ -588,6 +773,9 @@ class Conversation:
             reply.dropped_images, reply.notes = dropped["dropped_images"], dropped["notes"]
             return reply
         error = await self._ensure_process()
+        if isinstance(error, AgentReply):
+            error.dropped_images, error.notes = dropped["dropped_images"], dropped["notes"]
+            return error
         if error:
             return AgentReply(text="", error=error, **dropped)
         if self._cancel:
@@ -621,6 +809,7 @@ class Conversation:
             # «Стоп» пришёл, пока сообщение писалось: останавливаем сами.
             self._stop_task = asyncio.create_task(self._stop_turn(proc, INTERRUPT_WAIT_S))
         parts: list[str] = []
+        tool_ids: list[str] = []      # tool_use хода — сверить, все ли прошли через хук
         streamed = False
         began = False  # был system/init: CLI начал ход, сеанс найден
         last_entry: str | None = None
@@ -652,6 +841,11 @@ class Conversation:
                 if self._persist:
                     self.session_id = str(msg.get("session_id") or self.session_id)
                     self._saved = True
+                servers = msg.get("mcp_servers")
+                if isinstance(servers, list):
+                    self.mcp_servers = [
+                        {"name": str(x.get("name")), "status": str(x.get("status") or "")}
+                        for x in servers if isinstance(x, dict) and x.get("name")]
             elif kind == "stream_event":
                 event = msg.get("event")
                 if isinstance(event, dict) and event.get("type") == "message_start" and streamed:
@@ -670,14 +864,32 @@ class Conversation:
                     parts.append(delta)
                     if on_text is not None:
                         _safe_call(on_text, delta, self._log)
+            elif kind == "user" and self._gate is not None:
+                # Результат инструмента: выполнился ли вызов, который хук не видел?
+                # (Отказ правилом CLI — результат с ошибкой и без хука — не дыра.)
+                content = (msg.get("message") or {}).get("content")
+                done = [str(b.get("tool_use_id")) for b in content if isinstance(b, dict)
+                        and b.get("type") == "tool_result" and b.get("tool_use_id") and not b.get("is_error")] \
+                    if isinstance(content, list) else []
+                gap = self._gate.unseen(done)
+                if gap:
+                    self.unseen_tools = list(gap)
+                    self._log(f"диалог: {GATE_GAP_ERROR} ({', '.join(gap[:5])}) — процесс остановлен")
+                    await asyncio.to_thread(self._kill_if, proc)
+                    return AgentReply(text="".join(parts).strip(),
+                                      error=f"{GATE_GAP_ERROR} ({len(gap)}) — обновите Meet или Claude Code")
             elif kind == "assistant":
                 if msg.get("uuid"):
                     last_entry = str(msg["uuid"])
+                for block in (msg.get("message") or {}).get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
+                        tool_ids.append(str(block["id"]))
                 if not streamed:
                     for block in (msg.get("message") or {}).get("content") or []:
                         if isinstance(block, dict) and block.get("type") == "text":
                             parts.append(str(block.get("text") or ""))
             elif kind == "result":
+                self._note_unseen(tool_ids)
                 self.turns += 1
                 usage = msg.get("usage") or {}
                 self.context_tokens = sum(int(usage.get(k) or 0) for k in (
@@ -715,6 +927,28 @@ class Conversation:
             self._log(f"диалог: Claude Code запустил модель {actual}, а задана {self._model}")
         if self._on_model is not None:
             _safe_call(self._on_model, actual, self._log)
+
+
+def _gate_answer(gate, request: dict) -> dict:
+    """Ответ на `can_use_tool` или хук PreToolUse по решению ворот (может
+    ждать карточку подтверждения — вызывается в своём потоке)."""
+    if request.get("subtype") == "can_use_tool":
+        data = request.get("input") if isinstance(request.get("input"), dict) else {}
+        decision = gate.check(str(request.get("tool_name") or ""), data,
+                              tool_use_id=request.get("tool_use_id"), via="can_use_tool")
+        if decision.allow:
+            return {"behavior": "allow", "updatedInput": data}
+        return {"behavior": "deny", "message": decision.reason}
+    hook = request.get("input") if isinstance(request.get("input"), dict) else {}
+    if request.get("callback_id") != GATE_HOOK_ID or hook.get("hook_event_name") not in (None, "PreToolUse"):
+        return {}
+    data = hook.get("tool_input") if isinstance(hook.get("tool_input"), dict) else {}
+    decision = gate.check(str(hook.get("tool_name") or ""), data,
+                          tool_use_id=hook.get("tool_use_id") or request.get("tool_use_id"), via="hook")
+    if decision.allow:
+        return {}   # дальше — обычные права CLI (и наш can_use_tool)
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": decision.reason}}
 
 
 def _safe_call(on_text, piece, log) -> None:

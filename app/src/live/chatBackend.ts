@@ -12,8 +12,9 @@
  */
 
 import {
-  type Endpoint, attachChatFile, cancelJob, clickChat, continueChat, getChat, getRecordingChat, pasteChatImage,
-  postChat, reactChat, recordingChatAttach, recordingChatClick, recordingChatPaste, recordingChatReact,
+  type Endpoint, attachChatFile, cancelJob, clickChat, confirmChat, revokeChatGrant, continueChat, getChat, getRecordingChat,
+  pasteChatImage, postChat, reactChat, recordingChatAttach, recordingChatClick, recordingChatConfirm,
+  recordingChatPaste, recordingChatReact,
   recordingChatRemove, removeChatAttachment, setAgentFrequency, setAgentProfile, stopChat,
 } from "../lib/api";
 import type {
@@ -27,6 +28,10 @@ export type ChatBackend = {
   post: (ep: Endpoint, msg: ChatPost) => Promise<{ id: string }>;
   click: (ep: Endpoint, id: string, label: string, clientId: string) => Promise<unknown>;
   react: (ep: Endpoint, id: string, emoji: ChatReaction, on: boolean) => Promise<unknown>;
+  /** Карточка подтверждения Meet: разрешить один раз, до конца встречи (`meeting`) или отклонить. */
+  confirm: (ep: Endpoint, id: string, allow: boolean, meeting?: boolean) => Promise<unknown>;
+  /** Отозвать разрешение «до конца встречи». */
+  revoke: (ep: Endpoint, id: string) => Promise<unknown>;
   /** «Стоп» у ответа, который пишется. */
   stop: (ep: Endpoint, id?: string) => Promise<unknown>;
   frequency: (ep: Endpoint, label: AgentFrequencyLabel) => Promise<unknown>;
@@ -45,6 +50,8 @@ export const LIVE_CHAT: ChatBackend = {
   post: (ep, msg) => postChat(ep, msg),
   click: (ep, id, label, clientId) => clickChat(ep, id, label, clientId),
   react: (ep, id, emoji, on) => reactChat(ep, id, emoji, on),
+  confirm: (ep, id, allow, meeting) => confirmChat(ep, id, allow, meeting),
+  revoke: (ep, id) => revokeChatGrant(ep, id),
   stop: (ep, id) => stopChat(ep, id),
   frequency: (ep, label) => setAgentFrequency(ep, label),
   profile: (ep, profile) => setAgentProfile(ep, profile),
@@ -70,6 +77,8 @@ export function recordingChatBackend(id: string, job: () => Job | null,
     post: async (ep, msg) => ({ id: (await continueChat(ep, id, msg)).message.id }),
     click: (ep, mid, label, clientId) => recordingChatClick(ep, id, mid, label, clientId),
     react: (ep, mid, emoji, on) => recordingChatReact(ep, id, mid, emoji, on),
+    confirm: (ep, mid, allow, meeting) => recordingChatConfirm(ep, id, mid, allow, meeting),
+    revoke: async () => undefined,
     stop: async (ep) => {
       const running = job();
       if (!running) throw new Error("ответ уже не готовится");

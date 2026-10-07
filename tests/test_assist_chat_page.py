@@ -391,3 +391,24 @@ def test_chat_page_reactions_give_feedback_and_link_the_explanation(tmp_path):
     assert out["announce"] == "Учту: скорректирую, о чём пишу"   # постоянная live-область
     assert out["done"] == []
     assert out["tag"] == ["пояснение"] and out["ref"] == ["к сообщению «Риск: интеграция без владельца.»"]
+
+
+def test_chat_page_shows_meet_confirm_cards_pinned_and_with_escape():
+    """Карточка подтверждения Meet (0.3.7): точный вызов, «Разрешить один раз» /
+    «Отклонить», Esc — «Отклонить», ждущие — над лентой, решение — `/confirm`."""
+    script = _script(CHAT_PAGE)
+    assert '"Разрешить один раз"' in script and '"Отклонить"' in script
+    assert '"/confirm"' in script and "allow: allow" in script
+    assert 'e.key === "Escape"' in script
+    assert "renderPending()" in script and 'id="pending"' in CHAT_PAGE
+    assert "может: " in script
+
+
+def test_chat_page_card_shows_size_head_tail_warnings_and_meeting_grant():
+    script = _script(CHAT_PAGE)
+    assert "m.size" in script and 'setAttribute("dir", "ltr")' in script
+    assert "m.preview || args" in script and '"Показать полностью"' in script
+    assert "yes.disabled" not in script                       # «Разрешить» доступна всегда
+    assert '"Разрешать такое до конца встречи"' in script and "meeting: !!meeting" in script
+    assert "m.warnings" in script and '"/revoke"' in script
+    assert "unicode-bidi:plaintext" in CHAT_PAGE

@@ -33,6 +33,10 @@ META_JSON = "meta.json"
 PHASE = "phase"
 TEXT_PHASE = "text"
 TEXT_ONLY = "Спикеры ещё не определены — дождитесь конца расшифровки или расшифруйте запись заново"
+# Отметка в остатке записи, остановленной без сохранения, который не удалился
+# сразу (файл держит другая программа): в библиотеке её нет, уборка доудалит
+# (meet.temp_meeting).
+DISCARDED_MARK = ".meet-discarded"
 FOLDER_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})(?:_.+)?$")
 # Форматы дорожек в порядке предпочтения — те же, что понимает transcribe.
 TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a",
@@ -881,8 +885,9 @@ def title_source(meta: dict) -> str:
 
 
 def describe(folder: Path) -> Recording | None:
-    """Папка записи → карточка для библиотеки. Не папка записи — None."""
-    if not folder.is_dir():
+    """Папка записи → карточка для библиотеки. Не папка записи — None, и
+    остаток записи, остановленной без сохранения (`DISCARDED_MARK`), — тоже."""
+    if not folder.is_dir() or (folder / DISCARDED_MARK).exists():
         return None
     tracks = _tracks(folder)
     meta = read_meta(folder)
@@ -981,7 +986,10 @@ def listing(root: Path, limit: int = 200, keep=None) -> list[dict]:
     if not root.is_dir():
         return []
     found = []
-    children = sorted(root.iterdir(), key=lambda p: p.name, reverse=True)
+    # С точки — служебные: отложенная к удалению (`.deleting-`), недокопированный
+    # перенос временной встречи (`.partial-`) — в списке их нет.
+    children = sorted((f for f in root.iterdir() if not f.name.startswith(".")),
+                      key=lambda p: p.name, reverse=True)
     _forget_heads(root, {f.name for f in children})
     for folder in children:
         card = describe(folder)
@@ -1031,7 +1039,8 @@ def search_cards(cards, q: str, limit: int = 200, title_only: bool = False) -> l
 
 
 def latest(root: Path) -> Recording | None:
-    for folder in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
+    for folder in sorted((f for f in root.iterdir() if not f.name.startswith(".")),
+                         key=lambda p: p.name, reverse=True):
         card = describe(folder)
         if card is not None:
             return card

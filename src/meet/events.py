@@ -32,6 +32,8 @@ from pathlib import Path
 RECORD_STARTED = "record.started"
 RECORD_STOPPED = "record.stopped"
 RECORD_DISCARDED = "record.discarded"  # запись отменена и папка удалена
+# Временную встречу решили сохранить как обычную («Сохранить как обычную встречу»).
+RECORD_KEPT = "record.kept"
 RECORD_DEVICE = "record.device"  # дорожка открыта/переоткрыта/миграция
 RECORD_WAITING = "record.waiting"  # устройства нет, пауза уйдёт в тишину
 # выбранного в настройках устройства нет — дорожка пишет с системного

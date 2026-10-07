@@ -34,7 +34,21 @@ export type Snapshot = {
   recordings_dir: string;
   gpu_busy: boolean;
   disk_free_gb: number | null;
-  last_stop: { folder: string; reason: "saved" | "discarded" | "short"; at: number } | null;
+  /**
+   * Чем кончилась последняя запись: `discarded` — «Остановить без сохранения»,
+   * `temporary` — временная встреча закончилась и удалена (обе — не сохранение).
+   */
+  last_stop: { folder: string; reason: "saved" | "discarded" | "short" | "temporary"; at: number } | null;
+  /**
+   * Идёт временная встреча с ассистентом: вне библиотеки, на «Стоп» удаляется.
+   * После «Сохранить как обычную встречу» — false. Нет у старых резидентов.
+   */
+  temporary?: boolean;
+  /**
+   * Чью историю ассистента «Остановить без сохранения» не удалит (агент вкладки
+   * «Агент» без известного id): «Codex», «OpenCode». Нет у старых резидентов.
+   */
+  forget_gaps?: string[];
   /** Запись с ассистентом; `status` выше при ней остаётся "idle". Нет у старых резидентов. */
   live?: LiveStatus;
   /** Папка для встреч в базе знаний (`export.meetings_dir`); не задана — null. */
@@ -907,6 +921,27 @@ export type ChatMessage = {
   error?: string;
   note?: string;
   merged_into?: string;
+  /** Системная строка ворот согласия: «Ассистент хотел … — запрос заблокирован» (0.3.7). */
+  gate?: boolean;
+  /** Карточка подтверждения Meet (0.3.7): точный вызов агента, ждёт «Разрешить один раз» / «Отклонить». */
+  card?: "confirm";
+  tool?: string;
+  title?: string;
+  args?: string;
+  /** «3 строки, 812 симв.» — размер вызова. */
+  size?: string;
+  /** Длинный вызов: начало и конец с пометкой «…⟨скрыто: …⟩…» (полностью — `args`). */
+  preview?: string;
+  /** Необычные параметры команды («без песочницы») — крупно. */
+  warnings?: string[];
+  /** Что разрешит «Разрешать такое до конца встречи» (нет — кнопки нет). */
+  grant?: { key: string; label: string };
+  /** Запись разрешения «до конца встречи». */
+  label?: string;
+  revoked?: boolean;
+  decision?: "allow" | "allow_meeting" | "deny" | "timeout" | "cancelled" | "expired";
+  /** Когда карточка перестанет ждать (секунды Unix). */
+  expires_at?: number;
   event?: string;
   type?: "image" | "doc" | "kb_note" | "past_meeting";
   name?: string;
@@ -928,10 +963,10 @@ export type AgentFrequency = "less" | "normal" | "more";
 export type AgentFrequencyLabel = "реже" | "обычно" | "чаще";
 /**
  * Профиль сессии ассистента (`assist.profile`, 0.3.7): «Рабочая встреча» (`work` —
- * база знаний, прошлые встречи, подсказки по делу) или «Нейтральный» (`neutral` —
+ * база знаний, прошлые встречи, подсказки по делу) или «Личный» (`personal` —
  * созвон, стрим, видео: без базы знаний и рабочей рамки).
  */
-export type AgentProfile = "work" | "neutral";
+export type AgentProfile = "work" | "personal";
 
 /** `state.agent` и событие `agent`: что с агентом и что он видит. */
 export type AgentInfo = {
@@ -957,6 +992,16 @@ export type AgentInfo = {
   writing: string | null;
   /** `kb` — есть карта (база знаний и/или прошлые встречи группы); `kb_docs` — в ней структура базы знаний. */
   sees: { conversation: boolean; kb: boolean; kb_docs?: boolean; materials: number; images: number };
+  /** Расширенные возможности по согласию (`assist.agent_freedom`, 0.3.7). */
+  freedom?: boolean;
+  /**
+   * Что агент может: `consent` — файлы, MCP, веб по согласию (`mcp` — имена серверов, если CLI их назвал);
+   * `files` — Codex/OpenCode: только чтение файлов по просьбе; `read` — только чтение встречи и базы
+   * знаний; `meet` — просит Meet прочитать (локальная модель).
+   */
+  can?: { mode: "consent" | "files" | "read" | "meet"; mcp: string[] | null };
+  /** Разрешения «до конца встречи» (× — отозвать). */
+  grants?: { id: string; label: string }[];
 };
 
 /** `event: chat_partial`: текст ответа на сейчас (≤ 10 раз в секунду). */

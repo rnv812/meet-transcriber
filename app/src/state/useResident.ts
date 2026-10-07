@@ -18,11 +18,12 @@ const RECONNECT_MS = 2000;
  * `live.started`, а встаёт в расшифровку после `live.stopped`. `recording.*` —
  * запись изменилась вне задач: обрезка ожидания после звонка началась
  * (`recording.processing`) или закончилась, выгрузка в базу знаний, объединение
- * завершено (`recording.updated`).
+ * завершено (`recording.updated`). `record.kept` — временную встречу решили
+ * сохранить как обычную: пометка «не сохранится» снимается.
  */
 export const stateChanging = (e: BusEvent) =>
   e.kind === "record.started" || e.kind === "record.stopped" || e.kind === "record.discarded"
-  || e.kind.startsWith("live.") || e.kind.startsWith("recording.");
+  || e.kind === "record.kept" || e.kind.startsWith("live.") || e.kind.startsWith("recording.");
 
 /**
  * Группы встреч изменились (список, порядок, членство) — одно событие на действие. Снимок от этого

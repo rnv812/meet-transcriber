@@ -146,6 +146,8 @@ body {
 .badge--ok { color: var(--ok); background: rgba(76, 195, 138, 0.12); }
 .badge--run { color: #9aa3ff; background: rgba(94, 106, 210, 0.16); }
 .badge--err { color: var(--err); background: rgba(229, 72, 77, 0.12); }
+/* Временная встреча: не сохранится. */
+.badge--temp { color: var(--amber); background: rgba(245, 165, 36, 0.14); white-space: nowrap; }
 
 /* Каркас окна: навигация · список · карточка */
 .app { position: relative; display: flex; height: 100%; min-width: 820px; }

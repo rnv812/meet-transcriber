@@ -672,3 +672,47 @@ def test_removing_one_of_two_attachments_sharing_a_material_keeps_its_files(tmp_
             assert materials.records(state.folder) == []
 
     _run(scenario())
+
+
+# --- карточка подтверждения Meet (0.3.7, A1) -----------------------------------------------
+
+
+def test_confirm_card_route_decides_once_and_double_click_is_refused(tmp_path):
+    async def scenario():
+        state = ChatState(tmp_path)
+        card = state.chat.append("system", text="Ассистент хочет выполнить: команду", card="confirm",
+                                 tool="Bash", args="ls").message
+        agent = state.chat.append("agent", status="shown", text="Глянуть?", buttons=["Глянь"]).message
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post(f"/chat/{card['id']}/confirm", json={"allow": "yes"})
+            assert r.status == 400
+            r = await client.post(f"/chat/{card['id']}/confirm", json={"allow": True})
+            assert await r.json() == {"ok": True}
+            assert state.chat.get(card["id"])["decision"] == "allow"
+            r = await client.post(f"/chat/{card['id']}/confirm", json={"allow": False})
+            assert r.status == 400 and "уже решено" in await r.text()
+            r = await client.post(f"/chat/{agent['id']}/confirm", json={"allow": True})
+            assert r.status == 400                       # не карточка
+            r = await client.post(f"/chat/{agent['id']}/click", json={"label": "Глянь", "client_id": "a"})
+            assert r.status == 200
+            r = await client.post(f"/chat/{agent['id']}/click", json={"label": "Глянь", "client_id": "b"})
+            assert r.status == 400 and "уже ответили" in await r.text()
+
+    _run(scenario())
+
+
+def test_confirm_for_the_meeting_and_revoke_routes(tmp_path):
+    async def scenario():
+        state = ChatState(tmp_path)
+        card = state.chat.append("system", text="Ассистент хочет выполнить: MCP", card="confirm", tool="mcp__x__y",
+                                 args="{}", grant={"key": "mcp:mcp__x__y", "label": "MCP x: y"}).message
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post(f"/chat/{card['id']}/confirm", json={"allow": True, "meeting": "yes"})
+            assert r.status == 400
+            r = await client.post(f"/chat/{card['id']}/confirm", json={"allow": True, "meeting": True})
+            assert await r.json() == {"ok": True}
+            assert state.chat.get(card["id"])["decision"] == "allow_meeting"
+            r = await client.post("/chat/m99/revoke", json={})
+            assert r.status == 400                      # нет такого разрешения
+
+    _run(scenario())

@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths,
-                  settings, watch)
+                  settings, temp_meeting, watch)
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
 # зависеть от модуля, который тянет pystray, — наоборот, tray импортирует их
@@ -51,6 +51,12 @@ LIVE_TAIL_BUSY = "ассистент дописывает сводку этой 
 # проверка провайдера (~1 с) + это + обрыв хвоста (TAIL_CUT_WAIT_S +
 # live_control.JOIN_SLACK_S) + запуск ребёнка — около 22 с, с запасом.
 LIVE_RECORD_WAIT_S = 10.0
+# Временную встречу сохраняют как обычную: столько ждём хвост ассистента
+# (он пишет в её папку), прежде чем перенести её в библиотеку. Оболочка ждёт
+# ответа /recording/stop 70 с (api.rs, LONG_TIMEOUT).
+KEEP_SETTLE_S = 30.0
+# Выход резидента: столько ждём фоновый перенос сохраняемой временной встречи.
+KEEP_SHUTDOWN_S = 5.0
 
 PACKAGE = "meet-transcriber"
 
@@ -421,13 +427,13 @@ def _chat_mid(mid) -> str:
 
 def _session_profile(body: dict | None) -> str | None:
     """`profile` из тела `/live/start`, `/live/attach`, `/live/profile`: ключ
-    (`work` / `neutral`) или подпись; нет поля — None; негодное — 400."""
+    (`work` / `personal`) или подпись; нет поля — None; негодное — 400."""
     value = (body or {}).get("profile")
     if value is None:
         return None
     key = settings.profile_key(value)
     if key is None:
-        raise _bad_request("profile — work или neutral")
+        raise _bad_request("profile — work или personal")
     return key
 
 
@@ -712,6 +718,12 @@ class TrayControl:
         # дописывает хвост ленты и сводку в её папку в фоне (≤ STOP_TIMEOUT_S).
         # Отменённую запись удаляют сразу — его перед этим убивают.
         tray.after_stop = self._finish_attached
+        # Временная встреча, которую сохраняют как обычную: перед переносом в
+        # библиотеку дождаться, пока ассистент допишет хвост в её папку.
+        tray.settle_after_stop = self._settle_attached
+        # Когда поднялся резидент: временные встречи старше — прошлого запуска
+        # (сбой, убит), их убирает recover_in_background.
+        self._born = time.time()
         self.bus.subscribe(self._on_live_event)
         # Выгрузка в базу знаний: по одной за раз (кнопка поверх автоматики не
         # должна писать в ту же папку одновременно). Последний сбой автоматики —
@@ -1021,6 +1033,7 @@ class TrayControl:
         """Доделать прерванное прошлым выходом — в фоне: резидент сразу пишет
         и отвечает окну (см. recover)."""
         def work() -> None:
+            self._sweep_temporary()
             try:
                 swept = jobs.sweep_temp()
                 if swept:
@@ -1039,6 +1052,32 @@ class TrayControl:
                               f"возвращены папки — {len(done['restored'])}")
 
         self._background(work, "meet-recover")
+
+    def _sweep_temporary(self) -> None:
+        """Временные встречи прошлого запуска (резидент упал или убит посреди
+        неё): удалить и забыть сеансы агента; отмеченные «Сохранить как
+        обычную встречу» — перенести в библиотеку. Идущую — не трогать."""
+        from meet import temp_meeting
+
+        try:
+            done = temp_meeting.sweep(
+                before=self._born, library_root=self._root(), log=self.tray.log,
+                skip=lambda: getattr(self.tray, "temp_session", None),
+                active=lambda: self.tray._current_folder() if self.tray.recording else None)
+        except Exception as e:
+            self.tray.log(f"временные встречи прошлого запуска не проверены: {type(e).__name__}: {e}")
+            return
+        if done["wiped"]:
+            self.tray.log(f"удалены временные встречи прошлого запуска: {len(done['wiped'])}")
+        for folder in done["kept"]:
+            # «Сохранить как обычную встречу» до сбоя: обработать, как обычную
+            # сохранённую запись с ассистентом (расшифровка, черновое название).
+            try:
+                self._on_saved(str(folder), LIVE, True)
+            except Exception as e:
+                self.tray.log(f"сохранённая временная встреча не поставлена в обработку: "
+                              f"{type(e).__name__}")
+            self._updated(Path(folder))
 
     def _busy_now(self) -> set[str]:
         """Папки, в которые сейчас пишут (обычная запись, ассистент)."""
@@ -1244,6 +1283,15 @@ class TrayControl:
         elapsed = time.monotonic() - tray.started if recording and tray.started else 0.0
         return {
             "status": "recording" if recording else "idle",
+            # Временная встреча (meet.temp_meeting): не сохранится — окно,
+            # панели и трей помечают её. «Сохранить как обычную встречу» —
+            # снова False (дальше это обычная запись).
+            "temporary": bool(recording and getattr(tray, "temporary", False)
+                              and not getattr(tray, "temporary_kept", False)),
+            # «Остановить без сохранения»: чью историю ассистента удалить нечем
+            # (агент вкладки «Агент» без известного id — Codex, OpenCode); окно
+            # честно говорит об этом в вопросе. [] — удалится всё.
+            "forget_gaps": self._forget_gaps(recording),
             # Версия резидента: оболочка другой версии штатно его заменит.
             "version": app_version(),
             "source": tray.source,
@@ -1306,6 +1354,15 @@ class TrayControl:
             "processing": self._processing_list(),
         }
 
+    def _forget_gaps(self, recording: bool) -> list[str]:
+        if not recording:
+            return []
+        try:
+            folder = self.tray._current_folder()
+            return temp_meeting.forget_gaps(Path(folder)) if Path(folder).is_dir() else []
+        except Exception:
+            return []
+
     def _call_title(self) -> str | None:
         """Название звонка для `/state.title`. В отличие от `_browser_call`,
         который заголовок окна намеренно не отдаёт, здесь он есть — но только
@@ -1365,6 +1422,14 @@ class TrayControl:
             "folder": folder,
         }
 
+    def keep_recording(self) -> dict:
+        """«Сохранить как обычную встречу» посреди временной: на «Стоп» она
+        перенесётся в библиотеку и дальше — как обычная запись."""
+        keep = getattr(self.tray, "keep_temporary", None)
+        if keep is None or not keep():
+            raise _bad_request("Временная встреча не идёт")
+        return {**self.snapshot(), "ok": True, "action": "kept"}
+
     def shutdown(self) -> dict:
         """Выход по просьбе оболочки: идущая запись сохраняется штатно.
 
@@ -1375,6 +1440,11 @@ class TrayControl:
         if self.tray.recording:
             self.tray.stop_recording()
         self.live.stop(wait=True, timeout=live_control.SHUTDOWN_WAIT_S)
+        # Временную встречу сохраняют как обычную — перенос в фоне; не успеет —
+        # доделает следующий запуск (отметка `keep`).
+        wait_kept = getattr(self.tray, "wait_kept", None)
+        if wait_kept is not None:
+            wait_kept(KEEP_SHUTDOWN_S)
         self.tray.request_exit()
         return {"ok": True}
 
@@ -1386,11 +1456,17 @@ class TrayControl:
         что «Включить ассистента»). Ассистент не запустился или упал — запись
         идёт дальше как обычная, сохраняется и расшифровывается своей
         остановкой. Ответ сразу (`starting`), дальше — события `live.*`.
-        `{"profile"?: "work" | "neutral"}` — профиль сессии (0.3.7); нет —
-        `assist.profile`."""
+        `{"profile"?: "work" | "personal"}` — профиль сессии (0.3.7); нет —
+        `assist.profile`.
+
+        `{"temporary": true}` — временная встреча с ассистентом
+        (`meet.temp_meeting`): запись вне библиотеки, на «Стоп» удаляется
+        вместе с чатом и сеансами агента."""
         from meet import assistant
 
         _session_profile(body)          # негодный профиль — 400 до начала записи
+        temporary = (body or {}).get("temporary") is True
+
         if self.tray.recording:
             raise _bad_request("Идёт обычная запись — включите ассистента в ней "
                                "(«Включить ассистента»)")
@@ -1408,9 +1484,12 @@ class TrayControl:
         if storage.HOLD.held():
             raise _conflict(storage.HOLD_TEXT)
         attempt = RecordAttempt()
-        if not self.tray.start_recording(LIVE, attempt=attempt):
+        started = (self.tray.start_recording(LIVE, attempt=attempt, temporary=True) if temporary
+                   else self.tray.start_recording(LIVE, attempt=attempt))
+        if not started:
             raise _bad_request("Запись уже идёт")
-        self.tray.log("запись с ассистентом: запись пошла, подключаю ассистента")
+        self.tray.log(f"{'временная встреча' if temporary else 'запись с ассистентом'}: "
+                      f"запись пошла, подключаю ассистента")
         # Подключаем, когда у этой записи открылись устройства (её
         # `record.started`, доли секунды). Отвод и папка появляются раньше
         # устройств: по ним одним ассистент подключился бы к записи, которая
@@ -1474,7 +1553,7 @@ class TrayControl:
         берёт звук из отвода записи (`meet.pcm_tap`), второй раз устройства не
         открывает и lock записи не трогает; сначала догоняет уже записанное
         (с дорожек на диске), дальше слушает вживую. Ответ сразу (`starting`).
-        `{"profile"?: "work" | "neutral"}` — профиль сессии; нет — из журнала
+        `{"profile"?: "work" | "personal"}` — профиль сессии; нет — из журнала
         встречи (ассистента в неё уже включали) или `assist.profile`."""
         from meet import assistant, pcm_tap
 
@@ -1525,7 +1604,7 @@ class TrayControl:
         except live_control.LiveBusy as e:
             raise _bad_request(str(e))
         if reply.get("ok"):
-            self.tray.log(f"ассистент включается посреди записи: {folder}")
+            self.tray.log(f"ассистент включается посреди записи: {temp_meeting.loggable(folder)}")
         return reply
 
     def live_detach(self) -> dict:
@@ -1555,6 +1634,12 @@ class TrayControl:
             self.live.abort(reason=live_control.ENDED_RECORDING)
             return
         self.live.finish_after_recording()
+
+    def _settle_attached(self) -> None:
+        """Ассистент остановленной записи дописывает хвост в её папку —
+        дождаться (не дольше KEEP_SETTLE_S): папку сейчас перенесут."""
+        if self.live.finishing():
+            self.live.stop(wait=True, timeout=KEEP_SETTLE_S)
 
     def _live_call(self, call, *args) -> dict:
         try:
@@ -1650,6 +1735,19 @@ class TrayControl:
             payload["client_id"] = cid
         return self._live_call(self.live.chat_click, mid, payload)
 
+    def live_chat_confirm(self, mid: str, body: dict | None) -> dict:
+        """Карточка подтверждения Meet во время встречи: `{"allow": bool}` →
+        ребёнку (ворота агента ждут решения там)."""
+        mid = _chat_mid(mid)
+        allow, meeting = (body or {}).get("allow"), (body or {}).get("meeting", False)
+        if not isinstance(allow, bool) or not isinstance(meeting, bool):
+            raise _bad_request("allow, meeting — true или false")
+        return self._live_call(self.live.chat_confirm, mid, {"allow": allow, "meeting": meeting})
+
+    def live_chat_revoke(self, mid: str, body: dict | None = None) -> dict:
+        """Отозвать разрешение «до конца встречи» (× в шапке чата)."""
+        return self._live_call(self.live.chat_revoke, _chat_mid(mid))
+
     def live_chat_react(self, mid: str, body: dict | None) -> dict:
         """Реакция на сообщение агента: `{"emoji": "👍|👎|❓", "on"?: bool|null}`."""
         mid = _chat_mid(mid)
@@ -1695,12 +1793,12 @@ class TrayControl:
         return {"frequency": key, "label": settings.FREQUENCY_LABELS[key], "live": live}
 
     def live_profile(self, body: dict | None) -> dict:
-        """Профиль идущей сессии ассистента (`{"profile": work|neutral}`,
+        """Профиль идущей сессии ассистента (`{"profile": work|personal}`,
         0.3.7): только эта сессия — настройка по умолчанию (`assist.profile`)
         не меняется. Ассистента нет — 409. → `{"profile", "label", "live"}`."""
         key = _session_profile(body)
         if key is None:
-            raise _bad_request("profile — work или neutral")
+            raise _bad_request("profile — work или personal")
         reply = self._live_call(self.live.agent_profile, key)
         live = isinstance(reply, dict) and reply.get("live") is True
         return {"profile": key, "label": settings.PROFILE_LABELS[key], "live": live}
@@ -3666,6 +3764,29 @@ class TrayControl:
         if got is not None and got[0] is not None:
             self.bus.emit(CHAT_UPDATED, id=folder.name)
         return {"ok": True, "removed": got is not None}
+
+    def recording_chat_confirm(self, recording_id: str, mid: str, body: dict | None) -> dict:
+        """Карточка подтверждения Meet после встречи: `{"allow": bool}` →
+        решение в журнал (агента в задаче «Продолжить разговор» ждёт его там).
+        Решённая карточка — 400."""
+        from meet.assist import chatlog
+
+        mid = _chat_mid(mid)
+        allow, meeting = (body or {}).get("allow"), (body or {}).get("meeting", False)
+        if not isinstance(allow, bool) or not isinstance(meeting, bool):
+            raise _bad_request("allow, meeting — true или false")
+        folder = self._after_meeting_folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        log = chatlog.ChatLog(folder, log=self.tray.log)
+        try:
+            log.decide_card(mid, ("allow_meeting" if meeting else "allow") if allow else "deny")
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except chatlog.FileLockTimeout:
+            raise _unavailable("Журнал чата занят — повторите")
+        self.bus.emit(CHAT_UPDATED, id=folder.name)
+        return {"ok": True}
 
     def recording_chat_react(self, recording_id: str, mid: str, body: dict | None) -> dict:
         """Реакция на сообщение агента после встречи: `{"emoji": "👍|👎|❓",

@@ -100,12 +100,12 @@ test("«▾» открывает меню: «С ассистентом» зап�
   await waitFor(() => expect(api.getAssistant).toHaveBeenCalledWith(ep));
   expect(item).toBeEnabled();
   await userEvent.click(item);
-  expect(start).toHaveBeenCalledWith(ep, "work");
+  expect(start).toHaveBeenCalledWith(ep, { profile: "work" });
   expect(await screen.findByText("Ассистент запускается…")).toBeInTheDocument();
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
-test("профиль выбирается тем же щелчком: два пункта, «Нейтральный» запускает с ним", async () => {
+test("профиль выбирается тем же щелчком: два пункта, «Личный» запускает с ним", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
@@ -113,26 +113,27 @@ test("профиль выбирается тем же щелчком: два п�
   const items = screen.getAllByRole("menuitem");
   expect(items.map((i) => i.textContent)).toEqual([
     expect.stringContaining("С ассистентом · Рабочая встреча"),
-    expect.stringContaining("С ассистентом · Нейтральный"),
+    expect.stringContaining("С ассистентом · Личный"),
+    expect.stringContaining("Временная встреча"),
   ]);
   expect(items[1]).toHaveTextContent("без базы знаний");
   await waitFor(() => expect(first).toHaveFocus());
-  await userEvent.click(screen.getByRole("menuitem", { name: /Нейтральный/ }));
-  expect(start).toHaveBeenCalledWith(ep, "neutral");
+  await userEvent.click(screen.getByRole("menuitem", { name: /Личный/ }));
+  expect(start).toHaveBeenCalledWith(ep, { profile: "personal" });
 });
 
 test("профиль по умолчанию из настроек — первым и с пометкой", async () => {
-  vi.spyOn(api, "getAssistant").mockResolvedValue({ ...assistant(), profile: "neutral" });
+  vi.spyOn(api, "getAssistant").mockResolvedValue({ ...assistant(), profile: "personal" });
   const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   await openMenu();
   await waitFor(() => expect(screen.getAllByRole("menuitem")[0])
-    .toHaveTextContent("С ассистентом · Нейтральный (по умолчанию)"));
+    .toHaveTextContent("С ассистентом · Личный (по умолчанию)"));
   const items = screen.getAllByRole("menuitem");
   expect(items[1]).toHaveTextContent("С ассистентом · Рабочая встреча");
   expect(items[1]).not.toHaveTextContent("по умолчанию");
   await userEvent.click(items[0]!);
-  expect(start).toHaveBeenCalledWith(ep, "neutral");
+  expect(start).toHaveBeenCalledWith(ep, { profile: "personal" });
 });
 
 test("без провайдера неактивны оба пункта профиля", async () => {
@@ -140,7 +141,7 @@ test("без провайдера неактивны оба пункта про�
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   await openMenu();
   await waitFor(() => expect(screen.getAllByRole("menuitem").every((i) => (i as HTMLButtonElement).disabled)).toBe(true));
-  expect(screen.getByRole("menuitem", { name: /Нейтральный/ }))
+  expect(screen.getByRole("menuitem", { name: /Личный/ }))
     .toHaveAccessibleDescription("Подключите Claude Code, Codex или OpenCode в настройках");
 });
 

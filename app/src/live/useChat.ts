@@ -42,7 +42,7 @@ import type {
 import { type ChatBackend, LIVE_CHAT } from "./chatBackend";
 import {
   type ChatState, EMPTY_CHAT, type FeedItem, REACTIONS, chatReducer, explainPending, feedItems, isFinalAgent,
-  nextExplainExpiry, nextReveal, pinnedOf, usedButtons, writingShown,
+  nextExplainExpiry, nextReveal, pendingCards, pinnedOf, usedButtons, writingShown,
 } from "./chatModel";
 import { profileOf } from "./profiles";
 import { type KbIndex, type Source, findSources, kbIndex, mayMentionDocs } from "./sources";
@@ -129,6 +129,12 @@ export type Chat = {
   send: (text: string, attachments?: string[]) => Promise<boolean>;
   retry: (clientId: string) => Promise<boolean>;
   click: (id: string, label: string) => Promise<void>;
+  /** Карточка подтверждения Meet: «Разрешить один раз» (`true`), «до конца встречи» (`meeting`) или «Отклонить». */
+  confirm: (id: string, allow: boolean, meeting?: boolean) => Promise<void>;
+  /** Отозвать разрешение «до конца встречи». */
+  revokeGrant: (id: string) => Promise<void>;
+  /** Карточки подтверждения, которые ждут решения (над лентой). */
+  cards: ChatMessage[];
   react: (id: string, emoji: ChatReaction) => Promise<void>;
   stop: () => Promise<void>;
   setFrequency: (label: AgentFrequencyLabel) => Promise<void>;
@@ -304,6 +310,24 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     return next;
   }), []);
 
+  const confirm = useCallback(async (id: string, allow: boolean, meeting = false) => {
+    if (!ep) return;
+    try {
+      await backend.confirm(ep, id, allow, meeting);
+    } catch (e) {
+      setNote(`Решение не сохранено: ${errorText(e)}`);
+    }
+  }, [ep, backend]);
+
+  const revokeGrant = useCallback(async (id: string) => {
+    if (!ep) return;
+    try {
+      await backend.revoke(ep, id);
+    } catch (e) {
+      setNote(`Разрешение не отозвано: ${errorText(e)}`);
+    }
+  }, [ep, backend]);
+
   const react = useCallback(async (id: string, emoji: ChatReaction) => {
     if (!ep) return;
     const on = !stateRef.current.byId[id]?.reactions?.[emoji];
@@ -426,11 +450,11 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     const m = state.byId[id];
     return m?.kind === "agent" && typeof m.text === "string" && mayMentionDocs(m.text);
   }), [state.order, state.byId]);
-  // «Нейтральный»: базы знаний у сессии нет — и чипов её документов тоже (ревью M4):
+  // «Личный»: базы знаний у сессии нет — и чипов её документов тоже (ревью M4):
   // имя из прежней истории чата не должно выглядеть предложением документа.
-  const neutral = profileOf(profile ?? state.agent?.profile ?? opts.profile) === "neutral";
-  const kbAll = useKbDocs(ep, wantKb && !neutral);
-  const kb = neutral ? null : kbAll;
+  const personal = profileOf(profile ?? state.agent?.profile ?? opts.profile) === "personal";
+  const kbAll = useKbDocs(ep, wantKb && !personal);
+  const kb = personal ? null : kbAll;
   const found = useMemo(() => new Map<string, Source[]>(), [attachments, kb]);
   const sources = useCallback((m: ChatMessage) => {
     if (m.kind !== "agent" || !m.text || m.status === "writing") return [];
@@ -494,7 +518,8 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
     used: (id) => used.get(id) ?? null,
-    send, retry, click, react, stop, setFrequency, setProfile, paste, attach, removeAttachment, hidePin, sources, open, more,
-    composer, sink,
+    send, retry, click, confirm, revokeGrant, cards: pendingCards(state, now), react, stop, setFrequency, setProfile,
+    paste, attach,
+    removeAttachment, hidePin, sources, open, more, composer, sink,
   };
 }

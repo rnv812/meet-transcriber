@@ -28,6 +28,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     start_recording() -> dict            команды панели; возвращают, что вышло
     stop_recording(discard=False) -> dict
     adopt_recording() -> dict            автозапись → ручная (человек взял её)
+    keep_recording() -> dict             временная встреча → обычная (сохранится на «Стоп»)
     diagnostics(lines=200) -> dict       хвосты журналов для экрана диагностики
     settings() -> dict                   текущие настройки как есть
     patch_settings(updates) -> dict      частичное обновление, возвращает новые
@@ -93,7 +94,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     assistant() -> dict                   кто отвечает, что установлено, папки
     check_provider(body) -> dict          проверить провайдера коротким вызовом
     local_models(body) -> dict            модели локального сервера {"base_url", "model"}
-    live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
+    live_start(body) -> dict              живой режим (409 без провайдера, 400 при записи);
+                                         {"temporary": true} — временная встреча
     live_stop() -> dict                   остановить живой режим (ответ сразу)
     live_attach() / live_detach() -> dict включить ассистента посреди обычной
                                           записи / выключить его, запись идёт
@@ -104,12 +106,14 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_chat_paste(raw, type, name)      вставленная картинка (сырое тело до 10 МБ)
     live_chat_attach(body)                файл или папка с диска {"path"}
     live_chat_click(id, body) / live_chat_react(id, body) / live_chat_stop(body)
+    live_chat_confirm(id, body)           карточка подтверждения Meet {"allow", "meeting"?}
+    live_chat_revoke(id)                  отозвать разрешение «до конца встречи»
     live_chat_remove(id)                  вложение убрали из строки ввода до отправки
     agent_frequency(body)                 «Как часто писать»: в настройки и агенту
     live_profile(body)                    профиль идущей сессии (только она, не настройки)
     recording_chat(id) -> dict            чат записи после встречи (+ legacy)
     continue_chat(id, body) -> dict       «Продолжить разговор»: сообщение и задача chat
-    recording_chat_attach / _paste / _remove / _click / _react
+    recording_chat_attach / _paste / _remove / _click / _react / _confirm
                                           вложения, кнопки и реакции чата после встречи
     kb_docs() -> dict                     документы базы знаний (чипы-источники окна)
 """
@@ -386,6 +390,9 @@ def _make_handler(server: ControlServer):
             self.send_response(status)
             if payload is not None:
                 self.send_header("Content-Type", "application/json; charset=utf-8")
+            # Ответы — личные данные (чат ассистента, расшифровки): кешу WebView
+            # на диске их не хранить.
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             origin = self.headers.get("Origin")
             if origin and _origin_allowed(origin):
@@ -473,7 +480,7 @@ def _make_handler(server: ControlServer):
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Cache-Control", "no-store")
                 origin = self.headers.get("Origin")
                 if origin and _origin_allowed(origin):
                     self.send_header("Access-Control-Allow-Origin", origin)
@@ -603,7 +610,7 @@ def _make_handler(server: ControlServer):
             unsubscribe = server.state.bus.subscribe(deliver)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("X-Accel-Buffering", "no")
             self.send_header("Connection", "close")
             origin = self.headers.get("Origin")
@@ -647,7 +654,7 @@ def _make_handler(server: ControlServer):
             try:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Accel-Buffering", "no")
                 self.send_header("Connection", "close")
                 origin = self.headers.get("Origin")
@@ -817,6 +824,8 @@ _ROUTES = {
         discard=True
     ),
     ("POST", "/recording/adopt"): lambda h, p: _server_of(h).state.adopt_recording(),
+    # «Сохранить как обычную встречу» посреди временной (meet.temp_meeting).
+    ("POST", "/recording/keep"): lambda h, p: _server_of(h).state.keep_recording(),
     ("POST", "/auto-record"): lambda h, p: _server_of(h).state.set_auto_record(h._body()),
     # Фильтр по карточке (meet.library_filter): categories, groups, people,
     # from/to, has/lacks, min_s/max_s, in=title — до лимита.
@@ -865,6 +874,7 @@ _ROUTES = {
     ),
     ("POST", "/assistant/local-models"): lambda h, p: _server_of(h).state.local_models(h._body()),
     # `{"profile"?}` — профиль сессии ассистента (0.3.7); без тела — по умолчанию.
+    # {"temporary": true} — временная встреча с ассистентом (meet.temp_meeting).
     ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(h._body()),
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
     ("POST", "/live/attach"): lambda h, p: _server_of(h).state.live_attach(h._body()),
@@ -974,6 +984,12 @@ _PATTERNS = (
      lambda h, p, rid, mid: _server_of(h).state.recording_chat_react(unquote(rid), unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/click$"),
      lambda h, p, mid: _server_of(h).state.live_chat_click(unquote(mid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat/([^/]+)/confirm$"),
+     lambda h, p, rid, mid: _server_of(h).state.recording_chat_confirm(unquote(rid), unquote(mid), h._body())),
+    ("POST", re.compile(r"^/live/chat/([^/]+)/revoke$"),
+     lambda h, p, mid: _server_of(h).state.live_chat_revoke(unquote(mid), h._body())),
+    ("POST", re.compile(r"^/live/chat/([^/]+)/confirm$"),
+     lambda h, p, mid: _server_of(h).state.live_chat_confirm(unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/react$"),
      lambda h, p, mid: _server_of(h).state.live_chat_react(unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/attachments/([^/]+)/remove$"),

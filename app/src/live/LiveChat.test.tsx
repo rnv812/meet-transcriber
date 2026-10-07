@@ -5,12 +5,13 @@ vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   clickChat: vi.fn(async () => ({ ok: true, id: "m9" })),
   reactChat: vi.fn(async () => ({ ok: true, changed: true })),
+  confirmChat: vi.fn(async () => ({ ok: true })),
   newChatClientId: vi.fn(() => "c1"),
 }));
-import { clickChat, reactChat } from "../lib/api";
+import { clickChat, confirmChat, reactChat } from "../lib/api";
 import type { ChatMessage, ChatSnapshot } from "../lib/types";
 import { agentInfo, agentMsg, attMsg, userMsg } from "../test/chatFixtures";
-import { LiveChat } from "./LiveChat";
+import { GATE_TITLE, LiveChat } from "./LiveChat";
 import { EXPLAIN_WAIT_S } from "./chatModel";
 import { ACK_MS, type Chat, useChat } from "./useChat";
 
@@ -135,6 +136,15 @@ test("системные строки и строки встречи", () => {
   load([{ ...agentMsg("s1"), kind: "system", text: "Ассистенту нечего добавить" }, { ...agentMsg("e1"), kind: "meeting", text: "— часть 2 —" }]);
   expect(log()).toHaveTextContent("Ассистенту нечего добавить");
   expect(log()).toHaveTextContent("— часть 2 —");
+});
+
+test("строка ворот согласия — та же тихая системная строка, с пояснением (0.3.7)", () => {
+  render(<Host />);
+  const text = "Ассистент хотел без согласия: открыть C:/Users/u/Downloads/spec.pdf — запрос заблокирован";
+  load([{ ...agentMsg("s2"), kind: "system", text, gate: true }]);
+  const line = within(log()).getByText(text);
+  expect(line).toHaveClass("chat-sys", "chat-sys--gate");
+  expect(line).toHaveAttribute("title", GATE_TITLE);
 });
 
 /** Прокрутка ленты: jsdom не считает размеры — задаём их сами. */
@@ -309,4 +319,62 @@ test("❓ — старое (дольше EXPLAIN_WAIT_S) или агент вы�
   expect(within(msgRow("Сообщение m2")).getByText("Ассистент поясняет…")).toBeInTheDocument();
   rerender(<Host disabled />);
   expect(screen.queryByText("Ассистент поясняет…")).toBeNull();
+});
+
+const card = (id: string, o: Partial<ChatMessage> = {}): ChatMessage => ({
+  ...agentMsg(id), kind: "system", status: undefined, mode: undefined, card: "confirm", tool: "Bash", title: "команду",
+  text: "Ассистент хочет выполнить: команду", args: "echo hi > out.txt", expires_at: Date.now() / 1000 + 120, ...o,
+});
+const cards = () => screen.queryByRole("region", { name: "Подтверждение действия" });
+
+test("карточка подтверждения Meet: над лентой, точный вызов, «Разрешить один раз» уходит confirmChat (0.3.7)", async () => {
+  render(<Host />);
+  load([agentMsg("m1"), card("m2")]);
+  const region = cards()!;
+  expect(region).toHaveTextContent("Ассистент хочет выполнить: команду");
+  expect(region).toHaveTextContent("echo hi > out.txt");
+  // В ленте — та же запись без кнопок: решать — над лентой (её видно и при прокрутке вверх).
+  expect(within(log()).queryByRole("button", { name: "Разрешить один раз" })).toBeNull();
+  expect(log()).toHaveTextContent("Ждёт вашего решения — над лентой");
+  await userEvent.click(within(region).getByRole("button", { name: "Разрешить один раз" }));
+  expect(confirmChat).toHaveBeenCalledWith(ep, "m2", true, false);
+});
+
+test("карточка: длинный вызов — начало и конец, «Разрешить» доступна сразу, «Показать полностью» — по желанию; Esc", async () => {
+  render(<Host />);
+  const full = `ls${"x".repeat(700)}; rm -rf ~`;
+  const preview = "lsxxxx\n…⟨скрыто: 0 строк, 700 симв.⟩…\nxx; rm -rf ~";
+  load([card("m2", { args: full, preview, size: "1 строка, 712 симв." })]);
+  const region = cards()!;
+  expect(region).toHaveTextContent("1 строка, 712 симв.");
+  expect(region).toHaveTextContent("rm -rf ~");                        // хвост виден всегда
+  expect(region).toHaveTextContent("скрыто: 0 строк, 700 симв.");
+  expect(within(region).getByRole("button", { name: "Разрешить один раз" })).toBeEnabled();
+  await userEvent.click(within(region).getByRole("button", { name: "Показать полностью" }));
+  expect(region).toHaveTextContent(full);
+  within(region).getByRole("button", { name: "Отклонить" }).focus();
+  await userEvent.keyboard("{Escape}");
+  expect(confirmChat).toHaveBeenCalledWith(ep, "m2", false, false);
+});
+
+test("карточка: «Разрешать такое до конца встречи» — только если Meet её предлагает; предупреждения крупно", async () => {
+  render(<Host />);
+  load([card("m2", { grant: { key: "shell:Bash:npm", label: "Bash npm" },
+    warnings: ["⚠ Без песочницы Claude Code (dangerouslyDisableSandbox)"] }), card("m3", { args: "make" })]);
+  const region = cards()!;
+  expect(region).toHaveTextContent("⚠ Без песочницы Claude Code");
+  const grants = within(region).getAllByRole("button", { name: "Разрешать такое до конца встречи" });
+  expect(grants).toHaveLength(1);
+  expect(grants[0]).toHaveAttribute("title", expect.stringContaining("Bash npm"));
+  await userEvent.click(grants[0]!);
+  expect(confirmChat).toHaveBeenCalledWith(ep, "m2", true, true);
+});
+
+test("решённая или просроченная карточка уходит из-над ленты, в ленте — итог", () => {
+  render(<Host />);
+  load([card("m2", { decision: "allow" }), card("m3", { expires_at: Date.now() / 1000 - 5 }),
+    card("m4", { decision: "timeout" })]);
+  expect(cards()).toBeNull();
+  expect(log()).toHaveTextContent("Разрешено один раз");
+  expect(log()).toHaveTextContent("Время вышло — не выполнено");
 });
