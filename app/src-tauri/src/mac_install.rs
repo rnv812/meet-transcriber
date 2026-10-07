@@ -13,9 +13,11 @@
 // при запуске предлагается «Переместить Meet в Программы»), во втором —
 // замену делает один шаг от администратора (пароль спрашивает macOS):
 // постоянный текст скрипта и постоянные пути, всё изменяемое — отдельными
-// аргументами через `quoted form of`; копия проверяется (подпись нашим
-// сертификатом и версия) уже там, куда пользователь писать не может, и
-// только потом запускается — режимом `--privileged-swap` проверенной копии.
+// аргументами через `quoted form of`, пустая среда и полные пути программ;
+// копия проверяется (подпись сертификатом выпуска, SHA-1 которого вшит при
+// сборке, и версия) уже там, куда пользователь писать не может, лишается
+// ACL и set-id, и только потом запускается — режимом `--privileged-swap`
+// проверенной копии.
 
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
@@ -142,7 +144,31 @@ pub const WHY_NOT_WRITABLE_ELSEWHERE: &str =
     "папка с Meet недоступна на запись, а с паролем администратора Meet заменяется только в «Программах»";
 pub const WHY_BUNDLE_NOT_WRITABLE: &str =
     "Meet.app в «Программах» недоступен на запись (установлен другим пользователем?)";
-pub const WHY_ADMIN_NEEDS_SIGNATURE: &str = "папка с Meet недоступна на запись, а установленная версия подписана не сертификатом Meet — заменить её с паролем администратора нельзя";
+pub const WHY_ADMIN_NEEDS_PIN: &str = "папка с Meet недоступна на запись, а в этой сборке Meet нет закреплённого сертификата выпуска — замена с паролем администратора отключена";
+
+/// SHA-1 сертификата подписи выпусков, вшитый при сборке
+/// (`MEET_SIGNING_SHA1`, в CI — закреплённый `MACOS_CERT_SHA1` job `macos`).
+/// Его и только его требует шаг от администратора; из работающего пакета он
+/// не выводится (тот может лежать в «Загрузках» и быть чем угодно). Сборка
+/// без него (разработческая) — без шага от администратора.
+const BUILD_PIN: Option<&str> = option_env!("MEET_SIGNING_SHA1");
+
+/// Закреплённый SHA-1 из значения при сборке: 40 hex (двоеточия допускаются,
+/// как в выводе `security`), в нижнем регистре. Иное — `None`.
+pub fn pin_from(value: Option<&str>) -> Option<String> {
+    let sha: String = value?
+        .trim()
+        .chars()
+        .filter(|c| *c != ':')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+}
+
+/// Закреплённый сертификат этой сборки.
+pub fn build_pin() -> Option<String> {
+    pin_from(BUILD_PIN)
+}
 
 /// Можно ли поменять пакет своими правами: в папке можно создавать (пробный
 /// файл) и, если пакет уже есть, сам пакет доступен на запись (иначе прежнюю
@@ -154,13 +180,13 @@ pub fn direct_possible(dir_writable: bool, target_exists: bool, target_writable:
 /// Своими правами, от администратора или никак (причина). Шаг от
 /// администратора — только для /Applications/Meet.app, только когда сами
 /// «Программы» пользователю недоступны (иначе в них можно подложить свою
-/// папку между проверкой и запуском) и только при подписи нашим
-/// сертификатом (`pinned` — его SHA-1 из требования установленной версии).
+/// папку между проверкой и запуском) и только в сборке с закреплённым
+/// сертификатом выпуска (`pin` — `build_pin()`).
 pub fn access(
     target: &Path,
     direct: bool,
     applications_writable: bool,
-    pinned: Option<&str>,
+    pin: Option<&str>,
 ) -> Result<Access, &'static str> {
     if direct {
         return Ok(Access::Direct);
@@ -171,23 +197,25 @@ pub fn access(
     if applications_writable {
         return Err(WHY_BUNDLE_NOT_WRITABLE);
     }
-    if pinned.is_none() {
-        return Err(WHY_ADMIN_NEEDS_SIGNATURE);
+    if pin.is_none() {
+        return Err(WHY_ADMIN_NEEDS_PIN);
     }
     Ok(Access::Admin)
 }
 
-/// SHA-1 сертификата из требования ровно того вида, что ставит
-/// scripts/sign_macos.sh: `identifier "com.meet.desktop" and certificate leaf
-/// = H"<40 hex>"`. Любое другое — `None`: шаг от администратора не строится.
-pub fn pinned_leaf(requirement: &str) -> Option<String> {
-    let prefix = format!("identifier \"{BUNDLE_ID}\" and certificate leaf = H\"");
-    let sha = requirement
-        .trim()
-        .strip_prefix(&prefix)?
-        .strip_suffix('"')?;
-    (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| sha.to_ascii_lowercase())
+/// Факты о месте замены (проверки файловой системы делает `mac_update`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouteFacts {
+    pub exists: bool,
+    pub dir_writable: bool,
+    pub target_writable: bool,
+    pub applications_writable: bool,
+}
+
+/// `direct_possible` и `access` по собранным фактам.
+pub fn route(target: &Path, facts: RouteFacts, pin: Option<&str>) -> Result<Access, &'static str> {
+    let direct = direct_possible(facts.dir_writable, facts.exists, facts.target_writable);
+    access(target, direct, facts.applications_writable, pin)
 }
 
 // --- шаг от администратора --------------------------------------------------------
@@ -209,14 +237,22 @@ pub fn admin_spare(pid: u32) -> PathBuf {
     admin_work(pid).join("Meet-old.app")
 }
 
-/// Скрипт шага от администратора (`/bin/sh -c`). Текст постоянный; данные —
-/// позиционные параметры: $1 — Meet.app в образе (или во временной копии),
-/// $2 — pid помощника (имя рабочей папки), $3 — SHA-1 сертификата, $4 —
-/// версия, $5 — uid пользователя (от его имени запускается новая версия).
-/// Каждый параметр сначала проверяется по шаблону. Порядок: копия в закрытую
-/// папку от root → права root → проверка подписи нашим сертификатом и версии
-/// → снятие карантина (только после проверки) → запуск проверенной копии в
-/// режиме `--privileged-swap`. Коды выхода — `admin_failure`.
+/// Скрипт шага от администратора. Запускается с пустой средой (`env -i`,
+/// только PATH — `admin_applescript`), все программы — по полному пути
+/// (функции bash из среды и PATH ни на что не влияют). Текст постоянный;
+/// данные — позиционные параметры: $1 — Meet.app в образе (или во временной
+/// копии), $2 — pid помощника (имя рабочей папки), $3 — SHA-1 закреплённого
+/// сертификата, $4 — точная версия (`CFBundleShortVersionString`, уже
+/// сверенная с выпуском по semver на стороне пользователя), $5 — uid
+/// пользователя (не 0), $6 — `run` или `check` (проверка параметров и вывод
+/// их в hex — для теста кавычек в CI, ничего не делает).
+/// Порядок: проверка параметров → «Программы» root и не для всех на запись →
+/// уборка брошенных рабочих папок (их pid не жив) → копия `ditto --noacl` в
+/// закрытую папку от root → root:wheel, без ACL, без set-id/sticky, без
+/// записи для group/other, без флагов → проверка подписи закреплённым
+/// сертификатом, версии и исполняемого файла → снятие карантина (только
+/// после проверки) → запуск проверенной копии `--privileged-swap`. Коды
+/// выхода — `admin_outcome`.
 pub const ADMIN_SCRIPT: &str = r#"# Meet: замена /Applications/Meet.app от администратора
 set -u
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -227,45 +263,85 @@ PID=$2
 LEAF=$3
 VERSION=$4
 USER_ID=$5
+MODE=$6
 case "$PID" in ''|*[!0-9]*) exit 64 ;; esac
 case "$USER_ID" in ''|*[!0-9]*) exit 64 ;; esac
+[ "$USER_ID" -ne 0 ] || exit 64
 case "$LEAF" in ''|*[!0-9a-f]*) exit 64 ;; esac
 [ "${#LEAF}" -eq 40 ] || exit 64
 case "$VERSION" in ''|*[!0-9A-Za-z.+-]*) exit 64 ;; esac
 case "$SRC" in /*/Meet.app) ;; *) exit 64 ;; esac
-[ -d /Applications ] || exit 65
+case "$MODE" in run|check) ;; *) exit 64 ;; esac
+if [ "$MODE" = check ]; then
+  for VALUE in "$SRC" "$PID" "$LEAF" "$VERSION" "$USER_ID"; do
+    printf '%s' "$VALUE" | /usr/bin/od -An -tx1 | /usr/bin/tr -d ' \n'
+    printf ' '
+  done
+  /usr/bin/env | /usr/bin/sed 's/=.*//' | /usr/bin/tr '\n' ','
+  exit 0
+fi
+[ -d "$SRC" ] && [ ! -L "$SRC" ] || exit 64
+[ -d /Applications ] && [ ! -L /Applications ] || exit 65
+[ "$(/usr/bin/stat -f %u /Applications)" = 0 ] || exit 65
+case "$(/usr/bin/stat -f %Sp /Applications)" in ????????w?) exit 65 ;; esac
+for OLD in /Applications/.Meet.app.work-*; do
+  [ -d "$OLD" ] && [ ! -L "$OLD" ] || continue
+  OLD_PID=${OLD##*/.Meet.app.work-}
+  case "$OLD_PID" in ''|*[!0-9]*) continue ;; esac
+  [ "$OLD_PID" != "$PID" ] || continue
+  kill -0 "$OLD_PID" 2>/dev/null && continue
+  /bin/rm -rf "$OLD"
+done
 WORK="/Applications/.Meet.app.work-$PID"
 STAGE="$WORK/Meet.app"
-fail() { rm -rf "$WORK"; exit "$1"; }
-rm -rf "$WORK"
-mkdir -m 700 "$WORK" || exit 66
-ditto "$SRC" "$STAGE" || fail 66
-chown -R 0:0 "$STAGE" || fail 66
-chmod -R go-w "$STAGE" || fail 66
+fail() { /bin/rm -rf "$WORK"; exit "$1"; }
+/bin/rm -rf "$WORK"
+/bin/mkdir -m 700 "$WORK" || exit 66
+/usr/bin/ditto --noacl "$SRC" "$STAGE" || fail 66
 [ -d "$STAGE" ] && [ ! -L "$STAGE" ] || fail 66
-codesign --verify --deep --strict -R "=identifier \"com.meet.desktop\" and certificate leaf = H\"$LEAF\"" "$STAGE" || fail 67
+/usr/sbin/chown -R 0:0 "$STAGE" || fail 66
+/bin/chmod -RN "$STAGE" || fail 66
+/bin/chmod -R a-st,go-w "$STAGE" || fail 66
+/usr/bin/chflags -R 0 "$STAGE" || fail 66
+/usr/bin/codesign --verify --deep --strict -R "=identifier \"com.meet.desktop\" and certificate leaf = H\"$LEAF\"" "$STAGE" || fail 67
 FOUND=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGE/Contents/Info.plist") || fail 68
 [ "$FOUND" = "$VERSION" ] || fail 68
 EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$STAGE/Contents/Info.plist") || fail 69
 case "$EXE" in ''|.*|*/*) fail 69 ;; esac
 [ -f "$STAGE/Contents/MacOS/$EXE" ] && [ ! -L "$STAGE/Contents/MacOS/$EXE" ] || fail 69
-xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null
+/usr/bin/xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null
 exec "$STAGE/Contents/MacOS/$EXE" --privileged-swap "$PID" "$USER_ID"
 "#;
 
-/// AppleScript для `osascript`: из аргументов собирает команду `/bin/sh -c
-/// <скрипт> meet-update <аргументы…>`, каждый — через `quoted form of`
-/// (кавычки, `$`, обратные кавычки и переводы строк остаются текстом), и
-/// выполняет её `with administrator privileges`. Сам текст постоянный.
-pub const ADMIN_APPLESCRIPT: [&str; 7] = [
-    "on run argv",
-    "set cmd to \"/bin/sh -c \" & quoted form of (item 1 of argv) & \" meet-update\"",
-    "repeat with i from 3 to (count of argv)",
-    "set cmd to cmd & \" \" & quoted form of (item i of argv)",
-    "end repeat",
-    "do shell script cmd with prompt (item 2 of argv) with administrator privileges",
-    "end run",
-];
+/// Начало команды, которую выполняет `do shell script`: пустая среда (только
+/// PATH) и `/bin/sh` по полному пути. Внешний sh видит лишь полный путь
+/// `/usr/bin/env` — ни функций, ни поиска по PATH.
+pub const ADMIN_SHELL: &str = "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -c ";
+
+/// AppleScript для `osascript`: из аргументов собирает команду
+/// `ADMIN_SHELL <скрипт> meet-update <аргументы…>`, каждый — через `quoted
+/// form of` (кавычки, `$`, обратные кавычки и переводы строк остаются
+/// текстом), и выполняет её `with administrator privileges`
+/// (`privileged=false` — без прав и без окна пароля: только для проверки
+/// кавычек в CI). Сам текст постоянный.
+pub fn admin_applescript(privileged: bool) -> [String; 7] {
+    [
+        "on run argv".to_string(),
+        format!(
+            "set cmd to \"{ADMIN_SHELL}\" & quoted form of (item 1 of argv) & \" meet-update\""
+        ),
+        "repeat with i from 3 to (count of argv)".to_string(),
+        "set cmd to cmd & \" \" & quoted form of (item i of argv)".to_string(),
+        "end repeat".to_string(),
+        if privileged {
+            "do shell script cmd with prompt (item 2 of argv) with administrator privileges"
+                .to_string()
+        } else {
+            "do shell script cmd".to_string()
+        },
+        "end run".to_string(),
+    ]
+}
 
 /// Что передаётся шагу от администратора.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,8 +350,9 @@ pub struct AdminJob {
     pub source: PathBuf,
     /// pid помощника — имя рабочей папки.
     pub helper_pid: u32,
-    /// SHA-1 сертификата (`pinned_leaf`).
+    /// SHA-1 закреплённого сертификата (`build_pin`).
     pub leaf: String,
+    /// Точная `CFBundleShortVersionString` новой версии.
     pub version: String,
     pub uid: u32,
 }
@@ -291,10 +368,16 @@ pub fn admin_prompt(version: &str) -> String {
 /// скрипт, текст окна и данные — отдельными аргументами. `None` — путь не в
 /// UTF-8 или данные не того вида (тогда шаг не строится).
 pub fn admin_command(job: &AdminJob) -> Option<Vec<String>> {
+    admin_command_for(job, true)
+}
+
+/// То же; `privileged=false` — режим `check` без прав (тест кавычек).
+pub fn admin_command_for(job: &AdminJob, privileged: bool) -> Option<Vec<String>> {
     let source = job.source.to_str()?;
     let fits = source.starts_with('/')
         && source.ends_with("/Meet.app")
         && job.helper_pid > 0
+        && job.uid > 0
         && job.leaf.len() == 40
         && job
             .leaf
@@ -309,9 +392,9 @@ pub fn admin_command(job: &AdminJob) -> Option<Vec<String>> {
         return None;
     }
     let mut args = Vec::new();
-    for line in ADMIN_APPLESCRIPT {
+    for line in admin_applescript(privileged) {
         args.push("-e".to_string());
-        args.push(line.to_string());
+        args.push(line);
     }
     args.extend([
         ADMIN_SCRIPT.to_string(),
@@ -321,8 +404,50 @@ pub fn admin_command(job: &AdminJob) -> Option<Vec<String>> {
         job.leaf.clone(),
         job.version.clone(),
         job.uid.to_string(),
+        if privileged { "run" } else { "check" }.to_string(),
     ]);
     Some(args)
+}
+
+/// Ответ режима `check`: значения (в hex, через пробел) и имена переменных
+/// среды. `None` — ответ не того вида. Только для тестов.
+#[cfg(test)]
+pub fn parse_check_reply(reply: &str) -> Option<(Vec<Vec<u8>>, Vec<String>)> {
+    let reply = reply.trim_end_matches(['\n', '\r']);
+    let mut parts: Vec<&str> = reply.split(' ').collect();
+    let env = parts.pop()?;
+    let values = parts
+        .iter()
+        .map(|hex| {
+            (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+                .collect::<Option<Vec<u8>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let names = env
+        .split(',')
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect();
+    Some((values, names))
+}
+
+/// Запись в дереве копии, которая даёт запись кому-то кроме root: владелец не
+/// root, запись для group/other или set-id/sticky (`mode` — `st_mode`).
+pub fn insecure_entry(uid: u32, mode: u32) -> bool {
+    uid != 0 || mode & 0o7022 != 0
+}
+
+/// В выводе `ls -leR` есть строки ACL (« 0: user:… allow write»).
+pub fn ls_shows_acl(output: &str) -> bool {
+    output.lines().any(|line| {
+        let line = line.trim_start();
+        let numbered = line
+            .split_once(':')
+            .is_some_and(|(head, _)| !head.is_empty() && head.bytes().all(|b| b.is_ascii_digit()));
+        numbered && (line.contains(" allow ") || line.contains(" deny "))
+    })
 }
 
 /// Чем закончилась замена пакета (и своими правами, и от администратора).
@@ -399,7 +524,9 @@ pub fn admin_outcome(success: bool, stderr: &str) -> Placed {
         Some(64) => Placed::Failed("шаг администратора: неверные данные".into()),
         Some(65) => Placed::Failed("нет папки «Программы»".into()),
         Some(66) => Placed::Failed(detail("копия новой версии не сделалась")),
-        Some(67) => Placed::Failed("подпись новой версии не совпала с сертификатом Meet".into()),
+        Some(67) => Placed::Failed(
+            "подпись новой версии не совпала с закреплённым сертификатом выпусков".into(),
+        ),
         Some(68) => Placed::Failed("версия в копии не та, что в выпуске".into()),
         Some(69) => Placed::Failed("в копии нет исполняемого файла Meet".into()),
         Some(code) => Placed::Failed(detail(&format!(
@@ -418,7 +545,8 @@ pub fn privileged_requested(args: &[String]) -> Option<(u32, u32)> {
         return None;
     }
     let pid: u32 = pid.parse().ok().filter(|pid| *pid > 0)?;
-    let uid: u32 = uid.parse().ok()?;
+    // uid 0 — никогда: новая версия запускается от имени пользователя.
+    let uid: u32 = uid.parse().ok().filter(|uid| *uid > 0)?;
     Some((pid, uid))
 }
 
@@ -431,8 +559,11 @@ pub fn privileged_from_stage(bundle: &Path, pid: u32) -> bool {
 /// Аргументы запуска новой версии от имени пользователя из процесса root:
 /// `launchctl asuser <uid> sudo -u #<uid> open <пакет>` (сеанс и права
 /// пользователя, не root).
-pub fn launch_as_user_args(uid: u32, app: &Path) -> Vec<String> {
-    vec![
+pub fn launch_as_user_args(uid: u32, app: &Path) -> Option<Vec<String>> {
+    if uid == 0 {
+        return None;
+    }
+    Some(vec![
         "asuser".into(),
         uid.to_string(),
         "/usr/bin/sudo".into(),
@@ -440,7 +571,7 @@ pub fn launch_as_user_args(uid: u32, app: &Path) -> Vec<String> {
         format!("#{uid}"),
         "/usr/bin/open".into(),
         app.to_string_lossy().into_owned(),
-    ]
+    ])
 }
 
 // --- сообщения человеку ------------------------------------------------------------
@@ -580,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    fn admin_route_only_for_applications_and_our_certificate() {
+    fn admin_route_only_for_applications_and_a_pinned_build() {
         let installed = Path::new(INSTALLED_APP);
         assert_eq!(access(installed, true, true, None), Ok(Access::Direct));
         assert_eq!(
@@ -611,33 +742,78 @@ mod tests {
             ),
             Err(WHY_NOT_WRITABLE_ELSEWHERE)
         );
-        // ad-hoc (0.3.3) и чужая подпись — без шага от администратора.
+        // Сборка без закреплённого сертификата — без шага от администратора.
         assert_eq!(
             access(installed, false, false, None),
-            Err(WHY_ADMIN_NEEDS_SIGNATURE)
+            Err(WHY_ADMIN_NEEDS_PIN)
         );
     }
 
     #[test]
-    fn only_our_exact_requirement_gives_a_pinned_certificate() {
-        let ours = format!("identifier \"com.meet.desktop\" and certificate leaf = H\"{SHA}\"");
-        assert_eq!(pinned_leaf(&ours).as_deref(), Some(SHA));
-        let upper = ours.replace(SHA, &SHA.to_ascii_uppercase());
-        assert_eq!(pinned_leaf(&upper).as_deref(), Some(SHA));
-        for other in [
-            format!("identifier \"com.other\" and certificate leaf = H\"{SHA}\""),
-            format!("identifier \"com.meet.desktop\" and certificate root = H\"{SHA}\""),
-            format!("identifier \"com.meet.desktop\" and certificate leaf = H\"{SHA}\" or true"),
-            "identifier \"com.meet.desktop\" and certificate leaf = H\"abc\"".to_string(),
-            format!(
-                "identifier \"com.meet.desktop\" and certificate leaf = H\"{}\"",
-                "z".repeat(40)
+    fn route_combines_the_folder_facts() {
+        let installed = Path::new(INSTALLED_APP);
+        let facts = |exists, dir_writable, target_writable, applications_writable| RouteFacts {
+            exists,
+            dir_writable,
+            target_writable,
+            applications_writable,
+        };
+        // Администратор: всё доступно.
+        assert_eq!(
+            route(installed, facts(true, true, true, true), None),
+            Ok(Access::Direct)
+        );
+        // Новая установка в доступные «Программы».
+        assert_eq!(
+            route(installed, facts(false, true, false, true), None),
+            Ok(Access::Direct)
+        );
+        // Обычная учётная запись.
+        assert_eq!(
+            route(installed, facts(true, false, false, false), Some(SHA)),
+            Ok(Access::Admin)
+        );
+        assert_eq!(
+            route(installed, facts(true, false, false, false), None),
+            Err(WHY_ADMIN_NEEDS_PIN)
+        );
+        // Пакет чужого пользователя в доступных «Программах».
+        assert_eq!(
+            route(installed, facts(true, true, false, true), Some(SHA)),
+            Err(WHY_BUNDLE_NOT_WRITABLE)
+        );
+        // Рабочий стол без прав.
+        assert_eq!(
+            route(
+                Path::new("/Users/max/Desktop/Meet.app"),
+                facts(true, false, false, false),
+                Some(SHA)
             ),
-            "cdhash H\"8d0c1f2a\"".to_string(),
-            String::new(),
-        ] {
-            assert_eq!(pinned_leaf(&other), None, "{other}");
+            Err(WHY_NOT_WRITABLE_ELSEWHERE)
+        );
+    }
+
+    #[test]
+    fn the_pin_comes_from_the_build_value_only() {
+        assert_eq!(pin_from(Some(SHA)).as_deref(), Some(SHA));
+        assert_eq!(
+            pin_from(Some(&SHA.to_ascii_uppercase())).as_deref(),
+            Some(SHA)
+        );
+        assert_eq!(
+            pin_from(Some(
+                "68:E9:E1:AE:56:BD:80:84:62:A1:F5:2F:CF:F5:08:3F:54:4A:BA:73"
+            ))
+            .as_deref(),
+            Some(SHA)
+        );
+        for bad in ["", "abc", &"z".repeat(40), &format!("{SHA}0"), "68e9 e1ae"] {
+            assert_eq!(pin_from(Some(bad)), None, "{bad}");
         }
+        assert_eq!(pin_from(None), None);
+        // Тесты собираются без MEET_SIGNING_SHA1 (или с ним в CI) — значение
+        // либо отсутствует, либо ровно 40 hex.
+        assert!(build_pin().is_none_or(|pin| pin.len() == 40));
     }
 
     #[test]
@@ -658,32 +834,42 @@ mod tests {
         }
     }
 
+    /// Пути с пробелами, кавычками, `$()`, обратными кавычками, `\`, переводом
+    /// строки, табуляцией и не-ASCII (кириллица, NFC и NFD).
+    const HOSTILE: [&str; 6] = [
+        "/private/var/folders/T/meet-update/m'1\"$(id)`x`;\nrm -rf ~/Meet.app",
+        "/Users/Макс Петров/Downloads/My \"Apps\" 'q'/Meet.app",
+        "/tmp/a b/$(touch /tmp/meet-pwned)/`touch /tmp/meet-pwned`/Meet.app",
+        "/tmp/back\\slash\ttab\nnewline/Meet.app",
+        "/tmp/caf\u{e9} \u{1F600}/Meet.app",
+        "/tmp/cafe\u{301}/Meet.app",
+    ];
+
     #[test]
     fn admin_command_keeps_every_value_out_of_the_script_text() {
-        // Путь с кавычками, $, обратными кавычками, ; и переводом строки.
-        let nasty = "/private/var/folders/T/meet-update/m'1\"$(id)`x`;\nrm -rf ~/Meet.app";
-        let job = admin_job(nasty);
-        let args = admin_command(&job).unwrap();
-        // Сначала только постоянный AppleScript.
-        let script_part: Vec<&String> = args.iter().take(ADMIN_APPLESCRIPT.len() * 2).collect();
-        for (i, line) in ADMIN_APPLESCRIPT.iter().enumerate() {
-            assert_eq!(script_part[i * 2], "-e");
-            assert_eq!(script_part[i * 2 + 1], line);
-        }
-        let rest = &args[ADMIN_APPLESCRIPT.len() * 2..];
-        assert_eq!(rest[0], ADMIN_SCRIPT);
-        assert_eq!(rest[1], admin_prompt("0.3.7"));
-        // Данные — отдельными аргументами, байт в байт.
-        assert_eq!(rest[2], nasty);
-        assert_eq!(&rest[3..], ["4242", SHA, "0.3.7", "501"]);
-        // Ни AppleScript, ни скрипт не содержат данных задания.
-        for constant in ADMIN_APPLESCRIPT.iter().copied().chain([ADMIN_SCRIPT]) {
-            assert!(!constant.contains("4242") && !constant.contains(SHA));
-            assert!(!constant.contains("meet-update/m"));
+        let lines = admin_applescript(true);
+        for nasty in HOSTILE {
+            let args = admin_command(&admin_job(nasty)).unwrap();
+            // Сначала только постоянный AppleScript.
+            for (i, line) in lines.iter().enumerate() {
+                assert_eq!(args[i * 2], "-e");
+                assert_eq!(&args[i * 2 + 1], line);
+            }
+            let rest = &args[lines.len() * 2..];
+            assert_eq!(rest[0], ADMIN_SCRIPT);
+            assert_eq!(rest[1], admin_prompt("0.3.7"));
+            // Данные — отдельными аргументами, байт в байт.
+            assert_eq!(rest[2], nasty);
+            assert_eq!(&rest[3..], ["4242", SHA, "0.3.7", "501", "run"]);
+            // Ни AppleScript, ни скрипт не содержат данных задания.
+            for constant in lines.iter().map(String::as_str).chain([ADMIN_SCRIPT]) {
+                assert!(!constant.contains("4242") && !constant.contains(SHA));
+                assert!(!constant.contains(nasty));
+            }
         }
         // Каждый аргумент — через quoted form of; скрипт — без eval.
         assert_eq!(
-            ADMIN_APPLESCRIPT
+            lines
                 .iter()
                 .filter(|line| line.contains("quoted form of"))
                 .count(),
@@ -691,6 +877,67 @@ mod tests {
         );
         assert!(!ADMIN_SCRIPT.contains("eval"));
         assert!(ADMIN_SCRIPT.contains("WORK=\"/Applications/.Meet.app.work-$PID\""));
+        // Без прав — только проверка, и никакого окна пароля.
+        let check = admin_command_for(&admin_job(HOSTILE[0]), false).unwrap();
+        assert_eq!(check.last().unwrap(), "check");
+        assert!(!check
+            .iter()
+            .any(|arg| arg.contains("administrator privileges")));
+    }
+
+    #[test]
+    fn privileged_command_runs_with_an_empty_environment_and_absolute_paths() {
+        // Внешняя команда do shell script: env -i, только PATH, sh по пути.
+        let lines = admin_applescript(true);
+        assert!(lines[1].starts_with(&format!("set cmd to \"{ADMIN_SHELL}\"")));
+        assert_eq!(
+            ADMIN_SHELL,
+            "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/sh -c "
+        );
+        assert!(lines[5].ends_with("with administrator privileges"));
+        // Внутри скрипта — ни одной внешней программы по короткому имени.
+        let tools = [
+            "rm",
+            "mkdir",
+            "ditto",
+            "chown",
+            "chmod",
+            "chflags",
+            "codesign",
+            "xattr",
+            "PlistBuddy",
+            "stat",
+            "od",
+            "tr",
+            "env",
+            "sed",
+            "sh",
+            "launchctl",
+            "sudo",
+            "open",
+        ];
+        for line in ADMIN_SCRIPT.lines().filter(|line| !line.starts_with('#')) {
+            for word in line.split(|c: char| c.is_whitespace() || "();|&`$\"'".contains(c)) {
+                assert!(
+                    !tools.contains(&word),
+                    "короткое имя «{word}» в строке: {line}"
+                );
+            }
+        }
+        for absolute in [
+            "/bin/rm -rf \"$WORK\"",
+            "/bin/mkdir -m 700",
+            "/usr/bin/ditto --noacl",
+            "/usr/sbin/chown -R 0:0",
+            "/bin/chmod -RN",
+            "/bin/chmod -R a-st,go-w",
+            "/usr/bin/chflags -R 0",
+            "/usr/bin/codesign --verify --deep --strict",
+            "/usr/libexec/PlistBuddy",
+            "/usr/bin/xattr -dr com.apple.quarantine",
+        ] {
+            assert!(ADMIN_SCRIPT.contains(absolute), "{absolute}");
+        }
     }
 
     #[test]
@@ -706,27 +953,39 @@ mod tests {
         let mut job = admin_job("/tmp/m/Meet.app");
         job.helper_pid = 0;
         assert!(admin_command(&job).is_none());
+        let mut job = admin_job("/tmp/m/Meet.app");
+        job.uid = 0;
+        assert!(admin_command(&job).is_none());
         assert!(admin_command(&admin_job("/tmp/m/Meet.app")).is_some());
     }
 
     #[test]
     fn admin_script_checks_before_it_runs_anything() {
-        // Проверка подписи — до снятия карантина и до запуска копии; запуск —
+        // ACL и set-id снимаются до проверки подписи; карантин — после; запуск —
         // проверенной копии из закрытой папки, с постоянным флагом.
         let at = |needle: &str| {
             ADMIN_SCRIPT
                 .find(needle)
                 .unwrap_or_else(|| panic!("{needle}"))
         };
-        assert!(at("mkdir -m 700") < at("ditto"));
-        assert!(at("ditto") < at("chown -R 0:0"));
-        assert!(at("chown -R 0:0") < at("codesign --verify --deep --strict"));
-        assert!(at("codesign --verify") < at("xattr -dr com.apple.quarantine"));
+        assert!(at("case \"$MODE\"") < at("if [ \"$MODE\" = check ]"));
+        assert!(at("exit 0\nfi") < at("[ -d \"$SRC\" ] && [ ! -L \"$SRC\" ]"));
+        assert!(at("[ ! -L \"$SRC\" ]") < at("/usr/bin/ditto"));
+        assert!(at("/usr/bin/stat -f %u /Applications") < at("/bin/mkdir -m 700"));
+        assert!(at("for OLD in /Applications/.Meet.app.work-*") < at("/bin/mkdir -m 700"));
+        assert!(at("/bin/mkdir -m 700") < at("/usr/bin/ditto --noacl"));
+        assert!(at("/usr/bin/ditto --noacl") < at("/usr/sbin/chown -R 0:0"));
+        assert!(at("/usr/sbin/chown -R 0:0") < at("/bin/chmod -RN"));
+        assert!(at("/bin/chmod -RN") < at("/bin/chmod -R a-st,go-w"));
+        assert!(at("/bin/chmod -R a-st,go-w") < at("/usr/bin/chflags -R 0"));
+        assert!(at("/usr/bin/chflags -R 0") < at("/usr/bin/codesign --verify"));
+        assert!(at("/usr/bin/codesign --verify") < at("/usr/bin/xattr -dr com.apple.quarantine"));
         assert!(at("CFBundleShortVersionString") < at("exec "));
-        assert!(at("xattr -dr") < at("exec "));
+        assert!(at("/usr/bin/xattr -dr") < at("exec "));
         assert!(ADMIN_SCRIPT.contains(&format!("{PRIVILEGED_ARG} \"$PID\" \"$USER_ID\"")));
+        assert!(ADMIN_SCRIPT.contains("[ \"$USER_ID\" -ne 0 ] || exit 64"));
         // Проверки параметров — раньше любого действия.
-        assert!(at("exit 64") < at("rm -rf"));
+        assert!(at("exit 64") < at("/bin/rm -rf"));
         assert!(ADMIN_SCRIPT.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"));
         assert_eq!(
             admin_work(7),
@@ -739,7 +998,7 @@ mod tests {
     }
 
     /// Проверки параметров скрипта — настоящим sh (на macOS в CI): неверное
-    /// значение — код 64 до любого действия.
+    /// значение — код 64 до любого действия; `check` — только вывод.
     #[cfg(unix)]
     #[test]
     fn admin_script_rejects_bad_parameters_with_64() {
@@ -749,25 +1008,119 @@ mod tests {
                 .arg(ADMIN_SCRIPT)
                 .arg("meet-update")
                 .args(args)
-                .status()
+                .output()
                 .unwrap()
-                .code()
         };
-        let good = ["/tmp/x/Meet.app", "42", SHA, "0.3.7", "501"];
-        let bad: [(usize, &str); 7] = [
+        let good = ["/tmp/x/Meet.app", "42", SHA, "0.3.7", "501", "check"];
+        let bad: [(usize, &str); 11] = [
             (0, "Meet.app"),
             (0, "/tmp/x/Other.app"),
             (1, "4;2"),
+            (1, "4\n2"),
+            (1, ""),
             (2, "ABC"),
             (3, "0.3.7;id"),
+            (3, "$(id)"),
             (4, "five"),
-            (1, ""),
+            (4, "0"),
+            (5, "go"),
         ];
         for (index, value) in bad {
             let mut args = good;
             args[index] = value;
-            assert_eq!(run(&args), Some(64), "{index}={value}");
+            assert_eq!(run(&args).status.code(), Some(64), "{index}={value}");
         }
+        let checked = run(&good);
+        assert_eq!(checked.status.code(), Some(0));
+        let (values, _) = parse_check_reply(&String::from_utf8_lossy(&checked.stdout)).unwrap();
+        assert_eq!(values[0], b"/tmp/x/Meet.app");
+    }
+
+    /// Кавычки насквозь — настоящим osascript без прав (macOS CI, шаг
+    /// «Privileged update script: dry run»): тот же AppleScript и тот же
+    /// скрипт в режиме `check`; значения возвращаются байт в байт, ничего не
+    /// выполняется, среда пустая (кроме PATH), /Applications не трогается.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn admin_script_round_trips_hostile_arguments_through_osascript() {
+        let marker = std::path::Path::new("/tmp/meet-pwned");
+        let _ = std::fs::remove_file(marker);
+        for nasty in HOSTILE {
+            let args = admin_command_for(&admin_job(nasty), false).unwrap();
+            let out = std::process::Command::new("/usr/bin/osascript")
+                .args(&args)
+                // Функция bash и посторонняя переменная в среде помощника не
+                // должны дойти до скрипта.
+                .env("BASH_FUNC_od%%", "() { echo hijacked; }")
+                .env("MEET_LEAK", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{nasty:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let (values, env) = parse_check_reply(&String::from_utf8_lossy(&out.stdout)).unwrap();
+            let got = String::from_utf8(values[0].clone()).unwrap();
+            // AppleScript может привести NFD к NFC — допускаем только это.
+            let nfc = nasty.replace("e\u{301}", "\u{e9}");
+            assert!(got == nasty || got == nfc, "{nasty:?} → {got:?}");
+            assert_eq!(values[1], b"4242");
+            assert_eq!(values[2], SHA.as_bytes());
+            assert_eq!(values[3], b"0.3.7");
+            assert_eq!(values[4], b"501");
+            for name in &env {
+                assert!(
+                    ["PATH", "PWD", "SHLVL", "_", "OLDPWD"].contains(&name.as_str()),
+                    "лишняя переменная среды: {name}"
+                );
+            }
+            assert!(env.iter().any(|name| name == "PATH"));
+        }
+        assert!(!marker.exists(), "что-то выполнилось");
+        // Значение не того вида не проходит дальше проверки (64).
+        let mut evil = admin_command_for(&admin_job("/tmp/x/Meet.app"), false).unwrap();
+        let n = evil.len();
+        evil[n - 3] = "0.3.7$(touch /tmp/meet-pwned)".into();
+        let out = std::process::Command::new("/usr/bin/osascript")
+            .args(&evil)
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert_eq!(
+            osascript_error_number(&String::from_utf8_lossy(&out.stderr)),
+            Some(64)
+        );
+        assert!(!marker.exists(), "что-то выполнилось");
+    }
+
+    #[test]
+    fn check_reply_is_parsed() {
+        let reply = "2f746d70 3432 PATH,PWD,SHLVL,_,\n";
+        let (values, env) = parse_check_reply(reply).unwrap();
+        assert_eq!(values, [b"/tmp".to_vec(), b"42".to_vec()]);
+        assert_eq!(env, ["PATH", "PWD", "SHLVL", "_"]);
+        assert_eq!(parse_check_reply("zz PATH,"), None);
+    }
+
+    #[test]
+    fn stage_permissions_are_judged() {
+        assert!(!insecure_entry(0, 0o40755));
+        assert!(!insecure_entry(0, 0o100755));
+        assert!(!insecure_entry(0, 0o120755));
+        assert!(insecure_entry(501, 0o100755));
+        assert!(insecure_entry(0, 0o100775));
+        assert!(insecure_entry(0, 0o100757));
+        assert!(insecure_entry(0, 0o104755));
+        assert!(insecure_entry(0, 0o102755));
+        assert!(insecure_entry(0, 0o41755));
+        let clean = "/Applications/Meet.app:\ntotal 0\ndrwxr-xr-x  3 root  wheel  96 Contents\n";
+        assert!(!ls_shows_acl(clean));
+        let acl =
+            "drwxr-xr-x+ 3 root  wheel  96 Contents\n 0: user:max allow add_file,delete_child\n";
+        assert!(ls_shows_acl(acl));
+        assert!(ls_shows_acl(" 12: group:staff deny delete\n"));
+        assert!(!ls_shows_acl("10:30 allow"));
     }
 
     #[test]
@@ -793,7 +1146,9 @@ mod tests {
         assert!(matches!(admin_outcome(false, "x (12)"), Placed::Broken(_)));
         assert_eq!(
             admin_outcome(false, "0:1: execution error: (67)"),
-            Placed::Failed("подпись новой версии не совпала с сертификатом Meet".into())
+            Placed::Failed(
+                "подпись новой версии не совпала с закреплённым сертификатом выпусков".into()
+            )
         );
         assert!(matches!(admin_outcome(false, "boom"), Placed::Failed(t) if t.contains("boom")));
         assert_eq!(osascript_error_number("no number"), None);
@@ -828,6 +1183,11 @@ mod tests {
             privileged_requested(&args(&["meet", PRIVILEGED_ARG, "42"])),
             None
         );
+        // uid 0 — никогда.
+        assert_eq!(
+            privileged_requested(&args(&["meet", PRIVILEGED_ARG, "42", "0"])),
+            None
+        );
         assert_eq!(
             privileged_requested(&args(&["meet", "--apply-update", "42", "501"])),
             None
@@ -856,8 +1216,9 @@ mod tests {
 
     #[test]
     fn new_version_is_started_as_the_user_not_as_root() {
+        assert_eq!(launch_as_user_args(0, Path::new(INSTALLED_APP)), None);
         assert_eq!(
-            launch_as_user_args(501, Path::new(INSTALLED_APP)),
+            launch_as_user_args(501, Path::new(INSTALLED_APP)).unwrap(),
             [
                 "asuser",
                 "501",

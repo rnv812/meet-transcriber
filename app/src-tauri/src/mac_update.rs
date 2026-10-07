@@ -29,8 +29,11 @@
 //    встаёт в /Applications/Meet.app (а при запуске Meet предлагает
 //    «Переместить Meet в Программы»);
 //  - «Программы» недоступны на запись (обычная учётная запись) — замену
-//    делает один шаг от администратора: пароль спрашивает macOS, копия
-//    проверяется уже в закрытой папке, обмен и откат — те же;
+//    делает один шаг от администратора: пароль спрашивает macOS, среда
+//    пустая, копия (без ACL и set-id, root:wheel) проверяется в закрытой
+//    папке сертификатом выпусков, SHA-1 которого вшит при сборке
+//    (`MEET_SIGNING_SHA1`; без него шага от администратора нет), обмен и
+//    откат — те же, новая версия запускается от имени пользователя;
 //  - карантин снимается с копии только после проверки подписи;
 //  - каждый шаг и решение — в logs/update.log, итог — в logs/update-last.json
 //    («О программе» показывает причину сбоя).
@@ -51,7 +54,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::mac_install::{Access, Placed};
+use crate::mac_install::{Access, Location, Placed};
 use crate::updater::{is_newer, same_version};
 
 /// Имя приложения внутри образа выпуска (`productName` в tauri.macos.conf.json).
@@ -138,22 +141,122 @@ pub const NEWER_IN_APPLICATIONS: &str =
     "Обновление не установлено: в «Программах» уже стоит Meet новее — запустите его оттуда";
 
 /// Что уже лежит на месте, куда встанет новая версия (`target` не работающий
-/// пакет: копия из временной папки или «Переместить в Программы»): чужое
-/// приложение — ручная установка, Meet новее ставимого — отказ (не понижаем
-/// версию). `None` — можно ставить.
+/// пакет: копия из временной папки или «Переместить в Программы»; зовётся,
+/// только если там что-то есть): не Meet (или идентификатор не прочитался) —
+/// ручная установка, Meet новее ставимого — отказ (не понижаем версию).
+/// `None` — можно ставить.
 pub fn existing_target_problem(
     identifier: Option<&str>,
     version: Option<&str>,
     installing: &str,
     our_identifier: &str,
 ) -> Option<Plan> {
-    if identifier.is_some_and(|id| id != our_identifier) {
+    if identifier != Some(our_identifier) {
         return Some(Plan::Manual(WHY_OTHER_APP_IN_APPLICATIONS));
     }
     if version.is_some_and(|version| is_newer(version, installing)) {
         return Some(Plan::Refuse(NEWER_IN_APPLICATIONS));
     }
     None
+}
+
+/// Что делать по «Переместить Meet в Программы».
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoveStep {
+    /// Копировать и ставить.
+    Proceed,
+    /// В «Программах» уже Meet той же версии или новее — просто открыть его.
+    OpenExisting,
+    /// Не перемещать: причина.
+    Stop(&'static str),
+}
+
+pub const ALREADY_IN_APPLICATIONS: &str = "Meet уже в «Программах»";
+
+/// Решение о перемещении по месту запуска и тому, что лежит в
+/// /Applications/Meet.app (`identifier`/`version` — его, если он есть).
+pub fn move_step(
+    location: Location,
+    target_exists: bool,
+    identifier: Option<&str>,
+    version: Option<&str>,
+    current: &str,
+    our_identifier: &str,
+) -> MoveStep {
+    if !crate::mac_install::offers_move(location) {
+        return MoveStep::Stop(ALREADY_IN_APPLICATIONS);
+    }
+    if !target_exists {
+        return MoveStep::Proceed;
+    }
+    if identifier != Some(our_identifier) {
+        return MoveStep::Stop(WHY_OTHER_APP_IN_APPLICATIONS);
+    }
+    if version.is_some_and(|version| same_version(version, current) || is_newer(version, current)) {
+        return MoveStep::OpenExisting;
+    }
+    MoveStep::Proceed
+}
+
+/// Что лежит в /Applications/Meet.app перед шагом от администратора.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetFacts {
+    pub exists: bool,
+    pub identifier: Option<String>,
+    pub version: Option<String>,
+}
+
+pub const WHY_STAGE_VERSION_UNKNOWN: &str = "версия проверенной копии не прочиталась";
+pub const WHY_NEWER_INSTALLED: &str = "в «Программах» уже стоит Meet новее";
+
+/// Своя проверка шага от администратора (не полагается на решение,
+/// принятое до окна пароля): копия цела по правам (`stage_secure`), на месте
+/// замены — Meet (не чужое и не без идентификатора) и не новее копии.
+pub fn privileged_guard(
+    stage_secure: Result<(), String>,
+    stage_version: Option<&str>,
+    target: &TargetFacts,
+    our_identifier: &str,
+) -> Result<(), String> {
+    stage_secure?;
+    let Some(stage_version) = stage_version else {
+        return Err(WHY_STAGE_VERSION_UNKNOWN.into());
+    };
+    if target.exists {
+        if target.identifier.as_deref() != Some(our_identifier) {
+            return Err(WHY_OTHER_APP_IN_APPLICATIONS.into());
+        }
+        if target
+            .version
+            .as_deref()
+            .is_some_and(|version| is_newer(version, stage_version))
+        {
+            return Err(WHY_NEWER_INSTALLED.into());
+        }
+    }
+    Ok(())
+}
+
+/// Ход режима `--privileged-swap` (root): своя проверка, затем тот же обмен,
+/// запуск и откат, что у помощника. Рабочая папка (в ней прежняя или
+/// неудавшаяся версия) убирается, кроме случая, когда прежняя не вернулась.
+pub fn privileged_swap(ops: &impl Ops, pid: u32, guard: Result<(), String>) -> Placed {
+    let placed = match guard {
+        Err(why) => {
+            ops.log(&format!("шаг администратора отказал: {why}"));
+            Placed::Failed(why)
+        }
+        Ok(()) => place_and_launch(
+            ops,
+            &crate::mac_install::admin_stage(pid),
+            Path::new(crate::mac_install::INSTALLED_APP),
+            &crate::mac_install::admin_spare(pid),
+        ),
+    };
+    if !matches!(placed, Placed::Broken(_)) {
+        ops.remove(&crate::mac_install::admin_work(pid));
+    }
+    placed
 }
 
 /// `CFBundleIdentifier` из Info.plist.
@@ -942,13 +1045,17 @@ mod run {
         fn launch(&self, app: &Path) -> bool {
             let started_ok = match self.root {
                 None => open(app),
-                Some(uid) => Command::new("/bin/launchctl")
-                    .args(mac_install::launch_as_user_args(uid, app))
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .is_ok_and(|status| status.success()),
+                Some(uid) => match mac_install::launch_as_user_args(uid, app) {
+                    // uid 0 — не запускаем вовсе.
+                    None => false,
+                    Some(args) => Command::new("/bin/launchctl")
+                        .args(args)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .is_ok_and(|status| status.success()),
+                },
             };
             if !started_ok {
                 self.log("open не запустил новую версию");
@@ -980,12 +1087,9 @@ mod run {
         }
 
         fn elevate(&self, job: &Apply, me: u32) -> Placed {
-            let Some(leaf) = job
-                .requirement
-                .as_deref()
-                .and_then(mac_install::pinned_leaf)
-            else {
-                return Placed::Failed(mac_install::WHY_ADMIN_NEEDS_SIGNATURE.into());
+            // Сертификат — вшитый при сборке, не из работающего пакета.
+            let Some(leaf) = mac_install::build_pin() else {
+                return Placed::Failed(mac_install::WHY_ADMIN_NEEDS_PIN.into());
             };
             // SAFETY: getuid без аргументов, ошибок не бывает.
             let uid = unsafe { libc::getuid() };
@@ -1053,6 +1157,11 @@ mod run {
 
     /// Режим `--apply-update`: код выхода 0 — обновлено.
     pub fn run_helper(job: &Apply) -> i32 {
+        // SAFETY: geteuid без аргументов, ошибок не бывает.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("--apply-update: от root не запускается");
+            return 64;
+        }
         update_log!(
             "помощник: жду выхода {} и ставлю {} ({:?}, {:?}) в {}",
             job.pid,
@@ -1066,15 +1175,50 @@ mod run {
         i32::from(finish != Finish::Updated)
     }
 
+    /// Права проверенной копии: всё дерево — root, без записи для group/other,
+    /// без set-id/sticky и без ACL (их сняли `chmod -RN`/`chmod -R a-st,go-w`
+    /// в ADMIN_SCRIPT; здесь — проверка, что так и есть).
+    fn stage_secure(stage: &Path) -> Result<(), String> {
+        fn walk(path: &Path) -> Result<(), String> {
+            let meta = std::fs::symlink_metadata(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            if mac_install::insecure_entry(meta.uid(), meta.mode()) {
+                return Err(format!(
+                    "права копии небезопасны: {} (uid {}, режим {:o})",
+                    path.display(),
+                    meta.uid(),
+                    meta.mode()
+                ));
+            }
+            if meta.is_dir() {
+                let entries = std::fs::read_dir(path)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                for entry in entries {
+                    let entry = entry.map_err(|error| error.to_string())?;
+                    walk(&entry.path())?;
+                }
+            }
+            Ok(())
+        }
+        walk(stage)?;
+        match output(Command::new("/bin/ls").arg("-leR").arg(stage)) {
+            Some((true, text)) if !mac_install::ls_shows_acl(&text) => Ok(()),
+            Some((true, _)) => Err("у копии остались ACL".into()),
+            _ => Err("ls -leR не ответил".into()),
+        }
+    }
+
     /// Режим `--privileged-swap <pid> <uid>`: проверенная копия новой версии,
-    /// запущенная ADMIN_SCRIPT от root из `/Applications/.Meet.app.work-<pid>`.
-    /// Меняет её местами с /Applications/Meet.app, запускает от имени `uid`,
-    /// не запустилась — возвращает прежнюю. Владелец новой версии — прежний.
-    /// Строки журнала — в вывод (их пишет в update.log помощник).
+    /// запущенная ADMIN_SCRIPT от root (среда пустая) из
+    /// `/Applications/.Meet.app.work-<pid>`. Своя проверка (права копии, на
+    /// месте — Meet и не новее), затем обмен с /Applications/Meet.app, запуск
+    /// от имени `uid` (не 0), не запустилась — прежняя возвращается. Новая
+    /// версия остаётся root:wheel без записи для других. Строки журнала — в
+    /// вывод (их пишет в update.log помощник).
     pub fn run_privileged(pid: u32, uid: u32) -> i32 {
         // SAFETY: geteuid без аргументов, ошибок не бывает.
-        if unsafe { libc::geteuid() } != 0 {
-            eprintln!("--privileged-swap: не root");
+        if unsafe { libc::geteuid() } != 0 || uid == 0 {
+            eprintln!("--privileged-swap: не root или uid 0");
             return 64;
         }
         let here = std::env::current_exe()
@@ -1087,28 +1231,18 @@ mod run {
         let ops = MacOps::root(uid);
         let target = PathBuf::from(mac_install::INSTALLED_APP);
         let stage = mac_install::admin_stage(pid);
-        let spare = mac_install::admin_spare(pid);
-        // Владелец прежней версии (её нет — root:admin, как у установленного
-        // администратором).
-        let owner = std::fs::symlink_metadata(&target)
-            .map(|meta| (meta.uid(), meta.gid()))
-            .unwrap_or((0, 80));
-        let placed = place_and_launch(&ops, &stage, &target, &spare);
-        if placed == Placed::Updated {
-            let chown = Command::new("/usr/sbin/chown")
-                .arg("-R")
-                .arg(format!("{}:{}", owner.0, owner.1))
-                .arg(&target)
-                .status();
-            if !chown.is_ok_and(|status| status.success()) {
-                ops.log("владелец новой версии не поменялся");
-            }
-        }
-        // Прежняя версия (или неудавшаяся новая) — в рабочей папке; её
-        // убираем, кроме случая, когда прежняя не вернулась на место.
-        if !matches!(placed, Placed::Broken(_)) {
-            ops.remove(&mac_install::admin_work(pid));
-        }
+        let facts = TargetFacts {
+            exists: std::fs::symlink_metadata(&target).is_ok(),
+            identifier: identifier_of(&target),
+            version: version_of(&target),
+        };
+        let guard = privileged_guard(
+            stage_secure(&stage),
+            version_of(&stage).as_deref(),
+            &facts,
+            mac_install::BUNDLE_ID,
+        );
+        let placed = privileged_swap(&ops, pid, guard);
         let code = mac_install::exit_code(&placed);
         let mut lines = ops.lines.borrow().clone();
         if let Placed::Failed(why) | Placed::Broken(why) = &placed {
@@ -1216,27 +1350,27 @@ mod run {
     }
 
     /// Как менять `target`: своими правами, от администратора или никак.
-    fn route(target: &Path, requirement: Option<&str>) -> (Result<Access, &'static str>, String) {
+    fn route(target: &Path) -> (Result<Access, &'static str>, String) {
         let exists = std::fs::symlink_metadata(target).is_ok();
         let dir = target.parent().unwrap_or(Path::new("/"));
         let dir_writable = writable(dir);
-        let target_writable = exists && path_writable(target);
-        let direct = mac_install::direct_possible(dir_writable, exists, target_writable);
-        let applications_writable = if dir == Path::new(mac_install::APPLICATIONS) {
-            dir_writable
-        } else {
-            writable(Path::new(mac_install::APPLICATIONS))
+        let facts = mac_install::RouteFacts {
+            exists,
+            dir_writable,
+            target_writable: exists && path_writable(target),
+            applications_writable: if dir == Path::new(mac_install::APPLICATIONS) {
+                dir_writable
+            } else {
+                writable(Path::new(mac_install::APPLICATIONS))
+            },
         };
-        let pinned = requirement.and_then(mac_install::pinned_leaf);
-        let facts = format!(
-            "место {} (есть: {exists}; папка на запись: {dir_writable}; пакет на запись: {target_writable}; «Программы» на запись: {applications_writable}; сертификат Meet: {})",
+        let pin = mac_install::build_pin();
+        let text = format!(
+            "место {} ({facts:?}; закреплённый сертификат в сборке: {})",
             target.display(),
-            pinned.is_some()
+            pin.is_some()
         );
-        (
-            mac_install::access(target, direct, applications_writable, pinned.as_deref()),
-            facts,
-        )
+        (mac_install::route(target, facts, pin.as_deref()), text)
     }
 
     /// Поставить скачанный и сверенный образ `image` выпуска `release`.
@@ -1275,9 +1409,10 @@ mod run {
         let (verdict, detail) = signature(&new_app, requirement.as_deref(), &identifier);
         let found = version_of(&new_app);
         let version_fits = version_ok(found.as_deref(), release, &current);
-        let (route, facts) = route(&target, requirement.as_deref());
+        let (route, facts) = route(&target);
         let mut plan = decide(&running, verdict, version_fits, route);
-        if target != bundle && matches!(plan, Plan::InPlace(_)) {
+        let target_exists = std::fs::symlink_metadata(&target).is_ok();
+        if target != bundle && target_exists && matches!(plan, Plan::InPlace(_)) {
             if let Some(problem) = existing_target_problem(
                 identifier_of(&target).as_deref(),
                 version_of(&target).as_deref(),
@@ -1310,7 +1445,9 @@ mod run {
                     source: new_app,
                     mount: Some(mount.clone()),
                     image: Some(image.to_path_buf()),
-                    version: release.to_string(),
+                    // Точная строка из образа (сверена с выпуском по
+                    // semver): её же дословно сравнивает шаг администратора.
+                    version: found.clone().unwrap_or_else(|| release.to_string()),
                     identifier,
                     requirement,
                 };
@@ -1344,12 +1481,11 @@ mod run {
     /// (из App Translocation её иначе не взять), проверка подписи, затем тот
     /// же помощник, что у обновления (своими правами или с паролем
     /// администратора), и перезапуск из /Applications/Meet.app.
-    pub fn move_to_applications(app: &AppHandle) -> Result<(), String> {
+    pub fn move_to_applications(app: &AppHandle, confirmed: bool) -> Result<(), String> {
         let (bundle, location) = location().ok_or("Meet запущен не из пакета .app")?;
-        if !mac_install::offers_move(location) {
-            return Err("Meet уже в «Программах»".into());
-        }
-        if let Some(refusal) = crate::updater::refusal_now(true) {
+        // Как у обновления: запись — отказ, расшифровка — вопрос
+        // (WORK_IN_PROGRESS), пока человек не подтвердил.
+        if let Some(refusal) = crate::updater::refusal_now(confirmed) {
             return Err(refusal.to_string());
         }
         let target = PathBuf::from(mac_install::INSTALLED_APP);
@@ -1359,29 +1495,29 @@ mod run {
             "перемещение в «Программы»: Meet {current} запущен из {} ({location:?})",
             bundle.display()
         );
-        if std::fs::symlink_metadata(&target).is_ok() {
-            let existing = version_of(&target);
-            match existing_target_problem(
-                identifier_of(&target).as_deref(),
-                existing.as_deref(),
-                &current,
-                &identifier,
-            ) {
-                Some(Plan::Refuse(_)) => {
-                    // Там уже Meet новее — его и запускаем.
-                    update_log!(
-                        "в «Программах» Meet {existing:?} новее — запускаю его вместо перемещения"
-                    );
-                    if !open(&target) {
-                        return Err("Не удалось запустить Meet из «Программ»".into());
-                    }
-                    tray::quit(app);
-                    return Ok(());
+        let existing_version = version_of(&target);
+        match move_step(
+            location,
+            std::fs::symlink_metadata(&target).is_ok(),
+            identifier_of(&target).as_deref(),
+            existing_version.as_deref(),
+            &current,
+            &identifier,
+        ) {
+            MoveStep::Proceed => {}
+            MoveStep::Stop(why) => {
+                update_log!("перемещение: {why}");
+                return Err(format!("Не удалось переместить Meet: {why}"));
+            }
+            MoveStep::OpenExisting => {
+                update_log!(
+                    "в «Программах» уже Meet {existing_version:?} — запускаю его вместо перемещения"
+                );
+                if !open(&target) {
+                    return Err("Не удалось запустить Meet из «Программ»".into());
                 }
-                Some(Plan::Manual(why)) => {
-                    return Err(format!("Не удалось переместить Meet: {why}"))
-                }
-                _ => {}
+                tray::quit(app);
+                return Ok(());
             }
         }
         let running = requirement_of(&bundle);
@@ -1412,7 +1548,7 @@ mod run {
         if verdict != Verdict::Valid {
             return fail(format!("подпись копии не прошла проверку: {detail}"));
         }
-        let (route, facts) = route(&target, requirement.as_deref());
+        let (route, facts) = route(&target);
         update_log!("перемещение: {facts}; {route:?}");
         let access = match route {
             Ok(access) => access,
@@ -1473,32 +1609,71 @@ mod run {
         // выполняется на месте (см. комментарий о single-instance в main.rs).
         std::thread::spawn(move || {
             let handle = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                let dialog = rfd::AsyncMessageDialog::new()
-                    .set_level(rfd::MessageLevel::Info)
-                    .set_title(MOVE_TITLE)
-                    .set_description(question)
-                    .set_buttons(rfd::MessageButtons::OkCancelCustom(
-                        MOVE_CONFIRM.to_string(),
-                        MOVE_LATER.to_string(),
-                    ))
-                    .show();
-                std::thread::spawn(move || {
-                    let answer = tauri::async_runtime::block_on(dialog);
-                    let confirmed = matches!(
-                        &answer,
-                        rfd::MessageDialogResult::Custom(label) if label == MOVE_CONFIRM
-                    );
-                    if !confirmed {
+            ask(
+                &app,
+                MOVE_TITLE,
+                question,
+                MOVE_CONFIRM,
+                MOVE_LATER,
+                move |yes| {
+                    if !yes {
                         update_log!("перемещение: «Не сейчас»");
                         let _ = std::fs::create_dir_all(resident::data_dir());
                         let _ = std::fs::write(&marker, b"");
                         return;
                     }
-                    if let Err(error) = move_to_applications(&handle) {
-                        show_error(&handle, "Meet не перемещён", error);
+                    match move_to_applications(&handle, false) {
+                        Ok(()) => {}
+                        // Идёт расшифровка — тот же вопрос, что у обновления.
+                        Err(error) if error == crate::updater::WORK_IN_PROGRESS => {
+                            let again = handle.clone();
+                            ask(
+                                &handle,
+                                MOVE_TITLE,
+                                error,
+                                MOVE_NOW,
+                                MOVE_LATER,
+                                move |yes| {
+                                    if yes {
+                                        if let Err(error) = move_to_applications(&again, true) {
+                                            show_error(&again, "Meet не перемещён", error);
+                                        }
+                                    }
+                                },
+                            );
+                        }
+                        Err(error) => show_error(&handle, "Meet не перемещён", error),
                     }
-                });
+                },
+            );
+        });
+    }
+
+    pub const MOVE_NOW: &str = "Переместить сейчас";
+
+    /// Вопрос с двумя кнопками (из любого потока): окно — в главном потоке,
+    /// ответ (`true` — первая кнопка) — в отдельном.
+    fn ask(
+        app: &AppHandle,
+        title: &'static str,
+        text: String,
+        yes: &'static str,
+        no: &'static str,
+        then: impl FnOnce(bool) + Send + 'static,
+    ) {
+        let _ = app.run_on_main_thread(move || {
+            let dialog = rfd::AsyncMessageDialog::new()
+                .set_level(rfd::MessageLevel::Info)
+                .set_title(title)
+                .set_description(text)
+                .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                    yes.to_string(),
+                    no.to_string(),
+                ))
+                .show();
+            std::thread::spawn(move || {
+                let answer = tauri::async_runtime::block_on(dialog);
+                then(matches!(&answer, rfd::MessageDialogResult::Custom(label) if label == yes));
             });
         });
     }
@@ -1794,9 +1969,9 @@ mod tests {
                 &Requirement::AdHoc,
                 Valid,
                 true,
-                Err(mac_install::WHY_ADMIN_NEEDS_SIGNATURE)
+                Err(mac_install::WHY_ADMIN_NEEDS_PIN)
             ),
-            Plan::Manual(mac_install::WHY_ADMIN_NEEDS_SIGNATURE)
+            Plan::Manual(mac_install::WHY_ADMIN_NEEDS_PIN)
         );
         assert_eq!(
             decide(&Requirement::Unsigned, Valid, true, direct),
@@ -1826,7 +2001,12 @@ mod tests {
             existing_target_problem(ours, Some("0.3.7"), "0.3.7", id),
             None
         );
-        assert_eq!(existing_target_problem(None, None, "0.3.7", id), None);
+        // Идентификатор не прочитался (пустая папка «Meet.app», битый
+        // Info.plist) — чужое: не заменяем и тем более не удаляем.
+        assert_eq!(
+            existing_target_problem(None, None, "0.3.7", id),
+            Some(Plan::Manual(WHY_OTHER_APP_IN_APPLICATIONS))
+        );
         // Там Meet новее — не понижаем.
         assert_eq!(
             existing_target_problem(ours, Some("0.3.8"), "0.3.7", id),
@@ -2353,5 +2533,160 @@ mod tests {
         // Образа нет — открывать нечего, причина всё равно названа.
         assert!(!fake.has("show"));
         assert!(fake.has("tell gave-up false новая версия не запустилась за 30 секунд"));
+    }
+
+    #[test]
+    fn move_guards() {
+        let id = "com.meet.desktop";
+        let ours = Some(id);
+        use Location::*;
+        // Уже в «Программах» — перемещать нечего.
+        assert_eq!(
+            move_step(Applications, true, ours, Some("0.3.7"), "0.3.7", id),
+            MoveStep::Stop(ALREADY_IN_APPLICATIONS)
+        );
+        assert_eq!(
+            move_step(UserApplications, false, None, None, "0.3.7", id),
+            MoveStep::Stop(ALREADY_IN_APPLICATIONS)
+        );
+        // Места нет — ставим.
+        assert_eq!(
+            move_step(Translocated, false, None, None, "0.3.7", id),
+            MoveStep::Proceed
+        );
+        // Там старее — заменяем; та же или новее — открываем её.
+        assert_eq!(
+            move_step(Translocated, true, ours, Some("0.3.6"), "0.3.7", id),
+            MoveStep::Proceed
+        );
+        assert_eq!(
+            move_step(DiskImage, true, ours, Some("0.3.7"), "0.3.7", id),
+            MoveStep::OpenExisting
+        );
+        assert_eq!(
+            move_step(Elsewhere, true, ours, Some("0.3.8"), "0.3.7", id),
+            MoveStep::OpenExisting
+        );
+        // Чужое или без идентификатора — не трогаем.
+        assert_eq!(
+            move_step(
+                Translocated,
+                true,
+                Some("com.google.meet"),
+                Some("1.0.0"),
+                "0.3.7",
+                id
+            ),
+            MoveStep::Stop(WHY_OTHER_APP_IN_APPLICATIONS)
+        );
+        assert_eq!(
+            move_step(Translocated, true, None, None, "0.3.7", id),
+            MoveStep::Stop(WHY_OTHER_APP_IN_APPLICATIONS)
+        );
+    }
+
+    fn facts(exists: bool, identifier: Option<&str>, version: Option<&str>) -> TargetFacts {
+        TargetFacts {
+            exists,
+            identifier: identifier.map(str::to_string),
+            version: version.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn privileged_step_checks_for_itself() {
+        let id = "com.meet.desktop";
+        let ours = |version| facts(true, Some(id), Some(version));
+        assert_eq!(
+            privileged_guard(Ok(()), Some("0.3.8"), &ours("0.3.7"), id),
+            Ok(())
+        );
+        assert_eq!(
+            privileged_guard(Ok(()), Some("0.3.8"), &facts(false, None, None), id),
+            Ok(())
+        );
+        // Перемещение той же версии — можно (заменяет такую же).
+        assert_eq!(
+            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.7"), id),
+            Ok(())
+        );
+        // Понижение — нет, даже если решение до окна пароля его пропустило.
+        assert_eq!(
+            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.8"), id),
+            Err(WHY_NEWER_INSTALLED.into())
+        );
+        // Чужое или без идентификатора — нет.
+        assert_eq!(
+            privileged_guard(
+                Ok(()),
+                Some("0.3.8"),
+                &facts(true, Some("x.y"), Some("1.0.0")),
+                id
+            ),
+            Err(WHY_OTHER_APP_IN_APPLICATIONS.into())
+        );
+        assert_eq!(
+            privileged_guard(Ok(()), Some("0.3.8"), &facts(true, None, None), id),
+            Err(WHY_OTHER_APP_IN_APPLICATIONS.into())
+        );
+        // Права копии небезопасны или версия не прочиталась — нет.
+        assert_eq!(
+            privileged_guard(Err("ACL".into()), Some("0.3.8"), &ours("0.3.7"), id),
+            Err("ACL".into())
+        );
+        assert_eq!(
+            privileged_guard(Ok(()), None, &ours("0.3.7"), id),
+            Err(WHY_STAGE_VERSION_UNKNOWN.into())
+        );
+    }
+
+    #[test]
+    fn privileged_swap_refuses_without_touching_the_app_and_cleans_up() {
+        let fake = Fake::default();
+        let placed = privileged_swap(&fake, 42, Err(WHY_NEWER_INSTALLED.into()));
+        assert_eq!(placed, Placed::Failed(WHY_NEWER_INSTALLED.into()));
+        assert!(!fake.has("swap") && !fake.has("rename") && !fake.has("launch"));
+        assert!(fake.has("remove .Meet.app.work-42"));
+    }
+
+    #[test]
+    fn privileged_swap_exchanges_launches_and_removes_the_work_folder() {
+        let fake = Fake::default();
+        assert_eq!(privileged_swap(&fake, 42, Ok(())), Placed::Updated);
+        let calls: Vec<String> = fake
+            .calls()
+            .into_iter()
+            .filter(|call| !call.starts_with("log "))
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                "swap Meet.app Meet.app",
+                "launch Meet.app",
+                // Прежняя версия — в рабочей папке (после обмена).
+                "remove Meet.app",
+                "remove Meet-old.app",
+                "remove .Meet.app.work-42",
+            ]
+        );
+    }
+
+    #[test]
+    fn privileged_swap_keeps_the_work_folder_when_the_old_app_did_not_come_back() {
+        let fake = Fake::default();
+        fake.launches.borrow_mut().push_back(false);
+        fake.swaps
+            .borrow_mut()
+            .extend([Ok(()), Err(SwapError::Failed("EIO".into()))]);
+        assert!(matches!(
+            privileged_swap(&fake, 42, Ok(())),
+            Placed::Broken(_)
+        ));
+        assert!(!fake.has("remove .Meet.app.work-42"));
+        // Откат удался — папка убирается.
+        let fake = Fake::default();
+        fake.launches.borrow_mut().extend([false, true]);
+        assert_eq!(privileged_swap(&fake, 42, Ok(())), Placed::RolledBack);
+        assert!(fake.has("remove .Meet.app.work-42"));
     }
 }

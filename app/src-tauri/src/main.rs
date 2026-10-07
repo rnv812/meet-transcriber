@@ -37,9 +37,25 @@ use tauri::{RunEvent, WindowEvent};
 use resident::Supervisor;
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    // macOS: шаг обновления от администратора (`mac_install::ADMIN_SCRIPT`
+    // запускает им проверенную копию новой версии): обмен, запуск от имени
+    // пользователя, откат. Единственный режим, который работает от root.
+    #[cfg(target_os = "macos")]
+    if let Some((pid, uid)) = mac_install::privileged_requested(&args) {
+        std::process::exit(mac_update::run_privileged(pid, uid));
+    }
+    // Всё остальное от root не запускается никогда — ни приложение, ни
+    // помощники: иначе неизвестный будущей версии флаг из шага
+    // администратора поднял бы окна и резидент с правами root.
+    #[cfg(unix)]
+    // SAFETY: geteuid без аргументов, ошибок не бывает.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("meet: от root не запускается");
+        std::process::exit(64);
+    }
     // Помощник установщика (`windows/hooks.nsh`): ждёт процессы из папки
     // установки и выходит, не поднимая ни Tauri, ни окон.
-    let args: Vec<String> = std::env::args().collect();
     if let Some((mode, root)) = install_wait::requested(&args) {
         std::process::exit(install_wait::run(mode, &root));
     }
@@ -48,22 +64,6 @@ fn main() {
     #[cfg(target_os = "macos")]
     if let Some(job) = mac_update::Apply::from_args(&args) {
         std::process::exit(mac_update::run_helper(&job));
-    }
-    // macOS: шаг обновления от администратора (`mac_install::ADMIN_SCRIPT`
-    // запускает им проверенную копию новой версии): обмен, запуск от имени
-    // пользователя, откат.
-    #[cfg(target_os = "macos")]
-    if let Some((pid, uid)) = mac_install::privileged_requested(&args) {
-        std::process::exit(mac_update::run_privileged(pid, uid));
-    }
-    // Само приложение от root не запускается никогда (только режимы выше):
-    // иначе неизвестный будущей версии флаг из шага администратора поднял
-    // бы окна и резидент с правами root.
-    #[cfg(target_os = "macos")]
-    // SAFETY: geteuid без аргументов, ошибок не бывает.
-    if unsafe { libc::geteuid() } == 0 {
-        eprintln!("meet: приложение не запускается от root");
-        std::process::exit(64);
     }
     // macOS: PATH терминала (оболочки входа) — до любых потоков и детей:
     // из Finder и Dock приложение видит только PATH launchd, и Claude Code

@@ -324,10 +324,14 @@ export async function updateStatus(): Promise<UpdateStatus | null> {
   return invoke<UpdateStatus>("update_status").catch(() => null);
 }
 
-/** «Переместить Meet в Программы» (macOS): приложение перезапустится оттуда. */
-export async function moveToApplications(): Promise<void> {
+/**
+ * «Переместить Meet в Программы» (macOS): приложение перезапустится оттуда.
+ * Идёт расшифровка — оболочка отвечает вопросом `UPDATE_CONFIRM_WORK` (как у
+ * обновления), `confirmed` — человек согласился её прервать.
+ */
+export async function moveToApplications(confirmed = false): Promise<void> {
   if (!inTauri()) throw new Error(NOT_IN_APP);
-  await invoke<void>("move_to_applications");
+  await invoke<void>("move_to_applications", { confirmed });
 }
 
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void) => listenShell("update-progress", cb);

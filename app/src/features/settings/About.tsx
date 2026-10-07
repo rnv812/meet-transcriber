@@ -204,24 +204,33 @@ function UpdateRow() {
  * Translocation) — обновления на месте не работают; кнопка перемещения.
  */
 function MoveRow({ status }: { status: UpdateStatus }) {
-  const [state, setState] = useState<{ kind: "idle" } | { kind: "moving" } | { kind: "failed"; error: string }>(
-    { kind: "idle" },
-  );
-  const move = async () => {
+  type MoveState = { kind: "idle" } | { kind: "moving" } | { kind: "confirm" } | { kind: "failed"; error: string };
+  const [state, setState] = useState<MoveState>({ kind: "idle" });
+  const move = async (confirmed = false) => {
     setState({ kind: "moving" });
     try {
-      await moveToApplications();
+      await moveToApplications(confirmed);
     } catch (cause) {
-      setState({ kind: "failed", error: errorText(cause) });
+      const error = errorText(cause);
+      // Идёт расшифровка — тот же вопрос, что у обновления.
+      setState(error === UPDATE_CONFIRM_WORK ? { kind: "confirm" } : { kind: "failed", error });
     }
   };
   return (
     <Row label="Расположение" hint={status.bundle ?? undefined}>
       <span className="move" role="status">
         <span>{status.move_hint ?? "Meet лежит не в «Программах» — обновления не смогут заменить его на месте."}</span>
-        <Button variant="primary" busy={state.kind === "moving"} onClick={() => void move()}>
-          Переместить Meet в Программы
-        </Button>
+        {state.kind === "confirm" ? (
+          <>
+            <span>{UPDATE_CONFIRM_WORK}</span>
+            <Button variant="primary" onClick={() => void move(true)}>Переместить сейчас</Button>
+            <Button onClick={() => setState({ kind: "idle" })}>Отмена</Button>
+          </>
+        ) : (
+          <Button variant="primary" busy={state.kind === "moving"} onClick={() => void move()}>
+            Переместить Meet в Программы
+          </Button>
+        )}
         {state.kind === "moving" && <span className="muted">Перемещаю — Meet перезапустится…</span>}
         {state.kind === "failed" && <span className="update__error">{state.error}</span>}
       </span>

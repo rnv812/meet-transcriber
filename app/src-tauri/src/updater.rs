@@ -846,21 +846,23 @@ pub fn update_status() -> UpdateStatus {
 }
 
 /// «Переместить Meet в Программы» (macOS): приложение выходит и запускается
-/// из /Applications. Ошибка — текст для окна.
+/// из /Applications. Ошибка — текст для окна; идёт расшифровка — вопрос
+/// WORK_IN_PROGRESS, пока человек не подтвердил (`confirmed`).
 #[tauri::command]
-pub async fn move_to_applications(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || move_blocking(&app))
+pub async fn move_to_applications(app: AppHandle, confirmed: Option<bool>) -> Result<(), String> {
+    let confirmed = confirmed.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || move_blocking(&app, confirmed))
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[cfg(target_os = "macos")]
-fn move_blocking(app: &AppHandle) -> Result<(), String> {
-    crate::mac_update::move_to_applications(app)
+fn move_blocking(app: &AppHandle, confirmed: bool) -> Result<(), String> {
+    crate::mac_update::move_to_applications(app, confirmed)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn move_blocking(_app: &AppHandle) -> Result<(), String> {
+fn move_blocking(_app: &AppHandle, _confirmed: bool) -> Result<(), String> {
     Err("Перемещение в «Программы» — только на macOS".into())
 }
 

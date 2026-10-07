@@ -443,6 +443,14 @@ def test_key_reaches_only_the_signing_step_after_the_build():
     assert "MEET_REQUIRE_SIGNING: ${{ github.ref_type == 'tag' }}" in macos
     pin = re.search(r'MACOS_CERT_SHA1: "([0-9A-F]{40})"', macos)
     assert pin and pin.group(1).lower() == SHA1
+    # Тот же SHA-1 вшивается в приложение при сборке (шаг обновления от
+    # администратора проверяет им новую версию), а шаг администратора
+    # прогоняется без прав через настоящий osascript.
+    build = _step(macos, "Build Meet.app (unsigned)")
+    assert "MEET_SIGNING_SHA1: ${{ env.MACOS_CERT_SHA1 }}" in build
+    assert 'MEET_REQUIRE_SIGNING:-}" == "true"' in SCRIPT and "MEET_SIGNING_SHA1" in SCRIPT
+    dry = _step(macos, "\"Privileged update script: dry run through osascript\"")
+    assert "mac_install::tests::admin_script" in dry
     upload = macos[macos.index("actions/upload-artifact@"):]
     assert "steps.package.outputs.dmg" in upload and "steps.package.outputs.sums" in upload
 

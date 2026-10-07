@@ -281,6 +281,28 @@ test("перемещение не удалось — причина рядом �
   expect(screen.getByRole("button", { name: "Переместить Meet в Программы" })).toBeEnabled();
 });
 
+test("перемещение во время расшифровки — сначала вопрос, «Переместить сейчас» повторяет с согласием", async () => {
+  vi.mocked(shell.updateStatus).mockResolvedValue(translocated);
+  vi.mocked(shell.moveToApplications).mockRejectedValueOnce(UPDATE_CONFIRM_WORK).mockResolvedValueOnce(undefined);
+  await renderAbout();
+  await userEvent.click(await screen.findByRole("button", { name: "Переместить Meet в Программы" }));
+  expect(await screen.findByText(UPDATE_CONFIRM_WORK)).toBeInTheDocument();
+  expect(shell.moveToApplications).toHaveBeenLastCalledWith(false);
+  await userEvent.click(screen.getByRole("button", { name: "Переместить сейчас" }));
+  expect(shell.moveToApplications).toHaveBeenLastCalledWith(true);
+});
+
+test("вопрос о расшифровке при перемещении можно отклонить", async () => {
+  vi.mocked(shell.updateStatus).mockResolvedValue(translocated);
+  vi.mocked(shell.moveToApplications).mockRejectedValueOnce(UPDATE_CONFIRM_WORK);
+  await renderAbout();
+  await userEvent.click(await screen.findByRole("button", { name: "Переместить Meet в Программы" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Отмена" }));
+  expect(screen.queryByText(UPDATE_CONFIRM_WORK)).toBeNull();
+  expect(screen.getByRole("button", { name: "Переместить Meet в Программы" })).toBeEnabled();
+  expect(shell.moveToApplications).toHaveBeenCalledTimes(1);
+});
+
 test("в «Программах» (и на Windows) вопроса о перемещении нет", async () => {
   vi.mocked(shell.updateStatus).mockResolvedValue({
     ...translocated, location: "applications", bundle: "/Applications/Meet.app", offer_move: false, move_hint: null,

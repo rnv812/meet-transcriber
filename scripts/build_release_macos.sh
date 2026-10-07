@@ -80,6 +80,20 @@ sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 # сертификаты из среды ему не передаём.
 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
 
+# Закреплённый SHA-1 сертификата выпусков (открытые данные) вшивается в
+# приложение: только им шаг обновления от администратора проверяет новую
+# версию (mac_install.rs, option_env!). Без него сборка — без этого шага; по
+# тегу (MEET_REQUIRE_SIGNING=true) так нельзя.
+if [[ -n "${MEET_SIGNING_SHA1:-}" ]]; then
+    [[ "${MEET_SIGNING_SHA1//:/}" =~ ^[0-9A-Fa-f]{40}$ ]]         || fail "MEET_SIGNING_SHA1 не 40 hex: $MEET_SIGNING_SHA1"
+    echo "Закреплённый сертификат в сборке: $MEET_SIGNING_SHA1"
+elif [[ "${MEET_REQUIRE_SIGNING:-}" == "true" ]]; then
+    fail "сборка по тегу без MEET_SIGNING_SHA1: обновление с паролем администратора не заработает"
+else
+    echo "MEET_SIGNING_SHA1 не задан: обновление с паролем администратора в этой сборке отключено" >&2
+fi
+export MEET_SIGNING_SHA1="${MEET_SIGNING_SHA1:-}"
+
 # --- 1. Версия -----------------------------------------------------------------
 step "Версия $VERSION"
 python3 - "$ROOT" "$VERSION" <<'PY'
