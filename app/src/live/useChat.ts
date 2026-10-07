@@ -59,6 +59,8 @@ export type ChatSink = {
 export const CHAT_NOTE_MS = 8000;
 /** Сколько видна заметка-отклик на 👍 / 👎 (гаснет в нажатую кнопку). */
 export const ACK_MS = 3500;
+/** ❓ поставлен — ждём пояснения. */
+export const EXPLAINING = "Ассистент поясняет…";
 /** Повтор перечитывания ленты: от и до (мс). */
 const RESYNC_MIN_MS = 1000;
 const RESYNC_MAX_MS = 10_000;
@@ -112,6 +114,11 @@ export type Chat = {
   note: string | null;
   /** Отклик окна на только что поставленную 👍 / 👎 этого сообщения (ACK_MS); иначе null. */
   ack: (id: string) => string | null;
+  /**
+   * Что объявить экранному диктору после реакции («Учту: …», «Ассистент
+   * поясняет…»): текст для постоянной вежливой live-области ленты.
+   */
+  announce: string;
   /** На это сообщение поставлен ❓, а пояснения ещё нет. */
   explaining: (id: string) => boolean;
   attachment: (id: string) => ChatMessage | undefined;
@@ -169,6 +176,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
   const [now, setNow] = useState(() => Date.now());
   const [note, setNote] = useState<string | null>(null);
   const [acks, setAcks] = useState<Record<string, string>>({});
+  const [announce, setAnnounce] = useState("");
   const stateRef = useRef(state);
   stateRef.current = state;
   const previews = useRef(new Map<string, string>());
@@ -302,6 +310,9 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
       return next;
     });
     if (ack) setTimeout(() => dropAck(id, ack), ACK_MS);
+    // Live-область живёт всегда, меняется только текст: так его объявляют NVDA и JAWS.
+    const said = ack ?? (on && emoji === "❓" ? EXPLAINING : "");
+    if (said) setAnnounce(said);
     try {
       await backend.react(ep, id, emoji, on);
     } catch (e) {
@@ -446,6 +457,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
   return {
     state, items, agent, loaded: state.loaded, pinned: pinnedOf(state), writing: writingShown(state, now), lastAgent, note,
     ack: (id) => acks[id] ?? null,
+    announce,
     explaining: (id) => explainPending(state, id, now / 1000),
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),

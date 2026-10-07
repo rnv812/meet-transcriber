@@ -11,8 +11,10 @@ vi.mock("../lib/api", async (orig) => ({
 import { postChat, setAgentFrequency } from "../lib/api";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
-import { CHAT_FLOOR, CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN, TRANSCRIPT_FLOOR } from "./ChatWorkspace";
-import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { CHAT_COMPACT_PX, CHAT_FLOOR, CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN, TRANSCRIPT_FLOOR, chatReserve } from "./ChatWorkspace";
+import { LiveWorkspace, PARTICIPANT_KEY, useLiveView } from "./LiveWorkspace";
 import { EMPTY_SUMMARY } from "./liveModel";
 import { type Chat, useChat } from "./useChat";
 import type { Live } from "./useLive";
@@ -34,10 +36,11 @@ function makeLive(o: Partial<Live> = {}): Live {
   };
 }
 let chat: Chat;
-function Host({ live, wide = false }: { live: Live; wide?: boolean }) {
+function Host({ live, wide = false, open = true }: { live: Live; wide?: boolean; open?: boolean }) {
   chat = useChat(ep);
   const view = useLiveView(live, { open: true, wide, quiet: false });
-  return <LiveWorkspace live={live} view={view} onAsk={() => {}} chat={chat} />;
+  // `open` — как у панели: свёрнутая панель снимает рабочую область, `view` и чат остаются у владельца.
+  return open ? <LiveWorkspace live={live} view={view} onAsk={() => {}} chat={chat} /> : <p>свёрнута</p>;
 }
 const load = () => act(() => chat.sink.onChatSnapshot({
   messages: [agentMsg("m1", { text: "Срок другой: [02:05]" })], seq: 3, agent: agentInfo(),
@@ -331,5 +334,106 @@ describe("одна раскладка", () => {
     rerender(<Host live={{ ...live, agent: null }} wide />);       // состояние без агента — чат остаётся
     expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBe(chatLog);
     expect(screen.queryByRole("tablist")).toBeNull();
+  });
+});
+
+
+/** chat.css как текст (в тестах CSS не подключается). */
+const chatCss = readFileSync(join(process.cwd(), "src/live/chat.css"), "utf8").replace(/\r\n/g, "\n");
+
+// --- ревью, исправления 1: переход по таймкоду, самая узкая панель, флаг участника, плотность ---
+
+describe("исправления 1", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  test("I1: таймкод нажали раньше, потом убрали расшифровку — свернули и развернули панель: остаётся убранной", async () => {
+    sideLayout({ px: 900 });
+    const live = makeLive({ agent: agentInfo() });
+    const { rerender } = render(<Host live={live} />);
+    load();
+    await userEvent.click(screen.getByRole("button", { name: "02:05" }));          // переход — раньше
+    await userEvent.click(screen.getByRole("button", { name: "Убрать расшифровку" }));
+    expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+    rerender(<Host live={live} open={false} />);
+    rerender(<Host live={live} open />);
+    expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+    expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBe("1");
+    // А новый переход — возвращает (и без хранилища: читается состояние, не localStorage).
+    localStorage.clear();
+    await userEvent.click(screen.getByRole("button", { name: "02:05" }));
+    expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+  });
+
+  /** Поля панели вокруг рабочей области (шапка панели, отступы) — по снимку окна 380 px. */
+  const PANEL_CHROME = 45;
+
+  test("I2: окно 300 px (минимум панели): чат не уже 160, колонка не уже 120 или прокручивается", () => {
+    localStorage.setItem("meet.pane.live-chat-side", "900");
+    vi.stubGlobal("innerWidth", 300);
+    const room = { px: window.innerWidth - PANEL_CHROME };
+    const win = sideLayout(room);
+    render(<Host live={makeLive({ agent: agentInfo() })} />);
+    for (const px of [300, 320, 340, 360, 420, 480, 600]) {
+      vi.stubGlobal("innerWidth", px);
+      win.resize(window.innerWidth - PANEL_CHROME);
+      const area = window.innerWidth - PANEL_CHROME;
+      const side = parseInt(body().style.getPropertyValue("--chat-side"), 10);
+      expect(area - side - 12).toBeGreaterThanOrEqual(CHAT_FLOOR);              // чат — всегда
+      if (area >= TRANSCRIPT_FLOOR + 12 + CHAT_FLOOR) expect(side).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+      const split = sideSplit();                                                 // и разделителем — не уже
+      expect(area - Number(split.getAttribute("aria-valuemax")) - 12).toBeGreaterThanOrEqual(CHAT_FLOOR);
+      expect(Number(split.getAttribute("aria-valuemin"))).toBeGreaterThanOrEqual(Math.min(TRANSCRIPT_FLOOR, area - CHAT_FLOOR - 12));
+    }
+  });
+
+  test("I2: колонка уступает первой: сначала до 120, потом чат с 280 до 160", () => {
+    expect(chatReserve(1000)).toBe(CHAT_MIN + 12);
+    expect(1000 - chatReserve(1000)).toBeGreaterThan(TRANSCRIPT_FLOOR);
+    expect(400 - chatReserve(400)).toBe(TRANSCRIPT_FLOOR);                        // колонка — на своём минимуме
+    expect(400 - TRANSCRIPT_FLOOR - 12).toBeLessThan(CHAT_MIN);                    // уже уступает чат
+    expect(chatReserve(255)).toBe(CHAT_FLOOR + 12);                                // 300 px: чат — на минимуме
+  });
+
+  test("I2: ширина по умолчанию (CSS) — по тому же правилу: чату ≥ 160 + промежуток, колонка прокручивается", () => {
+    const rule = chatCss.slice(chatCss.indexOf(".chat-ws__body {"), chatCss.indexOf("}", chatCss.indexOf(".chat-ws__body {")));
+    expect(rule).toContain("max(0px, min(clamp(120px, 30%, 480px), calc(100% - 172px)))");
+    expect(rule).toContain("minmax(160px, 1fr)");
+    expect(chatCss).toMatch(/\.chat-ws__transcript \{[^}]*overflow-x: auto/);
+    expect(chatCss).toContain(".chat-ws__transcript > .chat-ws__feed { min-width: 108px; }");
+    expect(chatCss).toMatch(/\.chat-ws__toggle \{[^}]*width: 24px; height: 24px/);           // цель ≥ 24 px
+  });
+
+  test("плотность ленты — по ширине колонки чата: широкое окно, узкий чат — реакции без подписей", () => {
+    sideLayout({ px: 1600 });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const w = this.classList.contains("chat-ws__main") ? CHAT_COMPACT_PX - 80 : 1600;
+      return { width: w, height: 600, top: 0, left: 0, right: w, bottom: 600, x: 0, y: 0, toJSON: () => ({}) };
+    });
+    render(<Host live={makeLive({ agent: agentInfo() })} wide />);
+    load();
+    expect(screen.getByRole("button", { name: "👍 Полезно" })).toHaveTextContent(/^👍$/);
+    expect(screen.getByText(/видит:/)).toBeInTheDocument();                         // шапка — по всей области
+  });
+
+  test("I4: до первого состояния — раскладка по последнему флагу участника; выключен — сразу прежняя, без чата", () => {
+    localStorage.setItem(PARTICIPANT_KEY, "0");
+    const { rerender } = render(<Host live={makeLive({ loaded: false })} />);
+    expect(screen.queryByRole("log", { name: "Чат с ассистентом" })).toBeNull();
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    rerender(<Host live={makeLive({ loaded: true })} />);                           // пришло: участника нет
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    expect(localStorage.getItem(PARTICIPANT_KEY)).toBe("0");
+    rerender(<Host live={makeLive({ loaded: true, agent: agentInfo() })} />);       // включили — запомнили
+    expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeInTheDocument();
+    expect(localStorage.getItem(PARTICIPANT_KEY)).toBe("1");
+  });
+
+  test("I4: флага нет или хранилище недоступно — до первого состояния чат", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("нет хранилища"); });
+    render(<Host live={makeLive({ loaded: false })} />);
+    expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeInTheDocument();
   });
 });

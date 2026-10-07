@@ -42,7 +42,7 @@ import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { type FeedItem, type Outgoing, REACTIONS, isFinalAgent } from "./chatModel";
 import type { Source } from "./sources";
-import type { Chat } from "./useChat";
+import { type Chat, EXPLAINING } from "./useChat";
 import "./chat.css";
 
 /** Насколько от низа ещё считается «внизу». */
@@ -194,10 +194,11 @@ function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
           <CopyButton text={plainMarkdown(text)} />
         </div>
       )}
-      {ack && <div key={ack} className="chat-msg__ack" role="status">{ack}</div>}
+      {/* Видимые заметки; диктору их объявляет постоянная live-область ленты (`chat.announce`). */}
+      {ack && <div key={ack} className="chat-msg__ack">{ack}</div>}
       {explaining && (
-        <div className="chat-msg__pending" role="status">
-          <span className="chat-typing__dots" aria-hidden="true" />Ассистент поясняет…
+        <div className="chat-msg__pending">
+          <span className="chat-typing__dots" aria-hidden="true" />{EXPLAINING}
         </div>
       )}
     </li>
@@ -415,6 +416,8 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
       )}
       {/* «Не отвлекать» глушит ленту, но вопрос к вам объявляется и тогда (ревью live-chat, M15). */}
       {quiet && <span className="sr-only" role="status">{pinned ? `Вопрос вам: ${plainMarkdown(pinned.text ?? "")}` : ""}</span>}
+      {/* Отклик на реакцию — в одной постоянной области: вставленную сразу с текстом диктор часто молчит. */}
+      <span className="sr-only" role="status" aria-live="polite" data-chat-announce="">{chat.announce}</span>
       <div ref={box} className="chat__scroll" onScroll={onScroll}>
         {chat.more && (
           <button type="button" className="chat__more" onClick={() => void chat.more?.()}>

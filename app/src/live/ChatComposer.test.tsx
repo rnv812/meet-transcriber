@@ -162,7 +162,7 @@ test("«Стоп» — пока ответ пишется и виден", async 
 test("агент выключен — поле недоступно и видно почему", () => {
   render(<Host reason="Ассистент выключен" />);
   expect(field()).toBeDisabled();
-  expect(screen.getByRole("status")).toHaveTextContent("Ассистент выключен");
+  expect(screen.getAllByRole("status").some((el) => el.textContent?.includes("Ассистент выключен"))).toBe(true);
   expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
 });
 

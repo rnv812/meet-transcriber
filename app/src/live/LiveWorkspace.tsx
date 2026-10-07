@@ -246,13 +246,34 @@ export function participantOn(live: Live, chat?: Chat | null): boolean {
 /** До первого состояния ассистента: причина в строке ввода чата. */
 export const CONNECTING = "Подключаюсь к ассистенту…";
 
+/** Последний известный флаг агента-участника — раскладка до первого состояния (окно панели — своё, без настроек). */
+export const PARTICIPANT_KEY = "meet.live.participant";
+
+/** Был ли агент-участник в прошлый раз; не знаем — да (по умолчанию он включён). */
+export function cachedParticipant(): boolean {
+  try {
+    return window.localStorage?.getItem(PARTICIPANT_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function rememberParticipant(on: boolean): void {
+  try {
+    window.localStorage?.setItem(PARTICIPANT_KEY, on ? "1" : "0");
+  } catch { /* хранилище недоступно: до первого состояния — чат */ }
+}
+
 /**
  * Рабочая область: с агентом-участником — чат (`ChatWorkspace`), без него
  * (`assist.participant` выключен, «Только сводка») — прежняя раскладка. Пока
- * первое состояние не пришло — уже чат (агент-участник по умолчанию включён)
- * с «Подключаюсь…» в строке ввода, а не пустой экран: чат не прячется ни при
- * подключении, ни при обрыве связи. Агента однажды видели — чат остаётся
- * (`chat.agent` не сбрасывается), прежняя раскладка — только по настройке.
+ * первое состояние не пришло, раскладку выбирает последний известный флаг
+ * участника (`PARTICIPANT_KEY`, по умолчанию — чат с «Подключаюсь…» в строке
+ * ввода): у тех, кто выключил участника, ничего не перескакивает, и чат не
+ * прячется ни при подключении, ни при обрыве связи. Агента однажды видели —
+ * чат остаётся (`chat.agent` не сбрасывается), прежняя раскладка — только по
+ * настройке. Устаревший флаг — одна смена раскладки сразу после того, как
+ * человек сам сменил настройку.
  */
 export function LiveWorkspace(props: {
   live: Live;
@@ -265,7 +286,11 @@ export function LiveWorkspace(props: {
   chat?: Chat | null;
 }) {
   const { chat, ...rest } = props;
-  if (chat && (participantOn(props.live, chat) || !props.live.loaded)) {
+  const on = participantOn(props.live, chat);
+  const loaded = props.live.loaded;
+  // Флаг — только из пришедшего состояния: до него ничего не знаем.
+  useEffect(() => { if (chat && loaded) rememberParticipant(on); }, [chat, loaded, on]);
+  if (chat && (on || (!loaded && cachedParticipant()))) {
     return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place} />;
   }
   return <ClassicWorkspace {...rest} />;

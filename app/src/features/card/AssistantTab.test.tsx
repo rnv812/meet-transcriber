@@ -278,7 +278,7 @@ test("после встречи: отклик на 👎, ❓ «поясняет�
   await within(await ready()).findByText("15 ноября");
   const m2 = () => within(log()).getByText("15 ноября").closest("li")!;
   await userEvent.click(within(m2()).getByRole("button", { name: "👎 Не по теме" }));
-  expect(within(m2()).getByRole("status")).toHaveTextContent("Учту: скорректирую, о чём пишу");
+  expect(within(m2()).getByText("Учту: скорректирую, о чём пишу")).toBeInTheDocument();
   await userEvent.click(within(m2()).getByRole("button", { name: "👎 Не по теме" }));   // сняли — отклик ушёл
   expect(within(m2()).queryByText(/Учту/)).toBeNull();
 

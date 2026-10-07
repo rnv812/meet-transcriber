@@ -51,8 +51,11 @@ export const REACTIONS: { emoji: ChatReaction; label: string; hint: string; ack:
 export const EXPLAIN_WAIT_S = 300;
 /** Пояснение — запись не старше ❓ (с допуском: время ❓ в окне ставится до ответа сервера). */
 const EXPLAIN_SLACK_S = 2;
-/** Ответ агента, который закрывает ожидание пояснения. */
-const EXPLAIN_DONE: ReadonlySet<string> = new Set(["shown", "cancelled", "failed"]);
+/**
+ * Ответ агента, который закрывает ожидание пояснения. Пишется — тоже: у
+ * пузыря уже есть метка «пояснение», второй «поясняет…» не нужен.
+ */
+const EXPLAIN_DONE: ReadonlySet<string> = new Set(["writing", "shown", "cancelled", "failed"]);
 
 /** Сообщение человека, которое ещё не подтвердил журнал. */
 export type Outgoing = {
@@ -326,7 +329,7 @@ export function usedButton(state: ChatState, id: string): string | null {
 
 /**
  * ❓ поставлен и пояснения ещё нет: в журнале после ❓ нет ни ответа агента с
- * `explains` на это сообщение (готового, остановленного или упавшего), ни строки
+ * `explains` на это сообщение (пишется, готов, остановлен или упал), ни строки
  * «нечего добавить» с `re` на него (или на просьбу пояснить после встречи), и
  * с ❓ прошло меньше EXPLAIN_WAIT_S. `now` — секунды Unix.
  */

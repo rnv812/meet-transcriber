@@ -139,7 +139,7 @@ test("M15: «Не отвлекать» — лента молчит, но воп�
   render(<Host quiet />);
   load([agentMsg("m1", { text: "Сказать про **срок**?", pin: true })]);
   expect(log()).toHaveAttribute("aria-live", "off");
-  expect(screen.getByRole("status")).toHaveTextContent("Вопрос вам: Сказать про срок?");
+  expect(screen.getByText("Вопрос вам: Сказать про срок?")).toHaveAttribute("role", "status");
 });
 
 // --- панель: M6 (одно состояние) и M15 (строка свёрнутой панели в «Не отвлекать») ---

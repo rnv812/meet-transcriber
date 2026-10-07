@@ -174,6 +174,28 @@ test("внизу — следит за низом, плашки нет", () => {
 // --- реакции: подписи, что будет, отклик, ❓ ждёт пояснения ---------------------------------
 
 const msgRow = (text: string | RegExp) => within(log()).getByText(text).closest("li")!;
+/** Постоянная live-область ленты: она одна объявляет отклики на реакции. */
+const announced = () => document.querySelector<HTMLElement>("[data-chat-announce]")!;
+
+test("live-область отклика на реакции есть с самого начала (пустая), заметки под сообщением — без role", () => {
+  render(<Host />);
+  load([agentMsg("m1")]);
+  expect(announced()).toHaveAttribute("role", "status");
+  expect(announced()).toHaveAttribute("aria-live", "polite");
+  expect(announced()).toBeEmptyDOMElement();
+  fireEvent.click(screen.getByRole("button", { name: "👍 Полезно" }));
+  expect(announced()).toHaveTextContent("Учту: такое полезно");
+  expect(within(msgRow("Сообщение m1")).queryByRole("status")).toBeNull();
+});
+
+test("непоставленные реакции вне наведения спрятаны только глазам: в дереве доступности они есть", () => {
+  render(<Host />);
+  load([agentMsg("m1", { reactions: { "👍": 1 } })]);
+  const row = msgRow("Сообщение m1");
+  for (const name of ["👍 Полезно", "👎 Не по теме", "❓ Поясни"]) {
+    expect(within(row).getByRole("button", { name })).toBeInTheDocument();
+  }
+});
 
 test("реакции: формальные подписи у кнопок, в подсказке — что будет", () => {
   render(<Host />);
@@ -208,7 +230,8 @@ test("👍 — отклик «Учту: такое полезно» сразу, 
     load([agentMsg("m1")]);
     const like = screen.getByRole("button", { name: "👍 Полезно" });
     fireEvent.click(like);
-    expect(within(msgRow("Сообщение m1")).getByRole("status")).toHaveTextContent("Учту: такое полезно");
+    expect(within(msgRow("Сообщение m1")).getByText("Учту: такое полезно")).toBeInTheDocument();
+    expect(announced()).toHaveTextContent("Учту: такое полезно");
     await act(async () => { await vi.advanceTimersByTimeAsync(ACK_MS + 10); });
     expect(within(msgRow("Сообщение m1")).queryByText("Учту: такое полезно")).toBeNull();
     expect(like).toHaveAttribute("aria-pressed", "true");
@@ -222,7 +245,8 @@ test("👎 — отклик «Учту: скорректирую, о чём пи
   load([agentMsg("m1")]);
   await userEvent.click(screen.getByRole("button", { name: "👎 Не по теме" }));
   expect(reactChat).toHaveBeenCalledWith(ep, "m1", "👎", true);
-  expect(within(msgRow("Сообщение m1")).getByRole("status")).toHaveTextContent("Учту: скорректирую, о чём пишу");
+  expect(within(msgRow("Сообщение m1")).getByText("Учту: скорректирую, о чём пишу")).toBeInTheDocument();
+  expect(announced()).toHaveTextContent("Учту: скорректирую, о чём пишу");
   expect(chat.agent?.frequency).toBe("чаще");
 });
 
@@ -246,11 +270,12 @@ test("❓ — «Ассистент поясняет…», пока не прид
   const row = () => msgRow("без владельца");
   expect(within(row()).getByText("Ассистент поясняет…")).toBeInTheDocument();
   expect(within(row()).queryByText(/Учту/)).toBeNull();
-  // ответ пишется — всё ещё ждём
+  expect(announced()).toHaveTextContent("Ассистент поясняет…");
+  // ответ с explains пишется — у его пузыря уже метка «пояснение», второй индикатор не нужен
   act(() => chat.sink.onChat({ seq: 21, op: "patch", id: "m1", set: { reactions: { "❓": now } } }));
   act(() => chat.sink.onChat({ seq: 22, op: "add", message: agentMsg("m2", {
     status: "writing", mode: "reply", text: "", explains: "m1", at: now + 1 }) }));
-  expect(within(row()).getByText("Ассистент поясняет…")).toBeInTheDocument();
+  expect(within(row()).queryByText("Ассистент поясняет…")).toBeNull();
   act(() => chat.sink.onChat({ seq: 23, op: "patch", id: "m2", set: { status: "shown", text: "Олег в [00:05] не назвал владельца." } }));
   expect(within(row()).queryByText("Ассистент поясняет…")).toBeNull();
   const reply = msgRow(/не назвал владельца/);

@@ -144,9 +144,11 @@ test("❓ ждёт пояснения: до ответа с explains (готов
   expect(nextExplainExpiry(s, at * 1000)).toBe((at + EXPLAIN_WAIT_S) * 1000 + 1);
   expect(explainPending(s, "m1", at + EXPLAIN_WAIT_S + 1)).toBe(false);
   s = chatReducer(s, { type: "event", event: { seq: 11, op: "add", message: agentMsg("m2", { status: "writing", text: "", explains: "m1", at: at + 1 }) }, now: 0 });
-  expect(explainPending(s, "m1", at + 2)).toBe(true);              // пишется — ещё ждём
-  s = chatReducer(s, { type: "event", event: { seq: 12, op: "patch", id: "m2", set: { status: "failed", error: "сбой" } }, now: 0 });
-  expect(explainPending(s, "m1", at + 3)).toBe(false);             // упал — ждать нечего
+  expect(explainPending(s, "m1", at + 2)).toBe(false);             // пишется — у пузыря уже метка «пояснение»
+  s = chatReducer(s, { type: "event", event: { seq: 12, op: "patch", id: "m2", set: { status: "dropped" } }, now: 0 });
+  expect(explainPending(s, "m1", at + 3)).toBe(true);              // промолчал (скрыт) — ждём строку «нечего добавить»
+  s = chatReducer(s, { type: "event", event: { seq: 13, op: "add", message: agentMsg("m3", { status: "failed", error: "сбой", explains: "m1", at: at + 4 }) }, now: 0 });
+  expect(explainPending(s, "m1", at + 5)).toBe(false);             // упал — ждать нечего
   expect(nextExplainExpiry(s, at * 1000)).toBeNull();
 });
 

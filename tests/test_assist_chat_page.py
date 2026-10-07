@@ -315,6 +315,8 @@ def test_chat_page_reaction_labels_say_what_happens():
         assert f'"{label}"' in script and f'"{hint}"' in script
     assert '"Учту: такое полезно"' in script and '"Учту: скорректирую, о чём пишу"' in script
     assert '"Ассистент поясняет…"' in script and '"пояснение"' in script and '"к сообщению"' in script
+    assert '<span id="announce" class="sr" role="status" aria-live="polite"></span>' in CHAT_PAGE
+    assert "armExplainExpiry();" in script and "entry.node.focus(" in script
     for old in ('"норм"', '"не норм"', '"вопрос"'):
         assert old not in script
     # подписи у кнопок видны при наведении и фокусе, у поставленной — всегда; в узком окне — только эмодзи
@@ -343,6 +345,7 @@ const out = {};
   out.buttons = buttons("m1");
   await page.react("m1", "👎", true);
   out.dislike = cls("m1", "ack");
+  out.announce = document.getElementById("announce").textContent;
   timers.splice(0).forEach((f) => f());          // отклик гаснет
   out.faded = cls("m1", "ack");
   await page.react("m1", "👍", true);
@@ -383,6 +386,8 @@ def test_chat_page_reactions_give_feedback_and_link_the_explanation(tmp_path):
     assert out["dislike"] == ["Учту: скорректирую, о чём пишу"] and out["faded"] == []
     assert out["like"] == ["Учту: такое полезно"]
     assert out["off"] == []                                   # снятая реакция — без отклика
-    assert out["pending"] == ["Ассистент поясняет…"] and out["writing"] == ["Ассистент поясняет…"]
+    assert out["pending"] == ["Ассистент поясняет…"]
+    assert out["writing"] == []                    # пузырь с меткой «пояснение» уже есть — второй индикатор не нужен
+    assert out["announce"] == "Учту: скорректирую, о чём пишу"   # постоянная live-область
     assert out["done"] == []
     assert out["tag"] == ["пояснение"] and out["ref"] == ["к сообщению «Риск: интеграция без владельца.»"]

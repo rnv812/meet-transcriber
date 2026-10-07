@@ -192,6 +192,7 @@ button.used{border-color:var(--accent);color:var(--accent)}
 .tag{border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:0 6px;font-size:11px}
 button.ref{border:0;padding:0;color:var(--accent);font-size:12px;text-decoration:underline;border-radius:0}
 .msg.flash .body{outline:2px solid var(--accent)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @media (max-width:420px){.react .lbl{display:none!important}}
 @media (prefers-reduced-motion:reduce){.ack{animation:none}}
 footer{border-top:1px solid var(--line);padding:8px 16px}
@@ -219,6 +220,7 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
   <span id="link"></span>
 </header>
 <main id="feed" role="log" aria-live="polite"></main>
+<span id="announce" class="sr" role="status" aria-live="polite"></span>
 <footer>
   <div id="chips"></div>
   <div id="composer">
@@ -414,6 +416,8 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     const entry = nodes.get(mid);
     if (!entry) return;
     entry.node.scrollIntoView({block: "center"});
+    entry.node.tabIndex = -1;
+    entry.node.focus({preventScroll: true});
     entry.node.classList.add("flash");
     setTimeout(() => entry.node.classList.remove("flash"), 1500);
   }
@@ -426,13 +430,28 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     for (const id of order) {
       const r = msgs.get(id);
       if (!r || typeof r.at !== "number" || r.at < at - 1) continue;
-      if (r.kind === "agent" && r.explains === m.id && ["shown", "failed", "cancelled"].includes(r.status)) return false;
+      if (r.kind === "agent" && r.explains === m.id && ["writing", "shown", "failed", "cancelled"].includes(r.status)) return false;
       if (r.kind === "system" && r.re) {
         const asked = msgs.get(r.re);
         if (r.re === m.id || (asked && asked.via === "reaction" && asked.re === m.id)) return false;
       }
     }
     return true;
+  }
+
+  // «поясняет…» гаснет само через EXPLAIN_WAIT_S — и после перезагрузки страницы:
+  // таймер ставится по самому раннему ожиданию при каждой отрисовке.
+  let expiryTimer = 0;
+  function armExplainExpiry() {
+    clearTimeout(expiryTimer);
+    let soon = null;
+    for (const id of order) {
+      const m = msgs.get(id);
+      if (!m || m.kind !== "agent" || !explainPending(m)) continue;
+      const when = (m.reactions["❓"] + EXPLAIN_WAIT_S) * 1000 + 50;
+      if (soon === null || when < soon) soon = when;
+    }
+    if (soon !== null) expiryTimer = setTimeout(render, Math.max(0, soon - Date.now()));
   }
 
   function agentBody(body, m) {
@@ -492,16 +511,9 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
         row.appendChild(b);
       }
       box.appendChild(row);
-      if (acks.has(m.id)) {
-        const ack = el("div", "ack", acks.get(m.id));
-        ack.setAttribute("role", "status");
-        box.appendChild(ack);
-      }
-      if (explainPending(m)) {
-        const wait = el("div", "pending", "Ассистент поясняет…");
-        wait.setAttribute("role", "status");
-        box.appendChild(wait);
-      }
+      // Видимые заметки; диктору их объявляет постоянная область #announce.
+      if (acks.has(m.id)) box.appendChild(el("div", "ack", acks.get(m.id)));
+      if (explainPending(m)) box.appendChild(el("div", "pending", "Ассистент поясняет…"));
     }
     return box;
   }
@@ -568,6 +580,7 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
     });
     while (feed.children.length > want.length) feed.lastChild.remove();
     if (atBottom) feed.scrollTop = feed.scrollHeight;
+    armExplainExpiry();
     renderAgent();
   }
 
@@ -619,6 +632,8 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
   async function react(mid, emoji, on) {
     // Отклик — сразу, от страницы, не от модели; снятая реакция — без отклика.
     const ack = on ? (REACTIONS.find((r) => r[0] === emoji) || [])[3] : "";
+    const said = ack || (on && emoji === "❓" ? "Ассистент поясняет…" : "");
+    if (said) $("announce").textContent = said;
     if (ack) {
       acks.set(mid, ack);
       render();
@@ -629,8 +644,6 @@ body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
       if (acks.get(mid) === ack) { acks.delete(mid); render(); }
       notice("Реакция не сохранена: " + e.message);
     }
-    // ❓ ждёт пояснения не дольше EXPLAIN_WAIT_S: потом «поясняет…» снимается.
-    if (on && emoji === "❓") setTimeout(render, EXPLAIN_WAIT_S * 1000 + 50);
   }
 
   async function send() {

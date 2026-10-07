@@ -38,6 +38,9 @@ export class FakeEventSource {
 (globalThis as any).EventSource = FakeEventSource;
 beforeEach(() => {
   FakeEventSource.instances = [];
+  // Флаг участника, запомненный окном (`LiveWorkspace.PARTICIPANT_KEY`): прошлый тест
+  // файла не выбирает раскладку следующему до первого состояния.
+  try { localStorage.removeItem("meet.live.participant"); } catch { /* нет хранилища */ }
 });
 // Сеансы вкладки «Агент» живут вне React (features/card/agentSessions): каждый
 // тест начинает без сеансов и подписок прошлого. Модуль сам кладёт сюда сброс
