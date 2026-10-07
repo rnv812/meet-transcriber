@@ -1016,7 +1016,7 @@ class ChatLog:
 
     # --- затравка (запасной путь) ---
 
-    def context(self, budget: int, *, recent: int = RECENT_MESSAGES) -> str:
+    def context(self, budget: int, *, recent: int = RECENT_MESSAGES, until: str | None = None) -> str:
         """Журнал для затравки головы — **запасной путь**, когда родного
         продолжения сеанса нет (локальная модель, сеанс истёк, провайдер без
         resume). Последние `recent` сообщений — дословно (вложения —
@@ -1025,10 +1025,15 @@ class ChatLog:
         раньше — по строке, а что не уместилось — счётчиками. `budget` —
         символы; длина результата никогда его не превышает. Порядок —
         хронологический. Пишущийся ответ (`writing`), `meeting voiced` и
-        `system` с ошибкой не попадают."""
+        `system` с ошибкой не попадают. `until` — только записи до этого id
+        включительно (ответ после встречи не видит более поздних сообщений)."""
         if budget <= 0:
             return ""
         everything = self.messages()
+        if until is not None:
+            ids = [m["id"] for m in everything]
+            if until in ids:
+                everything = everything[:ids.index(until) + 1]
         view = {m["id"]: m for m in everything}
         msgs = [m for m in everything
                 if not (m.get("kind") == "meeting" and m.get("event") == "voiced")

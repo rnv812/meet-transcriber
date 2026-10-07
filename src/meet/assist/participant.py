@@ -99,6 +99,7 @@ NOTE_INTERRUPTED = ("Твой прошлый ответ прерван новы�
 NOTE_STOPPED = "Пользователь остановил твой прошлый ответ — не продолжай его."
 TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
 SHUTDOWN_ERROR = "ассистент остановлен"
+NOTHING_TO_ADD = "Ассистенту нечего добавить"
 _ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
 
 
@@ -304,7 +305,7 @@ class Participant:
                  clock=time.monotonic, log=print, merge_window_s: float = MERGE_WINDOW_S,
                  pause_s: float = PAUSE_S, max_interval_s: float = MAX_INTERVAL_S,
                  min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S,
-                 after_meeting: bool = False) -> None:
+                 after_meeting: bool = False, seed_until: str | None = None) -> None:
         from meet import llm
 
         self._bus = bus
@@ -335,6 +336,9 @@ class Participant:
         self._turn_timeout = turn_timeout_s
         # «Продолжить разговор» после встречи: у сообщений нет секунд записи.
         self._after_meeting = after_meeting
+        # Затравка — журнал только до этого сообщения: более поздние ждут
+        # своих задач «Продолжить разговор» (ревью M5).
+        self._seed_until = seed_until
 
         self.tools = provider in TOOL_PROVIDERS
         self.vision = llm.vision(provider)
@@ -908,7 +912,9 @@ class Participant:
         inputs = turn.inputs
         parts = []
         if force_seed or not session.has_context:
-            seed = pp.seed(self._chatlog, "", self._materials_summary(),
+            journal = (_JournalUntil(self._chatlog, self._seed_until) if self._seed_until
+                       else self._chatlog)
+            seed = pp.seed(journal, "", self._materials_summary(),
                            pp.ParticipantSettings(frequency=self.frequency,
                                                   owner_speaker=self._owner_speaker),
                            transcript=self._history(inputs.start), t=self._now_t())
@@ -1071,6 +1077,10 @@ class Participant:
             if note:
                 fields["note"] = note
             self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, **fields)])
+            if not requests and turn.addressed and turn.re:
+                # Пользователь спросил, а агент промолчал: без строки в ленте
+                # вопрос остался бы без ответа (ревью I2, решение (a)).
+                await self.note_nothing_to_add(turn.re)
         else:
             await self._show(turn, says)
         if requests:
@@ -1200,7 +1210,8 @@ class Participant:
         if client_id:
             old = await self._io(self._chatlog.by_client_id, client_id)
             if old is not None:
-                return {"id": old["id"], "queued": False, "duplicate": True,
+                queued = await self._requeue_unanswered(old)
+                return {"id": old["id"], "queued": queued, "duplicate": True,
                         "attachments": list(old.get("attachments") or [])}
         described, images, ids, image_ids = [], [], [], {}
         for item in attachments or ():
@@ -1226,6 +1237,21 @@ class Participant:
         self._interrupt_for_user()
         self._kick()
         return {"id": msg["id"], "queued": self._turn is not None, "attachments": ids}
+
+    async def _requeue_unanswered(self, message: dict) -> bool:
+        """Повтор `POST /chat` (тот же `client_id`) после перезапуска ребёнка:
+        сообщение без ответа — снова в очередь (ревью I1). Уже ждёт, отвечается
+        сейчас или отвечено — ничего."""
+        mid = message.get("id")
+        if message.get("kind") != "user" or any(m.get("id") == mid for m in self._user):
+            return False
+        if self._turn is not None and self._turn.re == mid:
+            return False
+        if answered(await self._io(self._chatlog.messages), mid):
+            return False
+        await self.queue_existing(mid)
+        self._interrupt_for_user()
+        return True
 
     def _queue_user(self, msg: dict) -> None:
         self._user.append(msg)
@@ -1314,6 +1340,16 @@ class Participant:
         self._kick()
         return message
 
+    async def note_nothing_to_add(self, mid: str) -> None:
+        """Строка журнала `system` «Ассистенту нечего добавить» к сообщению
+        пользователя `mid` (видна в ленте и в `assistant_chat.md`)."""
+        try:
+            added = await self._io(self._chatlog.append, "system", text=NOTHING_TO_ADD, re=mid)
+        except (OSError, RuntimeError) as e:
+            self._log(f"агент: строка «нечего добавить» не записана ({type(e).__name__}: {e})")
+            return
+        self._emit_chat([added.event])
+
     def add_note(self, text: str) -> None:
         """Заметка Meet агенту — в ближайший ход (сама ход не вызывает)."""
         if text and text not in self._notes:
@@ -1347,16 +1383,16 @@ class Participant:
             if _looks_image(item) and images >= att.MAX_PER_MESSAGE:
                 raise att.AttachmentError(f"В сообщении — не больше {att.MAX_PER_MESSAGE} изображений")
             if isinstance(item, dict) and isinstance(item.get("data"), (bytes, bytearray)):
-                saved = await asyncio.to_thread(att.save, self._folder, bytes(item["data"]),
-                                                name=item.get("name"))
+                saved = await self._parse(att.save, self._folder, bytes(item["data"]),
+                                          name=item.get("name"))
                 fields, image = self._image_fields(saved), saved["path"]
             else:
                 path = Path(item.get("path") if isinstance(item, dict) else item)
                 if path.suffix.lower() in IMAGE_SUFFIXES and not path.is_dir():
-                    saved = await asyncio.to_thread(att.save_file, self._folder, path)
+                    saved = await self._parse(att.save_file, self._folder, path)
                     fields, image = self._image_fields(saved), saved["path"]
                 else:
-                    fields = await asyncio.to_thread(self._add_document, path)
+                    fields = await self._parse(self._add_document, path)
         except (ValueError, OSError, TypeError) as e:
             name = _item_name(item)
             fields = {"type": "image" if _looks_image(item) else "doc", "name": name,
@@ -1370,6 +1406,38 @@ class Participant:
             self._materials += 1
         self._changed()
         return added.message, _descriptor(added.message, self.vision), image
+
+    async def _parse(self, fn, *args, **kwargs):
+        """Разбор вложения в потоке. Отменили (срок `/chat/attach`, стоп) —
+        поток дорабатывает сам, а то, что он положил в папку встречи, потом
+        убирается: материал без записи журнала иначе съедал бы квоту и попадал
+        в затравку (ревью M3)."""
+        future = asyncio.ensure_future(asyncio.to_thread(fn, *args, **kwargs))
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            future.add_done_callback(self._drop_orphan)
+            raise
+
+    def _drop_orphan(self, future) -> None:
+        if future.cancelled() or future.exception() is not None:
+            return
+        result = future.result()
+        if not isinstance(result, dict) or result.get("duplicate"):
+            return
+        from meet import materials
+
+        paths = []
+        if result.get("type") == "doc" and isinstance(result.get("ref"), str):
+            paths.append(materials.materials_dir(self._folder) / f"{result['ref']}.json")
+            paths.append(_text_dump_path(self._folder, result["ref"]))
+        elif result.get("path"):
+            paths.append(Path(result["path"]))   # картинка: assistant/files/<id>.<ext>
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                self._log(f"агент: брошенное вложение не убрано ({path.name}: {e})")
 
     def _image_fields(self, saved: dict) -> dict:
         fields = {"type": "image", "name": saved.get("name") or saved["id"], "status": "ready",
@@ -1434,6 +1502,31 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
 
 
 # --- помощники ---
+
+def answered(messages, mid: str) -> bool:
+    """Есть ли ответ на сообщение пользователя `mid`: реплика агента `re`
+    (показана или пишется) или строка «нечего добавить». Остановленный,
+    упавший или скрытый ответ — не ответ."""
+    for m in messages or ():
+        if m.get("re") != mid:
+            continue
+        if m.get("kind") == "agent" and m.get("status") in ("shown", "writing"):
+            return True
+        if m.get("kind") == "system":
+            return True
+    return False
+
+
+class _JournalUntil:
+    """Журнал для затравки до сообщения `until` включительно."""
+
+    def __init__(self, chatlog, until: str) -> None:
+        self._chatlog = chatlog
+        self._until = until
+
+    def context(self, budget: int, **kwargs) -> str:
+        return self._chatlog.context(budget, until=self._until, **kwargs)
+
 
 def _max_images() -> int:
     from meet.assist import attachments as att

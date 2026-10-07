@@ -252,15 +252,13 @@ def test_attach_path_needs_the_resident_token(tmp_path):
             body = await r.json()
             assert body["status"] == "ready" and body["attachment"]["type"] == "doc"
             assert state.chat.get(body["id"])["kind"] == "attachment"
-            # Своя страница браузера (Origin) путь не пришлёт и с токеном не в счёт:
-            # у ребёнка с токеном решает только он, а без токена — отсутствие Origin.
+            # Без токена (консоль) путь не принимается ни от кого (ревью I4).
             state.control_token = None
-            port = client.server.port
-            r = await client.post("/chat/attach", json={"path": str(note)},
-                                  headers={"Origin": f"http://127.0.0.1:{port}"})
+            r = await client.post("/chat/attach", json={"path": str(note)})
             assert r.status == 403
-            r = await client.post("/chat/attach", json={"path": str(note)})   # консоль
-            assert r.status == 200
+            r = await client.post("/chat/attach", json={"path": str(note)},
+                                  headers={TOKEN_HEADER: "s3cret"})
+            assert r.status == 403
 
     _run(scenario())
 
@@ -500,3 +498,91 @@ def test_queue_existing_message_written_by_another_writer(tmp_path):
         await p.shutdown()
 
     _run(main())
+
+
+def test_foreign_host_is_refused(tmp_path):
+    """I3: страница с чужим именем, указывающим на 127.0.0.1 (DNS-подмена),
+    не читает ни ленту, ни чат."""
+    async def scenario():
+        state = ChatState(tmp_path)
+        async with TestClient(TestServer(build_app(state))) as client:
+            port = client.server.port
+            for host in (f"evil.example:{port}", "evil.example", f"127.0.0.1:{port + 1}",
+                         f"localhost.evil:{port}"):
+                for path in ("/chat", "/events", "/"):
+                    r = await client.get(path, headers={"Host": host})
+                    assert r.status == 403, (host, path)
+            r = await client.post("/chat", json={"text": "a"}, headers={"Host": f"evil.example:{port}"})
+            assert r.status == 403 and state.chat.messages() == []
+            for host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                assert (await client.get("/chat", headers={"Host": host})).status == 200
+
+    _run(scenario())
+
+
+def test_failed_snapshot_is_retried(tmp_path):
+    """M2: снимок не прочитался — он повторяется, а не уходят одни дельты."""
+    async def scenario():
+        state = ChatState(tmp_path)
+        real = state.participant.snapshot
+        calls = {"n": 0}
+
+        async def flaky(limit=200):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("журнал занят")
+            return await real(limit)
+
+        state.participant.snapshot = flaky
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                await _read_events(resp, 1)          # state
+                await client.post("/chat", json={"text": "раз", "client_id": "c1"})
+                snap, seen = await _until(resp, "chat_snapshot")
+                assert [m["text"] for m in snap["messages"]] == ["раз"]
+                assert not [e for e, _ in seen if e == "chat"]   # дельт до снимка нет
+
+    _run(scenario())
+
+
+
+def test_live_silence_to_a_user_message_leaves_a_visible_line(tmp_path):
+    """I2 во время встречи: на сообщение пользователя агент промолчал — строка
+    «Ассистенту нечего добавить»; молчание по репликам встречи — без неё."""
+    runner = Runner('{"silent": true}', '{"silent": true}')
+    state = ChatState(tmp_path, runner=runner)
+    p = state.participant
+
+    async def main():
+        await p.post_user_message("Спасибо", client_id="c1")
+        assert await p.tick()
+        state.bus.publish("[00:00:05] Демьян: дальше", {"t": 5.0, "speaker": "Демьян", "text": "дальше"})
+        p._pause = p._min_gap = -5.0     # пауза — сразу (часы теста тикают на каждый взгляд)
+        assert await p.tick()
+        assert "дальше" in runner.calls[1][0]
+        await p.shutdown()
+
+    _run(main())
+    feed = state.chat.snapshot(feed=True)["messages"]
+    assert [(m["kind"], m.get("text"), m.get("re")) for m in feed] == [
+        ("user", "Спасибо", None), ("system", "Ассистенту нечего добавить", "m1")]
+
+
+def test_duplicate_post_of_an_unanswered_message_queues_it_again(tmp_path):
+    """I1 во время встречи: ребёнок перезапустился, окно повторило POST /chat —
+    сообщение без ответа снова уходит агенту."""
+    state = ChatState(tmp_path, runner=Runner('{"say": "Отвечаю"}'))
+    state.chat.append("user", text="Сроки?", client_id="c1")      # прошлый ребёнок
+    p = state.participant
+
+    async def main():
+        again = await p.post_user_message("Сроки?", client_id="c1")
+        assert again["duplicate"] is True and again["queued"] is True
+        assert (await p.post_user_message("Сроки?", client_id="c1"))["queued"] is False   # уже ждёт
+        assert await p.tick()
+        assert (await p.post_user_message("Сроки?", client_id="c1"))["queued"] is False   # отвечено
+        await p.shutdown()
+
+    _run(main())
+    agent = [m for m in state.chat.messages() if m["kind"] == "agent"]
+    assert agent[0]["re"] == "m1" and agent[0]["text"] == "Отвечаю"

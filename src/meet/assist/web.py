@@ -21,6 +21,9 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
 (заголовок Last-Event-ID) получает только пропущенные строки.
 Потребляет утиный объект состояния (в тестах — FakeState, в бою — AssistState).
 
+Любой запрос — только с `Host` 127.0.0.1 или localhost и своим портом
+(защита от DNS-подмены: иначе чужая страница прочла бы ленту и чат).
+
 **Чат агента-участника** (V4, задача 6; `state.participant` — иначе 409):
 
 - `GET /chat[?limit=N]` → `{"messages", "seq", "agent", "partial"}` — лента
@@ -32,8 +35,8 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
   (URL-кодировано) → `{"id", "status", "attachment"}`;
 - `POST /chat/attach` `{"path"}` — файл или папка с диска, только от
   доверенного вызывающего (`_trusted`: заголовок `X-Meet-Token` с токеном,
-  который резидент дал ребёнку в окружении; без токена — только запрос без
-  Origin, то есть не страница браузера) → как `/chat/paste`;
+  который резидент дал ребёнку в окружении; без токена — 403) → как
+  `/chat/paste`;
 - `POST /chat/{id}/click` `{"label", "client_id"?}` → `{"ok", "id"}`;
 - `POST /chat/{id}/react` `{"emoji", "on"?}` → `{"ok", "changed"}`;
 - `POST /chat/stop` `{"id"?}` → `{"ok"}`;
@@ -168,10 +171,27 @@ def _first_line_index(request, size: int) -> int:
         return max(0, size - TRANSCRIPT_TAIL)
 
 
-def _own_origins(request) -> set[str]:
+def _own_port(request):
     sock = request.transport.get_extra_info("sockname") if request.transport else None
-    port = sock[1] if sock else request.url.port
+    return sock[1] if sock else request.url.port
+
+
+def _own_origins(request) -> set[str]:
+    port = _own_port(request)
     return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+
+
+@web.middleware
+async def _own_host(request, handler):
+    """Только `Host` 127.0.0.1 или localhost со своим портом: страница с
+    чужим именем, которое DNS-подменой указывает на 127.0.0.1, с нами
+    «одного происхождения» и иначе прочла бы `GET /chat` и `/events`
+    (ревью I3)."""
+    port = _own_port(request)
+    host = (request.headers.get("Host") or "").strip().lower()
+    if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        raise web.HTTPForbidden(text="чужой Host")
+    return await handler(request)
 
 
 @web.middleware
@@ -188,14 +208,15 @@ async def _same_origin_posts(request, handler):
 
 def _trusted(request, state) -> bool:
     """Доверенный вызывающий (резидент): заголовок с токеном, который он дал
-    ребёнку (`state.control_token`). Без токена (`meet assist` из консоли) —
-    запрос без Origin: страница браузера (даже своя) путь к файлу не пришлёт,
-    она отдаёт байты (`/chat/paste`)."""
+    ребёнку (`state.control_token`). Без токена (`meet assist` из консоли)
+    путь не принимается вовсе: иначе любой процесс машины заставил бы
+    ассистента прочесть любой файл пользователя (ревью I4). Страница браузера
+    отдаёт байты (`/chat/paste`)."""
     token = getattr(state, "control_token", None)
-    if token:
-        given = request.headers.get(TOKEN_HEADER) or ""
-        return hmac.compare_digest(given.encode("utf-8"), str(token).encode("utf-8"))
-    return request.headers.get("Origin") is None
+    if not token:
+        return False
+    given = request.headers.get(TOKEN_HEADER) or ""
+    return hmac.compare_digest(given.encode("utf-8"), str(token).encode("utf-8"))
 
 
 def check_attach_path(raw) -> Path:
@@ -407,9 +428,13 @@ def build_app(state) -> web.Application:
                         # Подключились (или отстали от буфера) — лента целиком;
                         # события после номера ниже придут ещё раз, окно
                         # отбрасывает `seq` не новее снимка.
-                        chat_cursor = feed.count
+                        taken = feed.count
                         snap = await _chat_snapshot(state)
                         if snap is not None:
+                            # Номер — только после удачного снимка: не прочитался
+                            # (журнал занят) — снимок повторится на следующем
+                            # проходе, а не уйдут одни дельты (ревью M2).
+                            chat_cursor = taken
                             await resp.write(_event("chat_snapshot", snap))
                             wrote = True
                     else:
@@ -636,7 +661,7 @@ def build_app(state) -> web.Application:
                                "live": participant is not None, "saved": saved})
 
     # Картинка до 10 МБ в теле `/chat/paste` (по умолчанию aiohttp — 1 МБ).
-    app = web.Application(middlewares=[_same_origin_posts],
+    app = web.Application(middlewares=[_own_host, _same_origin_posts],
                           client_max_size=PASTE_MAX_BYTES + 64 * 1024)
     app.add_routes([
         web.get("/", index),

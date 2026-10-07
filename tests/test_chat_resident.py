@@ -229,6 +229,7 @@ class FakeLive:
         self.calls = []
         self.folder = folder
         self.running = running
+        self.agent_live = True
 
     def status(self):
         return {"folder": str(self.folder) if self.folder else None, "active": self.running}
@@ -242,7 +243,7 @@ class FakeLive:
                 if not self.running:
                     raise live_control.LiveNotRunning("Ассистент не запущен")
                 self.calls.append((name, *args))
-                return {"ok": True}
+                return {"ok": True, "live": self.agent_live}
             return call
         raise AttributeError(name)
 
@@ -326,6 +327,9 @@ def test_agent_frequency_persists_and_reaches_the_live_agent(state):
         "frequency": "less", "label": "реже", "live": True}
     assert settings.load().assist.frequency == "less"
     assert state.live.calls[-1] == ("agent_frequency", "less")
+    # M1: ребёнок без агента-участника («Только сводка») — live от него, false.
+    state.live.agent_live = False
+    assert state.agent_frequency({"frequency": "more"})["live"] is False
     state.live.running = False
     assert state.agent_frequency({"frequency": "normal"})["live"] is False
     assert settings.load().assist.frequency == "normal"
@@ -506,3 +510,38 @@ def test_summary_only_wires_no_participant(tmp_path, monkeypatch):
     cfg = settings.Settings.from_raw({"assist": {"participant": True}})
     heavy, st = _wired(tmp_path / "on", monkeypatch, cfg)
     assert st.participant is not None and st.chat_feed is not None
+
+
+
+# --- раунд исправлений 1 ---------------------------------------------------------------
+
+
+def test_duplicate_without_job_and_answer_queues_again(state, tmp_path):
+    """I1: задача потерялась (перезапуск резидента, отмена) — повтор с тем же
+    client_id спрашивает агента снова; отвеченное — нет."""
+    first = state.continue_chat(RID, {"text": "Сроки?", "client_id": "k-1"})
+    state.llm_queue.cancel(first["job"]["id"])
+    again = state.continue_chat(RID, {"text": "Сроки?", "client_id": "k-1"})
+    assert again["duplicate"] is True and again["job"]["id"] != first["job"]["id"]
+    assert state.llm_queue.get(again["job"]["id"]).options == {"message": "m1"}
+    state.llm_queue.cancel(again["job"]["id"])
+    folder = tmp_path / "recordings" / RID
+    ChatLog(folder).append("agent", status="shown", text="Пятница", re="m1")
+    third = state.continue_chat(RID, {"text": "Сроки?", "client_id": "k-1"})
+    assert third["duplicate"] is True and third["job"] is None
+
+
+def test_killed_chat_job_reply_is_closed(state, app, tmp_path):
+    """M6: «пишет» от убитой задачи закрывается — по её концу и при чтении."""
+    folder = tmp_path / "recordings" / RID
+    log = ChatLog(folder)
+    log.append("user", text="Сроки?")
+    stuck = log.begin_reply(mode="reply", re="m1").message
+    state._background = lambda fn, name="": fn()
+    job = jobs.Job(id="j9", kind=jobs.CHAT, folder=str(folder))
+    job.state = jobs.FAILED
+    app.bus.emit(jobs.JOB_FAILED, job=job.to_raw())
+    assert log.get(stuck["id"])["status"] == "cancelled"
+    second = log.begin_reply(mode="reply", re="m1").message   # как после выхода резидента
+    out = state.recording_chat(RID)
+    assert [m["status"] for m in out["messages"] if m["id"] == second["id"]] == ["cancelled"]

@@ -187,9 +187,10 @@ def test_merge_concatenates_two_journals_in_time_order(tmp_path):
     msgs = ChatLog(target).load()
     assert count == len(msgs) == 9
     texts = [(m["kind"], m.get("text")) for m in msgs]
+    # «После встречи» части 1 остаётся в её блоке, не под «— часть 2 —» (ревью M4).
     assert texts == [("meeting", "— часть 1 —"), ("attachment", None), ("user", "смотри"),
-                     ("agent", "вижу"), ("agent", ""), ("meeting", "— часть 2 —"),
-                     ("user", "вторая часть"), ("agent", "ок"), ("user", "после встречи")]
+                     ("agent", "вижу"), ("agent", ""), ("user", "после встречи"),
+                     ("meeting", "— часть 2 —"), ("user", "вторая часть"), ("agent", "ок")]
     ids = [m["id"] for m in msgs]
     assert len(set(ids)) == len(ids) and ids[1] == "a1"
     by_text = {m.get("text"): m for m in msgs}
@@ -338,3 +339,102 @@ def test_merge_run_glues_the_chats_of_its_parts(tmp_path, monkeypatch):
     msgs = ChatLog(folder).load()
     assert [(m.get("text"), m.get("t")) for m in msgs] == [
         ("— часть 1 —", 0.0), ("первая", 30.0), ("— часть 2 —", 600.0), ("вторая", 620.0)]
+
+
+
+# --- раунд исправлений 1 ---------------------------------------------------------------
+
+
+def test_chat_job_silence_leaves_a_visible_line(folder, capsys):
+    """I2: после встречи агент промолчал — строка «Ассистенту нечего добавить»."""
+    log = ChatLog(folder)
+    log.append("user", text="Спасибо!", after_meeting=True)
+    runner = Runner('{"silent": true}')
+    assert job_worker._chat(str(folder), "m1", runner=runner, provider="codex") == 0
+    assert "silent" in runner.calls[0][0] and "обязательно" in runner.calls[0][0]
+    feed = log.snapshot(feed=True)["messages"]
+    assert [(m["kind"], m.get("text"), m.get("re")) for m in feed] == [
+        ("user", "Спасибо!", None), ("system", "Ассистенту нечего добавить", "m1")]
+
+
+def test_chat_job_read_chain_out_of_turns_leaves_a_visible_line(folder, capsys, monkeypatch):
+    """I2: модель без инструментов просит и просит — ходы кончились без ответа."""
+    monkeypatch.setattr(job_worker, "CHAT_TURNS_MAX", 2)
+    log = ChatLog(folder)
+    log.append("user", text="Что в плане?", after_meeting=True)
+    asks = ['{"list": ""}'] * 3
+    runner = Runner(*asks)
+    assert job_worker._chat(str(folder), "m1", runner=runner, provider="openai-compatible") == 0
+    texts = [m.get("text") for m in log.snapshot(feed=True)["messages"]]
+    assert texts[-1] == "Ассистенту нечего добавить"
+
+
+def test_after_meeting_note_names_the_transcript_and_summary(folder):
+    """I5: агент с инструментами узнаёт, где расшифровка и итоги; модели без
+    инструментов итоги — текстом, в пределах бюджета."""
+    (folder / "summary.md").write_text("# Итоги\n\nРелиз — в пятницу.\n", encoding="utf-8")
+    note = job_worker._after_meeting_note(folder, tools=True)
+    assert str(folder / "transcript.json") in note and str(folder / "summary.md") in note
+    assert "Релиз — в пятницу" not in note
+    local = job_worker._after_meeting_note(folder, tools=False)
+    assert "Релиз — в пятницу" in local and "<<<ИТОГИ" in local
+    (folder / "summary.md").write_text("x" * 20_000, encoding="utf-8")
+    assert len(job_worker._after_meeting_note(folder, tools=False)) < job_worker.CHAT_SUMMARY_MAX + 1000
+
+
+def test_chat_job_for_local_model_sees_the_summary(folder, capsys):
+    (folder / "summary.md").write_text("# Итоги\n\nБюджет утвердили.\n", encoding="utf-8")
+    ChatLog(folder).append("user", text="Что с бюджетом?", after_meeting=True)
+    runner = Runner('{"say": "Утвердили."}')
+    assert job_worker._chat(str(folder), "m1", runner=runner, provider="openai-compatible") == 0
+    assert "Бюджет утвердили." in runner.calls[0][0]
+
+
+def test_seed_does_not_include_later_messages(folder, capsys):
+    """M5: ответ на m1 не видит m2 (у того своя задача)."""
+    log = ChatLog(folder)
+    log.append("user", text="Первый вопрос", after_meeting=True)
+    log.append("user", text="Второй вопрос", after_meeting=True)
+    runner = Runner('{"say": "Ответ на первый."}')
+    assert job_worker._chat(str(folder), "m1", runner=runner, provider="openai-compatible") == 0
+    assert "Первый вопрос" in runner.calls[0][0] and "Второй вопрос" not in runner.calls[0][0]
+
+
+def test_attach_timeout_does_not_leave_an_orphan_material(tmp_path, monkeypatch):
+    """M3: срок /chat/attach вышел, разбор дописал материал уже без записи
+    журнала — материал убирается."""
+    import asyncio
+
+    from meet.assist.bus import TranscriptBus
+    from meet.assist.participant import Participant
+
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    doc = tmp_path / "План.md"
+    doc.write_text("# План\n\nСрок — пятница.\n", encoding="utf-8")
+    release = threading.Event()
+    real_add = materials.add
+
+    def slow_add(folder, path, **kw):
+        release.wait(5)
+        return real_add(folder, path, **kw)
+
+    monkeypatch.setattr(materials, "add", slow_add)
+    chat = ChatLog(rec)
+    p = Participant(TranscriptBus(), chat, provider="codex", folder=rec, runner=Runner(),
+                    log=lambda _m: None)
+
+    async def main():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(p.attach(str(doc)), 0.2)
+        release.set()
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if not materials.records(rec) and not list(materials.materials_dir(rec).glob("*.txt")):
+                break
+        await p.shutdown()
+
+    asyncio.run(main())
+    assert materials.records(rec) == []
+    assert not list(materials.materials_dir(rec).glob("a*.*"))
+    assert chat.messages() == []

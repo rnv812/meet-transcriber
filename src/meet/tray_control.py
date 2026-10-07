@@ -740,6 +740,8 @@ class TrayControl:
             self._mark_pending(Path(folder), False)
         if kind == jobs.CHAT and folder:
             # Ответ после встречи готов или не удался — окно перечитает чат.
+            if event.kind == jobs.JOB_FAILED:
+                self._background(lambda: self._close_stuck_chat(Path(folder)), "meet-chat")
             self.bus.emit(CHAT_UPDATED, id=Path(folder).name)
         if kind == jobs.ANALYZE and folder:
             stopping = bool(getattr(self.llm_queue, "stopping", False))
@@ -1568,8 +1570,9 @@ class TrayControl:
         settings.patch({"assist": {"frequency": key}})
         live = False
         try:
-            self.live.agent_frequency(key)
-            live = True
+            reply = self.live.agent_frequency(key)
+            # Ребёнок без агента-участника («Только сводка») отвечает live: false.
+            live = isinstance(reply, dict) and reply.get("live") is True
         except live_control.LiveNotRunning:
             pass
         except (live_control.LiveError, RuntimeError) as e:
@@ -3339,7 +3342,12 @@ class TrayControl:
             return {"error": "записи нет"}
         out: dict = {"messages": [], "seq": 0, "legacy": None}
         if chatlog.has_chat(folder):
-            out.update(chatlog.ChatLog(folder, log=self.tray.log).snapshot(feed=True))
+            snap = chatlog.ChatLog(folder, log=self.tray.log).snapshot(feed=True)
+            if any(m.get("status") == chatlog.WRITING for m in snap["messages"]):
+                # «Пишет…» без писателя — от задачи, убитой выходом резидента.
+                self._close_stuck_chat(folder)
+                snap = chatlog.ChatLog(folder, log=self.tray.log).snapshot(feed=True)
+            out.update(snap)
         else:
             out["legacy"] = _legacy_assistant(folder)
         out["live"] = self._live_folder(folder)
@@ -3376,12 +3384,41 @@ class TrayControl:
         message = added.message
         if not added.created:
             job = self.llm_queue.active_for(str(folder), (jobs.CHAT,))
+            if job is None and message.get("kind") == "user" and not self._chat_answered(log, message["id"]):
+                # Повтор после потерянной задачи (перезапуск резидента, отмена,
+                # падение до ответа): ответа нет — спросить агента снова (ревью I1).
+                job = self.llm_queue.submit(jobs.CHAT, str(folder),
+                                            _with_provider({"message": message["id"]}, provider))
             return {"message": message, "job": job.to_raw() if job is not None else None,
                     "duplicate": True}
         self.bus.emit(CHAT_UPDATED, id=folder.name)
         job = self.llm_queue.submit(jobs.CHAT, str(folder),
                                     _with_provider({"message": message["id"]}, provider))
         return {"message": message, "job": job.to_raw()}
+
+    @staticmethod
+    def _chat_answered(log, mid: str) -> bool:
+        from meet.assist.participant import answered
+
+        return answered(log.messages(), mid)
+
+    def _close_stuck_chat(self, folder: Path) -> None:
+        """Задачу ответа убили (отмена, выход резидента) посреди хода: реплика
+        осталась «пишет». Писателя сейчас нет — закрыть её (ревью M6)."""
+        from meet.assist import chatlog
+
+        if not chatlog.has_chat(folder) or self._live_folder(folder):
+            return
+        if self.llm_queue.active_for(str(folder), (jobs.CHAT,)) is not None:
+            return
+        try:
+            events = chatlog.ChatLog(folder, log=self.tray.log).close_interrupted(
+                "ответ прерван: задача остановлена")
+        except OSError as e:
+            self.tray.log(f"чат ассистента: недописанный ответ не закрыт ({folder.name}): {e}")
+            return
+        if events:
+            self.bus.emit(CHAT_UPDATED, id=folder.name)
 
     def _live_folder(self, folder: Path) -> bool:
         """Идёт ли живой режим этой записи (тогда пишет ребёнок)."""
