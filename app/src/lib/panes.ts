@@ -71,7 +71,11 @@ export type PaneSpec = {
   /** Размер по умолчанию; нет — его задаёт CSS (доля области), пока панель не потянули. */
   def?: number;
   min: number;
-  max: number;
+  /**
+   * Верхний предел; нет — панель ограничивает только место области за вычетом
+   * `reserve` (у областей ассистента: соседу остаётся его минимум, и только).
+   */
+  max?: number;
   /** Сколько оставить остальной области (сетке, тексту); по умолчанию 0. */
   reserve?: number | ((room: number) => number);
 };
@@ -82,13 +86,20 @@ export type PaneSpec = {
  * области за вычетом `reserve`: не наезжает на соседа и не выходит за край.
  */
 export function paneBounds(spec: PaneSpec, room: number): { min: number; max: number } {
-  if (!room) return { min: spec.min, max: spec.max };
+  // Не измерена и предела нет — пока только минимум (размер — paneWidth, как просили).
+  if (!room) return { min: spec.min, max: spec.max ?? spec.min };
   const reserve = typeof spec.reserve === "function" ? spec.reserve(room) : spec.reserve ?? 0;
-  const max = Math.max(0, Math.min(spec.max, room - reserve));
+  const max = Math.max(0, Math.min(spec.max ?? Infinity, room - reserve));
   return { min: Math.min(spec.min, max), max };
 }
 
+/**
+ * Размер панели при желаемом `want` в области `room`: в пределах `paneBounds`.
+ * Область сузилась (окно) — панель ужимается, но не уже своего минимума и так,
+ * чтобы соседу осталось `reserve`; запомненный `want` при этом не меняется.
+ */
 export function paneWidth(spec: PaneSpec, want: number, room: number): number {
+  if (!room) return Math.max(spec.min, spec.max == null ? want : Math.min(want, spec.max));
   const b = paneBounds(spec, room);
   return clamp(want, b.min, b.max);
 }

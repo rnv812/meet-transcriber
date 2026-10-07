@@ -13,7 +13,7 @@
 /* Широкая: расшифровка — колонкой слева (по умолчанию ~30 %), разделитель на её правой рамке. */
 .chat-ws__body--side {
   display: grid; gap: 12px;
-  grid-template-columns: var(--chat-side, minmax(180px, 3fr)) minmax(320px, 7fr); grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: var(--chat-side, minmax(160px, 3fr)) minmax(280px, 7fr); grid-template-rows: minmax(0, 1fr);
 }
 .chat-ws__body--side > .chat-ws__transcript { grid-column: 1; grid-row: 1; padding-right: 12px; border-right: 1px solid var(--line); }
 .chat-ws__body--side > .chat-ws__main { grid-column: 2; grid-row: 1; }

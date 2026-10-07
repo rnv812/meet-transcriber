@@ -85,6 +85,16 @@ test("панель в области: не шире области за выче
   expect(paneBounds(spk, 700)).toEqual({ min: 320, max: 700 });
 });
 
+test("панель без верхнего предела: только место области за вычетом соседа и свой минимум", () => {
+  const spec = { min: 160, reserve: 292 };
+  expect(paneBounds(spec, 2000)).toEqual({ min: 160, max: 1708 });
+  expect(paneWidth(spec, 1500, 2000)).toBe(1500);
+  expect(paneWidth(spec, 1500, 900)).toBe(608);            // окно сузили — соседу его минимум
+  expect(paneWidth(spec, 100, 900)).toBe(160);             // не уже своего минимума
+  expect(paneBounds(spec, 0)).toEqual({ min: 160, max: 160 }); // ещё не измерена…
+  expect(paneWidth(spec, 1500, 0)).toBe(1500);             // …размер — как просили, до замера
+});
+
 test("ширины запоминаются; по умолчанию — ничего не хранится; мусор и недоступное хранилище не мешают", () => {
   saveShell({ nav: 240, navMode: "rail", list: 400 });
   expect(loadShell()).toEqual({ nav: 240, navMode: "rail", list: 400 });

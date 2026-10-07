@@ -11,6 +11,7 @@ vi.mock("../lib/api", async (orig) => ({
 import { postChat, setAgentFrequency } from "../lib/api";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
+import { CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN } from "./ChatWorkspace";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
 import { EMPTY_SUMMARY } from "./liveModel";
 import { type Chat, useChat } from "./useChat";
@@ -159,4 +160,89 @@ test("до первого состояния — «Подключаюсь к а�
   expect(screen.getByText("Подключаюсь к ассистенту…")).toBeInTheDocument();
   expect(screen.queryByRole("tablist")).toBeNull();
   expect(screen.queryByRole("log")).toBeNull();
+});
+
+
+// --- ширина колонки расшифровки: без верхнего предела, только минимумы -----------------------
+
+/** Ширина тела широкой раскладки (jsdom не раскладывает); `room.px` можно менять — «окно». */
+function sideLayout(room: { px: number }, column = 300) {
+  width(1200);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("chat-ws__body--side") ? room.px : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("chat-ws__transcript") ? column : 0;
+  });
+  const all: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    cb: () => void;
+    constructor(cb: () => void) { this.cb = cb; }
+    observe() { all.push(this.cb); }
+    disconnect() { const at = all.indexOf(this.cb); if (at >= 0) all.splice(at, 1); }
+  });
+  return { resize: (px: number) => { room.px = px; act(() => { [...all].forEach((cb) => cb()); }); } };
+}
+const body = () => document.querySelector<HTMLElement>(".chat-ws__body--side")!;
+const sideSplit = () => screen.getByRole("separator", { name: "Ширина расшифровки" });
+/** Чату остаётся его минимум и промежуток сетки. */
+const sideMax = (room: number) => room - CHAT_MIN - 12;
+
+describe("ширина колонки расшифровки", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  test("предел — только место: колонку можно расширить далеко за прежние 640 px, чату — его минимум", async () => {
+    sideLayout({ px: 1800 });
+    render(<Host live={makeLive({ agent: agentInfo() })} wide />);
+    const split = sideSplit();
+    expect(CHAT_PANES.side).not.toHaveProperty("max");
+    expect(split).toHaveAttribute("aria-valuemin", String(CHAT_SIDE_MIN));
+    expect(split).toHaveAttribute("aria-valuemax", String(sideMax(1800)));
+    fireEvent.keyDown(split, { key: "End" });
+    expect(body().style.getPropertyValue("--chat-side")).toBe(`${sideMax(1800)}px`);
+    expect(localStorage.getItem("meet.pane.live-chat-side")).toBe(String(sideMax(1800)));
+    // мышью — тоже до упора вправо, не дальше минимума чата
+    fireEvent.keyDown(split, { key: "Home" });
+    fireEvent.pointerDown(split, { button: 0, clientX: 300, pointerId: 1 });
+    fireEvent.pointerMove(split, { clientX: 1400, pointerId: 1 });
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    fireEvent.pointerUp(split, { clientX: 1400, pointerId: 1 });
+    expect(body().style.getPropertyValue("--chat-side")).toBe(`${CHAT_SIDE_MIN + 1100}px`);
+    expect(CHAT_SIDE_MIN + 1100).toBeGreaterThan(640);
+  });
+
+  test("клавиши — шаг 16 px; двойной щелчок и Enter — как было", () => {
+    sideLayout({ px: 1200 });
+    render(<Host live={makeLive({ agent: agentInfo() })} wide />);
+    const split = sideSplit();
+    expect(split).toHaveAttribute("aria-valuenow", "300");      // по CSS, пока не тянули
+    fireEvent.keyDown(split, { key: "ArrowRight" });             // колонка слева: → — шире
+    expect(body().style.getPropertyValue("--chat-side")).toBe("316px");
+    fireEvent.doubleClick(split);
+    expect(body().style.getPropertyValue("--chat-side")).toBe("");
+    expect(localStorage.getItem("meet.pane.live-chat-side")).toBeNull();
+    fireEvent.keyDown(split, { key: "ArrowLeft" });
+    expect(body().style.getPropertyValue("--chat-side")).toBe("284px");
+    fireEvent.keyDown(split, { key: "Enter" });
+    expect(body().style.getPropertyValue("--chat-side")).toBe("");
+  });
+
+  test("окно сузили — запомненная ширина ужимается, чат не уже минимума; шире — возвращается", () => {
+    localStorage.setItem("meet.pane.live-chat-side", "1000");
+    const room = { px: 1600 };
+    const win = sideLayout(room);
+    render(<Host live={makeLive({ agent: agentInfo() })} wide />);
+    expect(body().style.getPropertyValue("--chat-side")).toBe("1000px");
+    win.resize(900);
+    expect(body().style.getPropertyValue("--chat-side")).toBe(`${sideMax(900)}px`);
+    expect(sideSplit()).toHaveAttribute("aria-valuemax", String(sideMax(900)));
+    win.resize(700);                                             // совсем узко — расшифровке её минимум
+    expect(body().style.getPropertyValue("--chat-side")).toBe(`${Math.max(CHAT_SIDE_MIN, sideMax(700))}px`);
+    expect(localStorage.getItem("meet.pane.live-chat-side")).toBe("1000");   // пожелание остаётся
+    win.resize(1600);
+    expect(body().style.getPropertyValue("--chat-side")).toBe("1000px");
+  });
 });

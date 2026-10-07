@@ -404,6 +404,16 @@ describe("размеры областей широкой раскладки", ()
     expect(ws().style.getPropertyValue("--live-side")).toBe(`${LIVE_PANES.side.min}px`);
   });
 
+  test("без верхнего предела: колонку можно расширить за прежние 960 px, ленте — её минимум", () => {
+    layout({ room: 2000 });
+    render(<Host live={makeLive()} wide />);
+    const col = split("Ширина колонки подсказок");
+    expect(LIVE_PANES.side).not.toHaveProperty("max");
+    expect(col).toHaveAttribute("aria-valuemax", String(2000 - LIVE_PANES.feedMin - 12));
+    fireEvent.keyDown(col, { key: "End" });
+    expect(ws().style.getPropertyValue("--live-side")).toBe(`${2000 - LIVE_PANES.feedMin - 12}px`);
+  });
+
   test("двойной щелчок — снова как по умолчанию: переменная и запомненное снимаются", () => {
     layout();
     localStorage.setItem("meet.pane.live-side", "500");
