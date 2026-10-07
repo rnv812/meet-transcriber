@@ -235,6 +235,56 @@ pub async fn pick_media(app: AppHandle) -> Result<Option<String>, String> {
     .map_err(|error| error.to_string())?
 }
 
+/// Что можно приложить к сообщению ассистенту кнопкой «📎»: документы, которые
+/// разбирает резидент (`materials.DOC_SUFFIXES`), и картинки
+/// (`participant.IMAGE_SUFFIXES`). Перетаскивание и папки идут мимо этого
+/// списка — их проверяет сам резидент.
+pub const CHAT_ATTACH_EXTS: &[&str] = &[
+    "md", "txt", "docx", "pptx", "xlsx", "csv", "pdf", "png", "jpg", "jpeg", "gif", "webp", "bmp",
+    "tif", "tiff",
+];
+
+/// Путь из диалога можно отдать резиденту как вложение чата: абсолютный, не
+/// сетевой (UNC-путь `//сервер/…`) и с расширением из `CHAT_ATTACH_EXTS`.
+pub fn chat_attachable(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    if !path.is_absolute()
+        || text.starts_with("\\\\")
+        || text.starts_with("//")
+        || text.contains('\0')
+    {
+        return false;
+    }
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| CHAT_ATTACH_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Диалог «📎 Приложить» строки ввода чата ассистента: несколько файлов;
+/// отказ — пустой список. Пути — только из `chat_attachable`.
+#[tauri::command]
+pub async fn pick_chat_files(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(chosen) = app
+            .dialog()
+            .file()
+            .add_filter("Документы и картинки", CHAT_ATTACH_EXTS)
+            .blocking_pick_files()
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(chosen
+            .into_iter()
+            .filter_map(|file| file.into_path().ok())
+            .filter(|path| chat_attachable(path))
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Диалог выбора папки (настройки ассистента: база знаний, заметки). `start`
 /// — откуда начать, если такая папка есть. `None` — отказ.
 #[tauri::command]
@@ -549,6 +599,22 @@ mod tests {
             main_url(Some("rec"), Some("assistant")),
             "index.html?recording=rec&section=assistant"
         );
+    }
+
+    #[test]
+    fn chat_attachments_keep_only_known_local_files() {
+        let root = if cfg!(windows) { r"C:\Users\me\" } else { "/home/me/" };
+        for name in ["План.pptx", "notes.MD", "скрин.PNG", "photo.jpeg", "table.xlsx", "doc.pdf"] {
+            let path = PathBuf::from(format!("{root}{name}"));
+            assert!(chat_attachable(&path), "{name}");
+        }
+        for name in ["setup.exe", "script.ps1", "archive.zip", "noext", "page.html"] {
+            let path = PathBuf::from(format!("{root}{name}"));
+            assert!(!chat_attachable(&path), "{name}");
+        }
+        assert!(!chat_attachable(Path::new("relative/План.pptx")));
+        assert!(!chat_attachable(Path::new(r"\\server\share\План.pptx")));
+        assert!(!chat_attachable(Path::new("//server/share/План.pptx")));
     }
 
     fn argv(items: &[&str]) -> Vec<String> {

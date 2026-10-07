@@ -116,6 +116,7 @@ fn main() {
             windows::save_text,
             windows::pick_media,
             windows::pick_folder,
+            windows::pick_chat_files,
             windows::resident_status,
             // Плавающая панель ассистента: вид, размер, перетаскивание.
             live_panel::live_window_state,

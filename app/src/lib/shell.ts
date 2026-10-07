@@ -36,6 +36,42 @@ export async function pickMedia(): Promise<string | null> {
   return invoke<string | null>("pick_media");
 }
 
+/** «📎» строки ввода чата ассистента: файлы для вложения (оболочка пропускает только документы и картинки). */
+export async function pickChatFiles(): Promise<string[]> {
+  if (!inTauri()) return [];
+  return invoke<string[]>("pick_chat_files");
+}
+
+/** Перетаскивание файлов на окно (Tauri: HTML5-перетаскивание WebView2 перехватывает сам). */
+export type FileDrop =
+  | { type: "enter" | "over"; x: number; y: number }
+  | { type: "drop"; x: number; y: number; paths: string[] }
+  | { type: "leave" };
+
+/**
+ * Подписка на перетаскивание файлов на это окно; `x`, `y` — точка в CSS-пикселях
+ * окна (оболочка даёт физические). Вне приложения — ничего. → отписка.
+ */
+export async function onFileDrop(cb: (e: FileDrop) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((e) => {
+    const p = e.payload as { type: string; paths?: string[]; position?: { x: number; y: number } };
+    const scale = window.devicePixelRatio || 1;
+    const x = (p.position?.x ?? 0) / scale;
+    const y = (p.position?.y ?? 0) / scale;
+    if (p.type === "enter" || p.type === "over") cb({ type: p.type, x, y });
+    else if (p.type === "drop") cb({ type: "drop", x, y, paths: p.paths ?? [] });
+    else if (p.type === "leave") cb({ type: "leave" });
+  });
+}
+
+/** Точка (x, y) окна — над зоной вложений чата (элемент с `data-chat-drop`). */
+export function overChatDrop(x: number, y: number): boolean {
+  const el = typeof document.elementFromPoint === "function" ? document.elementFromPoint(x, y) : null;
+  return !!el?.closest("[data-chat-drop]");
+}
+
 /**
  * Диалог выбора папки (`start` — откуда начать). null — отказ. В браузере (dev)
  * диалога нет — путь вводится руками.
