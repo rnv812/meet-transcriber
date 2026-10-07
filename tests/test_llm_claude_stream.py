@@ -77,7 +77,7 @@ def test_command_line_no_tools_no_persistence_model_and_thinking(fake_cli, monke
         assert flag in argv
     assert argv[argv.index("--tools") + 1] == ""
     assert argv[argv.index("--input-format") + 1] == "stream-json"
-    assert argv[argv.index("--model") + 1] == "haiku"
+    assert "--model=haiku" in argv
     assert argv[argv.index("--thinking") + 1] == "disabled"
     assert argv[argv.index("--system-prompt") + 1] == "системный промпт подсказок"
     # Рабочая папка — служебная, не папка встречи (вкладка «Агент» её не продолжит).

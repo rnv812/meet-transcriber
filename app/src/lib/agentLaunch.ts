@@ -137,7 +137,7 @@ export function ourArgs(agent: AgentId, knowledge: string | null, resume = false
   if (agent === "opencode") return resume ? ["--continue"] : [];
   if (agent === "claude-code") {
     return [resume ? "--resume" : "--session-id", SESSION_ID, ...(kb ? ["--add-dir", kb] : []),
-      "--append-system-prompt", MEETING_PROMPT, "--model", model?.trim() || DEFAULT_CLAUDE_MODEL];
+      "--append-system-prompt", MEETING_PROMPT, `--model=${model?.trim() || DEFAULT_CLAUDE_MODEL}`];
   }
   return [...(resume ? ["resume", "--last"] : []), "--cd", MEETING_FOLDER, "-c", `developer_instructions=${MEETING_PROMPT}`];
 }
@@ -165,7 +165,11 @@ export function withUserArgs(agent: AgentId, ours: string[], user: string[]): st
       dropFlag(args, "--resume", true);
       dropFlag(args, "--session-id", true);
     }
-    if (has(user, ["--model"])) dropFlag(args, "--model", true);
+    if (has(user, ["--model"])) {
+      dropFlag(args, "--model", true);
+      const at = args.findIndex((a) => a.startsWith("--model="));
+      if (at >= 0) args.splice(at, 1);
+    }
   } else if (agent === "opencode") {
     if (has(user, OPENCODE_SESSION_FLAGS)) dropFlag(args, "--continue", false);
   } else {
@@ -177,12 +181,23 @@ export function withUserArgs(agent: AgentId, ours: string[], user: string[]): st
 
 const shown = (arg: string) => (arg === "" ? '""' : /[\s"']/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg);
 
-/** Строка «Команда запуска»: свои переменные (секреты скрыты), программа, аргументы. `model` — `llm.model`. */
+/** Переменная, которой задают модель Claude Code в «Переменных окружения» (как `MODEL_ENV` оболочки). */
+export const MODEL_ENV = "ANTHROPIC_MODEL";
+/** Своя ANTHROPIC_MODEL (имя без учёта регистра, пустое значение не в счёт) — как `env_model` оболочки. */
+export const envModel = (env: EnvEntry[]): string | null =>
+  [...env].reverse().find((e) => e.key.toUpperCase() === MODEL_ENV && e.value.trim())?.value.trim() ?? null;
+
+/**
+ * Строка «Команда запуска»: свои переменные (секреты скрыты), программа, аргументы. `model` — `llm.model`;
+ * своя ANTHROPIC_MODEL в переменных — нашего `--model` нет (флаг у CLI сильнее переменной), как в оболочке.
+ */
 export function previewCommand(agent: AgentId, launch: LaunchDraft, knowledge: string | null,
   model: string | null = null): string | null {
   const user = parseArgs(String(launch.args ?? ""));
   if (user.error !== null || typeof launch.env === "string") return null;
   const program = AGENTS.find((a) => a.id === agent)?.program ?? agent;
   const env = launch.env.map((e) => `${e.key}=${shown(maskValue(e.key, e.value))}`);
-  return [...env, program, ...withUserArgs(agent, ourArgs(agent, knowledge, false, model), user.args).map(shown)].join(" ");
+  let ours = ourArgs(agent, knowledge, false, model);
+  if (envModel(launch.env) !== null) ours = ours.filter((a) => !a.startsWith("--model="));
+  return [...env, program, ...withUserArgs(agent, ours, user.args).map(shown)].join(" ");
 }

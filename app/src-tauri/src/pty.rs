@@ -291,6 +291,7 @@ pub fn claude_model(settings: &Value) -> String {
 /// 2.1.292 восстанавливает её, только если модель не задана флагом или
 /// ANTHROPIC_MODEL). Свой `--model` в параметрах запуска — его
 /// (`with_user_args` уберёт наш). Codex и OpenCode — модель из своего конфига.
+/// Значение — через `=`, как id сеанса: оно не станет отдельным флагом.
 pub fn with_model(provider: Provider, mut args: Vec<String>, model: &str) -> Vec<String> {
     let model = model.trim();
     if provider == Provider::Claude {
@@ -299,9 +300,34 @@ pub fn with_model(provider: Provider, mut args: Vec<String>, model: &str) -> Vec
         } else {
             model
         };
-        args.extend(["--model".to_string(), model.to_string()]);
+        args.push(format!("--model={model}"));
     }
     args
+}
+
+/// Переменная, которой человек сам задаёт модель Claude Code в «Переменных
+/// окружения» вкладки (`ANTHROPIC_MODEL`).
+pub const MODEL_ENV: &str = "ANTHROPIC_MODEL";
+
+/// Своя `ANTHROPIC_MODEL` в переменных окружения запуска (имя — без учёта
+/// регистра, как у переменных Windows; пустое значение не в счёт).
+pub fn env_model(env: &[(String, String)]) -> Option<String> {
+    env.iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case(MODEL_ENV))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Модель вкладки «Агент» для `with_model`: `llm.model` из настроек, а если
+/// человек задал `ANTHROPIC_MODEL` в своих переменных окружения — None: наш
+/// `--model` перекрыл бы её (у CLI флаг сильнее переменной), а свои
+/// переменные «применяются последними».
+pub fn tab_model(settings: &Value, launch_env: &[(String, String)]) -> Option<String> {
+    if env_model(launch_env).is_some() {
+        return None;
+    }
+    Some(claude_model(settings))
 }
 
 /// Текст подсказки о встрече для OpenCode (файл из `instructions` его
@@ -554,6 +580,7 @@ pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) ->
             }
             if user_has(user, &["--model"]) {
                 drop_flag(&mut args, "--model", true);
+                args.retain(|a| !a.starts_with("--model="));
             }
         }
         Provider::Codex => {
@@ -1136,6 +1163,15 @@ pub struct AgentSpawned {
     model: Option<String>,
 }
 
+/// Модель для шапки вкладки: последний `--model` у Claude, иначе своя
+/// `ANTHROPIC_MODEL` из переменных запуска; Codex и OpenCode — None.
+fn spawned_model(provider: Provider, spec: &SpawnSpec) -> Option<String> {
+    if provider != Provider::Claude {
+        return None;
+    }
+    model_arg(&spec.args).or_else(|| env_model(&spec.env.set))
+}
+
 /// Модель, с которой запускается агент: значение последнего `--model`
 /// (`--model x` или `--model=x`) — у повторённого параметра действует
 /// последнее. Нет — None (Codex и OpenCode берут модель из своего конфига).
@@ -1201,7 +1237,6 @@ fn prepare(
     let knowledge = text_at(&assistant, &["knowledge_dir"]).map(str::to_string);
     let settings = client.get("/settings").map_err(fail)?;
     let mode = proxy_mode(text_at(&settings, &["llm", "proxy"]));
-    let model = claude_model(&settings);
     // Свои параметры — до записи файлов и метки: негодные не запускают агента.
     let launch = launch_from_settings(&settings, provider)?;
     let state = client.get_state().map_err(fail)?;
@@ -1257,12 +1292,15 @@ fn prepare(
         env.set.push(("OPENCODE_CONFIG_CONTENT".into(), config));
     }
     // Свои переменные — последними: они перекрывают и очистку меток, и наши.
+    // Модель — до того, как свои переменные уйдут в окружение: своя
+    // ANTHROPIC_MODEL отменяет наш --model (`tab_model`).
+    let model = tab_model(&settings, &launch.env);
     env.set.extend(launch.env);
-    let ours = with_model(
-        provider,
-        agent_args(provider, &folder_text, knowledge.as_deref(), &session),
-        &model,
-    );
+    let ours = agent_args(provider, &folder_text, knowledge.as_deref(), &session);
+    let ours = match model {
+        Some(model) => with_model(provider, ours, &model),
+        None => ours,
+    };
     Ok(SpawnSpec {
         recording: recording.to_string(),
         args: with_user_args(provider, ours, &launch.args),
@@ -1292,7 +1330,7 @@ pub async fn agent_spawn(
     let resume = resume.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let spec = prepare(&recording_id, provider, resume, cols, rows)?;
-        let model = model_arg(&spec.args);
+        let model = spawned_model(provider, &spec);
         let data_app = app.clone();
         let on_data: DataSink = Box::new(move |id, data| {
             let id = id.to_string();
@@ -2121,22 +2159,92 @@ mod tests {
                 agent_args(Provider::Claude, "D:/r", Some(r"D:\kb"), &session),
                 &claude_model(&settings),
             );
-            let at = args.iter().position(|a| a == "--model").expect("--model");
-            assert_eq!(args[at + 1], "opus", "{session:?}");
+            let at = args
+                .iter()
+                .position(|a| a == "--model=opus")
+                .expect("--model=opus");
             // --add-dir принимает несколько папок: модель не станет «папкой».
             let dir = args.iter().position(|a| a == "--add-dir").unwrap();
-            assert!(at > dir + 1);
+            assert!(at > dir + 1, "{session:?}");
             let args = with_user_args(Provider::Claude, args, &[]);
-            assert_eq!(args.iter().filter(|a| *a == "--model").count(), 1);
+            assert_eq!(model_arg(&args), Some("opus".into()));
+            assert_eq!(args.iter().filter(|a| a.starts_with("--model")).count(), 1);
         }
         assert_eq!(
             with_model(Provider::Claude, Vec::new(), ""),
-            ["--model", "sonnet"]
+            ["--model=sonnet"]
         );
         // Codex и OpenCode — модель из своего конфига.
         let codex = agent_args(Provider::Codex, "D:/r", None, &AgentSession::Fresh);
         assert_eq!(with_model(Provider::Codex, codex.clone(), "opus"), codex);
         assert!(with_model(Provider::OpenCode, Vec::new(), "opus").is_empty());
+    }
+
+    /// Своя ANTHROPIC_MODEL в «Переменных окружения» вкладки — наш `--model`
+    /// не передаётся (флаг у CLI сильнее переменной), шапка показывает её.
+    #[test]
+    fn own_anthropic_model_env_skips_our_model_flag() {
+        let settings = serde_json::json!({ "llm": { "model": "opus" } });
+        let env = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(tab_model(&settings, &[]), Some("opus".into()));
+        assert_eq!(
+            tab_model(&settings, &env(&[("CLAUDE_CODE_X", "1")])),
+            Some("opus".into())
+        );
+        assert_eq!(
+            tab_model(&settings, &env(&[("ANTHROPIC_MODEL", "fable")])),
+            None
+        );
+        assert_eq!(
+            tab_model(&settings, &env(&[("anthropic_model", "fable")])),
+            None
+        );
+        // Пустое значение — не своя модель.
+        assert_eq!(
+            tab_model(&settings, &env(&[("ANTHROPIC_MODEL", " ")])),
+            Some("opus".into())
+        );
+        let spec = SpawnSpec {
+            recording: "r1".into(),
+            program: PathBuf::from("claude.exe"),
+            args: agent_args(Provider::Claude, "D:/r", None, &AgentSession::Fresh),
+            cwd: PathBuf::from("D:/r"),
+            env: EnvPlan {
+                set: env(&[("ANTHROPIC_MODEL", "fable")]),
+                remove: Vec::new(),
+            },
+            cols: 80,
+            rows: 24,
+        };
+        assert!(!spec.args.iter().any(|a| a.starts_with("--model")));
+        assert_eq!(spawned_model(Provider::Claude, &spec), Some("fable".into()));
+        assert_eq!(spawned_model(Provider::Codex, &spec), None);
+    }
+
+    /// Ответ `agent_spawn` окну — ровно `{id, model}` (окно читает эти имена).
+    #[test]
+    fn agent_spawned_serialises_to_id_and_model() {
+        let spawned = AgentSpawned {
+            id: "agent-1".into(),
+            model: Some("opus".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&spawned).unwrap(),
+            serde_json::json!({ "id": "agent-1", "model": "opus" })
+        );
+        let none = AgentSpawned {
+            id: "agent-2".into(),
+            model: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&none).unwrap(),
+            serde_json::json!({ "id": "agent-2", "model": null })
+        );
     }
 
     /// Окну — модель, с которой запущен агент: последний `--model`.
@@ -2169,7 +2277,8 @@ mod tests {
         );
         for user in [&["--model", "fable"][..], &["--model=fable"][..]] {
             let args = with_user_args(Provider::Claude, ours.clone(), &strings(user));
-            assert!(!args.iter().any(|a| a == "opus"), "{user:?}");
+            assert!(!args.iter().any(|a| a.contains("opus")), "{user:?}");
+            assert_eq!(model_arg(&args), Some("fable".into()));
             assert_eq!(args[args.len() - user.len()..], strings(user)[..]);
             assert!(args.iter().any(|a| a == SID));
         }

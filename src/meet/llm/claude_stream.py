@@ -129,7 +129,7 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
     новый сеанс-ветка до записи `fork_at` без хода `drop_turn`. Значения —
     через `=`: id не станет отдельным флагом (так же делает SDK).
 
-    `--model` — всегда, и при `--resume`: без него CLI взял бы модель по
+    `--model=` — всегда, и при `--resume`: без него CLI взял бы модель по
     умолчанию, а при `--resume` — модель прежнего сеанса (claude 2.1.292
     восстанавливает её, только если модель не задана флагом или
     ANTHROPIC_MODEL). Пустая `model` — DEFAULT_CLAUDE_MODEL."""
@@ -162,7 +162,7 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
         cmd.append("--no-session-persistence")
     turns = max_turns or (RESPONDER_MAX_TURNS if responder else 1)
     cmd += ["--disable-slash-commands", "--max-turns", str(turns)]
-    cmd += ["--model", claude_model(model)]
+    cmd.append(f"--model={claude_model(model)}")
     if thinking:
         cmd += ["--thinking", thinking]
     if effort:

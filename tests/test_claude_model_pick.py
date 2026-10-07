@@ -30,8 +30,11 @@ SID = "0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b"
 
 
 def _model_of(argv) -> str:
-    assert argv.count("--model") == 1, argv
-    return argv[argv.index("--model") + 1]
+    """Значение единственного `--model` (`--model x` у SDK, `--model=x` у диалога)."""
+    found = [(i, a) for i, a in enumerate(argv) if a == "--model" or a.startswith("--model=")]
+    assert len(found) == 1, argv
+    i, arg = found[0]
+    return argv[i + 1] if arg == "--model" else arg.split("=", 1)[1]
 
 
 # --- псевдонимы и сравнение ---
@@ -48,6 +51,12 @@ def _model_of(argv) -> str:
     ("Opus", "claude-opus-5-5", True),
     ("opusplan", "claude-sonnet-4-5", True),
     ("default", "claude-fable-5-1", True),
+    ("best", "claude-fable-5-1", True),       # лучшая доступная — сравнивать не с чем
+    ("best", "claude-opus-5-5", True),
+    ("mythos", "claude-mythos-5-1", True),
+    ("mythos", "claude-fable-5-1", False),
+    ("opus[1m]", "claude-opus-5-5[1m]", True),
+    ("fable[1m]", "claude-opus-5-5", False),
     ("opus", None, True),
 ])
 def test_model_matches(configured, actual, same):

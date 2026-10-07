@@ -75,7 +75,10 @@ DEFAULT_CLAUDE_MODEL = "sonnet"
 # Псевдонимы моделей Claude Code (`claude --help` 2.1.292: «an alias for the
 # latest model (e.g. 'fable', 'opus', or 'sonnet')»): CLI сам выбирает
 # последнюю модель семейства, в `system/init` — её полное имя.
-CLAUDE_ALIASES = ("fable", "opus", "sonnet", "haiku")
+CLAUDE_ALIASES = ("fable", "opus", "sonnet", "haiku", "mythos")
+# Псевдонимы без семейства: модель выбирает сам CLI (`default` — по умолчанию,
+# `best` — лучшая доступная): сравнивать не с чем.
+CLAUDE_ANY = ("default", "best")
 
 
 def claude_model(value) -> str:
@@ -88,13 +91,13 @@ def model_matches(configured: str | None, actual: str | None) -> bool:
     """Та ли модель запустилась (`actual` — из `system/init` CLI), что задана
     (`configured`: псевдоним или полное имя). Псевдоним — по семейству в имени
     («opus» ↔ «claude-opus-5-5»); полное имя — с точностью до регистра,
-    суффикса `[1m]`, даты и приставки провайдера. `default` и неизвестное —
-    не с чем сравнить: совпадает."""
+    суффикса `[1m]`, даты и приставки провайдера. `default`, `best` и
+    неизвестное — не с чем сравнить: совпадает."""
     def norm(v):
         return str(v or "").strip().lower().removesuffix("[1m]")
 
     want, got = norm(configured), norm(actual)
-    if not want or not got or want == "default":
+    if not want or not got or want in CLAUDE_ANY:
         return True
     if want == "opusplan":
         return "opus" in got or "sonnet" in got

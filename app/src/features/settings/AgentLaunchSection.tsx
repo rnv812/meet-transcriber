@@ -93,7 +93,7 @@ function LaunchTip({ agent }: { agent: AgentId }) {
       </TipLine>
       <TipLine>
         Параметр с одним значением действует ваш: свой <code>--append-system-prompt</code> заменит подсказку о
-        встрече, свой <code>--model</code> — модель из настроек. <code>--add-dir</code> добавляет папки к нашей. Свои <code>--continue</code>, <code>--resume</code>{" "}
+        встрече, свой <code>--model</code> или переменная <code>ANTHROPIC_MODEL</code> — модель из настроек. <code>--add-dir</code> добавляет папки к нашей. Свои <code>--continue</code>, <code>--resume</code>{" "}
         или <code>--session-id</code> выбирают сеанс вместо приложения.
       </TipLine>
       <TipLine>Переменные окружения — по одной в строке: ИМЯ=значение. Они применяются последними.</TipLine>
