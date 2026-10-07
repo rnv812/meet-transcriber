@@ -647,3 +647,28 @@ def test_sent_attachment_cannot_be_removed(tmp_path):
             assert state.chat.get(aid)["status"] == "ready"
 
     _run(scenario())
+
+
+def test_removing_one_of_two_attachments_sharing_a_material_keeps_its_files(tmp_path):
+    note = tmp_path / "План.md"
+    note.write_text("# План\n\nСрок — пятница.\n", encoding="utf-8")
+
+    async def scenario():
+        from meet import materials
+
+        state = ChatState(tmp_path, token="s3cret")
+        async with TestClient(TestServer(build_app(state))) as client:
+            first = await (await client.post("/chat/attach", json={"path": str(note)},
+                                             headers={TOKEN_HEADER: "s3cret"})).json()
+            second = await (await client.post("/chat/attach", json={"path": str(note)},
+                                              headers={TOKEN_HEADER: "s3cret"})).json()
+            ref = first["attachment"]["ref"]
+            assert second["attachment"]["ref"] == ref            # тот же материал (повтор)
+            r = await client.post(f"/chat/attachments/{first['id']}/remove")
+            assert (await r.json())["changed"] is True
+            assert [rec["id"] for rec in materials.records(state.folder)] == [ref]
+            assert Path(second["attachment"]["path"]).is_file()
+            await client.post(f"/chat/attachments/{second['id']}/remove")
+            assert materials.records(state.folder) == []
+
+    _run(scenario())

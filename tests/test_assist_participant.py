@@ -1205,3 +1205,20 @@ def test_run_loop_wakes_on_a_user_message(tmp_path):
 
     run(main())
     assert agents(h)[0]["text"] == "На связи"
+
+
+def test_saving_settings_does_not_persist_the_participant_default(tmp_path):
+    from meet import settings as settings_mod
+
+    path = tmp_path / "config.json"
+    settings_mod.patch({"assist": {"frequency": "less"}}, path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["assist"]["frequency"] == "less" and "participant" not in raw["assist"]
+    assert settings_mod.load(path).assist.participant is True
+    # Выключили явно — пишется и остаётся при следующих сохранениях.
+    settings_mod.patch({"assist": {"participant": False}}, path)
+    settings_mod.patch({"assist": {"frequency": "more"}}, path)
+    assert json.loads(path.read_text(encoding="utf-8"))["assist"]["participant"] is False
+    # Ключ уже был в файле — снова включённый тоже пишется (не пропадает молча).
+    settings_mod.patch({"assist": {"participant": True}}, path)
+    assert json.loads(path.read_text(encoding="utf-8"))["assist"]["participant"] is True

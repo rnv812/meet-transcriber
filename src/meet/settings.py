@@ -1844,8 +1844,10 @@ def save(settings: Settings, path: Path | None = None) -> None:
     RETIRED_SECTIONS)."""
     target = Path(path or paths.config_path())
     with _FILE_LOCK:
-        merged = {k: v for k, v in read_raw(target).items() if k not in RETIRED_SECTIONS}
+        before = read_raw(target)
+        merged = {k: v for k, v in before.items() if k not in RETIRED_SECTIONS}
         merged.update(settings.to_raw())
+        _keep_default_participant_unset(merged, before)
         # Integrations.to_raw токена не содержит: запасная копия токена
         # (диспетчер недоступен) приходит из файла выше и так и сохраняется.
         # post_record_hook больше не читается (его место — hooks.post_record), но
@@ -1853,6 +1855,18 @@ def save(settings: Settings, path: Path | None = None) -> None:
         if "post_record_hook" in merged:
             merged["post_record_hook"] = settings.hooks.post_record
         _write_raw(target, merged)
+
+
+def _keep_default_participant_unset(merged: dict, before: dict) -> None:
+    """`assist.participant` по умолчанию в файл не пишется: сохранение любой
+    настройки ассистента иначе закрепляло бы в файле значение по умолчанию
+    этой версии. Ключ, который в файле уже есть, и значение не по умолчанию
+    пишутся как обычно."""
+    assist = merged.get("assist")
+    had = before.get("assist") if isinstance(before.get("assist"), dict) else {}
+    if (isinstance(assist, dict) and assist.get("participant") is Assist.participant
+            and "participant" not in had):
+        assist.pop("participant", None)
 
 
 def drop_retired(path: Path | None = None) -> bool:
