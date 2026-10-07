@@ -227,3 +227,34 @@ def test_default_codex_runner_is_built_without_calls(smoke, tmp_path):
     scenario = smoke.Scenario("codex", tmp_path / "work", proxy="none")
     assert callable(scenario._make_runner())
     assert smoke.Scenario("claude", tmp_path / "w2")._make_runner() is None
+
+
+def test_echo_heuristic_spots_a_repeated_point(smoke):
+    target = "Сейчас обсуждают офис и кофемашину, к делу это не относится, можно вернуть к рискам по платежам."
+    assert smoke._echo(target, target) == 1.0
+    assert smoke._echo(target, "Офис и кофемашину обсуждают — это не относится к делу, верните к платежам.") >= smoke.ECHO_SHARE
+    assert smoke._echo(target, "Заявку на сертификацию лучше подать сейчас.") < smoke.ECHO_SHARE
+    assert smoke._echo("Да, ок.", "Да, ок.") == 0.0          # мало слов — не судим
+
+
+def test_scenario_warns_when_the_downvoted_point_comes_back(smoke, tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    downvoted = []
+
+    class Stubborn(FakeConversation):
+        async def send(self, text, **kw):
+            reply = await super().send(text, **kw)
+            if pp.H_REACTIONS in text and "👎" in text:
+                downvoted.append(True)
+            elif downvoted and len(downvoted) == 1 and pp.H_TRANSCRIPT in text:
+                downvoted.append(True)    # следующий ход по репликам — та же мысль снова
+                return _say("Сейчас обсуждают офис и кофемашину, к делу это не относится, "
+                            "можно вернуть к рискам по платежам.")
+            return reply
+
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+    scenario = smoke.Scenario("claude", tmp_path / "work",
+                              conversation=lambda **kw: Stubborn(ids, [], **kw), out=lambda _m: None)
+    rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
+    status, detail = rows[dict(smoke.CHECKS)["dislike"]]
+    assert status == smoke.WARN and "повторяет" in detail

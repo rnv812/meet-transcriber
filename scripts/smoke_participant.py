@@ -222,7 +222,7 @@ CHECKS = [
     ("private", "ни слова из «Личное/»"),
     ("pin", "вопрос владельцу закреплён (📌)"),
     ("buttons", "кнопки появились хотя бы раз"),
-    ("dislike", "после 👎 сообщения не длиннее"),
+    ("dislike", "после 👎 не повторяет отвергнутую мысль"),
     ("explain", "❓ — пояснение"),
     ("errors", "ходы без ошибок провайдера"),
     ("restart", "перезапуск: сеанс продолжен или затравка"),
@@ -251,6 +251,26 @@ def _mmss(t: float) -> str:
 
 def _has(patterns, text: str) -> list[str]:
     return [p for p in patterns if re.search(p, text or "", flags=re.I)]
+
+
+# Повтор мысли — грубо: доля «основ» (первые 5 букв слов от 5 букв) отвергнутого
+# сообщения, которые снова есть в более позднем. Суждение, а не механика: WARN.
+ECHO_SHARE = 0.5
+ECHO_MIN_STEMS = 3
+_ECHO_STOP = {"сейча", "можно", "нужно", "стоит", "очень", "потом", "тоже", "также", "котор", "будет", "этого"}
+
+
+def _stems(text: str) -> set[str]:
+    words = re.findall(r"[а-яёa-z0-9]+", (text or "").lower())
+    return {w[:5] for w in words if len(w) >= 5} - _ECHO_STOP
+
+
+def _echo(target: str, later: str) -> float:
+    """Какая доля основ `target` повторилась в `later` (0 — мало слов для суждения)."""
+    stems = _stems(target)
+    if len(stems) < ECHO_MIN_STEMS:
+        return 0.0
+    return len(stems & _stems(later)) / len(stems)
 
 
 # --- прогон -------------------------------------------------------------------------
@@ -635,18 +655,19 @@ class Scenario:
         row("buttons", PASS if offered else WARN, f"сообщений с кнопками: {len(offered)}, {how}")
 
         dis = self.marks.get("👎_ids")
-        if dis is None:
+        target = next((m for m in shown if m["id"] == self.marks.get("👎_target")), None)
+        if dis is None or target is None:
             row("dislike", WARN, "👎 не ставили")
         else:
-            pre = [len(m["text"]) for m in proactive if m["id"] in dis]
-            post = [len(m["text"]) for m in proactive if m["id"] not in dis]
-            avg = lambda xs: sum(xs) / len(xs) if xs else 0.0  # noqa: E731
-            if not post:
-                row("dislike", PASS, "после 👎 сам больше не писал")
-            elif not pre or avg(post) <= avg(pre) * 1.1:
-                row("dislike", PASS, f"средняя длина: до {avg(pre):.0f}, после {avg(post):.0f} симв.")
+            # 👎 — «мимо темы»: частоту и длину он не меняет, проверяем только,
+            # что отвергнутая мысль не вернулась (суждение — WARN, не FAIL).
+            post = [m for m in shown if m["id"] not in dis]
+            echoes = [(m, _echo(target["text"], m["text"])) for m in post]
+            worst = max(echoes, key=lambda x: x[1], default=None)
+            if worst and worst[1] >= ECHO_SHARE:
+                row("dislike", WARN, f"{worst[0]['id']} повторяет {target['id']} ({worst[1]:.0%} слов)")
             else:
-                row("dislike", WARN, f"средняя длина: до {avg(pre):.0f}, после {avg(post):.0f} симв.")
+                row("dislike", PASS, f"повторов {target['id']} нет (сообщений после 👎: {len(post)})")
 
         q_ids = self.marks.get("❓_ids")
         if q_ids is None:
