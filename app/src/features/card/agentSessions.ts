@@ -63,6 +63,8 @@ export type AgentView = {
   unsent: { text: string; reason: UnsentReason } | null;
   /** Сеанс закрыт, чтобы освободить ресурсы: каким агентом продолжить. */
   evicted: { provider: string } | null;
+  /** С какой моделью запущен агент (`--model` из настроек или своих параметров); null — не задана или неизвестна. */
+  model: string | null;
 };
 
 /** Цвета и шрифт терминала — как у приложения. */
@@ -138,6 +140,8 @@ export class AgentSession {
   /** Агент сеанса (Claude Code, Codex, OpenCode). */
   provider: string | null = null;
   phase: Phase = "idle";
+  /** Модель запущенного агента (ответ `agent_spawn`). */
+  model: string | null = null;
   private code: number | null = null;
   private error: string | null = null;
   /** Номер запуска: ответ устаревшего запуска (перезапуск, остановка) отбрасывается. */
@@ -194,6 +198,7 @@ export class AgentSession {
       pending: p && { text: p.text, seq: p.seq, view: this.overdue ? "manual" : this.pendView },
       unsent: this.unsent,
       evicted: this.evicted,
+      model: this.phase === "running" || this.phase === "stopping" ? this.model : null,
     };
   }
 
@@ -336,7 +341,10 @@ export class AgentSession {
     try {
       await listen();
       if (mine !== this.attempt) return false;
-      const sid = await agentSpawn(this.id, provider, t.cols, t.rows, resume);
+      const spawned: unknown = await agentSpawn(this.id, provider, t.cols, t.rows, resume);
+      // Ответ оболочки — {id, model}; одна строка — id (так же отвечают тестовые подмены).
+      const sid = typeof spawned === "string" ? spawned : (spawned as { id: string }).id;
+      this.model = typeof spawned === "string" ? null : (spawned as { model?: string | null }).model ?? null;
       if (mine !== this.attempt) {
         agentKill(sid).catch(() => {});
         return false;

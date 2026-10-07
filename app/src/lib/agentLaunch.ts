@@ -125,13 +125,19 @@ export const MEETING_PROMPT = "<подсказка о встрече>";
 export const MEETING_FOLDER = "<папка встречи>";
 /** Id сеанса Claude: новый задаёт оболочка (`--session-id`), «Продолжить» — `--resume` его же. */
 export const SESSION_ID = "<id сеанса>";
-export function ourArgs(agent: AgentId, knowledge: string | null, resume = false): string[] {
+/** Модель Claude Code, когда `llm.model` пусто (как `DEFAULT_CLAUDE_MODEL` резидента и оболочки). */
+export const DEFAULT_CLAUDE_MODEL = "sonnet";
+/**
+ * `model` — `llm.model` («Модель Claude Code»): Claude получает её всегда
+ * (`--model`, и в «Продолжить прошлую»), как в `with_model` оболочки.
+ */
+export function ourArgs(agent: AgentId, knowledge: string | null, resume = false, model: string | null = null): string[] {
   const kb = knowledge?.trim() || null;
   // OpenCode: папка встречи — рабочая папка, подсказка и база знаний — в его конфиге (окружение).
   if (agent === "opencode") return resume ? ["--continue"] : [];
   if (agent === "claude-code") {
     return [resume ? "--resume" : "--session-id", SESSION_ID, ...(kb ? ["--add-dir", kb] : []),
-      "--append-system-prompt", MEETING_PROMPT];
+      "--append-system-prompt", MEETING_PROMPT, "--model", model?.trim() || DEFAULT_CLAUDE_MODEL];
   }
   return [...(resume ? ["resume", "--last"] : []), "--cd", MEETING_FOLDER, "-c", `developer_instructions=${MEETING_PROMPT}`];
 }
@@ -159,6 +165,7 @@ export function withUserArgs(agent: AgentId, ours: string[], user: string[]): st
       dropFlag(args, "--resume", true);
       dropFlag(args, "--session-id", true);
     }
+    if (has(user, ["--model"])) dropFlag(args, "--model", true);
   } else if (agent === "opencode") {
     if (has(user, OPENCODE_SESSION_FLAGS)) dropFlag(args, "--continue", false);
   } else {
@@ -170,11 +177,12 @@ export function withUserArgs(agent: AgentId, ours: string[], user: string[]): st
 
 const shown = (arg: string) => (arg === "" ? '""' : /[\s"']/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg);
 
-/** Строка «Команда запуска»: свои переменные (секреты скрыты), программа, аргументы. */
-export function previewCommand(agent: AgentId, launch: LaunchDraft, knowledge: string | null): string | null {
+/** Строка «Команда запуска»: свои переменные (секреты скрыты), программа, аргументы. `model` — `llm.model`. */
+export function previewCommand(agent: AgentId, launch: LaunchDraft, knowledge: string | null,
+  model: string | null = null): string | null {
   const user = parseArgs(String(launch.args ?? ""));
   if (user.error !== null || typeof launch.env === "string") return null;
   const program = AGENTS.find((a) => a.id === agent)?.program ?? agent;
   const env = launch.env.map((e) => `${e.key}=${shown(maskValue(e.key, e.value))}`);
-  return [...env, program, ...withUserArgs(agent, ourArgs(agent, knowledge), user.args).map(shown)].join(" ");
+  return [...env, program, ...withUserArgs(agent, ourArgs(agent, knowledge, false, model), user.args).map(shown)].join(" ");
 }

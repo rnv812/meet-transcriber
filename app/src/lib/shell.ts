@@ -447,8 +447,14 @@ export type AgentExit = { id: string; code: number | null };
  * псевдоконсоли. Возвращает id сессии; прежняя сессия этой записи гасится.
  */
 /** `resume` — «Продолжить прошлую»: Claude Code `--resume`, Codex `resume --last`, OpenCode `--continue`. */
-export const agentSpawn = (recordingId: string, provider: string, cols: number, rows: number, resume = false) =>
-  invoke<string>("agent_spawn", { recordingId, provider, cols, rows, resume });
+/** Запущенный агент: id сессии и модель, с которой он запущен (`--model`; у Codex и OpenCode — null). */
+export type AgentSpawned = { id: string; model: string | null };
+export const agentSpawn = async (recordingId: string, provider: string, cols: number, rows: number, resume = false):
+  Promise<AgentSpawned> => {
+  const r = await invoke<AgentSpawned | string>("agent_spawn", { recordingId, provider, cols, rows, resume });
+  // Оболочка до 0.3.7 отвечала одним id.
+  return typeof r === "string" ? { id: r, model: null } : { id: r.id, model: r.model ?? null };
+};
 export const agentWrite = (id: string, data: string) => invoke<void>("agent_write", { id, data });
 export const agentResize = (id: string, cols: number, rows: number) =>
   invoke<void>("agent_resize", { id, cols, rows });

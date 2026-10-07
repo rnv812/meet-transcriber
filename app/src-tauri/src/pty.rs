@@ -273,6 +273,37 @@ pub fn agent_args(
     }
 }
 
+/// Модель Claude Code, когда в настройках её нет (как `DEFAULT_CLAUDE_MODEL`
+/// резидента, `meet.llm.base`).
+pub const DEFAULT_CLAUDE_MODEL: &str = "sonnet";
+
+/// Модель Claude Code для вкладки «Агент»: `llm.model` из ответа GET
+/// /settings, пусто — `DEFAULT_CLAUDE_MODEL`.
+pub fn claude_model(settings: &Value) -> String {
+    text_at(settings, &["llm", "model"])
+        .unwrap_or(DEFAULT_CLAUDE_MODEL)
+        .to_string()
+}
+
+/// Модель — явно (`--model`), как у всех вызовов Claude Code резидента: без
+/// флага claude взял бы модель из `~/.claude/settings.json` или свою по
+/// умолчанию (самую новую), а с `--resume` — модель прежнего сеанса (claude
+/// 2.1.292 восстанавливает её, только если модель не задана флагом или
+/// ANTHROPIC_MODEL). Свой `--model` в параметрах запуска — его
+/// (`with_user_args` уберёт наш). Codex и OpenCode — модель из своего конфига.
+pub fn with_model(provider: Provider, mut args: Vec<String>, model: &str) -> Vec<String> {
+    let model = model.trim();
+    if provider == Provider::Claude {
+        let model = if model.is_empty() {
+            DEFAULT_CLAUDE_MODEL
+        } else {
+            model
+        };
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    args
+}
+
 /// Текст подсказки о встрече для OpenCode (файл из `instructions` его
 /// конфига): тот же, что у других агентов, и папка базы знаний.
 pub fn opencode_prompt(knowledge: Option<&str>) -> String {
@@ -508,7 +539,7 @@ fn drop_flag(args: &mut Vec<String>, name: &str, valued: bool) {
 /// заданного дважды, действует последнее значение, то есть своё. Наш
 /// дубликат убирается, если повтор был бы ошибкой или лишним: Claude —
 /// наш выбор сеанса, когда человек сам задал `--continue`/`-c`/`--resume`/
-/// `-r`/`--session-id`; Codex — `--last` (при «Продолжить») и `--cd`, когда
+/// `-r`/`--session-id`, и наш `--model`, когда задан свой; Codex — `--last` (при «Продолжить») и `--cd`, когда
 /// они есть у человека; OpenCode — наш `--continue`, когда человек сам задал
 /// `--continue`/`-c`/`--session`/`-s`. Папка запуска, подсказка о встрече и `resume` Codex
 /// остаются.
@@ -520,6 +551,9 @@ pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) ->
                 drop_flag(&mut args, "--continue", false);
                 drop_flag(&mut args, "--resume", true);
                 drop_flag(&mut args, "--session-id", true);
+            }
+            if user_has(user, &["--model"]) {
+                drop_flag(&mut args, "--model", true);
             }
         }
         Provider::Codex => {
@@ -1094,6 +1128,30 @@ struct AgentExit {
     code: Option<u32>,
 }
 
+/// Ответ `agent_spawn`: id сессии и модель, с которой запущен агент
+/// (`model_arg`; окно показывает её в шапке вкладки).
+#[derive(Clone, Serialize)]
+pub struct AgentSpawned {
+    id: String,
+    model: Option<String>,
+}
+
+/// Модель, с которой запускается агент: значение последнего `--model`
+/// (`--model x` или `--model=x`) — у повторённого параметра действует
+/// последнее. Нет — None (Codex и OpenCode берут модель из своего конфига).
+pub fn model_arg(args: &[String]) -> Option<String> {
+    let mut found = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--model" {
+            found = iter.next().cloned();
+        } else if let Some(value) = arg.strip_prefix("--model=") {
+            found = Some(value.to_string());
+        }
+    }
+    found.filter(|m| !m.trim().is_empty())
+}
+
 fn main_only(window: &tauri::Window) -> Result<(), String> {
     if window.label() == MAIN {
         Ok(())
@@ -1143,6 +1201,7 @@ fn prepare(
     let knowledge = text_at(&assistant, &["knowledge_dir"]).map(str::to_string);
     let settings = client.get("/settings").map_err(fail)?;
     let mode = proxy_mode(text_at(&settings, &["llm", "proxy"]));
+    let model = claude_model(&settings);
     // Свои параметры — до записи файлов и метки: негодные не запускают агента.
     let launch = launch_from_settings(&settings, provider)?;
     let state = client.get_state().map_err(fail)?;
@@ -1199,7 +1258,11 @@ fn prepare(
     }
     // Свои переменные — последними: они перекрывают и очистку меток, и наши.
     env.set.extend(launch.env);
-    let ours = agent_args(provider, &folder_text, knowledge.as_deref(), &session);
+    let ours = with_model(
+        provider,
+        agent_args(provider, &folder_text, knowledge.as_deref(), &session),
+        &model,
+    );
     Ok(SpawnSpec {
         recording: recording.to_string(),
         args: with_user_args(provider, ours, &launch.args),
@@ -1223,12 +1286,13 @@ pub async fn agent_spawn(
     cols: u16,
     rows: u16,
     resume: Option<bool>,
-) -> Result<String, String> {
+) -> Result<AgentSpawned, String> {
     main_only(&window)?;
     let provider = Provider::parse(&provider).ok_or("неизвестный агент")?;
     let resume = resume.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         let spec = prepare(&recording_id, provider, resume, cols, rows)?;
+        let model = model_arg(&spec.args);
         let data_app = app.clone();
         let on_data: DataSink = Box::new(move |id, data| {
             let id = id.to_string();
@@ -1242,15 +1306,19 @@ pub async fn agent_spawn(
         });
         let id = sessions().spawn(spec, on_data, on_exit)?;
         shell_log!(
-            "агент: {} запущен в записи {recording_id} ({id}{})",
+            "агент: {} запущен в записи {recording_id} ({id}{}{})",
             provider.title(),
             if resume {
                 ", продолжение"
             } else {
                 ""
-            }
+            },
+            model
+                .as_deref()
+                .map(|m| format!(", модель {m}"))
+                .unwrap_or_default()
         );
-        Ok(id)
+        Ok(AgentSpawned { id, model })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2029,6 +2097,83 @@ mod tests {
     }
 
     const SID: &str = "0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b";
+
+    /// Модель «Агента» — из настроек (`llm.model`), всегда явным `--model`:
+    /// и в новом сеансе, и в «Продолжить прошлую» (`--resume`, `--continue`),
+    /// иначе claude взял бы свою модель по умолчанию или модель прежнего сеанса.
+    #[test]
+    fn claude_always_gets_the_configured_model() {
+        let settings = serde_json::json!({ "llm": { "model": "opus" } });
+        assert_eq!(claude_model(&settings), "opus");
+        assert_eq!(
+            claude_model(&serde_json::json!({ "llm": { "model": "  " } })),
+            "sonnet"
+        );
+        assert_eq!(claude_model(&serde_json::json!({})), "sonnet");
+        for session in [
+            AgentSession::Fresh,
+            AgentSession::New(SID.into()),
+            AgentSession::Resume(SID.into()),
+            AgentSession::ResumeLast,
+        ] {
+            let args = with_model(
+                Provider::Claude,
+                agent_args(Provider::Claude, "D:/r", Some(r"D:\kb"), &session),
+                &claude_model(&settings),
+            );
+            let at = args.iter().position(|a| a == "--model").expect("--model");
+            assert_eq!(args[at + 1], "opus", "{session:?}");
+            // --add-dir принимает несколько папок: модель не станет «папкой».
+            let dir = args.iter().position(|a| a == "--add-dir").unwrap();
+            assert!(at > dir + 1);
+            let args = with_user_args(Provider::Claude, args, &[]);
+            assert_eq!(args.iter().filter(|a| *a == "--model").count(), 1);
+        }
+        assert_eq!(
+            with_model(Provider::Claude, Vec::new(), ""),
+            ["--model", "sonnet"]
+        );
+        // Codex и OpenCode — модель из своего конфига.
+        let codex = agent_args(Provider::Codex, "D:/r", None, &AgentSession::Fresh);
+        assert_eq!(with_model(Provider::Codex, codex.clone(), "opus"), codex);
+        assert!(with_model(Provider::OpenCode, Vec::new(), "opus").is_empty());
+    }
+
+    /// Окну — модель, с которой запущен агент: последний `--model`.
+    #[test]
+    fn launch_model_is_the_last_model_flag() {
+        assert_eq!(
+            model_arg(&strings(&["--resume", SID, "--model", "opus"])),
+            Some("opus".into())
+        );
+        assert_eq!(
+            model_arg(&strings(&["--model", "opus", "--model=fable"])),
+            Some("fable".into())
+        );
+        assert_eq!(model_arg(&strings(&["--model"])), None);
+        assert_eq!(model_arg(&strings(&["--cd", "D:/r"])), None);
+    }
+
+    /// Свой `--model` в параметрах запуска — его, наш убирается.
+    #[test]
+    fn own_model_in_launch_args_replaces_ours() {
+        let ours = with_model(
+            Provider::Claude,
+            agent_args(
+                Provider::Claude,
+                "D:/r",
+                None,
+                &AgentSession::Resume(SID.into()),
+            ),
+            "opus",
+        );
+        for user in [&["--model", "fable"][..], &["--model=fable"][..]] {
+            let args = with_user_args(Provider::Claude, ours.clone(), &strings(user));
+            assert!(!args.iter().any(|a| a == "opus"), "{user:?}");
+            assert_eq!(args[args.len() - user.len()..], strings(user)[..]);
+            assert!(args.iter().any(|a| a == SID));
+        }
+    }
 
     /// Claude: новый сеанс — со своим id, «Продолжить» — `--resume` этого id
     /// (а не «последний разговор в папке», который мог оставить кто-то

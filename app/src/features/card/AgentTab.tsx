@@ -240,7 +240,7 @@ export function AgentTab({
   // Сеанс этой записи — вне вкладки: переживает её закрытие.
   const s = agentSession(id);
   const v = useSyncExternalStore(s.subscribe, s.snapshot);
-  const { phase, code, error, ready } = v;
+  const { phase, code, error, ready, model } = v;
 
   /** Что получит агент (GET agent-context); null — ещё не знаем. */
   const [context, setContext] = useState<Context | null>(null);
@@ -446,6 +446,11 @@ export function AgentTab({
           <span className={`agent__dot${phase === "running" ? " agent__dot--run" : ""}`} aria-hidden="true" />
           {phaseText(phase, code)}
         </span>
+        {model && (
+          <span className="agent__model" title="Модель, с которой запущен агент (--model): «Модель Claude Code» в настройках или свой --model в параметрах запуска">
+            модель: {model}
+          </span>
+        )}
       </div>
       {context && <div className="agent__context">{contextText(context)}</div>}
       <div className="agent__hint">

@@ -58,10 +58,13 @@ test("переменные: строки ИМЯ=значение, пустые �
 });
 
 test("свои параметры — после наших; наш дубликат убирается, где повтор — ошибка или лишний", () => {
-  const claude = ourArgs("claude-code", String.raw`D:\kb`, true);
-  expect(claude).toEqual(["--resume", SESSION_ID, "--add-dir", String.raw`D:\kb`, "--append-system-prompt", MEETING_PROMPT]);
+  const claude = ourArgs("claude-code", String.raw`D:\kb`, true, "opus");
+  expect(claude).toEqual(["--resume", SESSION_ID, "--add-dir", String.raw`D:\kb`, "--append-system-prompt", MEETING_PROMPT,
+    "--model", "opus"]);
   expect(ourArgs("claude-code", null).slice(0, 2)).toEqual(["--session-id", SESSION_ID]);
-  expect(withUserArgs("claude-code", claude, ["--model", "opus"])).toEqual([...claude, "--model", "opus"]);
+  // Свой --model — его, наш убирается.
+  expect(withUserArgs("claude-code", claude, ["--model", "fable"])).toEqual([...claude.slice(0, -2), "--model", "fable"]);
+  expect(withUserArgs("claude-code", claude, ["--model=fable"])).toEqual([...claude.slice(0, -2), "--model=fable"]);
   for (const user of [["--resume", "abc"], ["-c"], ["--session-id", "abc"], ["--continue"]]) {
     const args = withUserArgs("claude-code", claude, user);
     expect(args).toEqual([...claude.slice(2), ...user]);
@@ -73,6 +76,20 @@ test("свои параметры — после наших; наш дублик
   expect(merged.filter((a) => a === "--last")).toHaveLength(1);
   expect(merged).not.toContain("--cd");
   expect(merged.slice(-3)).toEqual(["--last", "-C", String.raw`D:\other`]);
+});
+
+test("Claude во вкладке «Агент» — всегда с моделью из настроек (llm.model), пусто — sonnet", () => {
+  for (const resume of [false, true]) {
+    const args = ourArgs("claude-code", null, resume, "opus");
+    expect(args.slice(-2)).toEqual(["--model", "opus"]);
+  }
+  expect(ourArgs("claude-code", null, false, "  ").slice(-2)).toEqual(["--model", "sonnet"]);
+  expect(ourArgs("claude-code", null).slice(-2)).toEqual(["--model", "sonnet"]);
+  expect(ourArgs("codex", null, false, "opus")).not.toContain("--model");
+  expect(ourArgs("opencode", null, true, "opus")).toEqual(["--continue"]);
+  expect(previewCommand("claude-code", { args: "", env: [] }, null, "opus")).toBe(
+    "claude --session-id \"<id сеанса>\" --append-system-prompt \"<подсказка о встрече>\" --model opus",
+  );
 });
 
 test("строка «Команда запуска»: переменные, программа, наши и свои параметры; секреты скрыты", () => {

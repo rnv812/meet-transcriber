@@ -143,8 +143,10 @@ test("подсказка: примеры параметров и что фоно
   open();
   const claude = await screen.findByRole("group", { name: "Запуск Claude Code" });
   await userEvent.click(within(claude).getByRole("button", { name: "Какие параметры можно задать для Claude Code" }));
-  expect(await screen.findByText(/Для фоновых задач используется модель из настройки «Модель Claude Code»/))
+  expect(await screen.findByText(/Фоновые задачи и живой ассистент всегда идут на модели из настройки «Модель Claude Code»/))
     .toBeInTheDocument();
+  // Модель из настроек вкладка «Агент» тоже передаёт сама (--model).
+  expect(screen.getByText(/с подсказкой о встрече и/)).toHaveTextContent("--model из настройки «Модель Claude Code»");
   expect(screen.getByText("--permission-mode acceptEdits")).toBeInTheDocument();
 });
 

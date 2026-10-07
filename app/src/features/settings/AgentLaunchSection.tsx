@@ -41,9 +41,13 @@ const QUOTES_LINE = (
   </TipLine>
 );
 
-/** Примеры для полей: параметры и переменные окружения. */
+/**
+ * Примеры для полей: параметры и переменные окружения. У Claude Code — не
+ * `--model`: серый пример в пустом поле читался как заданная модель, а модель
+ * вкладка и так берёт из «Модели Claude Code» (v037 model-pick).
+ */
 const PLACEHOLDERS: Record<AgentId, { args: string; env: string }> = {
-  "claude-code": { args: "--model opus", env: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" },
+  "claude-code": { args: "--permission-mode acceptEdits", env: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" },
   codex: { args: "-m gpt-5", env: "CODEX_HOME=D:\\codex" },
   opencode: { args: "-m anthropic/claude-sonnet-4-5", env: "OPENCODE_CONFIG=D:\\opencode.json" },
 };
@@ -83,16 +87,17 @@ function LaunchTip({ agent }: { agent: AgentId }) {
       {QUOTES_LINE}
       <TipLine>
         Приложение само передаёт папку встречи как рабочую, <code>--session-id</code> нового сеанса (или{" "}
-        <code>--resume</code> для «Продолжить прошлую»), <code>--add-dir</code> с базой знаний и{" "}
-        <code>--append-system-prompt</code> с подсказкой о встрече. Ваши параметры идут после них.
+        <code>--resume</code> для «Продолжить прошлую»), <code>--add-dir</code> с базой знаний,{" "}
+        <code>--append-system-prompt</code> с подсказкой о встрече и <code>--model</code> из настройки «{MODEL_LABEL}».
+        Ваши параметры идут после них.
       </TipLine>
       <TipLine>
         Параметр с одним значением действует ваш: свой <code>--append-system-prompt</code> заменит подсказку о
-        встрече. <code>--add-dir</code> добавляет папки к нашей. Свои <code>--continue</code>, <code>--resume</code>{" "}
+        встрече, свой <code>--model</code> — модель из настроек. <code>--add-dir</code> добавляет папки к нашей. Свои <code>--continue</code>, <code>--resume</code>{" "}
         или <code>--session-id</code> выбирают сеанс вместо приложения.
       </TipLine>
       <TipLine>Переменные окружения — по одной в строке: ИМЯ=значение. Они применяются последними.</TipLine>
-      <TipLine>Действует только во вкладке «Агент». Для фоновых задач используется модель из настройки «{MODEL_LABEL}».</TipLine>
+      <TipLine>Действует только во вкладке «Агент». Фоновые задачи и живой ассистент всегда идут на модели из настройки «{MODEL_LABEL}».</TipLine>
     </HelpTip>
   ) : (
     <HelpTip label="Какие параметры можно задать для Codex" title="Параметры запуска Codex">
@@ -145,12 +150,12 @@ function EnvField({ id, agent, env, onChange }: {
   );
 }
 
-function AgentLaunchRows({ agent, label, launch, knowledge, onChange }: {
-  agent: AgentId; label: string; launch: LaunchDraft; knowledge: string | null;
+function AgentLaunchRows({ agent, label, launch, knowledge, model, onChange }: {
+  agent: AgentId; label: string; launch: LaunchDraft; knowledge: string | null; model: string | null;
   onChange: (next: LaunchDraft) => void;
 }) {
   const errors = launchError(launch);
-  const preview = previewCommand(agent, launch, knowledge);
+  const preview = previewCommand(agent, launch, knowledge, model);
   const dirty = launch.args !== "" || envText(launch.env) !== "";
   const argsId = `agent-args-${agent}`;
   const envId = `agent-env-${agent}`;
@@ -185,6 +190,7 @@ function AgentLaunchRows({ agent, label, launch, knowledge, onChange }: {
 export function AgentLaunchSection({ draft, set }: { draft: Raw; set: SetFn }) {
   const launch = (draft.agent?.launch ?? {}) as Launches;
   const knowledge = (draft.assistant?.knowledge_dir as string | null | undefined) ?? null;
+  const model = (draft.llm?.model as string | null | undefined) ?? null;
   const update = (agent: AgentId, next: LaunchDraft) => {
     const all: Launches = {};
     for (const { id } of AGENTS) all[id] = launch[id] ?? EMPTY;
@@ -199,7 +205,7 @@ export function AgentLaunchSection({ draft, set }: { draft: Raw; set: SetFn }) {
       </p>
       {AGENTS.map(({ id, label }) => (
         <AgentLaunchRows key={id} agent={id} label={label} launch={launch[id] ?? EMPTY} knowledge={knowledge}
-          onChange={(next) => update(id, next)} />
+          model={model} onChange={(next) => update(id, next)} />
       ))}
     </>
   );

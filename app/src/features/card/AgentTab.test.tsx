@@ -231,6 +231,14 @@ test("выбор агента: только установленные, запу
   expect(screen.getByText(/Агент запущен в папке встречи/)).toBeInTheDocument();
 });
 
+test("шапка: модель, с которой запущен агент (--model из настроек); до запуска — нет", async () => {
+  h.shell.agentSpawn.mockResolvedValue({ id: "agent-1", model: "opus" });
+  await show(assistant());
+  expect(screen.queryByText(/модель:/)).toBeNull();
+  await userEvent.click(startButton());
+  expect(await screen.findByText("модель: opus")).toBeInTheDocument();
+});
+
 test("вывод своего сеанса — в терминал, в том числе пришедший до ответа на запуск; чужой — нет", async () => {
   let resolve: (id: string) => void = () => {};
   h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));

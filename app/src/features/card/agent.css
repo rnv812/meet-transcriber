@@ -10,6 +10,7 @@
 }
 .agent__bar .help { margin-right: 6px; }
 .agent__phase { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--text-2); }
+.agent__model { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .agent__dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-3); }
 .agent__dot--run { background: var(--ok); }
 .agent__hint { font-size: 12px; color: var(--text-3); }
