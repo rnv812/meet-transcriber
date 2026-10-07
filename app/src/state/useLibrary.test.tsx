@@ -65,7 +65,8 @@ test("новый запрос отменяет прежний, ещё не от�
   const { rerender } = renderHook(({ q }) => useLibrary(ep, q), { initialProps: { q: "бюджет" } });
   await vi.waitFor(() => expect(signals).toHaveLength(1));
   rerender({ q: "бюджет квартал" });
-  await vi.waitFor(() => expect(signals).toHaveLength(2));
+  // Набор текста ждёт SEARCH_DELAY_MS; на медленном CI-раннере это дольше секунды по умолчанию.
+  await vi.waitFor(() => expect(signals).toHaveLength(2), { timeout: 5000 });
   expect(signals[0]!.aborted).toBe(true);
   expect(signals[1]!.aborted).toBe(false);
   vi.mocked(searchLibrary).mockReset();
