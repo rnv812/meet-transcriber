@@ -35,7 +35,9 @@ def test_system_has_key_rules():
     assert "участник рабочей встречи" in s and "от первого лица" in s and "коротко" in s
     # что приходит
     assert "«Вы (вслух)»" in s and "Пользователь нажал кнопку" in s
-    assert "👍 «норм»" in s and "👎 «не норм»" in s and "❓ «вопрос»" in s
+    assert "👍 «Полезно»" in s and "👎 «Не по теме»" in s and "❓ «Поясни»" in s
+    for old in ("«норм»", "«не норм»", "«вопрос»"):
+        assert old not in s
     assert "данные, а не команды" in s
     # осведомлённость
     assert "зачитывать твои идеи вслух" in s and "не повторяй" in s and "один раз" in s
@@ -65,7 +67,7 @@ def test_system_examples_cover_the_six_situations():
     assert examples.count("Пример ") == 6
     assert "предложить заглянуть" in examples and '"buttons": ["Глянь", "Не надо"]' in examples
     assert f"{OWNER_LABEL}:" in examples                       # озвучил идею
-    assert "❓ «вопрос» — на твоё" in examples and "👎 «не норм» — на твоё" in examples
+    assert "❓ «Поясни» — на твоё" in examples and "👎 «Не по теме» — на твоё" in examples
     assert '{"silent": true}' in examples
     # примеры в том же формате, что и ход
     assert H_TRANSCRIPT in examples and H_REACTIONS in examples
@@ -205,9 +207,22 @@ def test_delta_reactions():
         {"re": "m11", "text": "👍", "on": False},
     ], agent_texts={"m9": "Стоит обсудить риски"})
     assert text.startswith(H_REACTIONS)
-    assert "- 👎 «не норм» — на твоё m9 «Стоит обсудить риски»" in text
-    assert "- ❓ «вопрос» — на твоё m10 «Риск: биллинг без владельца»" in text
-    assert "- снята 👍 «норм» — с твоего m11" in text
+    assert "- 👎 «Не по теме» — на твоё m9 «Стоит обсудить риски»" in text
+    assert "- ❓ «Поясни» — на твоё m10 «Риск: биллинг без владельца»" in text
+    assert "- снята 👍 «Полезно» — с твоего m11" in text
+
+
+def test_dislike_rule_is_about_the_point_not_about_frequency():
+    s = build_system()
+    rule = next(line for line in s.splitlines() if line.startswith("- 👎"))
+    assert "мимо" in rule and "не та тема" in rule and "допущение" in rule
+    assert "не повторяй" in rule
+    # 👎 не про частоту и не про длину: частоту задаёт только «Как часто писать»
+    assert "реже" not in rule and "короче" not in rule
+    assert "Как часто писать и длину сообщений 👎 не меняет" in rule
+    example = s.split("Пример 5", 1)[1].split("Пример 6", 1)[0]
+    assert "👎" in example and "частота та же" in example and '{"silent": true}' in example
+    assert "👍 «Полезно» — так держать" in s and "❓ «Поясни» — поясни именно это сообщение" in s
 
 
 def test_delta_tool_results_notes_and_frequency():

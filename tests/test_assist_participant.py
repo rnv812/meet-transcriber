@@ -524,6 +524,74 @@ def test_button_click_and_reactions_reach_the_next_delta(tmp_path):
     assert [n for n, _ in h.events].count("chat") >= 6
 
 
+def test_explanation_reply_links_back_to_the_explained_message(tmp_path):
+    h = _make(tmp_path, script=[say("Риск: интеграция без владельца."),
+                                say("Олег в [00:05] не назвал владельца, а от интеграции зависит запуск.")])
+
+    async def main():
+        publish(h, 5, "Олег", "интеграцию возьмёт кто-нибудь")
+        h.clock.t = 10
+        await h.p.tick()
+        mid = agents(h)[0]["id"]
+        await h.p.react(mid, "❓")
+        assert await h.p.tick()
+        await h.p.shutdown()
+        return mid
+
+    mid = run(main())
+    reply = agents(h)[-1]
+    assert reply["status"] == "shown" and reply["explains"] == mid
+    assert "re" not in reply                          # ❓ — не сообщение пользователя
+    assert "пояснение к " + mid in h.chat.render_md()
+
+
+def test_silence_on_explain_leaves_a_line_so_the_window_stops_waiting(tmp_path):
+    h = _make(tmp_path, script=[say("Риск: интеграция без владельца."), SILENT])
+
+    async def main():
+        publish(h, 5, "Олег", "интеграцию возьмёт кто-нибудь")
+        h.clock.t = 10
+        await h.p.tick()
+        mid = agents(h)[0]["id"]
+        await h.p.react(mid, "❓")
+        assert await h.p.tick()
+        await h.p.shutdown()
+        return mid
+
+    mid = run(main())
+    lines = [m for m in h.chat.messages() if m["kind"] == "system"]
+    assert lines and lines[-1]["re"] == mid
+
+
+def test_dislike_never_changes_the_frequency(tmp_path):
+    runner = FakeRunner([say("Стоит обсудить риски."), SILENT, say("Обсудите бюджет."), SILENT])
+    h = _make(tmp_path, provider="openai-compatible", runner=runner)
+
+    async def main():
+        assert h.p.set_frequency("чаще") == "чаще"
+        publish(h, 5, "Олег", "раз")
+        h.clock.t = 10
+        await h.p.tick()
+        for n, t in ((1, 30), (2, 60)):
+            mid = agents(h)[-1]["id"]
+            await h.p.react(mid, "👎")
+            h.clock.t = t
+            await h.p.tick()
+            if n == 1:
+                publish(h, t + 2, "Олег", "два", at=t + 2)
+                h.clock.t = t + 20
+                await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert h.p.frequency == "чаще" and h.p.view()["frequency"] == "чаще"
+    prompts = [prompt for prompt, _kw in runner.calls]
+    assert sum(pp.H_REACTIONS in prompt and "👎 «Не по теме»" in prompt for prompt in prompts) >= 2
+    assert not any("сменил «Как часто писать»" in prompt for prompt in prompts[1:])
+    assert all(data["frequency"] == "чаще" for name, data in h.events if name == "agent")
+    assert all("# Как часто писать: «чаще»" in kw["system_prompt"] for _p, kw in runner.calls)
+
+
 def test_image_goes_to_a_model_with_vision(tmp_path):
     h = _make(tmp_path, script=[say("На графике рост в марте")])
 

@@ -348,6 +348,7 @@ def test_question_reaction_reaches_the_agent_as_a_request_to_explain(tmp_path, m
     assert participant.EXPLAIN_REQUEST in prompt and "у биллинга нет владельца" in prompt
     answer = [m for m in log.messages() if m["kind"] == "agent"][-1]
     assert answer["re"] == asked.message["id"] and answer["status"] == "shown"
+    assert answer["explains"] == "m1"                  # окно свяжет пояснение с сообщением
 
 
 def test_control_routes_for_the_chat_after_the_meeting(server):

@@ -1041,22 +1041,22 @@ def test_reactions_in_context_order_and_md(tmp_path):
     lines = seed.splitlines()
     order = [i for i, ln in enumerate(lines) if "Реакция" in ln or "снял реакцию" in ln]
     assert [lines[i].split("] ", 1)[1] for i in order] == [
-        f"Реакция человека на {first}: 👍 «норм»",
-        f"Реакция человека на {second}: ❓ «вопрос»",
-        f"Человек снял реакцию с {first}: 👍 «норм»",
-        f"Реакция человека на {second}: 👎 «не норм»",
+        f"Реакция человека на {first}: 👍 «Полезно»",
+        f"Реакция человека на {second}: ❓ «Поясни»",
+        f"Человек снял реакцию с {first}: 👍 «Полезно»",
+        f"Реакция человека на {second}: 👎 «Не по теме»",
     ]
     assert seed.index("Вторая реплика") < seed.index(f"Реакция человека на {second}: ❓")
     # События реакций не в счёт последних трёх: все три сообщения — дословно.
     assert "Раньше в чате" not in seed
-    assert "  [Реакции человека: ❓ вопрос, 👎 не норм]" in seed
+    assert "  [Реакции человека: ❓ Поясни, 👎 Не по теме]" in seed
     first_block = seed[seed.index("Первая реплика"):seed.index("вопрос человека")]
     assert "Реакции человека" not in first_block       # снятая не показывается
     # Сжатые — тоже по строке на своём месте.
     small = log.context(10_000, recent=0)
-    assert f": Реакция человека на {second}: 👎 «не норм»" in small
+    assert f": Реакция человека на {second}: 👎 «Не по теме»" in small
     md = log.render_md()
-    assert "реакции: ❓ вопрос, 👎 не норм" in md
+    assert "реакции: ❓ Поясни, 👎 Не по теме" in md
     assert "Реакция человека" not in md and md.count("**Ассистент**") == 2
 
 

@@ -45,6 +45,13 @@
 (абзацем), чтобы сломанная модель не завалила ленту. Ответ на сообщение,
 нажатие или реакцию пользователя всегда получает своё сообщение.
 
+**Реакции** сами ничего не настраивают: 👍 / 👎 / ❓ уходят агенту в ход, и
+он сам решает по правилам промпта (👎 — сообщение мимо темы; частоту и длину
+ответов это не меняет — частоту задаёт только «Как часто писать»). Ответ на
+❓ (во время встречи — реакция, после встречи — запись `via: "reaction"`)
+несёт `explains` = id поясняемой реплики; промолчал — строка «нечего
+добавить» с `re` на неё, чтобы окно не ждало пояснения вечно.
+
 Журнал и вызовы модели — блокирующие: журнал пишется в одном своём потоке
 (он же держит порядок записей), разбор вложений и запросы к базе — в
 потоках `asyncio.to_thread`. Цикл событий не блокируется.
@@ -272,6 +279,7 @@ class _Turn:
     inputs: _Inputs
     addressed: bool                    # ход отвечает пользователю (и цепочка запросов к Meet)
     re: str | None = None              # на какое сообщение пользователя
+    explains: str | None = None        # какую свою реплику поясняет (❓)
     reply_id: str | None = None
     raw: list = field(default_factory=list)
     shown: str = ""
@@ -376,7 +384,8 @@ class Participant:
         self._notes: list[str] = []
         self._frequency_note: str | None = None
         self._tool_rounds = 0
-        self._chain: tuple[bool, str | None] | None = None   # цепочка запросов: (addressed, re)
+        # Цепочка запросов: (addressed, re, explains).
+        self._chain: tuple[bool, str | None, str | None] | None = None
         self._quiet_until = 0.0        # лимит запросов подряд исчерпан: пауза
         self._failures = 0
         self._retry_at = 0.0
@@ -804,9 +813,11 @@ class Participant:
             return None
         addressed = bool(inputs.user or inputs.reactions)
         re_id = inputs.user[-1]["id"] if inputs.user else None
+        explains = _explains(inputs)
         if not addressed and inputs.tools and self._chain is not None:
-            addressed, re_id = self._chain   # ответ Meet — продолжение ответа пользователю
-        turn = _Turn(inputs=inputs, addressed=addressed, re=re_id)
+            # ответ Meet — продолжение ответа пользователю
+            addressed, re_id, explains = self._chain
+        turn = _Turn(inputs=inputs, addressed=addressed, re=re_id, explains=explains)
         self._turn = turn
         self._last_turn_at = now
         turn.task = asyncio.ensure_future(self._run_turn(turn))
@@ -877,6 +888,8 @@ class Participant:
         fields = {"mode": "reply" if turn.addressed else "proactive"}
         if turn.re:
             fields["re"] = turn.re
+        if turn.explains:
+            fields["explains"] = turn.explains
         t = self._now_t()
         if t is not None:
             fields["t"] = t
@@ -1082,14 +1095,14 @@ class Participant:
             if note:
                 fields["note"] = note
             self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, **fields)])
-            if not requests and turn.addressed and turn.re:
-                # Пользователь спросил, а агент промолчал: без строки в ленте
-                # вопрос остался бы без ответа (ревью I2, решение (a)).
-                await self.note_nothing_to_add(turn.re)
+            if not requests and turn.addressed and (turn.re or turn.explains):
+                # Пользователь спросил (или ❓), а агент промолчал: без строки в
+                # ленте вопрос остался бы без ответа (ревью I2, решение (a)).
+                await self.note_nothing_to_add(turn.re or turn.explains)
         else:
             await self._show(turn, says)
         if requests:
-            self._chain = (turn.addressed, turn.re)
+            self._chain = (turn.addressed, turn.re, turn.explains)
             await self._run_tools(requests)
         else:
             self._chain = None
@@ -1616,6 +1629,19 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
 
 
 # --- помощники ---
+
+def _explains(inputs: _Inputs) -> str | None:
+    """Какую реплику агента просят пояснить в этом ходе: последняя ❓
+    (поставленная, не снятая) или просьба после встречи (`via: "reaction"`)."""
+    found = None
+    for r in inputs.reactions:
+        if r.get("emoji") == "❓" and isinstance(r.get("re"), str):
+            found = r["re"] if r.get("on") is not False else (None if found == r["re"] else found)
+    for m in inputs.user:
+        if m.get("via") == "reaction" and isinstance(m.get("re"), str):
+            found = m["re"]
+    return found
+
 
 def answered(messages, mid: str) -> bool:
     """Есть ли ответ на сообщение пользователя `mid`: реплика агента `re`

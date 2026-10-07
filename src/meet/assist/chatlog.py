@@ -42,14 +42,17 @@ OSError: файл после неудачного чтения не переза
 `cancelled`). Читатели видят `writing` как есть (окно — пузырь «Пишет…»);
 в `assistant_chat.md` и в затравку она не попадает, пока не закончена.
 
-**Реакции человека** на реплики агента — `REACTIONS`: 👍 «норм», 👎 «не
-норм», ❓ «вопрос». `react(id, emoji, on=None)` (None — переключить) пишет
+**Реакции человека** на реплики агента — `REACTIONS`: 👍 «Полезно», 👎 «Не
+по теме», ❓ «Поясни» (ключи — эмодзи, подписи с 0.3.7 формальные; раньше
+«норм» / «не норм» / «вопрос»). `react(id, emoji, on=None)` (None — переключить) пишет
 `patch` реплики `reactions: {эмодзи: at}` (снятая уходит из словаря) и
 событие встречи `meeting` `event: "reaction"`, `re`, `text`=эмодзи, `on` —
 агент видит отклики по порядку. Повтор того же состояния ничего не пишет.
 Затравка и `assistant_chat.md` показывают реакции у реплики; события
 реакций в затравке — короткой строкой на своём месте (не в счёт `recent`),
-в `assistant_chat.md` — только отметкой у реплики.
+в `assistant_chat.md` — только отметкой у реплики. Ответ агента на ❓ несёт
+`explains` = id реплики, которую он поясняет (окно связывает их: «пояснение»
+и ссылка «к сообщению …»; затравка и `assistant_chat.md` — «пояснение к m…»).
 
 **Кнопки и закрепление** (`v4-simple.md` §2): у реплики агента
 `buttons: [str]` (0–3, придумывает агент; лишние отбрасываются, пробелы
@@ -174,7 +177,7 @@ HIDDEN_STATUSES = ("held", "dropped", "superseded")
 # ленте, ни в затравке, ни в `assistant_chat.md` (ревью chat-api, M8).
 REMOVED = "removed"
 # Реакции человека на реплики агента (`react`): эмодзи → подпись.
-REACTIONS = {"👍": "норм", "👎": "не норм", "❓": "вопрос"}
+REACTIONS = {"👍": "Полезно", "👎": "Не по теме", "❓": "Поясни"}
 # Поля записи, которые ставит журнал: ни в `append(**fields)`, ни в `patch`.
 RECORD_KEYS = ("v", "seq", "at", "rec")
 PROTECTED = (*RECORD_KEYS, "id", "kind", "client_id")
@@ -1165,6 +1168,8 @@ class ChatLog:
         if kind == "agent":
             mode = _MODE.get(msg.get("mode"), msg.get("mode") or "")
             re_ = f", к {msg['re']}" if isinstance(msg.get("re"), str) else ""
+            if isinstance(msg.get("explains"), str):
+                re_ += f", пояснение к {msg['explains']}"
             lines = [f"{stamp} Ты писал ({mode}{re_}): {text}" if mode or re_
                      else f"{stamp} Ты писал: {text}"]
             if msg.get("say"):
@@ -1257,6 +1262,8 @@ class ChatLog:
                 if m.get("reply"):
                     block += ["", f"> Черновик ответа: «{_one_line(m['reply'], 400)}»"]
                 notes = []
+                if isinstance(m.get("explains"), str):
+                    notes.append(f"пояснение к {m['explains']}")
                 voiced = m.get("voiced")
                 if isinstance(voiced, dict):
                     vt = _num(voiced.get("t"))
