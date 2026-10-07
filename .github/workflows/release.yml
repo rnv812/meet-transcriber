@@ -243,6 +243,16 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test
 
+      # Шаг обновления от администратора (mac_install::ADMIN_SCRIPT) — без
+      # прав и без /Applications: тот же AppleScript через настоящий
+      # osascript, но без `with administrator privileges`, скрипт в режиме
+      # `check`. Пути с пробелами, кавычками, $(), обратными кавычками,
+      # переводами строк и не-ASCII возвращаются байт в байт, ничего не
+      # выполняется, среда пустая (кроме PATH); неверные значения — код 64.
+      - name: "Privileged update script: dry run through osascript"
+        working-directory: app/src-tauri
+        run: cargo test --bin meet-desktop mac_install::tests::admin_script -- --nocapture
+
       # Образ раннера (ImageOS, ImageVersion — переменные машины, в контексте
       # `env` их нет) — в ключ кэша ffmpeg.
       - name: Runner image
@@ -262,6 +272,10 @@ jobs:
         id: build
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          # Открытый SHA-1 сертификата выпусков вшивается в приложение
+          # (option_env! в mac_install.rs): только им шаг обновления от
+          # администратора проверяет новую версию.
+          MEET_SIGNING_SHA1: ${{ env.MACOS_CERT_SHA1 }}
         run: bash scripts/build_release_macos.sh "$VERSION"
 
       # Ключ — только здесь и только программам Apple: импорт во временную
