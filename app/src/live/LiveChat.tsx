@@ -16,6 +16,13 @@
  * в долгой встрече не прячется за десятками кнопок. Реакции видны при
  * наведении и фокусе, поставленные — всегда.
  *
+ * Реакции 👍 «Полезно», 👎 «Не по теме», ❓ «Поясни»: в подсказке — что будет,
+ * при наведении и фокусе рядом с эмодзи — подпись (в узкой — только эмодзи и
+ * подсказка). После нажатия 👍 / 👎 — заметка окна «Учту: …» (`chat.ack`),
+ * гаснет в нажатую кнопку; ❓ — «Ассистент поясняет…», пока не пришло
+ * пояснение. У пояснения — метка «пояснение» и ссылка «к сообщению …»:
+ * щелчок — к поясняемому сообщению.
+ *
  * Источники: документ, который упомянул агент (вложение чата или документ
  * базы знаний — `sources.ts`), — чип под сообщением; щелчок открывает его
  * (`open_material`). В узкой панели у чипа только значок.
@@ -44,6 +51,8 @@ const BOTTOM_SLACK_PX = 24;
 const ACTIONS = "button, a[href], input, select, textarea, [tabindex]:not(li)";
 /** Сколько держится «Скопировано». */
 export const COPIED_MS = 1500;
+/** Сколько подсвечено сообщение, к которому перешли по «к сообщению …». */
+const FLASH_MS = 1600;
 
 /** Новые готовые сообщения агента в ленте (их считает «↓ N новых»). */
 function agentIds(items: FeedItem[]): string[] {
@@ -92,20 +101,43 @@ function AgentButtons({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disab
   );
 }
 
-function Reactions({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disabled: boolean }) {
+function Reactions({ m, chat, disabled, compact }: { m: ChatMessage; chat: Chat; disabled: boolean; compact: boolean }) {
   return (
     <span className="chat-react" role="group" aria-label="Реакция">
-      {REACTIONS.map(({ emoji, label }) => {
+      {REACTIONS.map(({ emoji, label, hint }) => {
         const on = !!m.reactions?.[emoji];
         return (
           <button key={emoji} type="button" className={`chat-react__btn${on ? " is-on" : ""}`} aria-pressed={on}
-            aria-label={`${emoji} ${label}`} title={label} disabled={disabled}
+            aria-label={`${emoji} ${label}`} title={hint} disabled={disabled}
             onClick={() => void chat.react(m.id, emoji)}>
             <span aria-hidden="true">{emoji}</span>
+            {!compact && <span className="chat-react__label" aria-hidden="true">{label}</span>}
           </button>
         );
       })}
     </span>
+  );
+}
+
+/** Короткая цитата сообщения для ссылки «к сообщению «…»». */
+const QUOTE_MAX = 40;
+function quoteOf(m: ChatMessage | undefined): string {
+  const flat = plainMarkdown(m?.text ?? "").split(/\s+/).join(" ").trim();
+  if (!flat) return "";
+  return `«${flat.length > QUOTE_MAX ? `${flat.slice(0, QUOTE_MAX - 1).trimEnd()}…` : flat}»`;
+}
+
+/** Пояснение (ответ на ❓): метка и ссылка к поясняемому сообщению. */
+function ExplainsRef({ id, chat, onShow }: { id: string; chat: Chat; onShow: (id: string) => void }) {
+  const quote = quoteOf(chat.state.byId[id]);
+  return (
+    <>
+      <span className="chat-msg__tag chat-msg__tag--explain">пояснение</span>
+      <button type="button" className="chat-msg__ref" title="Показать сообщение, которое поясняет ассистент"
+        onClick={() => onShow(id)}>
+        к сообщению{quote ? ` ${quote}` : ""}
+      </button>
+    </>
   );
 }
 
@@ -125,14 +157,16 @@ function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; co
   );
 }
 
-function AgentMessage({ m, chat, onTime, compact, disabled }: {
-  m: ChatMessage; chat: Chat; onTime?: (t: number) => void; compact: boolean; disabled: boolean;
+function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
+  m: ChatMessage; chat: Chat; onTime?: (t: number) => void; onShow: (id: string) => void; compact: boolean; disabled: boolean;
 }) {
   const writing = m.status === "writing";
   const partial = chat.state.partial[m.id];
   const text = m.text ?? "";
   const time = typeof m.t === "number" ? clock(m.t) : null;
   const reacted = REACTIONS.some((r) => m.reactions?.[r.emoji]);
+  const ack = chat.ack(m.id);
+  const explaining = !disabled && !writing && chat.explaining(m.id);
   return (
     <li className={`chat-msg chat-msg--agent${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
       data-id={m.id} data-key={m.id} aria-busy={writing || undefined} title={compact && time ? time : undefined}>
@@ -140,6 +174,7 @@ function AgentMessage({ m, chat, onTime, compact, disabled }: {
         <span className="chat-msg__who">Ассистент</span>
         {time && !compact && <span className="chat-msg__time num">{time}</span>}
         {m.pin && <span className="chat-msg__tag">вопрос вам</span>}
+        {typeof m.explains === "string" && <ExplainsRef id={m.explains} chat={chat} onShow={onShow} />}
         {writing && partial?.trim() && <span className="chat-msg__writing">пишет…</span>}
       </div>
       {writing ? (
@@ -155,8 +190,14 @@ function AgentMessage({ m, chat, onTime, compact, disabled }: {
       {!writing && <AgentButtons m={m} chat={chat} disabled={disabled} />}
       {!writing && text.trim() && (
         <div className="chat-msg__tools">
-          <Reactions m={m} chat={chat} disabled={disabled} />
+          <Reactions m={m} chat={chat} disabled={disabled} compact={compact} />
           <CopyButton text={plainMarkdown(text)} />
+        </div>
+      )}
+      {ack && <div key={ack} className="chat-msg__ack" role="status">{ack}</div>}
+      {explaining && (
+        <div className="chat-msg__pending" role="status">
+          <span className="chat-typing__dots" aria-hidden="true" />Ассистент поясняет…
         </div>
       )}
     </li>
@@ -208,12 +249,14 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
   );
 }
 
-function Item({ it, chat, onTime, compact, disabled }: {
-  it: FeedItem; chat: Chat; onTime?: (t: number) => void; compact: boolean; disabled: boolean;
+function Item({ it, chat, onTime, onShow, compact, disabled }: {
+  it: FeedItem; chat: Chat; onTime?: (t: number) => void; onShow: (id: string) => void; compact: boolean; disabled: boolean;
 }) {
   if (it.type === "outgoing") return <UserMessage chat={chat} out={it.out} compact={compact} />;
   const m = it.message;
-  if (m.kind === "agent") return <AgentMessage m={m} chat={chat} onTime={onTime} compact={compact} disabled={disabled} />;
+  if (m.kind === "agent") {
+    return <AgentMessage m={m} chat={chat} onTime={onTime} onShow={onShow} compact={compact} disabled={disabled} />;
+  }
   if (m.kind === "user") return <UserMessage m={m} chat={chat} compact={compact} />;
   if (m.kind === "meeting") {
     return <li className="chat-divider" data-id={m.id} data-key={m.id}><span>{m.text || "встреча"}</span></li>;
@@ -347,6 +390,17 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
     // Кнопка «×» ушла вместе с карточкой — фокус в строку ввода, а не на <body>.
     box.current?.closest(".chat-ws__main")?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   };
+  // «к сообщению …» у пояснения: к поясняемому сообщению — прокрутить, подсветить, фокус.
+  const showMessage = (id: string) => {
+    const row = list.current?.querySelector<HTMLElement>(`:scope > li[data-id="${id}"]`);
+    if (!row) return;
+    row.scrollIntoView?.({ block: "center" });
+    setActive(row.dataset.key ?? null);
+    row.tabIndex = 0;
+    row.focus({ preventScroll: true });
+    row.classList.add("is-flash");
+    setTimeout(() => row.classList.remove("is-flash"), FLASH_MS);
+  };
   const showPinned = () => {
     if (!pinned) return;
     const row = box.current?.querySelector<HTMLElement>(`[data-id="${pinned.id}"]`);
@@ -376,7 +430,7 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
           )}
           {chat.items.map((it) => (
             <Item key={it.type === "message" ? it.message.id : `out:${it.out.client_id}`} it={it} chat={chat}
-              onTime={onTime} compact={compact} disabled={disabled} />
+              onTime={onTime} onShow={showMessage} compact={compact} disabled={disabled} />
           ))}
         </ol>
       </div>

@@ -52,7 +52,7 @@ test("M12: в порядке Tab — одно сообщение и его де�
   expect(third).toHaveAttribute("tabindex", "0");
   expect(first).toHaveAttribute("tabindex", "-1");
   expect(within(third!).getByRole("button", { name: "Глянь" })).toHaveAttribute("tabindex", "0");
-  expect(within(third!).getByRole("button", { name: "👍 норм" })).toHaveAttribute("tabindex", "0");
+  expect(within(third!).getByRole("button", { name: "👍 Полезно" })).toHaveAttribute("tabindex", "0");
   expect(within(first!).getByRole("button", { name: "Да" })).toHaveAttribute("tabindex", "-1");
   expect(within(first!).getByRole("button", { name: "Копировать" })).toHaveAttribute("tabindex", "-1");
   act(() => third!.focus());
@@ -75,7 +75,7 @@ test("M12: щелчок по действию другого сообщения 
   render(<Host />);
   load([agentMsg("m1", { text: "Первое" }), agentMsg("m2", { text: "Второе" })]);
   const [first, second] = rows();
-  await userEvent.click(within(first!).getByRole("button", { name: "👍 норм" }));
+  await userEvent.click(within(first!).getByRole("button", { name: "👍 Полезно" }));
   expect(first).toHaveAttribute("tabindex", "0");
   expect(second).toHaveAttribute("tabindex", "-1");
 });

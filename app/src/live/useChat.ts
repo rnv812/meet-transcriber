@@ -17,6 +17,14 @@
  * Куда уходят действия — `backend` (`chatBackend.ts`): во время встречи —
  * `/live/chat*`, после встречи — чат записи (вкладка «Ассистент» карточки).
  *
+ * Отклик на реакцию (`ack`): 👍 и 👎 — короткая заметка под сообщением сразу
+ * после нажатия, на ACK_MS. Её пишет окно, не модель, и только в своём
+ * состоянии: реакция уже лежит в журнале (кнопка остаётся нажатой), а заметка
+ * ничего к ней не добавляет — ни агенту, ни `assistant_chat.md`. ❓ вместо
+ * заметки — «Ассистент поясняет…» (`explaining`), пока в журнале нет ответа с
+ * `explains` на это сообщение; это выводится из журнала, поэтому одинаково и
+ * во время встречи, и на вкладке «Ассистент» после неё.
+ *
  * Чипы-источники (`sources`): документы, которые агент упомянул (`sources.ts`);
  * список документов базы знаний спрашивается у резидента, только когда в
  * ленте есть сообщение, похожее на упоминание файла, и держится минуту.
@@ -33,8 +41,8 @@ import type {
 } from "../lib/types";
 import { type ChatBackend, LIVE_CHAT } from "./chatBackend";
 import {
-  type ChatState, EMPTY_CHAT, type FeedItem, chatReducer, feedItems, isFinalAgent, nextReveal, pinnedOf, usedButtons,
-  writingShown,
+  type ChatState, EMPTY_CHAT, type FeedItem, REACTIONS, chatReducer, explainPending, feedItems, isFinalAgent,
+  nextExplainExpiry, nextReveal, pinnedOf, usedButtons, writingShown,
 } from "./chatModel";
 import { type KbIndex, type Source, findSources, kbIndex, mayMentionDocs } from "./sources";
 
@@ -49,6 +57,8 @@ export type ChatSink = {
 
 /** Сколько держать заметку о несработавшем действии. */
 export const CHAT_NOTE_MS = 8000;
+/** Сколько видна заметка-отклик на 👍 / 👎 (гаснет в нажатую кнопку). */
+export const ACK_MS = 3500;
 /** Повтор перечитывания ленты: от и до (мс). */
 const RESYNC_MIN_MS = 1000;
 const RESYNC_MAX_MS = 10_000;
@@ -100,6 +110,10 @@ export type Chat = {
   lastAgent: ChatMessage | null;
   /** Не сработало действие (реакция, кнопка, частота): текст на CHAT_NOTE_MS. */
   note: string | null;
+  /** Отклик окна на только что поставленную 👍 / 👎 этого сообщения (ACK_MS); иначе null. */
+  ack: (id: string) => string | null;
+  /** На это сообщение поставлен ❓, а пояснения ещё нет. */
+  explaining: (id: string) => boolean;
   attachment: (id: string) => ChatMessage | undefined;
   /** Миниатюра вставленной картинки (только в этом окне и сеансе). */
   preview: (id: string) => string | undefined;
@@ -154,6 +168,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
   const [state, dispatch] = useReducer(chatReducer, EMPTY_CHAT);
   const [now, setNow] = useState(() => Date.now());
   const [note, setNote] = useState<string | null>(null);
+  const [acks, setAcks] = useState<Record<string, string>>({});
   const stateRef = useRef(state);
   stateRef.current = state;
   const previews = useRef(new Map<string, string>());
@@ -187,6 +202,14 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
     const t = setTimeout(() => setNow(Date.now()), Math.max(0, due - Date.now()));
     return () => clearTimeout(t);
   }, [due]);
+
+  // «Ассистент поясняет…» — не дольше EXPLAIN_WAIT_S: к сроку перерисоваться.
+  const expiry = nextExplainExpiry(state, now);
+  useEffect(() => {
+    if (expiry === null) return;
+    const t = setTimeout(() => setNow(Date.now()), Math.max(0, expiry - Date.now()));
+    return () => clearTimeout(t);
+  }, [expiry]);
 
   // Правка неизвестной записи: ленту — заново. Снимок старее уже учтённых
   // событий (они пришли, пока шёл запрос) или ошибка — повтор с растущей паузой.
@@ -257,17 +280,36 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
     }
   }, [ep, backend]);
 
+  const dropAck = useCallback((id: string, text: string) => setAcks((cur) => {
+    if (cur[id] !== text) return cur;
+    const next = { ...cur };
+    delete next[id];
+    return next;
+  }), []);
+
   const react = useCallback(async (id: string, emoji: ChatReaction) => {
     if (!ep) return;
     const on = !stateRef.current.byId[id]?.reactions?.[emoji];
-    dispatch({ type: "react", id, emoji, on, at: Date.now() / 1000 });
+    const at = Date.now();
+    dispatch({ type: "react", id, emoji, on, at: at / 1000 });
+    setNow(at);
+    // Отклик — сразу, от окна; снятая реакция — без отклика (и прежний гаснет).
+    const ack = on ? REACTIONS.find((r) => r.emoji === emoji)?.ack ?? null : null;
+    setAcks((cur) => {
+      const next = { ...cur };
+      if (ack) next[id] = ack;
+      else delete next[id];
+      return next;
+    });
+    if (ack) setTimeout(() => dropAck(id, ack), ACK_MS);
     try {
       await backend.react(ep, id, emoji, on);
     } catch (e) {
       dispatch({ type: "react", id, emoji, on: !on, at: Date.now() / 1000 });
+      if (ack) dropAck(id, ack);
       setNote(`Реакция не дошла: ${errorText(e)}`);
     }
-  }, [ep, backend]);
+  }, [ep, backend, dropAck]);
 
   const stop = useCallback(async () => {
     if (!ep) return;
@@ -403,6 +445,8 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT): 
 
   return {
     state, items, agent, loaded: state.loaded, pinned: pinnedOf(state), writing: writingShown(state, now), lastAgent, note,
+    ack: (id) => acks[id] ?? null,
+    explaining: (id) => explainPending(state, id, now / 1000),
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
     used: (id) => used.get(id) ?? null,

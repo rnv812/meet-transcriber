@@ -861,12 +861,12 @@ export type ChatKind = "agent" | "user" | "attachment" | "meeting" | "system" | 
  * `dropped`, `superseded` в ленту не попадают.
  */
 export type ChatStatus = "writing" | "shown" | "held" | "dropped" | "superseded" | "dismissed" | "cancelled" | "failed";
-/** Реакции на сообщения агента: 👍 «норм», 👎 «не норм», ❓ «вопрос». */
+/** Реакции на сообщения агента: 👍 «Полезно», 👎 «Не по теме», ❓ «Поясни» (ключи — эмодзи). */
 export type ChatReaction = "👍" | "👎" | "❓";
 
 /**
  * Сообщение чата — свёрнутая запись журнала (`msg` + `patch`). Поля зависят от вида:
- * у агента — `text`, `status`, `buttons`, `pin`, `reactions`, `re`; у пользователя —
+ * у агента — `text`, `status`, `buttons`, `pin`, `reactions`, `re`, `explains`; у пользователя —
  * `text`, `attachments` (id вложений), `via: "button"` (нажатие), `after_meeting`;
  * у вложения — `type`, `name`, `status`, `path`, `summary`; у события встречи — `event`.
  */
@@ -882,6 +882,8 @@ export type ChatMessage = {
   status?: ChatStatus | "parsing" | "ready" | "removed";
   mode?: "reply" | "proactive";
   re?: string;
+  /** Ответ агента на ❓: id сообщения, которое он поясняет. */
+  explains?: string;
   buttons?: string[];
   pin?: boolean;
   reactions?: Partial<Record<ChatReaction, number>>;

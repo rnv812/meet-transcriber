@@ -11,14 +11,17 @@ import { clickChat, reactChat } from "../lib/api";
 import type { ChatMessage, ChatSnapshot } from "../lib/types";
 import { agentInfo, agentMsg, attMsg, userMsg } from "../test/chatFixtures";
 import { LiveChat } from "./LiveChat";
-import { type Chat, useChat } from "./useChat";
+import { EXPLAIN_WAIT_S } from "./chatModel";
+import { ACK_MS, type Chat, useChat } from "./useChat";
 
 const ep = { base: "http://h", token: "t" };
 let chat: Chat;
 
-function Host({ onTime, quiet }: { onTime?: (t: number) => void; quiet?: boolean }) {
+function Host({ onTime, quiet, compact, disabled }: {
+  onTime?: (t: number) => void; quiet?: boolean; compact?: boolean; disabled?: boolean;
+}) {
   chat = useChat(ep);
-  return <LiveChat chat={chat} onTime={onTime} quiet={quiet} />;
+  return <LiveChat chat={chat} onTime={onTime} quiet={quiet} compact={compact} disabled={disabled} />;
 }
 const load = (messages: ChatMessage[], seq = 20) =>
   act(() => chat.sink.onChatSnapshot({ messages, seq, agent: agentInfo() } as ChatSnapshot));
@@ -65,9 +68,9 @@ test("кнопки, нажатые раньше (в журнале), показ�
 test("реакции 👍 👎 ❓: переключатели, уходят reactChat; поставленная видна нажатой", async () => {
   render(<Host />);
   load([agentMsg("m1")]);
-  const like = screen.getByRole("button", { name: "👍 норм" });
-  expect(screen.getByRole("button", { name: "👎 не норм" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "❓ вопрос" })).toBeInTheDocument();
+  const like = screen.getByRole("button", { name: "👍 Полезно" });
+  expect(screen.getByRole("button", { name: "👎 Не по теме" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "❓ Поясни" })).toBeInTheDocument();
   await userEvent.click(like);
   expect(reactChat).toHaveBeenCalledWith(ep, "m1", "👍", true);
   expect(like).toHaveAttribute("aria-pressed", "true");
@@ -80,8 +83,8 @@ test("реакция не дошла — откат и заметка", async ()
   vi.mocked(reactChat).mockRejectedValueOnce(new Error("409"));
   render(<Host />);
   load([agentMsg("m1")]);
-  await userEvent.click(screen.getByRole("button", { name: "❓ вопрос" }));
-  expect(screen.getByRole("button", { name: "❓ вопрос" })).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(screen.getByRole("button", { name: "❓ Поясни" }));
+  expect(screen.getByRole("button", { name: "❓ Поясни" })).toHaveAttribute("aria-pressed", "false");
   expect(chat.note).toMatch(/Реакция не дошла/);
 });
 
@@ -165,4 +168,120 @@ test("внизу — следит за низом, плашки нет", () => {
   scrollTo(box, { top: 800 });
   act(() => chat.sink.onChat({ seq: 21, op: "add", message: agentMsg("m2") }));
   expect(screen.queryByRole("button", { name: /нов/ })).toBeNull();
+});
+
+
+// --- реакции: подписи, что будет, отклик, ❓ ждёт пояснения ---------------------------------
+
+const msgRow = (text: string | RegExp) => within(log()).getByText(text).closest("li")!;
+
+test("реакции: формальные подписи у кнопок, в подсказке — что будет", () => {
+  render(<Host />);
+  load([agentMsg("m1")]);
+  const row = msgRow("Сообщение m1");
+  const like = within(row).getByRole("button", { name: "👍 Полезно" });
+  const dislike = within(row).getByRole("button", { name: "👎 Не по теме" });
+  const explain = within(row).getByRole("button", { name: "❓ Поясни" });
+  expect(like).toHaveAttribute("title", "Полезно — ассистент будет писать больше такого");
+  expect(dislike).toHaveAttribute("title", "Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать");
+  expect(explain).toHaveAttribute("title", "Поясни — ассистент объяснит, на что опирался");
+  // подпись рядом с эмодзи (видна при наведении и фокусе — CSS), прежних «норм» нет
+  expect(like).toHaveTextContent("👍Полезно");
+  expect(dislike).toHaveTextContent("👎Не по теме");
+  expect(explain).toHaveTextContent("❓Поясни");
+  expect(row).not.toHaveTextContent(/норм|вопрос/);
+});
+
+test("узкая панель: у реакций только эмодзи, подпись и что будет — в подсказке и aria", () => {
+  render(<Host compact />);
+  load([agentMsg("m1")]);
+  const like = screen.getByRole("button", { name: "👍 Полезно" });
+  expect(like).toHaveTextContent(/^👍$/);
+  expect(like).toHaveAttribute("title", "Полезно — ассистент будет писать больше такого");
+  expect(screen.getByRole("button", { name: "👎 Не по теме" })).toHaveTextContent(/^👎$/);
+});
+
+test("👍 — отклик «Учту: такое полезно» сразу, гаснет, кнопка остаётся нажатой", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    render(<Host />);
+    load([agentMsg("m1")]);
+    const like = screen.getByRole("button", { name: "👍 Полезно" });
+    fireEvent.click(like);
+    expect(within(msgRow("Сообщение m1")).getByRole("status")).toHaveTextContent("Учту: такое полезно");
+    await act(async () => { await vi.advanceTimersByTimeAsync(ACK_MS + 10); });
+    expect(within(msgRow("Сообщение m1")).queryByText("Учту: такое полезно")).toBeNull();
+    expect(like).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("👎 — отклик «Учту: скорректирую, о чём пишу»; частота ассистента не меняется", async () => {
+  render(<Host />);
+  load([agentMsg("m1")]);
+  await userEvent.click(screen.getByRole("button", { name: "👎 Не по теме" }));
+  expect(reactChat).toHaveBeenCalledWith(ep, "m1", "👎", true);
+  expect(within(msgRow("Сообщение m1")).getByRole("status")).toHaveTextContent("Учту: скорректирую, о чём пишу");
+  expect(chat.agent?.frequency).toBe("чаще");
+});
+
+test("снять реакцию — без отклика; реакция не дошла — отклик уходит", async () => {
+  render(<Host />);
+  load([agentMsg("m1", { reactions: { "👍": 1 } })]);
+  await userEvent.click(screen.getByRole("button", { name: "👍 Полезно" }));
+  expect(reactChat).toHaveBeenLastCalledWith(ep, "m1", "👍", false);
+  expect(within(msgRow("Сообщение m1")).queryByText(/Учту/)).toBeNull();
+  vi.mocked(reactChat).mockRejectedValueOnce(new Error("409"));
+  await userEvent.click(screen.getByRole("button", { name: "👎 Не по теме" }));
+  expect(within(msgRow("Сообщение m1")).queryByText(/Учту/)).toBeNull();
+  expect(chat.note).toMatch(/Реакция не дошла/);
+});
+
+test("❓ — «Ассистент поясняет…», пока не придёт пояснение; оно ссылается на сообщение", async () => {
+  const now = Date.now() / 1000;
+  render(<Host />);
+  load([agentMsg("m1", { text: "Риск: интеграция **без владельца**, а от неё зависит запуск 15.11", at: now - 60 })]);
+  await userEvent.click(screen.getByRole("button", { name: "❓ Поясни" }));
+  const row = () => msgRow("без владельца");
+  expect(within(row()).getByText("Ассистент поясняет…")).toBeInTheDocument();
+  expect(within(row()).queryByText(/Учту/)).toBeNull();
+  // ответ пишется — всё ещё ждём
+  act(() => chat.sink.onChat({ seq: 21, op: "patch", id: "m1", set: { reactions: { "❓": now } } }));
+  act(() => chat.sink.onChat({ seq: 22, op: "add", message: agentMsg("m2", {
+    status: "writing", mode: "reply", text: "", explains: "m1", at: now + 1 }) }));
+  expect(within(row()).getByText("Ассистент поясняет…")).toBeInTheDocument();
+  act(() => chat.sink.onChat({ seq: 23, op: "patch", id: "m2", set: { status: "shown", text: "Олег в [00:05] не назвал владельца." } }));
+  expect(within(row()).queryByText("Ассистент поясняет…")).toBeNull();
+  const reply = msgRow(/не назвал владельца/);
+  expect(within(reply).getByText("пояснение")).toBeInTheDocument();
+  // Ссылка — с короткой цитатой без разметки.
+  const ref = within(reply).getByRole("button", { name: /^к сообщению «Риск: интеграция без владельца, а от/ });
+  expect(ref.textContent).toMatch(/…»$/);
+  const scrolled = vi.fn();
+  row().scrollIntoView = scrolled;
+  await userEvent.click(ref);
+  expect(scrolled).toHaveBeenCalled();
+  expect(row()).toHaveFocus();
+  expect(row()).toHaveClass("is-flash");
+});
+
+test("❓ — промолчал: строка «нечего добавить» с re на сообщение снимает ожидание", () => {
+  const now = Date.now() / 1000;
+  render(<Host />);
+  load([agentMsg("m1", { reactions: { "❓": now }, at: now - 60 })]);
+  expect(screen.getByText("Ассистент поясняет…")).toBeInTheDocument();
+  act(() => chat.sink.onChat({ seq: 21, op: "add", message: {
+    id: "m2", seq: 21, at: now + 2, kind: "system", text: "Ассистенту нечего добавить", re: "m1" } }));
+  expect(screen.queryByText("Ассистент поясняет…")).toBeNull();
+});
+
+test("❓ — старое (дольше EXPLAIN_WAIT_S) или агент выключен: «поясняет…» не показывается", () => {
+  const now = Date.now() / 1000;
+  const { rerender } = render(<Host />);
+  load([agentMsg("m1", { reactions: { "❓": now - EXPLAIN_WAIT_S - 5 } }), agentMsg("m2", { reactions: { "❓": now } })]);
+  expect(within(msgRow("Сообщение m1")).queryByText("Ассистент поясняет…")).toBeNull();
+  expect(within(msgRow("Сообщение m2")).getByText("Ассистент поясняет…")).toBeInTheDocument();
+  rerender(<Host disabled />);
+  expect(screen.queryByText("Ассистент поясняет…")).toBeNull();
 });

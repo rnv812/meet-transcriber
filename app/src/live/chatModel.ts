@@ -32,11 +32,27 @@ export const HIDDEN_STATUSES: ReadonlySet<string> = new Set(["held", "dropped", 
 export const REVEAL_MS = 1500;
 /** Виды записей, которые лента показывает сами по себе. */
 const FEED_KINDS: ReadonlySet<string> = new Set(["agent", "user", "system", "meeting"]);
-export const REACTIONS: { emoji: ChatReaction; label: string }[] = [
-  { emoji: "👍", label: "норм" },
-  { emoji: "👎", label: "не норм" },
-  { emoji: "❓", label: "вопрос" },
+/**
+ * Реакции на сообщения агента. Ключ в журнале — эмодзи (как в 0.3.6), подпись —
+ * формальная, `hint` — что будет (подсказка кнопки), `ack` — отклик окна сразу
+ * после нажатия (его пишет окно, не модель; у ❓ вместо отклика — «Ассистент
+ * поясняет…» до ответа). 👎 — «мимо темы», частоту он не меняет: её задаёт
+ * только «Как часто писать».
+ */
+export const REACTIONS: { emoji: ChatReaction; label: string; hint: string; ack: string | null }[] = [
+  { emoji: "👍", label: "Полезно", hint: "Полезно — ассистент будет писать больше такого", ack: "Учту: такое полезно" },
+  {
+    emoji: "👎", label: "Не по теме", hint: "Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать",
+    ack: "Учту: скорректирую, о чём пишу",
+  },
+  { emoji: "❓", label: "Поясни", hint: "Поясни — ассистент объяснит, на что опирался", ack: null },
 ];
+/** ❓ ждёт пояснения не дольше этого (с): агент выключен, ответ потерян — «поясняет…» не висит вечно. */
+export const EXPLAIN_WAIT_S = 300;
+/** Пояснение — запись не старше ❓ (с допуском: время ❓ в окне ставится до ответа сервера). */
+const EXPLAIN_SLACK_S = 2;
+/** Ответ агента, который закрывает ожидание пояснения. */
+const EXPLAIN_DONE: ReadonlySet<string> = new Set(["shown", "cancelled", "failed"]);
 
 /** Сообщение человека, которое ещё не подтвердил журнал. */
 export type Outgoing = {
@@ -306,6 +322,39 @@ export function usedButtons(state: ChatState): Map<string, string> {
 /** Какую кнопку сообщения уже нажали. */
 export function usedButton(state: ChatState, id: string): string | null {
   return usedButtons(state).get(id) ?? null;
+}
+
+/**
+ * ❓ поставлен и пояснения ещё нет: в журнале после ❓ нет ни ответа агента с
+ * `explains` на это сообщение (готового, остановленного или упавшего), ни строки
+ * «нечего добавить» с `re` на него (или на просьбу пояснить после встречи), и
+ * с ❓ прошло меньше EXPLAIN_WAIT_S. `now` — секунды Unix.
+ */
+export function explainPending(state: ChatState, id: string, now: number): boolean {
+  const at = state.byId[id]?.reactions?.["❓"];
+  if (typeof at !== "number" || now - at > EXPLAIN_WAIT_S) return false;
+  for (const rid of state.order) {
+    const r = state.byId[rid];
+    if (!r || typeof r.at !== "number" || r.at < at - EXPLAIN_SLACK_S) continue;
+    if (r.kind === "agent" && r.explains === id && EXPLAIN_DONE.has(r.status ?? "")) return false;
+    if (r.kind === "system" && typeof r.re === "string") {
+      const asked = state.byId[r.re];
+      if (r.re === id || (asked?.via === "reaction" && asked.re === id)) return false;
+    }
+  }
+  return true;
+}
+
+/** Когда (мс) истечёт самое раннее ожидание пояснения; null — ждать нечего. */
+export function nextExplainExpiry(state: ChatState, now: number): number | null {
+  let soon: number | null = null;
+  for (const id of state.order) {
+    const at = state.byId[id]?.reactions?.["❓"];
+    if (typeof at !== "number" || !explainPending(state, id, now / 1000)) continue;
+    const when = (at + EXPLAIN_WAIT_S) * 1000 + 1;
+    if (soon === null || when < soon) soon = when;
+  }
+  return soon;
 }
 
 /** Ответ, который пишется и виден (для «Стоп»): его id, иначе null. */

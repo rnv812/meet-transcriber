@@ -139,15 +139,37 @@
 .chat-msg__tools { display: flex; align-items: center; gap: 2px; min-height: 22px; }
 .chat-react { display: inline-flex; gap: 2px; }
 .chat-react__btn {
-  width: 26px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 11px;
-  background: transparent; font-size: 12px; line-height: 20px; cursor: pointer; opacity: 0.55;
+  display: inline-flex; align-items: center; gap: 4px; min-width: 26px; height: 22px; padding: 0 6px;
+  justify-content: center; border: 1px solid transparent; border-radius: 11px;
+  background: transparent; color: var(--text-2); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer; opacity: 0.55;
 }
+/* Подпись рядом с эмодзи: при наведении и фокусе на сообщение, у поставленной — всегда. */
+.chat-react__label { display: none; font-size: 11px; white-space: nowrap; }
+.chat-msg--agent:hover .chat-react__label, .chat-msg--agent:focus-within .chat-react__label,
+.chat-react__btn.is-on .chat-react__label { display: inline; }
+.chat-msg--agent:hover .chat-react__btn:not(:disabled), .chat-msg--agent:focus-within .chat-react__btn:not(:disabled) { opacity: 0.85; }
+.chat-react__btn.is-on { color: var(--text); }
 .chat-react__btn:hover:not(:disabled) { opacity: 1; background: var(--surface-hover); }
 .chat-react__btn.is-on { opacity: 1; border-color: rgba(94, 106, 210, 0.55); background: rgba(94, 106, 210, 0.16); }
 .chat-msg--agent .chat-msg__tools > *, .chat-react__btn:not(.is-on) { transition: opacity 0.15s ease; }
 .chat-msg--agent:not(:hover):not(:focus-within) .chat-react__btn:not(.is-on),
 .chat-msg--agent:not(:hover):not(:focus-within) .chat-msg__copy { opacity: 0; }
 @media (hover: none) { .chat-msg--agent .chat-react__btn, .chat-msg--agent .chat-msg__copy { opacity: 0.7 !important; } }
+
+/* Отклик окна на 👍 / 👎: держится и гаснет — остаётся нажатая кнопка. */
+.chat-msg__ack { color: var(--accent-hover); font-size: 11px; animation: chat-ack 3.5s ease forwards; }
+@keyframes chat-ack { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+/* ❓: ждём пояснения. */
+.chat-msg__pending { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 11px; font-style: italic; }
+/* Пояснение: метка и ссылка к поясняемому сообщению. */
+.chat-msg__tag--explain { background: rgba(94, 106, 210, 0.12); }
+.chat-msg__ref {
+  min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text-3); font: inherit; font-size: 10.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; text-decoration: underline dotted;
+}
+.chat-msg__ref:hover { color: var(--accent-hover); }
+.chat-msg.is-flash { background: rgba(94, 106, 210, 0.14); transition: background 0.3s ease; }
+@media (prefers-reduced-motion: reduce) { .chat-msg__ack { animation: none; } .chat-msg.is-flash { transition: none; } }
 
 /* Вложения в сообщении. */
 .chat-msg__atts { display: flex; flex-wrap: wrap; gap: 4px; }

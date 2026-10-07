@@ -1,6 +1,7 @@
 import { agentMsg, attMsg, userMsg } from "../test/chatFixtures";
 import {
-  type ChatState, EMPTY_CHAT, REVEAL_MS, chatReducer, feedItems, nextReveal, pinnedOf, usedButton, writingShown,
+  type ChatState, EMPTY_CHAT, EXPLAIN_WAIT_S, REACTIONS, REVEAL_MS, chatReducer, explainPending, feedItems,
+  nextExplainExpiry, nextReveal, pinnedOf, usedButton, writingShown,
 } from "./chatModel";
 
 const snap = (messages: ReturnType<typeof agentMsg>[], seq = 10) =>
@@ -123,4 +124,37 @@ test("закреплённый: «×» прячет; неотправленно�
   expect(pinnedOf(s)?.id).toBe("m1");
   s = chatReducer(s, { type: "hidePin", id: "m1" });
   expect(pinnedOf(s)).toBeNull();
+});
+
+
+test("реакции: ключи — эмодзи, подписи формальные, отклик у 👍 и 👎, у ❓ — нет", () => {
+  expect(REACTIONS.map((r) => [r.emoji, r.label, r.ack])).toEqual([
+    ["👍", "Полезно", "Учту: такое полезно"],
+    ["👎", "Не по теме", "Учту: скорректирую, о чём пишу"],
+    ["❓", "Поясни", null],
+  ]);
+});
+
+test("❓ ждёт пояснения: до ответа с explains (готового), строки re или срока; старое пояснение не в счёт", () => {
+  const at = 1_800_000_000;
+  let s = snap([agentMsg("m1", { at: at - 100 }), agentMsg("m0", { explains: "m1", at: at - 50 })]);
+  expect(explainPending(s, "m1", at)).toBe(false);                 // ❓ не ставили
+  s = chatReducer(s, { type: "react", id: "m1", emoji: "❓", on: true, at });
+  expect(explainPending(s, "m1", at)).toBe(true);                  // прежнее пояснение (m0) старше ❓
+  expect(nextExplainExpiry(s, at * 1000)).toBe((at + EXPLAIN_WAIT_S) * 1000 + 1);
+  expect(explainPending(s, "m1", at + EXPLAIN_WAIT_S + 1)).toBe(false);
+  s = chatReducer(s, { type: "event", event: { seq: 11, op: "add", message: agentMsg("m2", { status: "writing", text: "", explains: "m1", at: at + 1 }) }, now: 0 });
+  expect(explainPending(s, "m1", at + 2)).toBe(true);              // пишется — ещё ждём
+  s = chatReducer(s, { type: "event", event: { seq: 12, op: "patch", id: "m2", set: { status: "failed", error: "сбой" } }, now: 0 });
+  expect(explainPending(s, "m1", at + 3)).toBe(false);             // упал — ждать нечего
+  expect(nextExplainExpiry(s, at * 1000)).toBeNull();
+});
+
+test("❓ после встречи: «нечего добавить» к просьбе пояснить (via: reaction) тоже закрывает ожидание", () => {
+  const at = 1_800_000_000;
+  let s = snap([agentMsg("m1", { reactions: { "❓": at }, at: at - 100 }),
+    userMsg("m2", { via: "reaction", re: "m1", at: at + 1 })]);
+  expect(explainPending(s, "m1", at + 2)).toBe(true);
+  s = chatReducer(s, { type: "event", event: { seq: 11, op: "add", message: { id: "m3", seq: 11, at: at + 3, kind: "system", text: "нечего добавить", re: "m2" } }, now: 0 });
+  expect(explainPending(s, "m1", at + 4)).toBe(false);
 });
