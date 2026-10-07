@@ -78,12 +78,14 @@ export function FrequencySelect({ value, onChange, disabled = false }: {
   );
 }
 
-export function SessionBar({ agent, summary, writing = false, compact = false, onFrequency, disabled = false }: {
+export function SessionBar({ agent, summary, writing = false, compact = false, quiet = false, onFrequency, disabled = false }: {
   agent: AgentInfo;
   summary: Summary;
   /** Ответ пишется и виден в ленте. */
   writing?: boolean;
   compact?: boolean;
+  /** «Не отвлекать»: и ошибку не объявлять. */
+  quiet?: boolean;
   onFrequency: (v: AgentFrequencyLabel) => void;
   disabled?: boolean;
 }) {
@@ -94,9 +96,14 @@ export function SessionBar({ agent, summary, writing = false, compact = false, o
   const frequency = FREQUENCIES.includes(agent.frequency) ? agent.frequency : "чаще";
   return (
     <div className={`session-bar${compact ? " session-bar--compact" : ""}`} role="group" aria-label="Сессия ассистента">
-      <span className={`session-bar__state session-bar__state--${state.key}`} role="status"
+      {/* Состояние меняется на каждом ходе агента — не живая область, иначе
+          экранный диктор говорил бы всю встречу. Объявляется только ошибка. */}
+      <span className={`session-bar__state session-bar__state--${state.key}`}
         title={agent.state === "error" && agent.error ? agent.error : undefined}>
         <span className="session-bar__dot" aria-hidden="true" />{state.text}
+      </span>
+      <span className="sr-only" role="status">
+        {!quiet && agent.state === "error" ? `Ошибка ассистента${agent.error ? `: ${agent.error}` : ""}` : ""}
       </span>
       <span className="session-bar__model" title={agent.provider}>{agent.label || agent.provider}</span>
       {!compact && <span className="session-bar__sees">видит: {sees}</span>}

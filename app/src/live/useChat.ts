@@ -9,6 +9,10 @@
  *
  * «Пишет…» у ответа без текста появляется по таймеру (REVEAL_MS), поэтому хук
  * сам перерисовывается к нужному моменту.
+ *
+ * Хук живёт у владельца окна (панель, карточка), а не в рабочей области: текст
+ * строки ввода, вложения до отправки и убранный «×» закреплённый вопрос
+ * переживают сворачивание панели и смену раскладки.
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
@@ -22,7 +26,7 @@ import type {
   AgentFrequencyLabel, AgentInfo, ChatAttachResult, ChatEvent, ChatMessage, ChatPartial, ChatReaction, ChatSnapshot,
 } from "../lib/types";
 import {
-  type ChatState, EMPTY_CHAT, type FeedItem, chatReducer, feedItems, isFinalAgent, nextReveal, pinnedOf, usedButton,
+  type ChatState, EMPTY_CHAT, type FeedItem, chatReducer, feedItems, isFinalAgent, nextReveal, pinnedOf, usedButtons,
   writingShown,
 } from "./chatModel";
 
@@ -36,6 +40,31 @@ export type ChatSink = {
 
 /** Сколько держать заметку о несработавшем действии. */
 export const CHAT_NOTE_MS = 8000;
+/** Повтор перечитывания ленты: от и до (мс). */
+const RESYNC_MIN_MS = 1000;
+const RESYNC_MAX_MS = 10_000;
+
+/** Вложение в строке ввода до отправки. */
+export type ChatDraft = {
+  key: string;
+  name: string;
+  kind: "image" | "doc";
+  status: "uploading" | "ready" | "failed";
+  id?: string;
+  error?: string;
+  /** Миниатюра вставленной картинки (object URL). */
+  preview?: string;
+};
+
+/** Строка ввода: текст и вложения — у хука, чтобы пережить сворачивание и смену раскладки. */
+export type ChatComposerState = {
+  text: string;
+  setText: (text: string) => void;
+  drafts: ChatDraft[];
+  setDrafts: (fn: (cur: ChatDraft[]) => ChatDraft[]) => void;
+  /** Ключи вложений, убранных, пока они загружались. */
+  dropped: Set<string>;
+};
 
 export type Chat = {
   state: ChatState;
@@ -66,6 +95,9 @@ export type Chat = {
   attach: (path: string) => Promise<ChatAttachResult>;
   /** Вложение убрали из строки ввода до отправки: у агента его не будет. */
   removeAttachment: (id: string) => Promise<void>;
+  /** Убрать закреплённый вопрос («×»): и над лентой, и в свёрнутой панели. */
+  hidePin: (id: string) => void;
+  composer: ChatComposerState;
   sink: ChatSink;
 };
 
@@ -77,6 +109,10 @@ export function useChat(ep: Endpoint | null): Chat {
   stateRef.current = state;
   const previews = useRef(new Map<string, string>());
   const [frequency, setFrequencyLocal] = useState<AgentFrequencyLabel | null>(null);
+  const [text, setText] = useState("");
+  const [drafts, setDraftList] = useState<ChatDraft[]>([]);
+  const dropped = useRef(new Set<string>());
+  const [resync, setResync] = useState(0);
 
   const sink = useMemo<ChatSink>(() => ({
     onChatSnapshot: (snap) => { setNow(Date.now()); dispatch({ type: "snapshot", snap, now: Date.now() }); },
@@ -93,14 +129,26 @@ export function useChat(ep: Endpoint | null): Chat {
     return () => clearTimeout(t);
   }, [due]);
 
-  // Правка неизвестной записи: ленту — заново.
+  // Правка неизвестной записи: ленту — заново. Снимок старее уже учтённых
+  // событий (они пришли, пока шёл запрос) или ошибка — повтор с растущей паузой.
   useEffect(() => {
     if (!state.stale || !ep) return;
     let gone = false;
-    getChat(ep).then((snap) => { if (!gone) dispatch({ type: "snapshot", snap, now: Date.now() }); })
-      .catch((e) => console.warn("getChat:", e));
-    return () => { gone = true; };
-  }, [state.stale, ep]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const again = () => {
+      const delay = Math.min(RESYNC_MAX_MS, RESYNC_MIN_MS * 2 ** Math.min(resync, 4));
+      timer = setTimeout(() => setResync((n) => n + 1), delay);
+    };
+    getChat(ep).then((snap) => {
+      if (gone) return;
+      if (snap.seq < stateRef.current.seq) again();
+      else dispatch({ type: "snapshot", snap, now: Date.now(), fetched: true });
+    }).catch((e) => {
+      console.warn("getChat:", e);
+      if (!gone) again();
+    });
+    return () => { gone = true; clearTimeout(timer); };
+  }, [state.stale, ep, resync]);
 
   useEffect(() => {
     if (!note) return;
@@ -217,6 +265,12 @@ export function useChat(ep: Endpoint | null): Chat {
     }
   }, [ep]);
 
+  const hidePin = useCallback((id: string) => dispatch({ type: "hidePin", id }), []);
+  const setDrafts = useCallback((fn: (cur: ChatDraft[]) => ChatDraft[]) => setDraftList(fn), []);
+  const composer = useMemo<ChatComposerState>(
+    () => ({ text, setText, drafts, setDrafts, dropped: dropped.current }), [text, drafts, setDrafts]);
+  const used = useMemo(() => usedButtons(state), [state.order, state.byId, state.clicked]);
+
   const items = useMemo(() => feedItems(state, now), [state, now]);
   const agent = useMemo(
     () => (state.agent && frequency ? { ...state.agent, frequency } : state.agent),
@@ -234,7 +288,7 @@ export function useChat(ep: Endpoint | null): Chat {
     state, items, agent, loaded: state.loaded, pinned: pinnedOf(state), writing: writingShown(state, now), lastAgent, note,
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
-    used: (id) => usedButton(state, id),
-    send, retry, click, react, stop, setFrequency, paste, attach, removeAttachment, sink,
+    used: (id) => used.get(id) ?? null,
+    send, retry, click, react, stop, setFrequency, paste, attach, removeAttachment, hidePin, composer, sink,
   };
 }

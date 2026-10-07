@@ -113,3 +113,20 @@ test("правка неизвестной записи — лента переч
   expect(getChat).toHaveBeenCalledWith(ep);
   expect(rows()).toEqual(["agent:Вернулось"]);
 });
+
+test("перечитывание: снимок старее событий, пришедших за время запроса, не затирает их — повтор", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let first!: (v: unknown) => void;
+  vi.mocked(getChat)
+    .mockReturnValueOnce(new Promise((r) => { first = r; }) as never)
+    .mockResolvedValueOnce({ messages: [agentMsg("m7", { text: "Вернулось" }), agentMsg("m8", { text: "Новое" })], seq: 6 });
+  render(<Host />);
+  act(() => stream().emit("chat_snapshot", { messages: [], seq: 1, agent: agentInfo() }));
+  act(() => stream().emit("chat", { seq: 2, op: "patch", id: "m7", set: { status: "shown" } }));
+  act(() => stream().emit("chat", { seq: 5, op: "add", message: agentMsg("m8", { text: "Новое" }) }));
+  await act(async () => { first({ messages: [agentMsg("m7", { text: "Вернулось" })], seq: 3 }); });
+  expect(rows()).toEqual(["agent:Новое"]); // старый снимок не применён
+  await act(async () => { vi.advanceTimersByTime(1000); });
+  expect(getChat).toHaveBeenCalledTimes(2);
+  expect(rows()).toEqual(["agent:Вернулось", "agent:Новое"]);
+});

@@ -2,6 +2,9 @@
 
 /* --- Рабочая область: шапка сессии, полоса расшифровки и чат --- */
 .chat-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+/* До первого состояния ассистента: ни прежней раскладки, ни чата. */
+.live-ws--loading { align-items: center; justify-content: center; }
+.live-ws__loading { margin: 0; font-size: 12px; }
 .chat-ws__body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .chat-ws__main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .chat-ws__feed { flex: 1; min-height: 0; font-size: 12px; }
@@ -184,7 +187,8 @@
 }
 .chat-compose:focus-within { border-color: rgba(94, 106, 210, 0.6); }
 .chat-compose.is-over { border-color: var(--accent); background: rgba(94, 106, 210, 0.08); }
-.chat-compose.is-disabled { opacity: 0.75; }
+/* Недоступна: гаснут поле и кнопки, причина — нет (контраст ≥ 4,5 : 1). */
+.chat-compose.is-disabled .chat-compose__row { opacity: 0.6; }
 .chat-compose__drop {
   position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
   border-radius: inherit; background: rgba(94, 106, 210, 0.16); color: var(--accent-hover); font-size: 12px; pointer-events: none;
@@ -197,8 +201,13 @@
 .chat-compose__field:focus { outline: none; }
 .chat-compose__field::placeholder { color: var(--text-3); }
 .chat-compose__note { color: var(--err); font-size: 11.5px; }
-.chat-compose__reason { color: var(--text-3); font-size: 11.5px; }
-.chat-compose__stop { color: var(--red); }
+.chat-compose__reason { color: var(--text-2); font-size: 11.5px; }
+.chat-compose__quick { display: flex; flex-wrap: wrap; gap: 4px; }
+.chat-compose__stop {
+  flex: none; align-self: center; height: 24px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 12px;
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.chat-compose__stop:hover { border-color: var(--text-3); }
 .chat-compose__atts { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; }
 .chat-draft {
   display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 2px 2px 4px;

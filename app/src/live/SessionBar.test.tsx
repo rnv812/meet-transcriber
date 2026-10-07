@@ -8,13 +8,14 @@ import { DENY_NOTE, NO_VISION, SessionBar, seesText } from "./SessionBar";
 
 const summary: LiveSummary = { ...EMPTY_SUMMARY, topic: "Запуск биллинга", decisions: [{ id: "d1", text: "Стенд к пятнице" }] };
 const bar = () => screen.getByRole("group", { name: "Сессия ассистента" });
+const stateEl = () => bar().querySelector(".session-bar__state")!;
 
 test("модель, что видит, состояние", () => {
   render(<SessionBar agent={agentInfo({ sees: { conversation: true, kb: true, materials: 3, images: 0 } })} summary={summary}
     onFrequency={() => {}} />);
   expect(bar()).toHaveTextContent("Claude Code (sonnet)");
   expect(bar()).toHaveTextContent("видит: разговор, структура базы знаний, 3 материала");
-  expect(within(bar()).getByRole("status")).toHaveTextContent("слушает");
+  expect(stateEl()).toHaveTextContent("слушает");
   expect(bar()).not.toHaveTextContent(NO_VISION);
   expect(bar()).not.toHaveTextContent(DENY_NOTE);
 });
@@ -30,12 +31,23 @@ test("пометки: модель без зрения и Codex — исключ
 
 test("состояние: молчаливый ход — «думает», видимый ответ — «пишет», ошибка — с текстом в подсказке", () => {
   const { rerender } = render(<SessionBar agent={agentInfo({ state: "writing" })} summary={summary} onFrequency={() => {}} />);
-  expect(within(bar()).getByRole("status")).toHaveTextContent("думает…");
+  expect(stateEl()).toHaveTextContent("думает…");
   rerender(<SessionBar agent={agentInfo({ state: "writing" })} summary={summary} writing onFrequency={() => {}} />);
-  expect(within(bar()).getByRole("status")).toHaveTextContent("пишет…");
+  expect(stateEl()).toHaveTextContent("пишет…");
   rerender(<SessionBar agent={agentInfo({ state: "error", error: "лимит запросов" })} summary={summary} onFrequency={() => {}} />);
-  expect(within(bar()).getByRole("status")).toHaveTextContent("ошибка");
-  expect(within(bar()).getByRole("status")).toHaveAttribute("title", "лимит запросов");
+  expect(stateEl()).toHaveTextContent("ошибка");
+  expect(stateEl()).toHaveAttribute("title", "лимит запросов");
+});
+
+test("живая область объявляет только ошибку и молчит в «Не отвлекать»", () => {
+  const { rerender } = render(<SessionBar agent={agentInfo({ state: "writing" })} summary={summary} onFrequency={() => {}} />);
+  expect(stateEl()).not.toHaveAttribute("role");
+  expect(within(bar()).getByRole("status")).toBeEmptyDOMElement();
+  const error = agentInfo({ state: "error", error: "лимит запросов" });
+  rerender(<SessionBar agent={error} summary={summary} onFrequency={() => {}} />);
+  expect(within(bar()).getByRole("status")).toHaveTextContent("Ошибка ассистента: лимит запросов");
+  rerender(<SessionBar agent={error} summary={summary} quiet onFrequency={() => {}} />);
+  expect(within(bar()).getByRole("status")).toBeEmptyDOMElement();
 });
 
 test("«Как часто писать»: реже / обычно / чаще, щелчок и стрелки", async () => {

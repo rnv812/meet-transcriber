@@ -128,6 +128,7 @@ test("Развернуть и Свернуть просят оболочку с�
 test("панель, которую оставили развёрнутой, открывается развёрнутой", async () => {
   shellWith({ expanded: true });
   render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null })); // ассистент ответил
   expect(await screen.findByRole("log")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Свернуть" })).toHaveAttribute("aria-expanded", "true");
   expect(calls("live_set_expanded")).toEqual([]);
@@ -137,6 +138,7 @@ test("растянули свёрнутую за край — оболочка �
   let push!: (view: unknown) => void;
   vi.mocked(onLiveWindow).mockImplementation(async (cb) => { push = cb; return () => {}; });
   render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null })); // ассистент ответил
   await act(async () => {});
   expect(screen.queryByRole("log")).toBeNull();
   act(() => push({ expanded: true, maximized: false, pinned: true }));
@@ -147,6 +149,7 @@ test("растянули свёрнутую за край — оболочка �
 
 test("«На весь экран» и «Обычный размер»; на весь экран видно всё содержимое", async () => {
   render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null })); // ассистент ответил
   await userEvent.click(screen.getByRole("button", { name: "На весь экран" }));
   expect(invoke).toHaveBeenLastCalledWith("live_set_maximized", { maximized: true });
   expect(screen.getByRole("log")).toBeInTheDocument();
@@ -177,6 +180,7 @@ test("Esc на весь экран возвращает обычный разм�
 
 test("Esc в поле вопроса не возвращает обычный размер", async () => {
   render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null })); // ассистент ответил
   await userEvent.click(screen.getByRole("button", { name: "На весь экран" }));
   await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   await userEvent.click(screen.getByRole("textbox", { name: "Вопрос ассистенту" }));
@@ -268,6 +272,7 @@ test("оболочка отказала — вид возвращается пр
 test("«Что я пропустил?» — с момента, когда панель последний раз свернули", async () => {
   vi.mocked(liveAsk).mockResolvedValue({ answer: "Решили релиз в пятницу" });
   render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null })); // ассистент ответил
   await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
   await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   // Ещё не сворачивали — ассистент возьмёт последние минуты сам.
@@ -416,6 +421,7 @@ test("широкое окно (от 720) — две колонки; сузили
   try {
     shellWith({ expanded: true });
     render(<LivePanel endpoint={ep} />);
+    act(() => liveStream().emit("state", { digest: "", hints: [], status: null })); // ассистент ответил
     expect(await screen.findByRole("region", { name: "Подсказки" })).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).toBeNull();
     width = 500;

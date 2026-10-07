@@ -1,11 +1,14 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   setAgentFrequency: vi.fn(async () => ({ frequency: "less", label: "реже", live: true })),
+  pasteChatImage: vi.fn(async () => ({ id: "a1", status: "ready", attachment: { id: "a1", kind: "attachment" } })),
+  postChat: vi.fn(async () => ({ id: "m9", queued: false, attachments: [] })),
+  newChatClientId: vi.fn(() => "c1"),
 }));
-import { setAgentFrequency } from "../lib/api";
+import { postChat, setAgentFrequency } from "../lib/api";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
@@ -116,4 +119,44 @@ test("нет связи — писать нельзя, причина видна
   render(<Host live={makeLive({ agent: agentInfo(), error: "Нет связи с ассистентом — переподключаюсь…" })} />);
   expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBeDisabled();
   expect(screen.getByText("Нет связи с ассистентом — переподключаюсь…")).toBeInTheDocument();
+});
+
+test("смена раскладки (узкая → широкая → компактная) не теряет текст и вложения строки ввода", async () => {
+  let px = 600;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(() => ({ width: px, height: 600, top: 0, left: 0, right: px, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }));
+  const live = makeLive({ agent: agentInfo() });
+  const { rerender } = render(<Host live={live} />);
+  load();
+  const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+  await userEvent.type(field, "черновик");
+  const png = new File([new Uint8Array([1])], "shot.png", { type: "image/png" });
+  await act(async () => { fireEvent.paste(field, { clipboardData: { files: [png], getData: () => "" } }); });
+  rerender(<Host live={live} wide />);
+  expect(screen.getByRole("separator", { name: "Ширина расшифровки" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBe(field); // тот же элемент — не пересоздан
+  px = 360;
+  rerender(<Host live={{ ...live }} />);
+  await act(async () => { window.dispatchEvent(new Event("resize")); });
+  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toHaveValue("черновик");
+  expect(screen.getByRole("list", { name: "Вложения" })).toHaveTextContent("shot.png");
+});
+
+test("быстрые вопросы над пустой строкой: щелчок отправляет; при наборе — скрыты", async () => {
+  width(600);
+  render(<Host live={makeLive({ agent: agentInfo() })} />);
+  load();
+  const group = screen.getByRole("group", { name: "Быстрые вопросы" });
+  expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["Что я пропустил?", "Что ответить?", "Кратко итоги"]);
+  await userEvent.click(within(group).getByRole("button", { name: "Что я пропустил?" }));
+  expect(postChat).toHaveBeenCalledWith(ep, { text: "Что я пропустил?", client_id: "c1", attachments: [] });
+  await userEvent.type(screen.getByRole("textbox", { name: "Сообщение ассистенту" }), "с");
+  expect(screen.queryByRole("group", { name: "Быстрые вопросы" })).toBeNull();
+});
+
+test("до первого состояния — «Подключаюсь к ассистенту…», не прежняя раскладка", () => {
+  render(<Host live={makeLive({ loaded: false })} />);
+  expect(screen.getByText("Подключаюсь к ассистенту…")).toBeInTheDocument();
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(screen.queryByRole("log")).toBeNull();
 });

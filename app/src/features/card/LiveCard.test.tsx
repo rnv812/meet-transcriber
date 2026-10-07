@@ -12,6 +12,7 @@ const streams = () => FakeEventSource.instances.filter((s) => s.url.startsWith("
 
 test("идёт: поток ассистента открыт, те же вкладки, вопросы доступны", async () => {
   render(<LiveCard endpoint={ep} live={live()} />);
+  act(() => streams()[0]!.emit("state", { digest: "", hints: [], status: null }));
   expect(screen.getByText("Идёт запись с ассистентом")).toBeInTheDocument();
   expect(streams()).toHaveLength(1);
   expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Лента", "Сводка", "Подсказки", "Спросить"]);
@@ -21,6 +22,7 @@ test("идёт: поток ассистента открыт, те же вкла
 
 test("ассистент дописывает запись: лента остаётся, поток закрыт, вопросы неактивны", async () => {
   const { rerender } = render(<LiveCard endpoint={ep} live={live()} />);
+  act(() => streams()[0]!.emit("state", { digest: "", hints: [], status: null }));
   act(() => streams()[0]!.emit("line", { t: 1, speaker: "Демьян", text: "итог" }, 0));
   rerender(<LiveCard endpoint={ep} live={live({ active: false, stopping: true })} />);
   expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
@@ -37,4 +39,12 @@ test("резидент дописывает запись (active и stopping) �
   expect(streams()).toHaveLength(1); // и не переподключаемся
   expect(screen.queryByText(/Нет связи с ассистентом/)).toBeNull();
   expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
+});
+
+test("до первого состояния ассистента — «Подключаюсь…», а не прежние вкладки", () => {
+  render(<LiveCard endpoint={ep} live={live()} />);
+  expect(screen.getByText("Подключаюсь к ассистенту…")).toBeInTheDocument();
+  expect(screen.queryByRole("tablist")).toBeNull();
+  act(() => streams()[0]!.emit("state", { digest: "", hints: [], status: null }));
+  expect(screen.getByRole("tablist")).toBeInTheDocument();
 });

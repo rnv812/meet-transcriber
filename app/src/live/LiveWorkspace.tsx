@@ -243,9 +243,14 @@ export function participantOn(live: Live, chat?: Chat | null): boolean {
   return !!(chat && (chat.agent || live.agent));
 }
 
+/** До первого состояния ассистента: какой он — чат или прежний, ещё неизвестно. */
+export const CONNECTING = "Подключаюсь к ассистенту…";
+
 /**
  * Рабочая область: с агентом-участником — чат (`ChatWorkspace`), без него
- * (`assist.participant` выключен, «Только сводка») — прежняя раскладка.
+ * (`assist.participant` выключен, «Только сводка») — прежняя раскладка. Пока
+ * первое состояние не пришло — нейтральное «Подключаюсь…» (или ошибка связи),
+ * а не мелькание прежней раскладки.
  */
 export function LiveWorkspace(props: {
   live: Live;
@@ -258,6 +263,13 @@ export function LiveWorkspace(props: {
   chat?: Chat | null;
 }) {
   const { chat, ...rest } = props;
+  if (chat && !props.live.loaded && !participantOn(props.live, chat)) {
+    return (
+      <div className="live-ws live-ws--loading">
+        <p className="live-ws__loading muted" role="status">{props.live.error ?? CONNECTING}</p>
+      </div>
+    );
+  }
   if (chat && participantOn(props.live, chat)) {
     return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place} />;
   }

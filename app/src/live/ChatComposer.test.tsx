@@ -179,3 +179,15 @@ test("убрали, пока вложение загружалось, — уби
   expect(removeChatAttachment).toHaveBeenCalledWith(ep, "a5");
   expect(screen.queryByRole("list", { name: "Вложения" })).toBeNull();
 });
+
+test("в буфере текст и картинка (Excel, Word) — вставляется только текст", () => {
+  render(<Host />);
+  load();
+  const png = new File([new Uint8Array([1])], "image.png", { type: "image/png" });
+  const event = fireEvent.paste(field(), {
+    clipboardData: { files: [png], getData: (t: string) => (t === "text/plain" ? "A1\tB1" : "") },
+  });
+  expect(event).toBe(true); // не отменено — текст вставит браузер
+  expect(pasteChatImage).not.toHaveBeenCalled();
+  expect(screen.queryByRole("list", { name: "Вложения" })).toBeNull();
+});

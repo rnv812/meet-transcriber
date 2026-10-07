@@ -68,14 +68,18 @@ export type ChatState = {
   clicked: Record<string, string>;
   /** Правка пришла к неизвестной записи — ленту надо перечитать. */
   stale: boolean;
+  /** Закреплённый вопрос, который человек убрал «×» (в этом окне). */
+  hiddenPin: string | null;
 };
 
 export const EMPTY_CHAT: ChatState = {
   seq: -1, loaded: false, order: [], byId: {}, outbox: [], partial: {}, agent: null, seenAt: {}, clicked: {}, stale: false,
+  hiddenPin: null,
 };
 
 export type ChatAction =
-  | { type: "snapshot"; snap: ChatSnapshot; now: number }
+  /** `fetched` — снимок из `getChat` (перечитали): старее уже учтённых событий — не применяется. */
+  | { type: "snapshot"; snap: ChatSnapshot; now: number; fetched?: boolean }
   | { type: "event"; event: ChatEvent; now: number }
   | { type: "partial"; partial: ChatPartial }
   | { type: "agent"; agent: AgentInfo }
@@ -84,7 +88,8 @@ export type ChatAction =
   | { type: "failed"; client_id: string; error: string }
   | { type: "retry"; client_id: string }
   | { type: "click"; id: string; label: string | null }
-  | { type: "react"; id: string; emoji: ChatReaction; on: boolean; at: number };
+  | { type: "react"; id: string; emoji: ChatReaction; on: boolean; at: number }
+  | { type: "hidePin"; id: string };
 
 /** Черновики, которые журнал уже показал (по `client_id` или id из ответа POST). */
 function settle(outbox: Outgoing[], byId: Record<string, ChatMessage>): Outgoing[] {
@@ -117,6 +122,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "snapshot": {
       const { snap, now } = action;
+      if (action.fetched && snap.seq < state.seq) return state;
       const byId: Record<string, ChatMessage> = {};
       const order: string[] = [];
       for (const m of snap.messages) {
@@ -159,14 +165,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       const next = { ...cur, ...event.set } as ChatMessage;
       const byId = { ...state.byId, [event.id]: next };
-      let { partial, seenAt } = state;
+      let { partial, seenAt, order } = state;
+      if (next.kind === "agent" && typeof next.status === "string" && HIDDEN_STATUSES.has(next.status)) {
+        // Скрытый ответ (молчание, склеенный) больше не нужен: за 2 часа их сотни.
+        delete byId[event.id];
+        order = order.filter((id) => id !== event.id);
+      }
       if (next.status !== "writing" && (event.id in partial || event.id in seenAt)) {
         partial = { ...partial };
         delete partial[event.id];
         seenAt = { ...seenAt };
         delete seenAt[event.id];
       }
-      return { ...state, seq: event.seq, byId, partial, seenAt };
+      return { ...state, seq: event.seq, byId, order, partial, seenAt };
     }
     case "partial": {
       const { id, text } = action.partial;
@@ -209,6 +220,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       else delete reactions[action.emoji];
       return { ...state, byId: { ...state.byId, [action.id]: { ...cur, reactions } } };
     }
+    case "hidePin":
+      return { ...state, hiddenPin: action.id };
   }
 }
 
@@ -256,12 +269,13 @@ export function feedItems(state: ChatState, now: number): FeedItem[] {
 /** Готовое сообщение агента (не пишется): его считают новым и показывают в свёрнутой панели. */
 export function isFinalAgent(m: ChatMessage): boolean {
   return m.kind === "agent" && (m.status === "shown" || m.status === "cancelled" || m.status === "failed")
-    && !!(m.text?.trim() || m.error);
+    && !!(m.text?.trim() || m.error || m.status === "failed");
 }
 
 /**
  * Закреплённый вопрос к человеку (`pin`): последний такой, пока человек
- * после него ничего не написал и не нажал.
+ * после него ничего не написал и не нажал (сообщение, которое не ушло, — не в
+ * счёт) и не убрал его «×».
  */
 export function pinnedOf(state: ChatState): ChatMessage | null {
   let pin: ChatMessage | null = null;
@@ -271,19 +285,24 @@ export function pinnedOf(state: ChatState): ChatMessage | null {
     if (m.kind === "agent" && m.pin && m.status === "shown") pin = m;
     else if (m.kind === "user" && pin) pin = null;
   }
-  if (pin && state.outbox.length) return null;
-  return pin;
+  if (pin && state.outbox.some((o) => o.state !== "failed")) return null;
+  return pin && pin.id !== state.hiddenPin ? pin : null;
 }
 
-/** Какую кнопку сообщения уже нажали (из журнала или только что). */
-export function usedButton(state: ChatState, id: string): string | null {
-  if (state.clicked[id]) return state.clicked[id]!;
-  let label: string | null = null;
+/** Нажатые кнопки: id сообщения агента → надпись (из журнала и только что нажатые). Один проход. */
+export function usedButtons(state: ChatState): Map<string, string> {
+  const used = new Map<string, string>();
   for (const mid of state.order) {
     const m = state.byId[mid];
-    if (m?.kind === "user" && m.via === "button" && m.re === id) label = m.text ?? "";
+    if (m?.kind === "user" && m.via === "button" && typeof m.re === "string") used.set(m.re, m.text ?? "");
   }
-  return label;
+  for (const [id, label] of Object.entries(state.clicked)) used.set(id, label);
+  return used;
+}
+
+/** Какую кнопку сообщения уже нажали. */
+export function usedButton(state: ChatState, id: string): string | null {
+  return usedButtons(state).get(id) ?? null;
 }
 
 /** Ответ, который пишется и виден (для «Стоп»): его id, иначе null. */

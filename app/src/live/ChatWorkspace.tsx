@@ -79,27 +79,13 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
     <div ref={root} className={`chat-ws chat-ws--${layout}`} data-chat-drop="">
       {live.catchup?.active && <CatchupNote catchup={live.catchup} />}
       {agent && (
-        <SessionBar agent={agent} summary={live.summary} writing={!!chat.writing} compact={compact}
+        <SessionBar agent={agent} summary={live.summary} writing={!!chat.writing} compact={compact} quiet={view.quiet}
           onFrequency={(f) => void chat.setFrequency(f)} disabled={!!block} />
       )}
-      {layout === "side" && (
-        <div className="chat-ws__body chat-ws__body--side">
-          <section className="chat-ws__transcript" aria-label="Расшифровка">{feed}</section>
-          <PaneResizer name={`${key}-chat-side`} cssVar="--chat-side" spec={CHAT_PANES.side} panel="before"
-            label="Ширина расшифровки" className="chat-ws__split" />
-          {main}
-        </div>
-      )}
-      {layout === "top" && (
-        <div className="chat-ws__body chat-ws__body--top">
-          <section className="chat-ws__strip" aria-label="Расшифровка">{feed}</section>
-          <PaneResizer name={`${key}-chat-strip`} cssVar="--chat-strip" spec={CHAT_PANES.strip} panel="before" axis="y"
-            label="Высота расшифровки" />
-          {main}
-        </div>
-      )}
-      {layout === "compact" && (
-        <div className="chat-ws__body chat-ws__body--compact">
+      {/* Одно место в дереве при любой раскладке: чат и строка ввода не
+          пересоздаются при смене ширины (черновик, прокрутка, «↓ N»). */}
+      <div className={`chat-ws__body chat-ws__body--${layout}`}>
+        {layout === "compact" && (
           <button type="button" className="chat-ticker" aria-expanded={stripOpen}
             aria-label={stripOpen ? "Свернуть расшифровку" : "Развернуть расшифровку"}
             onClick={() => setStripOpen(!stripOpen)}>
@@ -110,10 +96,22 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
               </span>
             ) : <span className="chat-ticker__text muted">Реплики появятся, как только их расшифрует ассистент</span>}
           </button>
-          {stripOpen && <section className="chat-ws__strip chat-ws__strip--compact" aria-label="Расшифровка">{feed}</section>}
-          {main}
-        </div>
-      )}
+        )}
+        {(layout !== "compact" || stripOpen) && (
+          <section className={layout === "side" ? "chat-ws__transcript"
+            : `chat-ws__strip${layout === "compact" ? " chat-ws__strip--compact" : ""}`} aria-label="Расшифровка">
+            {feed}
+          </section>
+        )}
+        {layout === "side" ? (
+          <PaneResizer key="side" name={`${key}-chat-side`} cssVar="--chat-side" spec={CHAT_PANES.side} panel="before"
+            label="Ширина расшифровки" className="chat-ws__split" />
+        ) : layout === "top" ? (
+          <PaneResizer key="strip" name={`${key}-chat-strip`} cssVar="--chat-strip" spec={CHAT_PANES.strip}
+            panel="before" axis="y" label="Высота расшифровки" />
+        ) : null}
+        {main}
+      </div>
     </div>
   );
 }

@@ -96,3 +96,31 @@ test("нажатая кнопка: сразу после щелчка и по з
   expect(s.clicked).toEqual({});
   expect(usedButton(s, "m1")).toBe("Глянь");
 });
+
+test("скрытый ответ уходит из памяти, а не только из ленты", () => {
+  let s = snap([agentMsg("m1")], 1);
+  s = chatReducer(s, { type: "event", event: { seq: 2, op: "add", message: agentMsg("m2", { status: "writing", text: "" }) }, now: 0 });
+  s = chatReducer(s, { type: "event", event: { seq: 3, op: "patch", id: "m2", set: { status: "dropped" } }, now: 0 });
+  expect(s.order).toEqual(["m1"]);
+  expect(s.byId.m2).toBeUndefined();
+  expect(s.stale).toBe(false);
+});
+
+test("перечитанный снимок старее учтённых событий не применяется", () => {
+  let s = snap([agentMsg("m1")], 5);
+  s = chatReducer(s, { type: "event", event: { seq: 6, op: "add", message: agentMsg("m2") }, now: 0 });
+  const old = chatReducer(s, { type: "snapshot", snap: { messages: [agentMsg("m1")], seq: 5 }, now: 0, fetched: true });
+  expect(old).toBe(s);
+  const fresh = chatReducer(s, { type: "snapshot", snap: { messages: [agentMsg("m1"), agentMsg("m2")], seq: 7 }, now: 0, fetched: true });
+  expect(fresh.seq).toBe(7);
+});
+
+test("закреплённый: «×» прячет; неотправленное сообщение его не снимает", () => {
+  let s = snap([agentMsg("m1", { pin: true })], 2);
+  s = chatReducer(s, { type: "queue", out: { client_id: "c1", text: "да", attachments: [], at: 0, state: "sending" } });
+  expect(pinnedOf(s)).toBeNull();
+  s = chatReducer(s, { type: "failed", client_id: "c1", error: "нет связи" });
+  expect(pinnedOf(s)?.id).toBe("m1");
+  s = chatReducer(s, { type: "hidePin", id: "m1" });
+  expect(pinnedOf(s)).toBeNull();
+});

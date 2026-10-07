@@ -28,7 +28,7 @@ import { plainMarkdown } from "../lib/agentRef";
 import { type Endpoint, NoResidentError, liveDetach, liveStop, resolveEndpoint } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { inTauri, invoke } from "../lib/shell";
-import type { LiveHint } from "../lib/types";
+import type { ChatMessage, LiveHint } from "../lib/types";
 import { Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, PowerOff, Square } from "lucide-react";
 import { IconButton } from "../ui/IconButton";
 import { Truncate } from "../ui/Truncate";
@@ -249,11 +249,11 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
         </div>
       ) : participant ? (
         <button type="button" className={`live-last${chat.pinned ? " live-last--urgent" : ""}`} onClick={() => setExpanded(true)}
-          aria-label={agentLine ? `${chat.pinned ? "Вопрос вам" : "Ассистент"}: ${plainMarkdown(agentLine.text ?? "")}. Открыть чат` : "Развернуть панель"}>
+          aria-label={agentLine ? `${chat.pinned ? "Вопрос вам" : "Ассистент"}: ${agentText(agentLine)}. Открыть чат` : "Развернуть панель"}>
           {agentLine ? (
             <>
               <span className="live-last__kind live-last__kind--agent">{chat.pinned ? "Вопрос вам" : "Ассистент"}</span>
-              <Truncate className="live-last__text">{plainMarkdown(agentLine.text ?? agentLine.error ?? "")}</Truncate>
+              <Truncate className="live-last__text">{agentText(agentLine)}</Truncate>
             </>
           ) : last ? (
             <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
@@ -276,12 +276,17 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
               {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
               <span>{last.text}</span>
             </Truncate>
-          ) : <span className="live-last__text muted">Реплики появятся, как только их расшифрует ассистент</span>}
+          ) : <span className="live-last__text muted">{live.loaded || participant ? "Реплики появятся, как только их расшифрует ассистент" : "Ассистент подключается…"}</span>}
           {newHints > 0 && <span className="live-last__count" aria-label={`новых подсказок: ${newHints}`}>{newHints}</span>}
         </button>
       )}
     </div>
   );
+}
+
+/** Текст сообщения агента для свёрнутой строки: без разметки; упавший без текста — так и сказать. */
+function agentText(m: ChatMessage): string {
+  return plainMarkdown(m.text || "") || (m.status === "failed" ? "Не удалось получить ответ" : m.error || "");
 }
 
 /** Тащить окно, пока панели ещё нет (резидента ищем). */

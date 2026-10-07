@@ -115,7 +115,7 @@ function AgentMessage({ m, chat, onTime, compact, disabled }: {
       {writing ? (
         partial?.trim()
           ? <div className="chat-msg__text chat-msg__text--streaming">{partial}</div>
-          : <div className="chat-typing" role="status"><span className="chat-typing__dots" aria-hidden="true" />Пишет…</div>
+          : <div className="chat-typing"><span className="chat-typing__dots" aria-hidden="true" />Пишет…</div>
       ) : text.trim() ? (
         <Markdown source={text} className="chat-msg__text" onTime={onTime} />
       ) : null}
@@ -215,12 +215,11 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   const follow = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const seen = useRef<Set<string> | null>(null);
-  const [hidden, setHidden] = useState<string | null>(null);
   const ids = agentIds(chat.items);
   const outCount = chat.state.outbox.length;
   const last = chat.items.at(-1);
   const sig = `${chat.items.length}:${last?.type === "message" ? `${last.message.id}:${last.message.status}:${last.message.text?.length ?? 0}` : "o"}:${
-    last?.type === "message" ? chat.state.partial[last.message.id]?.length ?? 0 : 0}`;
+    Object.values(chat.state.partial).reduce((n, t) => n + t.length, 0)}`;
 
   const toBottom = () => {
     const el = box.current;
@@ -262,7 +261,12 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   }, []);
 
   const unread = atBottom || quiet || !seen.current ? 0 : ids.filter((id) => !seen.current!.has(id)).length;
-  const pinned = chat.pinned && chat.pinned.id !== hidden ? chat.pinned : null;
+  const pinned = chat.pinned;
+  const hidePin = (id: string) => {
+    chat.hidePin(id);
+    // Кнопка «×» ушла вместе с карточкой — фокус в строку ввода, а не на <body>.
+    box.current?.closest(".chat-ws__main")?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+  };
   const showPinned = () => {
     if (!pinned) return;
     const row = box.current?.querySelector<HTMLElement>(`[data-id="${pinned.id}"]`);
@@ -272,7 +276,7 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   return (
     <div className={`chat${compact ? " chat--compact" : ""}`}>
       {pinned && (
-        <Pinned m={pinned} chat={chat} onTime={onTime} onShow={showPinned} onHide={() => setHidden(pinned.id)}
+        <Pinned m={pinned} chat={chat} onTime={onTime} onShow={showPinned} onHide={() => hidePin(pinned.id)}
           disabled={disabled} />
       )}
       <div ref={box} className="chat__scroll" onScroll={onScroll}>
