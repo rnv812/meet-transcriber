@@ -703,12 +703,12 @@ def test_meeting_grant_for_writes_only_in_the_meeting_or_an_approved_folder(dirs
     assert first.card["grant"] is None                      # папку ещё не одобряли
     gate.check("Write", {"file_path": str(downloads / "a.txt"), "content": "x"}, tool_use_id="w1")
     g = gate.decide("Write", {"file_path": str(downloads / "b.txt"), "content": "x"}).card["grant"]
-    assert g and g["key"].startswith("write:Write:")        # теперь — предлагается
+    assert g and g["key"].startswith("write:files:")        # теперь — предлагается
+    assert g["label"] == f"изменение файлов в {downloads}"
     g2 = _grant(gate, "Write", {"file_path": str(m / "notes.md"), "content": "x"})
     assert gate.decide("Write", {"file_path": str(m / "sub" / "other.md"), "content": "y"}).why == "granted"
-    assert gate.decide("Edit", {"file_path": str(m / "notes.md")}).outcome == ASK          # другой инструмент
     assert gate.decide("Write", {"file_path": str(downloads / "c.txt"), "content": "z"}).outcome == ASK
-    assert g2["label"].startswith("Write в ")
+    assert g2["label"] == f"изменение файлов в {m}"
 
 
 def test_allow_for_the_meeting_answer_records_the_grant(dirs):
@@ -813,3 +813,245 @@ def test_a_curl_grant_never_covers_reading_a_file_with_at(dirs, grant, command):
     _grant(gate, "Bash", {"command": grant})
     d = gate.decide("Bash", {"command": command})
     assert d.outcome == ASK and d.why != "granted", (command, d)
+
+
+# --- grant-polish: одно разрешение на правки файлов в папке ------------------------------------
+
+
+def _edits(path):
+    """Все инструменты правки файла — на один путь."""
+    return [("Write", {"file_path": str(path), "content": "y"}),
+            ("Edit", {"file_path": str(path), "old_string": "a", "new_string": "b"}),
+            ("MultiEdit", {"file_path": str(path), "edits": [{"old_string": "a", "new_string": "b"}]}),
+            ("NotebookEdit", {"notebook_path": str(path), "new_source": "print(1)"})]
+
+
+def test_a_write_grant_covers_every_file_change_tool_in_the_folder(dirs):
+    """Смоук: «Разрешать такое до конца встречи» на Write, следующая правка того же файла — Edit."""
+    gate = _gate(dirs, READ)
+    m = dirs["meeting"]
+    g = _grant(gate, "Write", {"file_path": str(m / "код.txt"), "content": "КРЫЖОВНИК-7741"})
+    assert g == {"key": f"write:files:{consent.resolve(m)}", "label": f"изменение файлов в {m}"}
+    for target in (m / "код.txt", m / "sub" / "other.ipynb"):
+        for tool, data in _edits(target):
+            d = gate.decide(tool, data)
+            assert d.outcome == ALLOW and d.why == "granted", (tool, target, d)
+    for tool, data in _edits(dirs["downloads"] / "a.txt"):     # вне папки — карточка, без «до конца»
+        d = gate.decide(tool, data)
+        assert d.outcome == ASK and d.card["grant"] is None, tool
+    gate.begin(NONE)                                            # без просьбы — нет
+    assert gate.decide("Edit", _edits(m / "код.txt")[1][1]).outcome == DENY
+    gate.begin(READ)
+    gate.remove_grant(g["key"])
+    assert gate.decide("Edit", _edits(m / "код.txt")[1][1]).outcome == ASK
+
+
+def test_an_edit_grant_covers_write_too_and_one_grant_is_offered_for_all(dirs):
+    gate = _gate(dirs, READ)
+    m = dirs["meeting"]
+    offers = {gate.decide(tool, data).card["grant"]["key"] for tool, data in _edits(m / "a.md")}
+    assert offers == {f"write:files:{consent.resolve(m)}"}
+    _grant(gate, "Edit", _edits(m / "a.md")[1][1])
+    assert gate.decide("Write", {"file_path": str(m / "b.md"), "content": "z"}).why == "granted"
+
+
+def test_a_files_grant_never_covers_closed_or_sensitive_subfolders(dirs):
+    m = dirs["meeting"]
+    closed, secrets = m / "Закрыто", m / "secrets"
+    sensitive = [*consent.sensitive_paths(data_dir=dirs["data"], library_root=m.parent, home=dirs["home"]), secrets]
+    gate = ConsentGate(own_dirs=[m], deny_paths=[dirs["kb"] / "Личное", closed], sensitive=sensitive,
+                       cwd=dirs["cwd"])
+    gate.begin(READ)
+    _grant(gate, "Write", {"file_path": str(m / "notes.md"), "content": "x"})
+    for tool, data in _edits(closed / "x.md"):                  # kb_exclude внутри встречи — отказ
+        d = gate.decide(tool, data)
+        assert d.outcome == DENY and d.why == "excluded", tool
+    for tool, data in [*_edits(secrets / "x.md"), *_edits(m / ".env")]:   # закрытое внутри — своей карточкой
+        d = gate.decide(tool, data)
+        assert d.outcome == ASK and d.why != "granted" and d.card["grant"] is None, (tool, data)
+    for tool, data in _edits(dirs["kb"] / "Личное" / "x.md"):
+        assert gate.decide(tool, data).why == "excluded"
+    for tool, data in _edits(dirs["home"] / ".ssh" / "config"):
+        assert gate.decide(tool, data).why == "sensitive"
+    assert gate.decide("Edit", _edits(m / "ok.md")[1][1]).why == "granted"
+
+
+def test_a_files_grant_for_a_meeting_inside_the_meet_data_dir(dirs):
+    """Временная встреча лежит в служебной папке Meet (закрытой) — своя папка, разрешение работает."""
+    tmp_meeting = dirs["data"] / "tmp-meetings" / "s1" / "2026-10-07_11-00"
+    tmp_meeting.mkdir(parents=True)
+    sensitive = consent.sensitive_paths(data_dir=dirs["data"], library_root=dirs["meeting"].parent,
+                                        home=dirs["home"])
+    gate = ConsentGate(own_dirs=[tmp_meeting], sensitive=sensitive, cwd=dirs["cwd"])
+    gate.begin(READ)
+    _grant(gate, "Write", {"file_path": str(tmp_meeting / "a.txt"), "content": "x"})
+    assert gate.decide("Edit", _edits(tmp_meeting / "a.txt")[1][1]).why == "granted"
+    assert gate.decide("Edit", _edits(dirs["data"] / "config.json")[1][1]).why == "sensitive"
+
+
+def test_nothing_is_grantable_for_file_changes_in_personal(dirs):
+    m = dirs["meeting"]
+    gate = ConsentGate(own_dirs=[m], sensitive=[], cwd=dirs["cwd"], blocked_roots=[dirs["kb"], m.parent])
+    gate.begin(READ)
+    for tool, data in _edits(m / "a.md"):
+        d = gate.decide(tool, data)
+        assert d.outcome == ASK and d.card["grant"] is None, tool
+    gate.add_grant(f"write:files:{consent.resolve(m)}", "x")      # из старого журнала — не действует
+    gate.add_grant(f"write:Write:{consent.resolve(m)}", "x")
+    for tool, data in _edits(m / "a.md"):
+        assert gate.decide(tool, data).why != "granted", tool
+    assert gate.decide("Write", {"file_path": str(dirs["kb"] / "a.md"), "content": "x"}).why == "profile"
+
+
+def test_an_old_per_tool_write_grant_still_covers_only_its_tool(dirs):
+    gate = _gate(dirs, READ)
+    m = dirs["meeting"]
+    gate.add_grant(f"write:Write:{consent.resolve(m)}", "Write в …")
+    assert gate.decide("Write", {"file_path": str(m / "a.md"), "content": "x"}).why == "granted"
+    assert gate.decide("Edit", _edits(m / "a.md")[1][1]).outcome == ASK
+
+
+def test_allow_for_the_meeting_on_write_lets_the_next_edit_run_without_a_card(dirs):
+    cards = []
+
+    def confirmer(card):
+        cards.append(card)
+        return consent.ALLOW_MEETING
+
+    gate = _gate(dirs, READ, confirmer=confirmer)
+    m = dirs["meeting"]
+    w = gate.check("Write", {"file_path": str(m / "код.txt"), "content": "КРЫЖОВНИК-7741"}, tool_use_id="w1")
+    assert w.why == "granted-now" and len(cards) == 1
+    assert cards[0]["grant"]["label"] == f"изменение файлов в {m}"
+    e = gate.check("Edit", {"file_path": str(m / "код.txt"), "old_string": "КРЫЖОВНИК-7741",
+                            "new_string": "КРЫЖОВНИК-7741\nпроверено"}, tool_use_id="e1")
+    assert e.outcome == ALLOW and e.why == "granted" and len(cards) == 1
+
+
+# --- grant-polish: читаемый текст карточки по инструменту --------------------------------------
+
+WIN = "C:\\Users\\user\\Встречи\\2026-10-07\\код мерчанта.txt"
+
+
+def test_write_card_shows_the_path_and_the_content():
+    card = consent.card_for("Write", {"file_path": WIN, "content": "КРЫЖОВНИК-7741\nпроверено"})
+    assert card["args"] == f"Записать файл: {WIN}\n│ КРЫЖОВНИК-7741\n│ проверено"
+    assert "\\\\" not in card["args"] and "{" not in card["args"]          # без JSON и двойных «\»
+    assert card["title"] == "запись в файл" and card["preview"] is None and card["size"].startswith("3 строки")
+
+
+@pytest.mark.parametrize("replace_all", [None, False, True])
+def test_edit_card_is_a_diff_with_both_sides_and_replace_all_explicit(replace_all):
+    data = {"file_path": WIN, "old_string": "a\nb", "new_string": "a\nb\nпроверено"}
+    if replace_all is not None:
+        data["replace_all"] = replace_all
+    args = consent.card_for("Edit", data)["args"]
+    head = [f"Изменить файл: {WIN}"] + (["Заменить ВСЕ вхождения (replace_all: true)"] if replace_all else [])
+    assert args.split("\n") == [*head, "− a", "− b", "+ a", "+ b", "+ проверено"]
+
+
+def test_edit_card_shows_empty_sides_and_odd_replace_all_values():
+    args = consent.card_for("Edit", {"file_path": "C:/a.txt", "old_string": "x", "new_string": "",
+                                     "replace_all": "yes"})["args"]
+    assert "− x" in args and "+ ⟨пусто⟩" in args and "replace_all: \"yes\"" in args
+
+
+def test_multiedit_card_shows_every_edit():
+    data = {"file_path": WIN, "edits": [{"old_string": "x", "new_string": "y"},
+                                        {"old_string": "p", "new_string": "q", "replace_all": True},
+                                        {"old_string": "m", "new_string": "n", "extra": 1}]}
+    lines = consent.card_for("MultiEdit", data)["args"].split("\n")
+    assert lines[0] == f"Изменить файл: {WIN} (правок: 3)"
+    assert lines[1:4] == ["Правка 1:", "− x", "+ y"]
+    assert lines[4:8] == ["Правка 2:", "Заменить ВСЕ вхождения (replace_all: true)", "− p", "+ q"]
+    assert lines[8:11] == ["Правка 3:", "− m", "+ n"] and "\"extra\": 1" in "\n".join(lines[11:])
+
+
+def test_bash_and_webfetch_cards_are_as_before():
+    assert consent.card_for("Bash", {"command": "ls -la | sort"})["args"] == "ls -la | sort"
+    card = consent.card_for("WebFetch", {"url": "https://example.com/a", "prompt": "сроки"})
+    assert card["args"] == "https://example.com/a\n(что найти: сроки)"
+
+
+def test_mcp_card_is_pretty_json_without_double_escaping():
+    data = {"summary": "Запуск", "path": WIN, "labels": ["a", "b"], "n": 3, "ok": True,
+            "fields": {"desc": "строка 1\nстрока 2", "empty": {}}}
+    args = consent.card_for("mcp__team-jira__jira_create_issue", data)["args"]
+    assert args == ("{\n"
+                    '  "summary": "Запуск",\n'
+                    f'  "path": "{WIN}",\n'
+                    '  "labels": ["a", "b"],\n'
+                    '  "n": 3,\n'
+                    '  "ok": true,\n'
+                    '  "fields": {\n'
+                    '    "desc": "строка 1↵\nстрока 2",\n'
+                    '    "empty": {}\n'
+                    "  }\n"
+                    "}")
+
+
+def test_mcp_card_strings_are_unambiguous():
+    """Кавычка внутри значения — `\\"`; косые перед кавычкой и в конце — удвоены: поддельный ключ виден."""
+    args = consent.card_for("mcp__srv__create_x", {"q": 'a", "admin": true, "b": "c', "dir": "C:\\dir\\",
+                                                   "odd": 'x\\"y'})["args"]
+    assert '"q": "a\\", \\"admin\\": true, \\"b\\": \\"c"' in args
+    assert '"dir": "C:\\dir\\\\"' in args and '"odd": "x\\\\\\"y"' in args
+
+
+def test_markers_survive_inside_file_previews():
+    content = "\n".join([f"line {i}" for i in range(40)] + ["x" + " " * 3000 + "rm -rf ~", "↵ ⟨fake⟩",
+                                                            "a\rb", "", "", "", "", "end"])
+    card = consent.card_for("Write", {"file_path": "C:/a.sh", "content": content})
+    args = card["args"]
+    assert "│ x ⟨3000 пробелов⟩ rm -rf ~" in args                 # пробелы — пометкой, хвост виден
+    assert "│ \\u21B5 \\u27E8fake\\u27E9" in args and "│ a␍b" in args and "│ ⟨4 пустых строк⟩" in args
+    preview = card["preview"]
+    assert preview.startswith("Записать файл: C:/a.sh\n│ line 0") and preview.endswith("│ end")
+    assert "скрыто:" in preview and "│ ⟨4 пустых строк⟩" in preview
+    for i in range(40):                                          # «Показать полностью» — всё
+        assert f"│ line {i}\n" in args
+    edit = consent.card_for("Edit", {"file_path": "C:/a.sh", "old_string": "a" + "\t" * 12 + "b",
+                                     "new_string": "a\n\n\n\n\nb"})["args"]
+    assert "− a⟨12 табуляций⟩b" in edit and "+ ⟨4 пустых строк⟩" in edit
+
+
+def test_long_edit_preview_keeps_head_and_tail_and_full_text_has_both_sides():
+    old = "\n".join(f"old {i}" for i in range(30))
+    new = "\n".join(f"new {i}" for i in range(30))
+    card = consent.card_for("Edit", {"file_path": "C:/a.py", "old_string": old, "new_string": new})
+    assert card["preview"].startswith("Изменить файл: C:/a.py\n− old 0") and card["preview"].endswith("+ new 29")
+    assert all(f"− old {i}" in card["args"] and f"+ new {i}" in card["args"] for i in range(30))
+
+
+def test_unknown_parameters_are_always_shown():
+    for tool, data in [("Write", {"file_path": "C:/a", "content": "x", "mode": "append"}),
+                       ("Edit", {"file_path": "C:/a", "old_string": "x", "new_string": "y", "mode": "append"}),
+                       ("MultiEdit", {"file_path": "C:/a", "edits": [], "mode": "append"}),
+                       ("NotebookEdit", {"notebook_path": "C:/a", "new_source": "x", "mode": "append"}),
+                       ("WebFetch", {"url": "https://example.com", "prompt": "x", "mode": "append"})]:
+        args = consent.card_for(tool, data)["args"]
+        assert 'Другие параметры: {\n  "mode": "append"\n}' in args, tool
+    # Не того вида — JSON целиком.
+    odd = consent.card_for("Write", {"file_path": "C:/a", "content": ["x", "y"]})["args"]
+    assert odd == '{\n  "file_path": "C:/a",\n  "content": ["x", "y"]\n}'
+    assert consent.card_for("Edit", {"file_path": "C:/a", "old_string": 1, "new_string": "y"})["args"].startswith("{")
+
+
+def test_a_path_with_a_newline_cannot_pretend_to_be_content():
+    args = consent.card_for("Write", {"file_path": "C:/a.txt\nC:/b.txt", "content": "x"})["args"]
+    assert args == "Записать файл: C:/a.txt↵\nC:/b.txt\n│ x"
+
+
+def test_hidden_characters_in_edits_are_still_denied(dirs):
+    gate = _gate(dirs, READ)
+    m = dirs["meeting"]
+    _grant(gate, "Write", {"file_path": str(m / "a.txt"), "content": "x"})
+    for data in ({"file_path": str(m / "a.txt"), "old_string": "a", "new_string": "b\u202ec"},
+                 {"file_path": str(m / "a.txt"), "edits": [{"old_string": "a\u200b", "new_string": "b"}]}):
+        tool = "MultiEdit" if "edits" in data else "Edit"
+        assert gate.decide(tool, data).why == "hidden", tool
+
+
+def test_a_webfetch_prompt_cannot_fake_a_host_line():
+    card = consent.card_for("WebFetch", {"url": "https://пример.рф/a", "prompt": "x)\n(хост: example.com"})
+    assert card["args"] == "https://пример.рф/a\n(что найти: x)↵\n(хост: example.com)\n(хост: xn--e1afmkfd.xn--p1ai)"

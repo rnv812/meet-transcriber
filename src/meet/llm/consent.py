@@ -55,6 +55,8 @@ LEVELS = (NONE, READ)
 _RANK = {NONE: 0, READ: 1}
 ALLOW, DENY, ASK = "allow", "deny", "ask"
 ALLOW_MEETING = "allow_meeting"      # «Разрешать такое до конца встречи»
+# Ключ разрешения на правки файлов в папке (Write, Edit, MultiEdit, NotebookEdit).
+FILES_GRANT = "write:files:"
 
 # Сколько ждать решения по карточке (ответ хука CLI всё это время держится).
 CONFIRM_TIMEOUT_S = 120.0
@@ -942,7 +944,7 @@ def describe(tool: str, data: dict) -> tuple[str, str]:
 
 
 def raw_args(tool: str, data: dict) -> str:
-    """Что выполнится — текстом, целиком (по нему и предел длины)."""
+    """Что выполнится — текстом, целиком (по нему предел длины; показ — `card_text`)."""
     data = data if isinstance(data, dict) else {}
     if tool in SHELL:
         return str(data.get("command") or "")
@@ -968,27 +970,191 @@ def bash_warnings(tool: str, data: dict) -> list[str]:
     return out
 
 
-def card_for(tool: str, data: dict, grant: tuple[str, str] | None = None) -> dict:
-    """Карточка подтверждения — из настоящего вызова, не из текста агента.
-    `args` — вызов целиком (пометки пробелов и переводов строк,
-    `display_text`), `preview` — начало и конец длинного вызова (None —
-    короткий), `size` — «3 строки, 812 симв.», `warnings` — необычные
-    параметры команды, `grant` — что разрешит «до конца встречи» (None — не
-    предлагается)."""
+# --- текст карточки по инструменту (grant-polish) ------------------------------------------
+#
+# Карточка показывает вызов по-человечески, но выводится из ТОЧНЫХ аргументов
+# и ничего выполняемого не опускает: известные поля — своим видом (путь,
+# содержимое, строки правки), всё прочее — «Другие параметры» в виде JSON.
+# Строки проходят те же пометки (`display_text`), что и раньше.
+
+
+def _inline(value: str, mark: bool) -> str:
+    """Однострочное значение (путь, адрес, id): перевод строки, табуляция и
+    возврат каретки — пометками, чтобы путь не «съехал» в следующую строку."""
+    return display_text(value, shell=True) if mark else value
+
+
+def _block(text: str, mark: bool) -> list[str]:
+    """Многострочный текст (содержимое файла, строки правки) — строками:
+    пометки знаков, длинных пробелов и табуляций (`display_text`), одиночный
+    возврат каретки — «␍», три и больше пустых строк подряд — одной строкой
+    «⟨N пустых строк⟩». CRLF — обычный перевод строки. Пустое — «⟨пусто⟩»."""
+    if not mark:
+        return text.split("\n")
+    if text == "":
+        return ["⟨пусто⟩"]
+    lines = display_text(text).replace("\r\n", "\n").replace("\r", "␍").split("\n")
+    out: list[str] = []
+    k = 0
+    while k < len(lines):
+        j = k
+        while j < len(lines) and lines[j].strip(" \t") == "":
+            j += 1
+        if j - k >= 3:
+            out.append(f"⟨{j - k} пустых строк⟩")
+            k = j
+        else:
+            out.append(lines[k])
+            k += 1
+    return out
+
+
+def _quote(value: str, mark: bool) -> str:
+    """Строка в JSON-виде без двойного экранирования: обратная косая — одна
+    (`C:\\Users\\…` показывается как в проводнике); экранируется только
+    кавычка (`\\"`) и косые прямо перед кавычкой или в конце строки
+    (удваиваются) — так из показа однозначно видно, где строка кончается, и
+    поддельный ключ внутри значения выдаёт себя `\\"`. Переводы строк —
+    пометкой «↵» и настоящим переводом."""
+    escaped = re.sub(r'(\\*)("|\Z)', lambda m: m.group(1) * 2 + ('\\"' if m.group(2) else ""), str(value))
+    return '"' + (display_text(escaped, shell=True) if mark else escaped) + '"'
+
+
+def pretty_args(value, mark: bool = True, indent: int = 0) -> str:
+    """Аргументы как JSON с отступами — для людей: строки через `_quote`."""
+    pad = "  " * indent
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        items = [f"{pad}  {_quote(str(k), mark)}: {pretty_args(v, mark, indent + 1)}" for k, v in value.items()]
+        return "{\n" + ",\n".join(items) + f"\n{pad}}}"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "[]"
+        if not any(isinstance(v, (dict, list, tuple)) for v in value):
+            flat = [pretty_args(v, mark, indent + 1) for v in value]
+            if not any("\n" in x for x in flat) and sum(len(x) + 2 for x in flat) <= 80:
+                return "[" + ", ".join(flat) + "]"       # короткий список значений — одной строкой
+        items = [f"{pad}  {pretty_args(v, mark, indent + 1)}" for v in value]
+        return "[\n" + ",\n".join(items) + f"\n{pad}]"
+    if isinstance(value, str):
+        return _quote(value, mark)
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return _quote(repr(value), mark)
+
+
+def _others(data: dict, known: tuple[str, ...], mark: bool) -> list[str]:
+    """Параметры, которых карточка своим видом не показывает, — все до одного."""
+    rest = {k: v for k, v in data.items() if k not in known}
+    return ["Другие параметры: " + pretty_args(rest, mark)] if rest else []
+
+
+def _replace_all(data: dict, mark: bool) -> list[str]:
+    """`replace_all` — явно, если задан чем-то кроме false."""
+    if "replace_all" not in data or data["replace_all"] in (False, None):
+        return []
+    value = data["replace_all"]
+    shown = "true" if value is True else pretty_args(value, mark)
+    return [f"Заменить ВСЕ вхождения (replace_all: {shown})"]
+
+
+def _diff(old: str, new: str, mark: bool) -> list[str]:
+    return [*("− " + x for x in _block(old, mark)), *("+ " + x for x in _block(new, mark))]
+
+
+def _edit_ok(e) -> bool:
+    return isinstance(e, dict) and isinstance(e.get("old_string"), str) and isinstance(e.get("new_string"), str)
+
+
+def _file_text(tool: str, data: dict, mark: bool) -> str | None:
+    """Write / Edit / MultiEdit / NotebookEdit — заголовок с путём,
+    содержимое или строки правки; None — вызов не того вида (покажем JSON)."""
+    path_key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+    path = data.get(path_key)
+    if not isinstance(path, str):
+        return None
+    shown = _inline(path, mark)
+    if tool == "Write":
+        if not isinstance(data.get("content"), str):
+            return None
+        lines = [f"Записать файл: {shown}", *("│ " + x for x in _block(data["content"], mark))]
+        return "\n".join(lines + _others(data, ("file_path", "content"), mark))
+    if tool == "Edit":
+        if not _edit_ok(data):
+            return None
+        lines = [f"Изменить файл: {shown}", *_replace_all(data, mark),
+                 *_diff(data["old_string"], data["new_string"], mark)]
+        return "\n".join(lines + _others(data, ("file_path", "old_string", "new_string", "replace_all"), mark))
+    if tool == "MultiEdit":
+        edits = data.get("edits")
+        if not isinstance(edits, list) or not all(_edit_ok(e) for e in edits):
+            return None
+        lines = [f"Изменить файл: {shown} (правок: {len(edits)})"]
+        for n, e in enumerate(edits, 1):
+            lines += [f"Правка {n}:", *_replace_all(e, mark), *_diff(e["old_string"], e["new_string"], mark),
+                      *_others(e, ("old_string", "new_string", "replace_all"), mark)]
+        return "\n".join(lines + _others(data, ("file_path", "edits"), mark))
+    if tool == "NotebookEdit":
+        lines = [f"Изменить блокнот: {shown}"]
+        for key, name in (("cell_id", "ячейка"), ("cell_type", "тип"), ("edit_mode", "режим")):
+            if key in data:
+                value = data[key]
+                lines.append(f"{name}: " + (_inline(value, mark) if isinstance(value, str) else pretty_args(value, mark)))
+        known = ("notebook_path", "cell_id", "cell_type", "edit_mode")
+        if isinstance(data.get("new_source"), str):
+            lines += ["+ " + x for x in _block(data["new_source"], mark)]
+            known += ("new_source",)
+        return "\n".join(lines + _others(data, known, mark))
+    return None
+
+
+def card_text(tool: str, data: dict, *, mark: bool = True) -> str:
+    """Вызов для карточки — по инструменту (`mark=False` — без пометок, для
+    размера): команда — как есть; WebFetch — адрес и что найти; Write —
+    «Записать файл: путь» и содержимое; Edit/MultiEdit — «Изменить файл:
+    путь» и строки «− старое» / «+ новое» (обе стороны целиком, replace_all —
+    явно); MCP и прочие — аргументы JSON с отступами без двойного
+    экранирования. Неизвестные параметры показываются всегда."""
     data = data if isinstance(data, dict) else {}
-    kind, what = describe(tool, data)
-    raw = raw_args(tool, data)
     if tool in SHELL:
-        title = "команду"
-    elif tool in WEB_FETCH:
-        title = "открыть адрес"
+        command = str(data.get("command") or "")
+        return display_text(command, shell=True) if mark else command
+    if tool in WEB_FETCH and isinstance(data.get("url", ""), str) and isinstance(data.get("prompt", ""), str):
+        # Адрес и что найти — каждое своей строкой; перевод строки внутри — пометкой «↵»,
+        # чтобы текст запроса не изобразил строку «(хост: …)» или «Другие параметры».
+        lines = [_inline(str(data.get("url") or ""), mark)]
+        if data.get("prompt"):
+            lines.append(f"(что найти: {_inline(data['prompt'], mark)})")
         host = urlsplit(str(data.get("url") or "")).hostname or ""
         try:
             puny = host.encode("idna").decode("ascii") if host else ""
         except UnicodeError:
             puny = host
         if puny and puny != host:
-            raw += f"\n(хост: {puny})"
+            lines.append(f"(хост: {puny})")
+        return "\n".join(lines + _others(data, ("url", "prompt"), mark))
+    if tool in FILE_WRITE:
+        text = _file_text(tool, data, mark)
+        if text is not None:
+            return text
+    return pretty_args(data, mark)
+
+
+def card_for(tool: str, data: dict, grant: tuple[str, str] | None = None) -> dict:
+    """Карточка подтверждения — из настоящего вызова, не из текста агента.
+    `args` — вызов целиком (`card_text`: по инструменту, с пометками
+    пробелов и переводов строк), `preview` — начало и конец длинного вызова
+    (None — короткий), `size` — «3 строки, 812 симв.», `warnings` — необычные
+    параметры команды, `grant` — что разрешит «до конца встречи» (None — не
+    предлагается)."""
+    data = data if isinstance(data, dict) else {}
+    kind, what = describe(tool, data)
+    if tool in SHELL:
+        title = "команду"
+    elif tool in WEB_FETCH:
+        title = "открыть адрес"
     elif tool in FILE_WRITE:
         title = "запись в файл" if tool == "Write" else "правку файла"
     elif tool.startswith("mcp__"):
@@ -998,8 +1164,9 @@ def card_for(tool: str, data: dict, grant: tuple[str, str] | None = None) -> dic
         title = "навык"
     else:
         title = tool
-    args = display_text(raw, shell=tool in SHELL)
-    return {"tool": tool, "title": title, "args": args, "preview": card_preview(args), "size": _size(raw),
+    args = card_text(tool, data)
+    return {"tool": tool, "title": title, "args": args, "preview": card_preview(args),
+            "size": _size(card_text(tool, data, mark=False)),
             "warnings": bash_warnings(tool, data), "what": what, "kind": kind,
             "grant": {"key": grant[0], "label": grant[1]} if grant else None}
 
@@ -1020,6 +1187,17 @@ class Decision:
     @property
     def allow(self) -> bool:
         return self.outcome == ALLOW
+
+
+def _shown_parent(path, cwd) -> str:
+    """Папка файла — для подписи разрешения, как её написал агент (абсолютная)."""
+    try:
+        text = os.path.expandvars(os.path.expanduser(str(path)))
+        if not os.path.isabs(text) and cwd:
+            text = os.path.join(str(cwd), text)
+        return os.path.dirname(os.path.normpath(text))
+    except (TypeError, ValueError):
+        return ""
 
 
 def _canonical(tool: str, data) -> str:
@@ -1048,10 +1226,14 @@ class ConsentGate:
                  confirmer=None, blocked_roots=()) -> None:
         self._cwd = str(cwd) if cwd else None
         self._own = [r for r in (resolve(d, self._cwd) for d in own_dirs or () if d) if r]
+        # Папка для подписи разрешения — как её знает человек (регистр, «\»).
+        self._dir_shown = {r: os.path.normpath(str(d)) for d in own_dirs or () if d
+                           for r in [resolve(d, self._cwd)] if r}
         if self._cwd:
             own_cwd = resolve(self._cwd)
             if own_cwd:
                 self._own.append(own_cwd)
+                self._dir_shown.setdefault(own_cwd, os.path.normpath(self._cwd))
         self._deny = [r for r in (resolve(d, self._cwd) for d in deny_paths or () if d) if r]
         self._blocked = [r for r in (resolve(d, self._cwd) for d in blocked_roots or () if d) if r]
         self._ask_first = ASK_FIRST_PERSONAL if self._blocked else ASK_FIRST
@@ -1107,8 +1289,9 @@ class ConsentGate:
     def grant_for(self, tool: str, data: dict) -> tuple[str, str] | None:
         """Что разрешит «до конца встречи» для такого вызова (None — не
         предлагается): тот же MCP-инструмент; тот же домен WebFetch; то же
-        первое слово простой команды; тот же инструмент записи в папке встречи
-        или в папке, где запись уже разрешали."""
+        первое слово простой команды; изменение файлов любым инструментом
+        правки (Write, Edit, MultiEdit, NotebookEdit) в папке встречи или в
+        папке, где запись уже разрешали, — кроме «Личного» и закрытого внутри."""
         data = data if isinstance(data, dict) else {}
         if tool.startswith("mcp__"):
             server, name = mcp_parts(tool)
@@ -1121,16 +1304,32 @@ class ConsentGate:
                 return None
             return shell_grant(tool, str(data.get("command") or ""))
         if tool in FILE_WRITE:
-            target = resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
-            if not target:
+            # Один класс на все правки файлов (Write, Edit, MultiEdit,
+            # NotebookEdit): «изменение файлов в папке X». В «Личном» — никогда.
+            target = self._write_target(data)
+            if not target or self._blocked:
                 return None
             with self._lock:
                 folders = [*self._own, *self._approved_dirs]
+                shown = dict(self._dir_shown)
             for folder in folders:
-                if _inside(target, folder):
-                    return f"write:{tool}:{folder}", f"{tool} в {folder}"
+                if _inside(target, folder) and self._files_grantable(target, folder):
+                    return f"{FILES_GRANT}{folder}", f"изменение файлов в {_inline(shown.get(folder, folder), True)}"
             return None
         return None
+
+    def _write_target(self, data: dict) -> str | None:
+        return resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
+
+    def _files_grantable(self, target: str, folder: str) -> bool:
+        """Разрешение на правки в `folder` покрывает `target`, только если
+        цель не закрыта ничем, что уже внутри этой папки: `kb_exclude`,
+        чувствительный путь или корень профиля во вложенной папке, `.env`.
+        (Сама папка встречи может лежать в служебной папке Meet — временная
+        встреча; её «свою» запись это не меняет.)"""
+        if any(_inside(target, d) for d in self._deny) or _env_file(target):
+            return False
+        return not any(_inside(target, d) and not _inside(folder, d) for d in (*self._sensitive, *self._blocked))
 
     def _granted(self, tool: str, data: dict) -> bool:
         with self._lock:
@@ -1138,10 +1337,16 @@ class ConsentGate:
         if not grants:
             return False
         if tool in FILE_WRITE:
-            target = resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
-            prefix = f"write:{tool}:"
-            return bool(target) and any(k.startswith(prefix) and _inside(target, k[len(prefix):])
-                                        for k in grants)
+            target = self._write_target(data)
+            if not target or self._blocked:
+                return False
+            # Прежние ключи `write:<инструмент>:` (журналы до grant-polish) — только для своего инструмента.
+            for k in grants:
+                for prefix in (FILES_GRANT, f"write:{tool}:"):
+                    if k.startswith(prefix) and _inside(target, k[len(prefix):]) and \
+                            self._files_grantable(target, k[len(prefix):]):
+                        return True
+            return False
         grant = self.grant_for(tool, data)
         return bool(grant) and grant[0] in grants
 
@@ -1430,7 +1635,10 @@ class ConsentGate:
                 if tool in FILE_WRITE:
                     target = resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
                     if target:
-                        self._approved_dirs.add(target.rsplit("/", 1)[0])
+                        folder = target.rsplit("/", 1)[0]
+                        self._approved_dirs.add(folder)
+                        self._dir_shown.setdefault(folder, _shown_parent(
+                            data.get("file_path") or data.get("notebook_path"), self._cwd) or folder)
                 if answer == ALLOW_MEETING and card.get("grant"):
                     self._grants[card["grant"]["key"]] = card["grant"]["label"]
             return Decision(ALLOW, what=decision.what, kind=decision.kind,

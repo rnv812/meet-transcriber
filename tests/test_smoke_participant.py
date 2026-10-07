@@ -159,8 +159,9 @@ class FakeConversation:
         gate = self.kwargs.get("gate")
         if "Допиши в файл" in text and gate is not None:
             target = text.split("Допиши в файл ", 1)[1].split(".txt", 1)[0] + ".txt"
-            d = await asyncio.to_thread(gate.check, "Write", {"file_path": target,
-                                                              "content": "КРЫЖОВНИК-7741\nпроверено"},
+            # Как живой агент в смоуке: вторая правка того же файла — Edit, не Write.
+            d = await asyncio.to_thread(gate.check, "Edit", {"file_path": target, "old_string": "КРЫЖОВНИК-7741",
+                                                             "new_string": "КРЫЖОВНИК-7741\nпроверено"},
                                         tool_use_id=f"w{self.turns}", via="hook")
             if d.allow:
                 Path(target).write_text("КРЫЖОВНИК-7741\nпроверено", encoding="utf-8")
@@ -336,6 +337,29 @@ def test_only_freedom_part(smoke, tmp_path, monkeypatch):
     assert scenario.marks["again_cards"] == []           # второе действие — без карточки
     assert smoke._parts(smoke.parse_args(["--only-freedom"])) == ("freedom",)
     assert smoke._parts(smoke.parse_args(["--no-freedom"])) == ("main",)
+
+
+def test_freedom_grant_is_a_failure_when_an_edit_in_the_same_folder_needs_a_card(smoke, tmp_path, monkeypatch):
+    """Шаг 4 смоука: Edit после «до конца встречи» на Write — без карточки; карточка — FAIL механики."""
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+
+    class Forgetful(FakeConversation):
+        async def send(self, text, **kw):
+            gate = self.kwargs.get("gate")
+            if "Допиши в файл" in text and gate is not None:
+                for key in list(gate.grants()):          # как будто разрешения нет (ключ по имени Write)
+                    gate.remove_grant(key)
+            return await super().send(text, **kw)
+
+    ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
+    holder = {}
+    scenario = smoke.Scenario("claude", tmp_path / "work", parts=("freedom",),
+                              conversation=lambda **kw: Forgetful(ids, [], spec=str(holder["s"].spec), **kw),
+                              out=lambda _m: None)
+    holder["s"] = scenario
+    rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
+    status, detail = rows[dict(smoke.FREEDOM_CHECKS)["freedom_grant"]]
+    assert status == smoke.FAIL and "Edit" in detail, detail
 
 
 def test_freedom_leak_before_consent_is_a_failure_for_claude(smoke, tmp_path, monkeypatch):

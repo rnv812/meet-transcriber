@@ -370,6 +370,57 @@ test("карточка: «Разрешать такое до конца встр
   expect(confirmChat).toHaveBeenCalledWith(ep, "m2", true, true);
 });
 
+// Карточки как их собирает резидент (`consent.card_for`, grant-polish): текст по инструменту, без JSON-экранирования.
+const WRITE_CARD: Partial<ChatMessage> = {
+  tool: "Write", title: "запись в файл", size: "17 строк, 263 симв.",
+  args: "Записать файл: C:\\Users\\demo\\Встречи\\2026-10-07_11-00\\код мерчанта.txt\n│ # Код мерчанта\n│ строка 1\n│ строка 2\n│ строка 3\n│ строка 4\n│ строка 5\n│ строка 6\n│ строка 7\n│ строка 8\n│ строка 9\n│ строка 10\n│ строка 11\n│ строка 12\n│ строка 13\n│ строка 14\n│ КРЫЖОВНИК-7741",
+  preview: "Записать файл: C:\\Users\\demo\\Встречи\\2026-10-07_11-00\\код мерчанта.txt\n│ # Код мерчанта\n│ строка 1\n│ строка 2\n│ строка 3\n│ строка 4\n…⟨скрыто: 7 строк, 80 симв.⟩…\n│ строка 12\n│ строка 13\n│ строка 14\n│ КРЫЖОВНИК-7741",
+  grant: { key: "write:files:x", label: "изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00" },
+};
+const EDIT_CARD: Partial<ChatMessage> = {
+  tool: "Edit", title: "правку файла", size: "5 строк, 159 симв.",
+  args: "Изменить файл: C:\\Users\\demo\\Встречи\\2026-10-07_11-00\\код мерчанта.txt\nЗаменить ВСЕ вхождения (replace_all: true)\n− КРЫЖОВНИК-7741\n+ КРЫЖОВНИК-7741\n+ проверено",
+};
+const MCP_CARD: Partial<ChatMessage> = {
+  tool: "mcp__team-jira__jira_create_issue", title: "MCP team-jira → jira_create_issue", size: "6 строк, 125 симв.",
+  args: "{\n  \"project\": \"ABC\",\n  \"summary\": \"Запуск 28.11\",\n  \"attachment\": \"C:\\Users\\demo\\spec.md\",\n  \"labels\": [\"release\", \"risk\"]\n}",
+};
+const cardBox = (region: HTMLElement, title: string) =>
+  within(region).getByRole("group", { name: `Ассистент хочет выполнить: ${title}` });
+
+test("карточки по инструменту: запись, правка, MCP — снимки (grant-polish)", () => {
+  render(<Host />);
+  load([card("m2", WRITE_CARD), card("m3", EDIT_CARD), card("m4", MCP_CARD)]);
+  const region = cards()!;
+  const write = cardBox(region, "запись в файл");
+  const edit = cardBox(region, "правку файла");
+  const mcp = cardBox(region, "MCP team-jira → jira_create_issue");
+  expect(write).toMatchSnapshot("Write");
+  expect(edit).toMatchSnapshot("Edit");
+  expect(mcp).toMatchSnapshot("MCP");
+  // Пути — с одной «\», без JSON-экранирования; правка — обе стороны и replace_all явно.
+  expect(write.querySelector("pre")!.textContent).toContain("C:\\Users\\demo\\Встречи");
+  expect(write.querySelector("pre")!.textContent).not.toContain("\\\\");
+  expect(edit.querySelector("pre")!.textContent).toBe(EDIT_CARD.args);
+  expect(mcp.querySelector("pre")!.textContent).toContain("\"attachment\": \"C:\\Users\\demo\\spec.md\"");
+  expect(within(write).getByRole("button", { name: "Разрешать такое до конца встречи" }))
+    .toHaveAttribute("title", "Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00");
+});
+
+test("карточка записи: начало и конец с пометкой, «Показать полностью» — всё содержимое", async () => {
+  render(<Host />);
+  load([card("m2", WRITE_CARD)]);
+  const write = cardBox(cards()!, "запись в файл");
+  const pre = () => write.querySelector("pre")!.textContent;
+  expect(pre()).toBe(WRITE_CARD.preview);
+  expect(pre()).toContain("…⟨скрыто: 7 строк, 80 симв.⟩…");
+  expect(pre()).not.toContain("строка 8");
+  await userEvent.click(within(write).getByRole("button", { name: "Показать полностью" }));
+  expect(pre()).toBe(WRITE_CARD.args);
+  for (let i = 1; i <= 14; i++) expect(pre()).toContain(`│ строка ${i}\n`);
+  expect(write).toMatchSnapshot("Write, полностью");
+});
+
 test("решённая или просроченная карточка уходит из-над ленты, в ленте — итог", () => {
   render(<Host />);
   load([card("m2", { decision: "allow" }), card("m3", { expires_at: Date.now() / 1000 - 5 }),

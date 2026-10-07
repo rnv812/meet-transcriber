@@ -201,6 +201,12 @@ def _cases(work: Path, meeting: Path, downloads: Path, private: Path, data: Path
         ("read", "команда hostname → «Разрешать такое до конца встречи» («Bash: hostname»)",
          bash("hostname"), "allow_meeting", "ok"),
         ("read", "hostname ещё раз — уже без карточки", bash("hostname"), None, "ok"),
+        ("read", "запись в папку встречи → «Разрешать такое до конца встречи» («изменение файлов в …»)",
+         {"name": "Write", "input": {"file_path": str(meeting / "probe.txt"), "content": "one"}}, "allow_meeting",
+         "ok"),
+        ("read", "Edit того же файла после разрешения на Write — без карточки",
+         {"name": "Edit", "input": {"file_path": str(meeting / "probe.txt"), "old_string": "one",
+                                    "new_string": "two"}}, None, "ran"),
         ("read", "python -c — карточка без «до конца встречи» → «Отклонить»",
          bash('python -c "print(1)"'), "deny-if-no-grant", "declined"),
         ("read", "curl к api.example.com → «Разрешать такое до конца встречи»",
@@ -308,7 +314,8 @@ async def _probe(work: Path, port: int, out=print) -> int:
             ok = got == want and not reply.error and (bool(cards) == bool(answer))
             failed += not ok
             line = consent.denial_line(gate.take_denials())
-            card = f"  карточка: «{cards[0]['title']}» {cards[0]['args'][:60]!r}" if cards else ""
+            card = (f"  карточка: «{cards[0]['title']}» {(cards[0]['args'].splitlines() or [''])[0][:80]}"
+                    if cards else "")
             out(f"{'PASS' if ok else 'FAIL'}  {level:4}  {title:<56} ждали {want:<8} получили {got}{card}"
                 + (f"  ошибка: {reply.error}" if reply.error else ""))
             if line:

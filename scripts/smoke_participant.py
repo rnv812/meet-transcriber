@@ -31,7 +31,8 @@
 (нет кнопок — «глянь этот файл из Загрузок» текстом), и агент читает файл.
 Затем просьба записать код мерчанта в файл в папке встречи: запись — только
 через карточку Meet; скрипт нажимает «Разрешать такое до конца встречи» и
-проверяет файл, а следующая такая же запись идёт уже без карточки (у Codex
+проверяет файл, а следующая правка того же файла (обычно Edit после Write —
+одно разрешение «изменение файлов в папке») идёт уже без карточки (у Codex
 действий нет — пропуск).
 Ещё — видны ли MCP-серверы пользователя (из `system/init`). `--no-freedom` —
 прогон как в 0.3.6 (без этой части).
@@ -272,7 +273,8 @@ def build_freedom_plan() -> list[Step]:
                                           f"(кнопок нет — «{FREEDOM_TYPED}»)"),
             Step("freedom_action", None, f"свобода: «запиши код мерчанта в {ACTION_FILE}» → карточка Meet → "
                                          "«Разрешать такое до конца встречи»"),
-            Step("freedom_again", None, "свобода: «допиши в тот же файл строку «проверено»» — без карточки")]
+            Step("freedom_again", None, "свобода: «допиши в тот же файл строку «проверено»» (Edit после Write) "
+                                        "— без карточки")]
 
 
 def full_plan(parts=("main", "freedom")) -> list[Step]:
@@ -284,7 +286,8 @@ FREEDOM_CHECKS = [
     ("freedom_ask", "агент сам предложил глянуть файл, с кнопками"),
     ("freedom_read", "после «Да, глянь» прочитал файл из «Загрузок»"),
     ("freedom_card", "действие — только через карточку Meet; разрешено → выполнено"),
-    ("freedom_grant", "«Разрешать такое до конца встречи» — такое же действие дальше без карточки"),
+    ("freedom_grant", "«Разрешать такое до конца встречи» — дальше правки файлов в папке (Write, Edit…) "
+                      "без карточки"),
     ("freedom_mcp", "MCP-серверы пользователя видны (из init)"),
 ]
 
@@ -790,8 +793,13 @@ class Scenario:
                 if m.get("card") == "confirm" and not m.get("decision") and m["id"] not in approved:
                     approved.append(m["id"])
                     meeting = bool(m.get("grant"))
-                    self.out(f"  🔐 карточка Meet: {m.get('title')} — {str(m.get('args') or '')[:160]!r} → "
+                    self.out(f"  🔐 карточка Meet: {m.get('title')} ({m.get('tool')}) → "
                              + ("«Разрешать такое до конца встречи»" if meeting else "«Разрешить один раз»"))
+                    shown = str(m.get("preview") or m.get("args") or "").split("\n")
+                    for line in shown[:8]:
+                        self.out(f"      {line}")
+                    if len(shown) > 8:
+                        self.out(f"      … ещё строк: {len(shown) - 8}")
                     try:
                         await p.confirm(m["id"], True, meeting=meeting)
                     except ValueError as e:
@@ -895,7 +903,20 @@ class Scenario:
         elif not again and checked:
             row("freedom_grant", PASS, f"разрешено: {', '.join(granted)}; второе действие — без карточки")
         elif again:
-            row("freedom_grant", WARN, f"снова карточка ({len(again)}): агент выбрал другой инструмент или папку")
+            from meet.llm import consent
+
+            cards = [m for m in msgs if m["id"] in again]
+            folder = str(self.folder).replace("\\", "/").lower()
+            same = [m for m in cards if m.get("tool") in consent.FILE_WRITE
+                    and folder in str(m.get("what") or "").replace("\\", "/").lower()]
+            if same:
+                row("freedom_grant", FAIL, f"снова карточка на правку файла в той же папке "
+                                           f"({', '.join(str(m.get('tool')) for m in same)}) — разрешение "
+                                           f"«изменение файлов в папке» не сработало")
+            else:
+                row("freedom_grant", WARN, f"снова карточка ({len(again)}: "
+                                           f"{', '.join(str(m.get('tool')) for m in cards)}): агент выбрал "
+                                           "команду или другую папку")
         else:
             row("freedom_grant", WARN, "без карточки, но строки «проверено» в файле нет")
 

@@ -1,0 +1,244 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`карточка записи: начало и конец с пометкой, «Показать полностью» — всё содержимое > Write, полностью 1`] = `
+<section
+  aria-label="Ассистент хочет выполнить: запись в файл"
+  class="chat-card chat-card--open"
+  role="group"
+>
+  <div
+    class="chat-card__title"
+  >
+    Ассистент хочет выполнить: 
+    <b>
+      запись в файл
+    </b>
+    <span
+      class="chat-card__size muted"
+    >
+       · 
+      17 строк, 263 симв.
+    </span>
+  </div>
+  <pre
+    class="chat-card__args"
+    dir="ltr"
+  >
+    Записать файл: C:\\Users\\demo\\Встречи\\2026-10-07_11-00\\код мерчанта.txt
+│ # Код мерчанта
+│ строка 1
+│ строка 2
+│ строка 3
+│ строка 4
+│ строка 5
+│ строка 6
+│ строка 7
+│ строка 8
+│ строка 9
+│ строка 10
+│ строка 11
+│ строка 12
+│ строка 13
+│ строка 14
+│ КРЫЖОВНИК-7741
+  </pre>
+  <button
+    aria-expanded="true"
+    class="chat-card__more"
+    type="button"
+  >
+    Свернуть
+  </button>
+  <div
+    class="chat-card__actions"
+  >
+    <button
+      class="chat-btn chat-card__allow"
+      type="button"
+    >
+      Разрешить один раз
+    </button>
+    <button
+      class="chat-btn chat-card__allow-meeting"
+      title="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
+      type="button"
+    >
+      Разрешать такое до конца встречи
+    </button>
+    <button
+      class="chat-btn chat-card__deny"
+      type="button"
+    >
+      Отклонить
+    </button>
+  </div>
+</section>
+`;
+
+exports[`карточки по инструменту: запись, правка, MCP — снимки (grant-polish) > Edit 1`] = `
+<section
+  aria-label="Ассистент хочет выполнить: правку файла"
+  class="chat-card chat-card--open"
+  role="group"
+>
+  <div
+    class="chat-card__title"
+  >
+    Ассистент хочет выполнить: 
+    <b>
+      правку файла
+    </b>
+    <span
+      class="chat-card__size muted"
+    >
+       · 
+      5 строк, 159 симв.
+    </span>
+  </div>
+  <pre
+    class="chat-card__args"
+    dir="ltr"
+  >
+    Изменить файл: C:\\Users\\demo\\Встречи\\2026-10-07_11-00\\код мерчанта.txt
+Заменить ВСЕ вхождения (replace_all: true)
+− КРЫЖОВНИК-7741
++ КРЫЖОВНИК-7741
++ проверено
+  </pre>
+  <div
+    class="chat-card__actions"
+  >
+    <button
+      class="chat-btn chat-card__allow"
+      type="button"
+    >
+      Разрешить один раз
+    </button>
+    <button
+      class="chat-btn chat-card__deny"
+      type="button"
+    >
+      Отклонить
+    </button>
+  </div>
+</section>
+`;
+
+exports[`карточки по инструменту: запись, правка, MCP — снимки (grant-polish) > MCP 1`] = `
+<section
+  aria-label="Ассистент хочет выполнить: MCP team-jira → jira_create_issue"
+  class="chat-card chat-card--open"
+  role="group"
+>
+  <div
+    class="chat-card__title"
+  >
+    Ассистент хочет выполнить: 
+    <b>
+      MCP team-jira → jira_create_issue
+    </b>
+    <span
+      class="chat-card__size muted"
+    >
+       · 
+      6 строк, 125 симв.
+    </span>
+  </div>
+  <pre
+    class="chat-card__args"
+    dir="ltr"
+  >
+    {
+  "project": "ABC",
+  "summary": "Запуск 28.11",
+  "attachment": "C:\\Users\\demo\\spec.md",
+  "labels": ["release", "risk"]
+}
+  </pre>
+  <div
+    class="chat-card__actions"
+  >
+    <button
+      class="chat-btn chat-card__allow"
+      type="button"
+    >
+      Разрешить один раз
+    </button>
+    <button
+      class="chat-btn chat-card__deny"
+      type="button"
+    >
+      Отклонить
+    </button>
+  </div>
+</section>
+`;
+
+exports[`карточки по инструменту: запись, правка, MCP — снимки (grant-polish) > Write 1`] = `
+<section
+  aria-label="Ассистент хочет выполнить: запись в файл"
+  class="chat-card chat-card--open"
+  role="group"
+>
+  <div
+    class="chat-card__title"
+  >
+    Ассистент хочет выполнить: 
+    <b>
+      запись в файл
+    </b>
+    <span
+      class="chat-card__size muted"
+    >
+       · 
+      17 строк, 263 симв.
+    </span>
+  </div>
+  <pre
+    class="chat-card__args"
+    dir="ltr"
+  >
+    Записать файл: C:\\Users\\demo\\Встречи\\2026-10-07_11-00\\код мерчанта.txt
+│ # Код мерчанта
+│ строка 1
+│ строка 2
+│ строка 3
+│ строка 4
+…⟨скрыто: 7 строк, 80 симв.⟩…
+│ строка 12
+│ строка 13
+│ строка 14
+│ КРЫЖОВНИК-7741
+  </pre>
+  <button
+    aria-expanded="false"
+    class="chat-card__more"
+    type="button"
+  >
+    Показать полностью
+  </button>
+  <div
+    class="chat-card__actions"
+  >
+    <button
+      class="chat-btn chat-card__allow"
+      type="button"
+    >
+      Разрешить один раз
+    </button>
+    <button
+      class="chat-btn chat-card__allow-meeting"
+      title="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
+      type="button"
+    >
+      Разрешать такое до конца встречи
+    </button>
+    <button
+      class="chat-btn chat-card__deny"
+      type="button"
+    >
+      Отклонить
+    </button>
+  </div>
+</section>
+`;
