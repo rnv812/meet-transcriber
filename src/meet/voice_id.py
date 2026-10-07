@@ -64,6 +64,18 @@ def _build_embedder(device: str):
     return embed
 
 
+def _model_on_disk() -> bool:
+    """Модель голосов (подпапка embedding чекпойнта диаризации) скачана."""
+    try:
+        from meet import models
+        from meet.diarize import DIARIZATION_MODEL
+
+        return models.local_snapshot(DIARIZATION_MODEL,
+                                     required=("embedding/pytorch_model.bin",)) is not None
+    except Exception:
+        return False
+
+
 def _load_embedder():
     """Реальный эмбеддер: np.float32 16 кГц -> np.ndarray (256,). Видеокарта,
     если она рабочая; не нашлись библиотеки CUDA — один повтор на процессоре.
@@ -108,9 +120,10 @@ NO_OWNER_SAMPLE = "нет образца вашего голоса"
 class VoiceMatcher:
     """База голосов, образец владельца и эмбеддер для живого режима.
 
-    `load()` грузит эмбеддер, если есть база голосов или образец владельца
-    (иначе называть некого и делить микрофон не по чему — модель не
-    грузится). `live_voices()` — онлайн-кластеры дорожек (meet.live_voices).
+    `load()` грузит эмбеддер всегда: собеседники делятся по голосам и без
+    базы («Собеседник 1», «Собеседник 2»), база даёт им имена, образец
+    владельца — людей рядом в микрофоне. `live_voices()` — онлайн-кластеры
+    дорожек (meet.live_voices).
     Порог имени — T_live из настроек (`mic_split.live_threshold(
     asr.voice_threshold)`), микрофон делится по голосам при
     `asr.mic_speakers`. `embed_fn` инжектируется в тестах."""
@@ -126,7 +139,7 @@ class VoiceMatcher:
 
     @property
     def enabled(self) -> bool:
-        return self._embed is not None and (bool(self.base) or (bool(self.owner) and self.mic is not False))
+        return self._embed is not None
 
     def _settings(self) -> None:
         """Порог имени и «делить микрофон» — из настроек, если не заданы."""
@@ -160,11 +173,12 @@ class VoiceMatcher:
                 self._log(f"голоса: образец владельца не прочитан ({type(e).__name__}: {e})")
                 self.owner = []
         self._settings()
-        if not self.base and not (self.owner and self.mic):
-            # Называть некого, микрофон делить не по чему (или выключено) —
-            # эмбеддер не нужен ни одной дорожке.
-            why = NO_OWNER_SAMPLE if self.mic else "выключено в настройках"
-            self._log(f"голоса: база пуста, микрофон не делится: {why} - live-имена выключены")
+        if self._embed is None and not self.base and not (self.owner and self.mic)                 and not _model_on_disk():
+            # Называть некого и микрофон не делится: модель нужна только для
+            # собеседников звонка — качать её посреди встречи не будем (как и
+            # Whisper, `live_asr`). Скачается с моделью диаризации.
+            self._log("голоса: модель голосов не скачана — собеседники не делятся по голосам "
+                      "(скачайте модель диаризации в «Движок и модели»)")
             return
         if self._embed is None:
             try:
@@ -173,7 +187,8 @@ class VoiceMatcher:
                 self._log(f"голоса: опознание в живом режиме недоступно ({type(e).__name__}: {e})"
                           " — имена появятся после расшифровки")
                 return
-        parts = [f"{len(self.base)} чел. в базе"] if self.base else []
+        # Собеседники делятся по голосам и без базы — эмбеддер нужен всегда.
+        parts = [f"{len(self.base)} чел. в базе" if self.base else "база пуста: собеседники без имён"]
         if self.owner:
             parts.append("микрофон по голосам" if self.mic else "образец владельца есть, "
                          "микрофон не делится (настройки)")
@@ -185,7 +200,7 @@ class VoiceMatcher:
 
     def live_voices(self, defaults: dict | None = None, log=None):
         """Онлайн-кластеры дорожек (meet.live_voices.LiveVoices) или None —
-        эмбеддера нет или называть некого."""
+        эмбеддера нет."""
         if not self.enabled:
             return None
         from meet.live_voices import LiveVoices

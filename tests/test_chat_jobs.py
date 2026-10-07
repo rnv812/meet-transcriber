@@ -388,6 +388,8 @@ def test_chat_job_for_local_model_sees_the_summary(folder, capsys):
     runner = Runner('{"say": "Утвердили."}')
     assert job_worker._chat(str(folder), "m1", runner=runner, provider="openai-compatible") == 0
     assert "Бюджет утвердили." in runner.calls[0][0]
+    # Подписи живой ленты и расшифровки нумеруются по-разному — агент знает.
+    assert "уточнены в расшифровке после встречи" in runner.calls[0][0]
 
 
 def test_seed_does_not_include_later_messages(folder, capsys):

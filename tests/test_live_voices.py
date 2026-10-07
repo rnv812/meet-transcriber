@@ -279,11 +279,13 @@ def test_pinned_name_kept_when_score_holds():
     assert c.name == "Демьян" and c.named_s == c.seconds
 
 
-def test_no_base_means_no_embeddings_on_sys():
+def test_no_base_still_clusters_sys_without_names():
+    """Без базы называть некого, но голоса собеседников делятся: ключ есть,
+    подпись — «Собеседник»."""
     calls = []
     v = voices(base={}, calls=calls)
     a = v.assign("sys", clip(1), 0.0, 2.0)
-    assert a == (None, "Собеседник", lv.OTHER) and calls == []
+    assert a == ("s/sys:0", "Собеседник", lv.OTHER) and calls == [2 * SR]
 
 
 def test_short_clip_not_embedded():
@@ -409,11 +411,13 @@ def test_mic_undecided_cluster_owner_like_segment_is_owner():
 # --- экономия процессора (ревью I5) -------------------------------------------------
 
 
-def test_short_segment_below_one_and_a_half_seconds_not_embedded():
+def test_short_segment_below_one_and_a_half_seconds_starts_no_cluster():
+    """Реплика 1–1,5 с собеседников считается (её решат по голосам, когда их
+    станет два), но кластера не заводит: без соседа — без голоса."""
     calls = []
     v = voices(calls=calls)
     assert v.assign("sys", clip(1, 1.4), 0.0, 1.4).voice is None
-    assert calls == []
+    assert calls == [int(1.4 * SR)] and not v._tracks["sys"].live()
 
 
 def test_long_segment_embeds_only_its_middle():
@@ -818,3 +822,433 @@ def test_owner_drift_with_a_neighbour_is_better_than_without_two_voice_rules(mon
     for c0, cd, new, base in _drift_compare(monkeypatch, [("owner", 8), ("room", 4)] * 40, short_share=0.4):
         assert new[0] <= base[0] + DRIFT_SLACK, (c0, cd, new, base)
         assert new[1] <= base[1], (c0, cd, new, base)
+
+
+# --- голоса собеседников (дорожка sys, v037) ------------------------------------------
+# Раньше на звонке все голоса — один «Собеседник»: без базы sys не кластеризовался,
+# а безымянные кластеры подписывались одинаково. Теперь подтверждённые голоса
+# собеседников нумеруются («Собеседник 1», «Собеседник 2»), пока голос один —
+# «Собеседник», как раньше.
+
+
+def test_two_unknown_voices_get_numbers_and_earlier_lines_follow():
+    v = voices(base={})
+    a, t = feed(v, "sys", 1, 8)  # Демьян 16 с: первый голос — от 15 с речи
+    b, _ = feed(v, "sys", 2, 10, start=t + 1.0)  # Пётр: две проверки подряд (16 и 20 с)
+    assert {x.speaker for x in a} == {"Собеседник"}  # голос один — как раньше
+    assert [x.speaker for x in b] == ["Собеседник"] * 9 + ["Собеседник 2"]
+    assert dict(v.drain()) == {a[0].voice: "Собеседник 1", b[0].voice: "Собеседник 2"}
+    assert v.drain() == []
+
+
+def _two_known(v):
+    """Демьян 16 с, потом Пётр 20 с: оба голоса собеседников подтверждены."""
+    a, t = feed(v, "sys", 1, 8)
+    b, t = feed(v, "sys", 2, 10, start=t + 1.0)
+    assert len(v._tracks["sys"].voices()) == 2
+    v.drain()
+    return a[0].voice, b[0].voice, t
+
+
+def test_short_reply_between_two_known_voices_is_decided_by_voice():
+    calls = []
+    v = voices(base={}, calls=calls)
+    ivan, petr, t = _two_known(v)
+    feed(v, "sys", 1, 1, start=t)  # Демьян…
+    n = len(calls)
+    reply = v.assign("sys", clip(2, 1.2), t + 2.2, t + 3.4)  # …и «да, слушаю» Петра встык
+    assert len(calls) == n + 1 and reply.voice == petr and reply.speaker == "Собеседник 2"
+    tv = v._tracks["sys"]
+    assert tv.resolve(tv.number(petr)).seconds == pytest.approx(20.0)  # короткая реплика центроид не растит
+
+
+def test_short_reply_before_the_second_voice_is_relabelled_when_it_is_confirmed():
+    """Короткая реплика Петра до того, как его голос подтвердился, берёт голос
+    соседа (Демьяна), но под своим ключом: подтвердился Пётр — она его."""
+    v = voices(base={})
+    a, t = feed(v, "sys", 1, 8)
+    reply = v.assign("sys", clip(2, 1.2), t, t + 1.2)
+    assert reply.speaker == "Собеседник" and reply.voice != a[0].voice
+    tv = v._tracks["sys"]
+    assert tv.resolve(tv.number(reply.voice)).n == tv.number(a[0].voice)  # пока — голос Демьяна
+    b, _ = feed(v, "sys", 2, 10, start=t + 3.0)
+    renames = dict(v.drain())
+    assert renames[reply.voice] == "Собеседник 2" and renames[a[0].voice] == "Собеседник 1"
+    assert v.speaker(reply.voice) == v.speaker(b[0].voice)
+
+
+def test_fragment_near_the_second_voice_is_labelled_by_it_but_can_become_a_third():
+    """Обрывок (свой кластер 2 с) с Петром cos 0.45 — ниже LIVE_ASSIGN: после
+    подтверждения Петра строка обрывка задним числом — «Собеседник 2», но в
+    Петра он не вливается (центроид Петра чужим не мутнеет). Заговорил третий
+    человек, на которого обрывок похож, — обрывок его."""
+    VOICES[9] = lv._unit(0.45 * PETR + 0.893 * OWNER)
+    try:
+        v = voices(base={})
+        _, t = feed(v, "sys", 1, 8)
+        frag = v.assign("sys", clip(9), t + 1.0, t + 3.0)
+        _, t = feed(v, "sys", 2, 10, start=t + 4.0)
+        tv = v._tracks["sys"]
+        assert tv.clusters[tv.number(frag.voice)].into is None
+        assert (frag.voice, "Собеседник 2") in v.drain()
+        feed(v, "sys", 3, 10, start=t + 1.0)  # третий голос
+    finally:
+        del VOICES[9]
+    assert len(tv.voices()) == 3
+    assert v.speaker(frag.voice) == "Собеседник 3"
+    assert (frag.voice, "Собеседник 3") in v.drain()
+
+
+def test_long_segment_only_partly_like_a_known_voice_starts_its_own_cluster():
+    """При двух голосах длинный сегмент, похожий на Петра лишь на 0.45, — не в
+    Петра (может быть третьим человеком), но подписан как Пётр."""
+    VOICES[9] = lv._unit(0.45 * PETR + 0.893 * OWNER)
+    try:
+        v = voices(base={})
+        ivan, petr, t = _two_known(v)
+        got = v.assign("sys", clip(9, 2.5), t, t + 2.5)
+    finally:
+        del VOICES[9]
+    tv = v._tracks["sys"]
+    assert got.voice not in (ivan, petr) and got.speaker == "Собеседник 2"
+    assert tv.resolve(tv.number(petr)).seconds == pytest.approx(20.0)
+
+
+def test_voice_base_names_sys_voices_and_numbers_only_the_unnamed():
+    """Голос из базы — по имени; один безымянный рядом с ним — просто
+    «Собеседник»; от двух безымянных — номера (порядок подтверждения), и
+    голос с именем номер не занимает (ревью M2: не «Собеседник 2/3»)."""
+    v = voices(base={"Демьян": [IVAN * 2.5]})
+    a, t = feed(v, "sys", 1, 8)
+    b, t = feed(v, "sys", 2, 10, start=t + 1.0)
+    assert a[-1].speaker == "Демьян" and b[-1].speaker == "Собеседник"
+    c, _ = feed(v, "sys", 4, 10, start=t + 1.0)
+    assert c[-1].speaker == "Собеседник 2"
+    assert v.speaker(a[0].voice) == "Демьян" and v.speaker(b[0].voice) == "Собеседник 1"
+
+
+def test_one_voice_never_shows_a_number():
+    v = voices(base={})
+    got, _ = feed(v, "sys", 1, 40)
+    assert {x.speaker for x in got} == {"Собеседник"} and v.drain() == []
+    assert len(v._tracks["sys"].voices()) == 1
+
+
+def test_mic_track_keeps_its_own_rules():
+    """Нумерация — только у собеседников: микрофон без образца — «Вы»."""
+    v = voices(base={})
+    feed(v, "sys", 1, 6)
+    got, _ = feed(v, "mic", 2, 8)
+    assert {x.speaker for x in got} == {"Вы"} and all(x.voice is None for x in got)
+
+
+# --- смена говорящего внутри сегмента -------------------------------------------------
+
+
+def two_voice_clip(first: int, second: int, a: float, b: float) -> np.ndarray:
+    return np.concatenate([clip(first, a), clip(second, b)])
+
+
+def test_segment_with_two_voices_is_cut_at_the_pause_where_the_voice_changes():
+    calls = []
+    v = voices(base={}, calls=calls)
+    ivan, petr, t = _two_known(v)
+    n = len(calls)
+    # 2 с Демьяна, 2 с Петра; пауза 0,3 с между словами на стыке, 0,05 — внутри.
+    cuts = [(t + 1.0, 0.05), (t + 2.0, 0.3), (t + 3.0, 0.05)]
+    parts = v.assign_turns("sys", two_voice_clip(1, 2, 2.0, 2.0), t, t + 4.0, cuts)
+    assert [(round(a - t, 3), round(b - t, 3), x.speaker) for a, b, x in parts] == [
+        (0.0, 2.0, "Собеседник 1"), (2.0, 4.0, "Собеседник 2")]
+    assert calls[n:] == [int(lv.SPLIT_WIN_S * SR)] * 2  # два окна у паузы, середина не считается
+    assert v.stats["turns"] == 1
+
+
+def test_one_voice_segment_is_not_cut_and_costs_no_extra_audio():
+    calls = []
+    v = voices(base={}, calls=calls)
+    ivan, petr, t = _two_known(v)
+    n = len(calls)
+    parts = v.assign_turns("sys", clip(1, 4.0), t, t + 4.0, [(t + 2.0, 0.3)])
+    assert [(x.voice, x.speaker) for _, _, x in parts] == [(ivan, "Собеседник 1")]
+    # Два окна по 1,5 с вместо середины 3 с: звука на эмбеддинги — столько же.
+    assert calls[n:] == [int(lv.SPLIT_WIN_S * SR)] * 2
+
+
+def test_weak_difference_between_the_halves_does_not_cut():
+    """Окна у паузы различаются, но без отрыва SPLIT_MARGIN — сегмент целиком."""
+    VOICES[9] = lv._unit(0.60 * IVAN + 0.55 * PETR)  # с Демьяном 0.74, с Петром 0.68
+    try:
+        v = voices(base={})
+        _, _, t = _two_known(v)
+        parts = v.assign_turns("sys", two_voice_clip(1, 9, 2.0, 2.0), t, t + 4.0, [(t + 2.0, 0.3)])
+    finally:
+        del VOICES[9]
+    assert len(parts) == 1 and v.stats["turns"] == 0
+
+
+def test_no_cut_before_two_voices_are_known():
+    calls = []
+    v = voices(base={}, calls=calls)
+    _, t = feed(v, "sys", 1, 6)
+    n = len(calls)
+    parts = v.assign_turns("sys", two_voice_clip(1, 2, 2.0, 2.0), t, t + 4.0, [(t + 2.0, 0.3)])
+    assert len(parts) == 1 and calls[n:] == [int(lv.EMBED_MAX_S * SR)]  # обычный путь: середина
+
+
+# --- синтетика с разбросом окон (собеседники) ------------------------------------------
+# Окно голоса: cos с его голосом ≈ 0.7, окна одного человека между собой ≈ 0.5
+# (v037, mic-live-diar: окно с окном ~0.5); короткое (1–1,5 с) — шумнее. Голоса
+# разных людей — cos 0.35 (до 0.45). Эмбеддер читает голос из звука клипа.
+
+SYS_D = 32
+
+
+def _toward_d(rng, o, c):
+    u = rng.standard_normal(SYS_D)
+    u = _u(u - (u @ o) * o)
+    return _u(c * o + np.sqrt(1 - c ** 2) * u)
+
+
+def sys_run(plan, seed=0, n=2, cross=0.35, short_share=0.0, drift=None, base=None):
+    """`plan` — [(кто, секунды[, доля коротких])], кто — 0…n-1. `drift` — (cd,
+    p): у голоса 0 второй «режим» (cos cd с обычным) на доле p окон. `base` —
+    {имя: кто}. → ([(кто, подпись сейчас, подпись при выдаче, секунды)], v)."""
+    rng = np.random.default_rng(seed)
+    voice = [_u(rng.standard_normal(SYS_D))]
+    while len(voice) < n:
+        voice.append(_toward_d(rng, voice[0], cross))
+    if drift:
+        voice.append(_toward_d(rng, voice[0], drift[0]))  # код n — второй режим голоса 0
+
+    def embed(audio):
+        codes = np.rint(audio * 100).astype(int) - 1
+        codes = codes[codes >= 0]
+        share = np.bincount(codes, minlength=len(voice)) / max(1, len(codes))
+        mix = _u(sum(w * vec for w, vec in zip(share, voice)))
+        sig = 1.6 if len(audio) < 1.5 * SR else 1.0
+        return _u(mix + sig * _u(rng.standard_normal(SYS_D)))
+
+    names = {name: [voice[who] * 1.7] for name, who in (base or {}).items()}
+    v = lv.LiveVoices(embed, names, [], name_threshold=0.70, session="t", log=lambda line: None)
+    t, lines = 0.0, []
+    for step in plan:
+        who, total = step[0], step[1]
+        share = step[2] if len(step) > 2 else short_share
+        said = 0.0
+        while said < total:
+            short = rng.random() < share
+            d = float(rng.uniform(1.0, 1.5)) if short else float(rng.uniform(1.5, 4.0))
+            code = n if drift and who == 0 and rng.random() < drift[1] else who
+            got = v.assign("sys", np.full(int(d * SR), (code + 1) / 100, dtype=np.float32), t, t + d)
+            lines.append((who, got.voice, got.speaker, d))
+            v.drain()
+            t += d + 0.4
+            said += d
+    return [(who, v.speaker(key) if key else "Собеседник", shown, d) for who, key, shown, d in lines], v
+
+
+def label_accuracy(rows, final=True):
+    """Доля секунд с верной подписью при лучшем соответствии «подпись ↔
+    человек» один к одному (как DER без пауз и нахлёста)."""
+    import itertools
+
+    col = 1 if final else 2
+    whos = sorted({r[0] for r in rows})
+    labels = sorted({r[col] for r in rows})
+    m = {}
+    for r in rows:
+        m[(r[0], r[col])] = m.get((r[0], r[col]), 0.0) + r[3]
+    pad = labels + [None] * max(0, len(whos) - len(labels))
+    best = max(sum(m.get((w, lab), 0.0) for w, lab in zip(whos, labs))
+               for labs in itertools.permutations(pad, len(whos)))
+    return best / sum(r[3] for r in rows)
+
+
+def test_two_remote_voices_in_fast_turns_are_told_apart():
+    for seed in range(4):
+        rows, _ = sys_run([(0, 6), (1, 4)] * 40, seed, short_share=0.4)
+        assert label_accuracy(rows) >= 0.95, seed
+        assert label_accuracy(rows, final=False) >= 0.75, seed  # до подтверждения — «Собеседник»
+
+
+def test_two_close_remote_voices_are_still_told_apart():
+    for seed in range(3):
+        rows, _ = sys_run([(0, 6), (1, 4)] * 40, seed, short_share=0.4, cross=0.45)
+        assert label_accuracy(rows) >= 0.92, seed
+
+
+def test_one_remote_voice_with_drift_is_never_split():
+    """Звонок один на один: другая интонация, шум линии — не второй человек.
+    Ни одной строки с номером ни при выдаче, ни задним числом. Второй «режим»
+    голоса — на 30 % окон, cos 0.75–0.8 с обычным (T0: один человек — p10
+    0.70 на 15 с; при 0.7 и ниже он неотличим от второго похожего человека —
+    см. отчёт v037 sys-live-diar)."""
+    for cd in (0.75, 0.8, 1.0):
+        for seed in range(4):
+            rows, v = sys_run([(0, 900)], seed, n=1, drift=(cd, 0.3), short_share=0.3)
+            assert {r[1] for r in rows} == {r[2] for r in rows} == {"Собеседник"}, (cd, seed)
+
+
+def test_three_remote_voices_get_three_labels():
+    for seed in range(4):
+        rows, v = sys_run([(0, 6), (1, 5), (2, 5), (1, 3)] * 25, seed, n=3, short_share=0.3)
+        assert len(v._tracks["sys"].voices()) == 3, seed
+        assert label_accuracy(rows) >= 0.92, seed
+
+
+def test_short_replies_of_the_second_voice_are_labelled_by_voice():
+    """Второй голос отвечает в основном коротко (1–1,5 с): его секунды —
+    его подпись, а не голос предыдущего говорящего."""
+    for seed in range(4):
+        rows, _ = sys_run([(0, 8, 0.2), (1, 1.2, 1.0), (0, 5, 0.2), (1, 3, 0.0)] * 30, seed)
+        assert label_accuracy(rows) >= 0.95, seed
+        theirs = {}
+        for r in rows:
+            if r[0] == 1:
+                theirs[r[1]] = theirs.get(r[1], 0.0) + r[3]
+        mine = max(theirs, key=theirs.get)
+        short = [r for r in rows if r[0] == 1 and r[3] < 1.5]
+        right = sum(r[3] for r in short if r[1] == mine) / sum(r[3] for r in short)
+        assert right >= 0.8, (seed, right)
+
+
+def test_spread_voice_from_the_base_is_named():
+    for seed in range(3):
+        rows, _ = sys_run([(0, 6), (1, 4)] * 40, seed, short_share=0.3, base={"Демьян": 0})
+        ivan = sum(r[3] for r in rows if r[0] == 0 and r[1] == "Демьян")
+        assert ivan >= 0.95 * sum(r[3] for r in rows if r[0] == 0), seed
+        petr_as_ivan = sum(r[3] for r in rows if r[0] == 1 and r[1] == "Демьян")
+        assert petr_as_ivan <= 0.05 * sum(r[3] for r in rows if r[0] == 1), seed
+
+
+# --- fix round 1 (ревью v037 sys-live-diar) -------------------------------------------
+
+
+def _split_voice(v):
+    """Ложное разделение: голос 1 (Демьян) и голос 2 — «режим» Демьяна, чей
+    центроид от отбора окон ушёл от него (cos 0.45 < SYS_DISTINCT)."""
+    VOICES[9] = lv._unit(0.45 * IVAN + 0.893 * OWNER)
+    try:
+        a, t = feed(v, "sys", 1, 8)
+        b, t = feed(v, "sys", 9, 10, start=t + 1.0)
+    finally:
+        del VOICES[9]
+    tv = v._tracks["sys"]
+    assert len(tv.voices()) == 2
+    return a, b, t
+
+
+def test_split_voice_merges_back_and_lines_revert_through_drain():
+    v = voices(base={})
+    a, b, t = _split_voice(v)
+    assert b[-1].speaker == "Собеседник 2"
+    v.drain()
+    tv = v._tracks["sys"]
+    one, two = tv.voices()
+    two.total = lv._unit(0.8 * IVAN + 0.6 * OWNER) * two.seconds  # центроиды сошлись: cos 0.8
+    feed(v, "sys", 1, 1, start=t + 1.0)
+    assert len(tv.voices()) == 1
+    renames = dict(v.drain())
+    assert renames[a[0].voice] == "Собеседник" and renames[b[0].voice] == "Собеседник"
+    notes = v.drain_notes()
+    assert notes and "одним человеком" in notes[-1]
+
+
+def test_split_voice_heals_on_segment_evidence_before_centroids_meet():
+    """I1: голоса, чьи сегменты почти так же похожи на другой голос, как на
+    свой (отношение от SYS_SAME_RATIO), сливаются, даже когда их центроиды
+    разошлись от отбора окон (cos 0.62 < SYS_MERGE)."""
+    v = voices(base={})
+    a, b, t = _split_voice(v)
+    tv = v._tracks["sys"]
+    assert float(tv.voices()[0].center @ tv.voices()[1].center) < lv.SYS_MERGE
+    VOICES[9] = lv._unit(0.62 * IVAN + 0.785 * OWNER)
+    try:
+        feed(v, "sys", 9, lv.SYS_EVIDENCE_N + 1, start=t + 1.0)
+    finally:
+        del VOICES[9]
+    assert len(tv.voices()) == 1
+    assert v.speaker(b[0].voice) == "Собеседник"
+
+
+def test_two_real_voices_are_not_merged_by_the_evidence_rule():
+    v = voices(base={})
+    _, _, t = _two_known(v)
+    feed(v, "sys", 2, 20, start=t)
+    feed(v, "sys", 1, 20, start=t + 50.0)
+    assert len(v._tracks["sys"].voices()) == 2
+
+
+def test_numbers_are_reused_after_a_false_split_heals():
+    """M2: после слияния ошибочно разделённого голоса настоящий второй
+    человек — «Собеседник 2», а не «Собеседник 3»."""
+    v = voices(base={})
+    a, b, t = _split_voice(v)
+    tv = v._tracks["sys"]
+    tv.voices()[1].total = lv._unit(0.8 * IVAN + 0.6 * OWNER) * tv.voices()[1].seconds
+    _, t = feed(v, "sys", 1, 1, start=t + 1.0)
+    assert len(tv.voices()) == 1
+    c, _ = feed(v, "sys", 2, 10, start=t + 1.0)
+    assert c[-1].speaker == "Собеседник 2"
+    assert v.speaker(a[0].voice) == "Собеседник 1"
+
+
+def test_short_reply_without_a_neighbour_takes_the_nearest_numbered_voice():
+    """M3: короткая реплика после долгой паузы (соседа нет) при двух голосах —
+    не «Собеседник» без номера и без ключа, а ближайший голос под своим ключом."""
+    VOICES[9] = lv._unit(0.50 * IVAN + 0.52 * PETR + 0.69 * OWNER)  # без отрыва: голосами не решить
+    try:
+        v = voices(base={})
+        ivan, petr, t = _two_known(v)
+        got = v.assign("sys", clip(9, 1.2), t + 30.0, t + 31.2)
+    finally:
+        del VOICES[9]
+    assert got.voice not in (None, ivan, petr) and got.speaker == "Собеседник 2"
+    tv = v._tracks["sys"]
+    assert tv.get(tv.number(got.voice)).shadow
+
+
+def test_evicted_shades_drop_their_embedding_but_keep_their_voice():
+    v = voices(base={})
+    a, t = feed(v, "sys", 1, 8)
+    keys = []
+    for i in range(lv.SHADOWS_KEPT + 5):
+        keys.append(v.assign("sys", clip(1, 1.2), t, t + 1.2).voice)
+        t += 1.4
+    tv = v._tracks["sys"]
+    first = tv.get(tv.number(keys[0]))
+    assert first.total.size == 0 and tv.resolve(first.n).n == tv.number(a[0].voice)
+    assert tv.get(tv.number(keys[-1])).total.size > 0
+    assert v.speaker(keys[0]) == "Собеседник"
+
+
+def test_drain_notes_tell_the_agent_when_labels_change():
+    """I2: агенту — короткая заметка, когда нумерация включилась, выключилась
+    или голос получил имя из базы."""
+    v = voices(base={})
+    feed(v, "sys", 1, 8)
+    v.drain()
+    assert v.drain_notes() == []  # голос один — нумерации нет
+    _, t = feed(v, "sys", 2, 10, start=40.0)
+    v.drain()
+    notes = v.drain_notes()
+    assert len(notes) == 1 and notes[0].startswith("Meet уточнил говорящих:")
+    assert "Собеседник 1, Собеседник 2" in notes[0]
+    assert v.drain_notes() == []
+    named = voices(base={"Демьян": [IVAN * 2.5]})
+    feed(named, "sys", 1, 6)
+    named.drain()
+    assert named.drain_notes() == ["Meet уточнил говорящих: «Собеседник» — это Демьян."]
+
+
+@pytest.mark.parametrize("cd", [0.62, 0.65, 0.68, 0.70])
+def test_one_drifting_voice_for_an_hour_heals_and_is_numbered_briefly(cd):
+    """I1: один голос с сильным вторым «режимом» (cos 0.62–0.70 на 30 % окон)
+    1 ч. Ни один прогон не остаётся с номерами; строк с номером при выдаче —
+    мало (до правок раунда 1 на тех же прогонах: 956/320/227/143)."""
+    numbered = 0
+    for seed in (0, 4, 5):
+        rows, _ = sys_run([(0, 3600)], seed, n=1, drift=(cd, 0.3), short_share=0.3)
+        assert {r[1] for r in rows} == {"Собеседник"}, (cd, seed)
+        numbered += sum(1 for r in rows if r[2] != "Собеседник")
+    assert numbered <= {0.62: 420, 0.65: 110, 0.68: 110, 0.70: 70}[cd], numbered

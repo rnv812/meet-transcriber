@@ -18,28 +18,34 @@ def _embed(a):
     return np.array([1.0, 0.05], dtype=np.float32)
 
 
-def test_enabled_with_base_or_owner_sample():
+def test_enabled_whenever_the_embedder_is_loaded():
+    """Собеседники делятся по голосам и без базы и образца: матчер включён,
+    как только есть эмбеддер."""
     from meet.owner_voice import OwnerSample
 
     owner = [OwnerSample(id="a", embedding=np.array([0.0, 1.0]), source="enroll", date="d", seconds=20.0)]
     assert VoiceMatcher(base=_base(), embed_fn=_embed).enabled
     assert VoiceMatcher(base={}, owner=owner, embed_fn=_embed).enabled
-    assert not VoiceMatcher(base={}, owner=[], embed_fn=_embed).enabled
+    assert VoiceMatcher(base={}, owner=[], embed_fn=_embed).enabled
     assert not VoiceMatcher(base=_base()).enabled  # эмбеддер не загружен
 
 
-def test_load_with_empty_base_and_no_owner_does_not_build_embedder(monkeypatch):
+def test_load_with_empty_base_and_no_owner_builds_embedder_for_the_call(monkeypatch):
+    """База пуста и образца нет — эмбеддер всё равно нужен: собеседники звонка
+    делятся по голосам («Собеседник 1», «Собеседник 2»), просто без имён."""
     import meet.voice_id as vid
 
     built = []
+    monkeypatch.setattr(vid, "_model_on_disk", lambda: True)
     monkeypatch.setattr(vid, "load_voices", lambda: {})
     monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: [])
-    monkeypatch.setattr(vid, "_load_embedder", lambda: built.append(1))
+    monkeypatch.setattr(vid, "_load_embedder", lambda: built.append(1) or _embed)
     lines = []
     m = VoiceMatcher(log=lines.append)
     m.load()
-    assert not m.enabled and built == []
-    assert any("live-имена выключены" in line for line in lines)
+    assert m.enabled and built == [1]
+    assert m.live_voices({"sys": "Собеседник", "mic": "Вы"}).active("sys")
+    assert any("база пуста: собеседники без имён" in line for line in lines)
 
 
 def test_load_builds_embedder_for_owner_sample_alone(monkeypatch):
@@ -55,20 +61,54 @@ def test_load_builds_embedder_for_owner_sample_alone(monkeypatch):
     assert m.enabled and m.owner == owner
 
 
-def test_owner_sample_with_mic_split_off_does_not_build_embedder(monkeypatch):
-    """Ревью M1: образец есть, но микрофон не делится, а базы нет — эмбеддер
-    не нужен ни одной дорожке."""
+def test_empty_base_never_downloads_the_model_at_live_start(monkeypatch):
+    """Ревью M1: модель нужна только звонку — не скачана, значит не качаем
+    посреди встречи: собеседники не делятся, причина в журнале."""
+    import meet.voice_id as vid
+
+    built = []
+    monkeypatch.setattr(vid, "_model_on_disk", lambda: False)
+    monkeypatch.setattr(vid, "load_voices", lambda: {})
+    monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: [])
+    monkeypatch.setattr(vid, "_load_embedder", lambda: built.append(1) or _embed)
+    lines = []
+    m = VoiceMatcher(threshold=0.7, mic=True, log=lines.append)
+    m.load()
+    assert built == [] and not m.enabled and m.live_voices() is None
+    assert any("модель голосов не скачана" in line for line in lines)
+    # С базой голосов — как раньше (модель у таких пользователей уже есть).
+    monkeypatch.setattr(vid, "load_voices", _base)
+    VoiceMatcher(threshold=0.7, mic=True, log=lines.append).load()
+    assert built == [1]
+
+
+def test_model_on_disk_looks_for_the_embedding_weights(monkeypatch, tmp_path):
+    import meet.voice_id as vid
+    from meet import models
+
+    seen = []
+    monkeypatch.setattr(models, "local_snapshot", lambda repo, required=(): seen.append((repo, required)) or None)
+    assert vid._model_on_disk() is False
+    assert seen == [("pyannote/speaker-diarization-community-1", ("embedding/pytorch_model.bin",))]
+
+
+def test_owner_sample_with_mic_split_off_still_builds_embedder_for_the_call(monkeypatch):
+    """Образец есть, микрофон не делится, базы нет: эмбеддер нужен звонку
+    (собеседники по голосам), а микрофон остаётся целиком «Вы»."""
     import meet.voice_id as vid
     from meet.owner_voice import OwnerSample
 
     owner = [OwnerSample(id="a", embedding=np.array([0.0, 1.0]), source="enroll", date="d", seconds=20.0)]
     built = []
+    monkeypatch.setattr(vid, "_model_on_disk", lambda: True)
     monkeypatch.setattr(vid, "load_voices", lambda: {})
     monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: owner)
     monkeypatch.setattr(vid, "_load_embedder", lambda: built.append(1) or _embed)
     m = VoiceMatcher(threshold=0.7, mic=False, log=lambda line: None)
     m.load()
-    assert built == [] and not m.enabled
+    assert built == [1] and m.enabled
+    voices = m.live_voices({"sys": "Собеседник", "mic": "Вы"})
+    assert voices.active("sys") and not voices.active("mic")
 
 
 def test_threshold_and_mic_flag_come_from_settings(monkeypatch):
@@ -268,14 +308,14 @@ def test_load_says_why_the_mic_is_not_split_without_owner_sample(monkeypatch):
 def test_empty_base_without_owner_sample_gives_the_same_reason(monkeypatch):
     import meet.voice_id as vid
 
+    monkeypatch.setattr(vid, "_model_on_disk", lambda: True)
     monkeypatch.setattr(vid, "load_voices", lambda: {})
     monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: [])
     monkeypatch.setattr(vid, "_load_embedder", lambda: _embed)
     lines = []
     VoiceMatcher(threshold=0.7, mic=True, log=lines.append).load()
-    assert any("микрофон не делится: нет образца вашего голоса" in line and "live-имена выключены" in line
+    assert any("микрофон не делится: нет образца вашего голоса" in line and "база пуста" in line
                for line in lines)
     lines.clear()
     VoiceMatcher(threshold=0.7, mic=False, log=lines.append).load()
-    assert any("выключено в настройках" in line for line in lines)
-    assert not any("образца" in line for line in lines)
+    assert not any("образца" in line for line in lines)  # делить и не просили

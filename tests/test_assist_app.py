@@ -707,3 +707,37 @@ def test_state_view_tells_whether_the_mic_has_an_owner_sample(tmp_path):
     def broken():
         raise OSError("нет доступа")
     assert mic_view(cfg, False, load_owner=broken) is None
+
+
+def test_voice_notes_reach_the_participant_in_its_loop():
+    """Подписи собеседников уточнились (поток распознавания) — заметка агенту
+    через его цикл событий; без агента — ничего."""
+    from meet.assist.app import _note_agent
+
+    class Agent:
+        def __init__(self):
+            self.notes, self.threads = [], []
+
+        def add_note(self, text):
+            self.notes.append(text)
+            self.threads.append(threading.get_ident())
+
+    state = AssistState.__new__(AssistState)
+    state.participant, state.loop = None, None
+    _note_agent(state, "x")  # без агента — молча
+    agent = Agent()
+    state.participant = agent
+    _note_agent(state, "без цикла")
+    assert agent.notes == ["без цикла"]
+
+    async def main():
+        state.loop = asyncio.get_running_loop()
+        here = threading.get_ident()
+        t = threading.Thread(target=_note_agent, args=(state, "Meet уточнил говорящих: …"))
+        t.start()
+        t.join()
+        await asyncio.sleep(0.05)
+        return here
+
+    here = asyncio.run(main())
+    assert agent.notes[-1] == "Meet уточнил говорящих: …" and agent.threads[-1] == here

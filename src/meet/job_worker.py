@@ -575,6 +575,12 @@ CHAT_AFTER_NOTE = ("Встреча уже закончилась: пользов
 CHAT_AFTER_NOTE_PERSONAL = ("Запись уже закончилась: пользователь продолжает разговор с тобой после "
                            "неё. Новых реплик не будет. Ответь на его сообщение обязательно — "
                            "{\"silent\": true} после записи не используй.")
+# Подписи живой ленты («Собеседник N») и точной расшифровки («Спикер N»)
+# нумеруются независимо: в продолженной сессии агент видит обе.
+CHAT_LABELS_NOTE = ("Подписи живой ленты («Собеседник», «Собеседник N») были предварительными и "
+                    "уточнены в расшифровке после встречи: номера там свои («Спикер N») и с "
+                    "живыми не совпадают.")
+CHAT_LABELS_NOTE_PERSONAL = CHAT_LABELS_NOTE.replace("после встречи", "после записи")
 CHAT_SUMMARY_MAX = 6_000    # итоги встречи в заметке модели без инструментов
 CHAT_TURNS_MAX = 6          # ходов на одно сообщение (запросы к Meet у локальной модели)
 CHAT_PARTIAL_EVERY_S = 0.5  # кусок ответа — строкой chat.updated не чаще
@@ -644,6 +650,7 @@ def _chat(folder_str: str, message_id: str, chosen: str | None = None, *,
             await agent.start()
             await agent.queue_existing(message_id)
             agent.add_note(_after_meeting_note(folder, agent.tools, profile=agent.profile))
+            agent.add_note(CHAT_LABELS_NOTE_PERSONAL if agent.profile == "personal" else CHAT_LABELS_NOTE)
             turns = 0
             while turns < CHAT_TURNS_MAX and await agent.tick():
                 turns += 1

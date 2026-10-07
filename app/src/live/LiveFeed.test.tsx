@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { FeedLine } from "./useLive";
-import { LiveFeed, TARGET_MS, lineAt } from "./LiveFeed";
+import { LABELS_HINT, LiveFeed, TARGET_MS, lineAt } from "./LiveFeed";
 
 const line = (i: number, speaker: string | null = "Демьян"): FeedLine => ({ t: 60 + i, speaker, text: `реплика ${i}`, id: null });
 
@@ -112,4 +112,14 @@ test("ленту сузили или сделали ниже (разделите
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+test("нумерованные подписи собеседников — с подсказкой, что они предварительные", () => {
+  const { rerender } = render(<LiveFeed lines={[line(0, "Собеседник"), line(1)]} />);
+  expect(screen.queryByText(LABELS_HINT)).toBeNull();
+  rerender(<LiveFeed lines={[line(0, "Собеседник 1"), line(1, "Собеседник 2"), line(2)]} />);
+  expect(screen.getByText(LABELS_HINT)).toBeInTheDocument();
+  expect(screen.getByText("Собеседник 2")).toHaveAttribute("title", LABELS_HINT);
+  expect(screen.getByText("Демьян")).not.toHaveAttribute("title");
+  expect(screen.getAllByRole("listitem")).toHaveLength(3); // подсказка — не строка ленты
 });

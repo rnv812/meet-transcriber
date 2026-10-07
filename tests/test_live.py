@@ -320,6 +320,187 @@ def test_voices_stats_logged_on_stop(tmp_path):
     assert any(line.startswith("голоса живого режима: эмбеддингов 3") for line in lines)
 
 
+# --- голоса собеседников: номера и смена говорящего внутри сегмента (v037) ---------
+
+
+class TimelineTranscriber:
+    """Сегменты со словами на всей дорожке (абсолютное время): окно отдаёт
+    те, что в него попали."""
+
+    def __init__(self, segments):
+        self.segments = segments
+
+    def transcribe_window(self, audio, *, offset_s=0.0, hotwords=None, initial_prompt=None):
+        end = offset_s + len(audio) / 16000
+        return [s for s in self.segments if offset_s <= s.start < end]
+
+
+def _said(start, words, level):
+    """Сегмент из слов [(начало, конец, текст)] и куски звука для него."""
+    from meet.asr import Word
+
+    ws = [Word(start + a, start + b, " " + text) for a, b, text in words]
+    seg = Segment(ws[0].start, ws[-1].end, "".join(w.text for w in ws).strip(), words=ws)
+    return seg, [(seg.start, seg.end, level)]
+
+
+def test_two_call_voices_are_numbered_and_a_mixed_segment_is_split(tmp_path):
+    """Звонок: Демьян, потом Пётр, потом одна реплика ASR на двоих («раз два
+    три» Демьяна и «четыре пять шесть» Петра без точки между ними). Строки —
+    «Собеседник 1» / «Собеседник 2» (ранние — задним числом), смешанная
+    реплика — двумя строками."""
+    segs, sound = [], []
+    t = 0.0
+    for i in range(8):  # Демьян 16 с
+        seg, part = _said(t, [(0.0, 1.0, "демьян"), (1.05, 2.0, f"{i + 1}")], 1000)
+        segs.append(seg)
+        sound += part
+        t += 2.2
+    t += 1.0
+    for i in range(10):  # Пётр 20 с
+        seg, part = _said(t, [(0.0, 1.0, "пётр"), (1.05, 2.0, f"{i + 1}")], 100)
+        segs.append(seg)
+        sound += part
+        t += 2.2
+    t += 1.0
+    mixed, _ = _said(t, [(0.0, 0.6, "раз"), (0.65, 1.3, "два"), (1.35, 1.95, "три"),
+                         (2.3, 2.9, "четыре"), (2.95, 3.5, "пять"), (3.55, 4.0, "шесть")], None)
+    segs.append(mixed)
+    sound += [(t, t + 2.1, 1000), (t + 2.1, t + 4.0, 100)]
+    total = t + 4.5
+    pcm = np.zeros(int(16000 * total), dtype=np.int16)
+    for a, b, level in sound:
+        pcm[int(a * 16000):int(b * 16000)] = level
+    renames, got = [], []
+    engine = LiveEngine(tmp_path, TimelineTranscriber(segs), window_seconds=60.0,
+                        voice_matcher=_matcher(base={}),
+                        on_entry=lambda line, entry: got.append(entry),
+                        on_relabel=lambda voice, speaker: renames.append((voice, speaker)))
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(pcm.tobytes())
+    engine.process_window()
+    assert [(e["speaker"], e["text"]) for e in got[-2:]] == [
+        ("Собеседник 1", "раз два три"), ("Собеседник 2", "четыре пять шесть")]
+    assert got[-1]["t"] == round(t + 2.3, 2) and got[-2]["end"] == round(t + 1.95, 2)
+    assert sorted(speaker for _, speaker in renames) == ["Собеседник 1", "Собеседник 2"]
+    lines = (tmp_path / "live_transcript.md").read_text(encoding="utf-8").splitlines()
+    assert [line.split("] ")[1].split(":")[0] for line in lines] == \
+        ["Собеседник 1"] * 8 + ["Собеседник 2"] * 10 + ["Собеседник 1", "Собеседник 2"]
+
+
+def _call(segs_spec, start=0.0):
+    """[(уровень, сколько сегментов)] → сегменты по 2 с (два слова) и звук."""
+    segs, sound, t = [], [], start
+    for level, count in segs_spec:
+        for i in range(count):
+            seg, part = _said(t, [(0.0, 1.0, "слово"), (1.05, 2.0, f"{i + 1}")], level)
+            segs.append(seg)
+            sound += part
+            t += 2.2
+        t += 1.0
+    return segs, sound, t
+
+
+def _pcm_of(sound, total):
+    pcm = np.zeros(int(16000 * total), dtype=np.int16)
+    for a, b, level in sound:
+        pcm[int(a * 16000):int(b * 16000)] = level
+    return pcm
+
+
+def test_false_split_merging_back_reverts_file_panel_and_tells_the_agent(tmp_path):
+    """Ревью v037: голоса звонка, разделённые по ошибке, сливаются обратно —
+    строки снова «Собеседник» в файле ленты и в панели (`on_relabel`), агенту
+    — заметка «Meet уточнил говорящих: …» (`on_voices_note`)."""
+    segs, sound, t = _call([(1000, 8), (100, 10)])
+    renames, notes = [], []
+    engine = LiveEngine(tmp_path, TimelineTranscriber(segs), window_seconds=60.0,
+                        voice_matcher=_matcher(base={}),
+                        on_relabel=lambda voice, speaker: renames.append(speaker))
+    engine.on_voices_note = notes.append
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(_pcm_of(sound, t + 0.5).tobytes())
+    engine.process_window()
+    path = tmp_path / "live_transcript.md"
+    assert "Собеседник 2:" in path.read_text(encoding="utf-8")
+    assert len(notes) == 1 and "Собеседник 1, Собеседник 2" in notes[0]
+    # Центроиды сошлись (тот же человек): следующее окно сливает голоса.
+    tv = engine._voices._tracks["sys"]
+    one, two = tv.voices()
+    two.total = one.center * two.seconds
+    more, sound2, t2 = _call([(1000, 1)], start=t + 1.0)
+    engine._transcriber.segments = more
+    engine._tracks["sys.wav"]["buffer"].push(_pcm_of(sound2, t2 + 0.5)[int(16000 * (t + 0.5)):].tobytes())
+    engine.process_window()
+    assert len(tv.voices()) == 1
+    text = path.read_text(encoding="utf-8")
+    assert "Собеседник 1:" not in text and "Собеседник 2:" not in text
+    assert renames[-2:] == ["Собеседник", "Собеседник"]
+    assert "одним человеком" in notes[-1]
+
+
+class _BrokenTurns:
+    """Голоса, у которых `assign_turns` падает или режет мимо слов."""
+
+    def __init__(self, parts=None, fail=False):
+        self.parts, self.fail, self.calls = parts, fail, []
+
+    def assign(self, track, clip, start, end):
+        self.calls.append(("assign", start, end))
+        from meet.live_voices import Assigned
+
+        return Assigned("x/sys:0", "Собеседник", "other")
+
+    def assign_turns(self, track, clip, start, end, cuts):
+        self.calls.append(("turns", start, end, len(cuts)))
+        if self.fail:
+            raise RuntimeError("сбой")
+        from meet.live_voices import Assigned
+
+        return [(a, b, Assigned(f"x/sys:{i}", f"Собеседник {i + 1}", "other"))
+                for i, (a, b) in enumerate(self.parts)]
+
+
+def test_turns_fallbacks_keep_the_line_whole(tmp_path):
+    engine = LiveEngine(tmp_path, TimelineTranscriber([]))
+    audio = np.zeros(16000 * 5, dtype=np.float32)
+    seg, _ = _said(0.0, [(0.0, 1.0, "раз"), (1.3, 2.4, "два"), (2.6, 4.0, "три")], None)
+    plain = Segment(0.0, 4.0, "без слов")
+    # Нет слов (Whisper) — обычный путь, без assign_turns.
+    voices = _BrokenTurns(parts=[])
+    assert [(s.text, got.speaker) for s, got in engine._turns(voices, "sys.wav", audio, [plain], 0.0)] == [
+        ("без слов", "Собеседник")]
+    assert voices.calls == [("assign", 0.0, 4.0)]
+    # Микрофон не режется.
+    voices = _BrokenTurns(parts=[])
+    list(engine._turns(voices, "mic.wav", audio, [seg], 0.0))
+    assert voices.calls[0][0] == "assign"
+    # Сбой assign_turns — строка целиком с подписью по умолчанию (голоса нет).
+    lines = []
+    engine._log = lines.append
+    got = list(engine._turns(_BrokenTurns(fail=True), "sys.wav", audio, [seg], 0.0))
+    assert [(s.text, a) for s, a in got] == [("раз два три", None)]
+    assert any("сбой живых имён" in line for line in lines)
+    # Разрез не лёг на слова (за последним словом) — строка целиком, голос первой части.
+    got = list(engine._turns(_BrokenTurns(parts=[(0.0, 3.9), (3.9, 4.0)]), "sys.wav", audio, [seg], 0.0))
+    assert [(s.text, a.speaker) for s, a in got] == [("раз два три", "Собеседник 1")]
+    # Разрез по словам — две строки.
+    got = list(engine._turns(_BrokenTurns(parts=[(0.0, 1.3), (1.3, 4.0)]), "sys.wav", audio, [seg], 0.0))
+    assert [(s.text, a.speaker) for s, a in got] == [("раз", "Собеседник 1"), ("два три", "Собеседник 2")]
+
+
+def test_split_segment_by_word_times():
+    from meet.asr import Word
+    from meet.live import split_segment
+
+    ws = [Word(0.0, 0.5, " раз"), Word(0.6, 1.0, " два"), Word(1.4, 2.0, " три")]
+    seg = Segment(0.0, 2.0, "раз два три", words=ws, avg_logprob=-0.2)
+    a, b = split_segment(seg, [1.4])
+    assert (a.start, a.end, a.text, a.avg_logprob) == (0.0, 1.0, "раз два", -0.2)
+    assert (b.start, b.end, b.text, [w.text for w in b.words]) == (1.4, 2.0, "три", [" три"])
+    assert split_segment(seg, [5.0]) == [seg]  # разрез за словами — сегмент целиком
+
+
 def test_near_silent_first_window_does_not_freeze_gain(tmp_path):
     fake = FakeTranscriber([[], []])
     engine = LiveEngine(tmp_path, fake, window_seconds=20.0)

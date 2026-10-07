@@ -932,6 +932,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             glossary=state._glossary, on_fresh_audio=fresh_audio, log=log, profile=profile)
         # Сводка — в профиле сессии (выбранном, из журнала или по умолчанию).
         state.apply_profile(state.participant.profile)
+        # Подписи собеседников уточнились задним числом — заметка агенту в
+        # ближайший ход (из рабочего потока распознавания — в цикл событий).
+        engine.on_voices_note = lambda text: _note_agent(state, text)
         from meet.assist.web import ChatFeed
 
         state.chat_feed = ChatFeed(state.participant)
@@ -1068,6 +1071,17 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             print(f"\nОстановлено: {temp_meeting.loggable(out_dir)}", flush=True)
             if not temp_meeting.is_temporary(out_dir):
                 print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
+
+
+def _note_agent(state, text: str) -> None:
+    """Заметка Meet агенту-участнику из чужого потока: в его цикл событий."""
+    participant, loop = getattr(state, "participant", None), getattr(state, "loop", None)
+    if participant is None:
+        return
+    if loop is not None and not loop.is_closed():
+        loop.call_soon_threadsafe(participant.add_note, text)
+    else:
+        participant.add_note(text)
 
 
 def _make_participant(cfg, bus: TranscriptBus, out_dir: Path, provider: str, runner, *,

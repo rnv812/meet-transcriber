@@ -54,6 +54,31 @@ def format_live_line(start_s: float, speaker: str, text: str) -> str:
     return f"[{fmt_hms(start_s)}] {speaker}: {text}"
 
 
+def split_segment(seg, cuts: list) -> list:
+    """Сегмент → части по временам `cuts` (смена говорящего внутри реплики):
+    слово — в ту часть, где оно начинается. Текст части — из её слов (правила
+    текста к этому времени уже выровняли слова, см. textfix.apply_rules).
+    Части без слов не бывает: такой разрез пропускается."""
+    import dataclasses
+
+    groups, rest = [], list(seg.words)
+    for cut in sorted(cuts):
+        head = [w for w in rest if w.start < cut]
+        if head and len(head) < len(rest):
+            groups.append(head)
+            rest = rest[len(head):]
+    groups.append(rest)
+    if len(groups) == 1:
+        return [seg]
+    out = []
+    for i, words in enumerate(groups):
+        start = seg.start if i == 0 else words[0].start
+        end = seg.end if i == len(groups) - 1 else words[-1].end
+        out.append(dataclasses.replace(seg, start=start, end=end, words=list(words),
+                                       text="".join(w.text for w in words).strip()))
+    return out
+
+
 def relabel_line(line: str, old: str, new: str) -> str:
     """`[чч:мм:сс] Старый: текст` → `[чч:мм:сс] Новый: текст`; строка другого
     вида — без изменений."""
@@ -328,6 +353,9 @@ class LiveEngine:
         self.on_relabel = on_relabel
         # Колбэк ([номер строки у on_entry]): показанные строки-дубли спрятать.
         self.on_hide = on_hide
+        # Колбэк (текст): подписи собеседников уточнились — заметка агенту
+        # (он видит строки с подписью на момент выдачи). Ставит ассистент.
+        self.on_voices_note = None
         # Дубли соседа в живой ленте (meet.live_dedupe, `asr.live_mic_dedupe`):
         # строки людей рядом ждут, пока распознается звук собеседников.
         self._dupes = None
@@ -560,13 +588,10 @@ class LiveEngine:
         dupes = self._dupes if not catchup else None
         if dupes is not None:
             dupes.sound(fname.removesuffix(".wav"), start_s, audio)
-        for s in segs:
+        for s, got in self._turns(voices, fname, audio, segs, start_s):
             speaker, voice = default_speaker, None
-            if voices is not None:
-                got = self._assign(voices, fname, audio, s.start - start_s, s.end - start_s,
-                                   s.start, s.end)
-                if got is not None and got.voice is not None:
-                    speaker, voice = got.speaker, got.voice
+            if got is not None and got.voice is not None:
+                speaker, voice = got.speaker, got.voice
             line = format_live_line(s.start, speaker, s.text)
             entry = {"t": round(s.start, 2), "end": round(s.end, 2),
                      "speaker": speaker, "text": s.text}
@@ -652,9 +677,16 @@ class LiveEngine:
         догонялки) и потребители (`on_relabel`) — задним числом."""
         try:
             renames = dict(voices.drain())
+            notes = voices.drain_notes() if hasattr(voices, "drain_notes") else []
         except Exception as e:
             self._voice_failed(e)
             return
+        for text in notes:
+            if self.on_voices_note is not None:
+                try:
+                    self.on_voices_note(text)
+                except Exception:
+                    pass  # потребитель не должен валить запись
         if not renames:
             return
         for rec in self._voiced:
@@ -826,6 +858,35 @@ class LiveEngine:
             except Exception as e:
                 self._voice_failed(e)
         return self._voices
+
+    def _turns(self, voices, fname: str, audio, segs: list, start_s: float):
+        """[(сегмент, голос | None)] окна. Сегмент собеседников с двумя
+        голосами режется на реплики (`LiveVoices.assign_turns`: по паузе
+        между словами, где голос сменился) — каждая часть своей строкой."""
+        for s in segs:
+            if voices is None:
+                yield s, None
+                continue
+            words = list(getattr(s, "words", None) or [])
+            cuts = [(b.start, b.start - a.end) for a, b in zip(words, words[1:])]
+            if fname != "sys.wav" or not cuts or not hasattr(voices, "assign_turns"):
+                yield s, self._assign(voices, fname, audio, s.start - start_s, s.end - start_s,
+                                      s.start, s.end)
+                continue
+            try:
+                lo = max(0, int((s.start - start_s) * WINDOW_RATE))
+                hi = min(len(audio), int((s.end - start_s) * WINDOW_RATE))
+                parts = voices.assign_turns(fname.removesuffix(".wav"), audio[lo:hi],
+                                            s.start, s.end, cuts)
+            except Exception as e:
+                self._voice_failed(e)
+                yield s, None
+                continue
+            pieces = split_segment(s, [a for a, _, _ in parts[1:]])
+            if len(pieces) != len(parts):  # разрез не лёг на слова — строка целиком
+                yield s, parts[0][2]
+                continue
+            yield from zip(pieces, (got for _, _, got in parts))
 
     def _assign(self, voices, fname: str, audio, rel_start: float, rel_end: float,
                 start: float, end: float):

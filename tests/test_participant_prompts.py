@@ -635,3 +635,11 @@ def test_without_freedom_the_prompt_is_as_in_0_3_6():
 def test_agent_buttons_cannot_mimic_meet_confirm_cards():
     (action,) = pp.parse_reply('{"say": "Можно?", "buttons": ["Разрешить один раз", "ОТКЛОНИТЬ.", "Разрешить", "Да, глянь"]}')
     assert action.buttons == ("Да, глянь",)
+
+
+def test_system_says_speaker_labels_are_provisional():
+    """Ревью v037 I2: подписи «Собеседник N» живой ленты уточняются задним
+    числом — агент знает это и ждёт заметку «Meet уточнил говорящих»."""
+    text = build_system()
+    assert "«Собеседник», «Собеседник N» и «Спикер N» предварительные" in text
+    assert "Meet уточнил говорящих" in text

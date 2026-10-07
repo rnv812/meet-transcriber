@@ -1131,3 +1131,13 @@ def test_cli_accepts_the_old_neutral_profile(monkeypatch):
 
     cli.main()
     assert pp.normalize_profile(called["profile"]) == "personal"
+
+
+def test_personal_prompt_knows_labels_are_provisional():
+    from meet import job_worker
+
+    text = pp.build_system(profile="personal")
+    assert "Подписи «Собеседник», «Собеседник N» и «Спикер N» предварительные" in text
+    assert "Meet уточнил говорящих" in text and _work_hits(text) == []
+    assert "после встречи" in job_worker.CHAT_LABELS_NOTE
+    assert "встреч" not in job_worker.CHAT_LABELS_NOTE_PERSONAL

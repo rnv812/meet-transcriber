@@ -11,6 +11,11 @@ const BOTTOM_SLACK_PX = 24;
 /** Сколько подсвечена реплика, к которой перешли по таймкоду. */
 export const TARGET_MS = 2500;
 
+/** Подпись голоса собеседников, которую живой режим уточняет по ходу встречи. */
+const PROVISIONAL = /^Собеседник \d+$/;
+/** Подсказка к нумерованным подписям живой ленты. */
+export const LABELS_HINT = "Подписи «Собеседник N» предварительные — уточнятся в расшифровке после встречи";
+
 /** Переход к моменту встречи: секунды записи; `seq` различает повторные щелчки. */
 export type FeedFocus = { t: number; seq: number };
 
@@ -82,7 +87,8 @@ export function LiveFeed({ lines, className = "", focus = null }: {
     return () => clearTimeout(timer);
   }, [target]);
 
-  return (
+  const numbered = lines.some((l) => PROVISIONAL.test(l.speaker ?? ""));
+  const feed = (
     <ol ref={box} className={`live-feed ${className}`.trim()} role="log" aria-label="Лента встречи"
       onScroll={onScroll}>
       {lines.length === 0 && <li className="live-feed__empty muted">Реплики появятся, как только их расшифрует ассистент</li>}
@@ -91,11 +97,21 @@ export function LiveFeed({ lines, className = "", focus = null }: {
         <li key={l.id ?? `i${k}`} className={`live-feed__line${l === target ? " is-target" : ""}`}>
           <span className="live-feed__t num">{clock(l.t)}</span>
           <span className="live-feed__text">
-            {l.speaker && <span className="live-feed__who">{l.speaker}</span>}
+            {l.speaker && (
+              <span className="live-feed__who"
+                title={PROVISIONAL.test(l.speaker) ? LABELS_HINT : undefined}>{l.speaker}</span>
+            )}
             {l.text}
           </span>
         </li>
       ))}
     </ol>
+  );
+  if (!numbered) return feed;
+  return (
+    <>
+      <p className="live-feed__hint muted">{LABELS_HINT}</p>
+      {feed}
+    </>
   );
 }

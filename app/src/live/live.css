@@ -19,6 +19,7 @@
 .live-feed__text { color: var(--text); overflow-wrap: anywhere; }
 .live-feed__who { margin-right: 6px; color: var(--accent-hover); font-weight: 500; }
 .live-feed__empty { font-size: 12px; }
+.live-feed__hint { flex: none; margin: 0 0 4px; font-size: 11px; }
 
 .live-ask { display: flex; flex-direction: column; gap: 6px; }
 .live-ask__row { display: flex; gap: 6px; }

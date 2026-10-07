@@ -35,6 +35,19 @@
    на образец от T_WIN_FAST, — всегда владелец); короткие реплики от
    SHORT_EMBED_S — тоже; мелкие кластеры, которые ближе к человеку рядом,
    вливаются в него задним числом. До этого — всё как раньше.
+5. собеседники (дорожка sys, с базой и без) — голоса звонка: кластер от
+   SYS_VOICE_MIN_S речи — голос; следующий — если на SYS_CHECKS проверках
+   подряд он дальше SYS_DISTINCT от каждого известного (ближе — тот же
+   человек; голоса, сошедшиеся до SYS_MERGE, сливаются обратно). Голос с
+   именем из базы — голос сразу. Неподтверждённые обрывки одного голоса
+   сливаются между собой (окна одного человека похожи слабее LIVE_ASSIGN).
+   От двух голосов сегмент и короткая реплика от SHORT_EMBED_S решаются
+   сравнением с их центроидами (как два голоса микрофона), сегмент на двоих
+   режется по паузе между словами (`assign_turns`), а тени — сегменты, что
+   взяли голос соседа под своим ключом, — и мелкие обрывки решаются заново
+   при каждом новом голосе. Подпись: имя; пока безымянный голос один —
+   «Собеседник»; от двух — «Собеседник N» (N — порядок подтверждения),
+   прежние строки — задним числом.
 
 Ключи голосов несут метку сеанса (`3fa1/sys:3`): новый ассистент в той же
 записи начинает нумерацию заново, а панель держит строки прежнего.
@@ -54,6 +67,7 @@ community-1 в базе голосов не единичной длины (но�
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 from collections import deque
@@ -135,6 +149,51 @@ TWO_VOICES_FLOOR = 0.35
 SHORT_EMBED_S = 1.0
 # Время эмбеддингов для журнала — последние TIMES_KEPT.
 TIMES_KEPT = 2000
+# Голоса собеседников (дорожка sys). Кластер от SYS_VOICE_MIN_S речи — голос
+# собеседника: первый — сразу, следующий — если его центроид на SYS_CHECKS
+# проверках подряд (каждые CHECK_STEP_S речи) ниже SYS_DISTINCT с каждым уже
+# известным голосом. Голоса, чьи центроиды сошлись до SYS_MERGE, сливаются
+# обратно (один человек, разделённый по ошибке). Калибровка T0 — на 15 с:
+# разные люди — до 0.55, один человек — p10 0.70; SYS_MERGE — середина между
+# ними, SYS_DISTINCT ниже неё с запасом: при отборе окон центроиды двух
+# «режимов» одного голоса (другая интонация, шум линии) расходятся сильнее,
+# чем голос на самом деле (синтетика: второй режим с cos 0.7 даёт центроиды
+# ~0.5–0.6). Пока безымянный голос один, подпись — «Собеседник», как раньше;
+# от двух — «Собеседник 1», «Собеседник 2»… (номер — порядок подтверждения;
+# строки до него — задним числом).
+SYS_VOICE_MIN_S = mic_split.LIVE_MERGE_MIN_S
+SYS_DISTINCT = 0.50
+SYS_CHECKS = mic_split.LIVE_CHECKS
+# Порог слияния кластеров собеседников — ниже, чем у микрофона (LIVE_MERGE
+# 0.65), и с базой голосов тоже: один голос, разделённый по ошибке, должен
+# склеиться быстрее (ревью v037: 0.60 → 0.57 — на 40–50 % меньше строк с
+# номером у одного дрейфующего голоса без потерь у похожих людей). Разные
+# люди по T0 — до 0.55, имя при слиянии переходит, только если общий центроид
+# сам его заслуживает (`accept_name`).
+SYS_MERGE = 0.57
+# Разделение одного голоса не держится само (ревью v037, I1): у нового голоса
+# первые SYS_EVIDENCE_S речи копится отношение «сходство сегмента с другим
+# голосом / со своим». Это оценка сходства самих голосов без перекоса от
+# отбора окон (при двух голосах каждый растёт только своими окнами, и
+# центроиды двух «режимов» одного человека расходятся). От SYS_SAME_RATIO на
+# SYS_EVIDENCE_N сегментах — тот же человек, голоса сливаются. Синтетика: два
+# похожих человека (cos 0.5) дают ~0.5, «режимы» одного голоса 0.62–0.7 —
+# выше; 0.6 — граница, при которой похожие люди ещё не сливаются.
+SYS_EVIDENCE_S = 60.0
+SYS_EVIDENCE_N = 8
+SYS_SAME_RATIO = 0.60
+# Сколько последних сегментов собеседников, взявших голос соседа (короткие
+# реплики, сегменты без своего кластера), помнить с эмбеддингом: когда
+# подтверждается новый голос, они решаются заново по голосам.
+SHADOWS_KEPT = 64
+# Смена говорящего внутри сегмента (ASR не поставил точку между репликами):
+# при двух и больше голосах сегмент от SPLIT_MIN_S режется по самой длинной
+# паузе между словами, если окна по SPLIT_WIN_S с двух сторон от неё уверенно
+# (отрыв SPLIT_MARGIN, сходство от TWO_VOICES_FLOOR) — разные голоса. Два окна
+# заменяют эмбеддинг середины: лишний — один на длинный сегмент.
+SPLIT_MIN_S = 2.5
+SPLIT_WIN_S = 1.5
+SPLIT_MARGIN = 0.10
 
 OWNER = "owner"
 ROOM = "room"
@@ -144,6 +203,9 @@ OTHER = "other"  # дорожка собеседников: роли владе�
 ROOM_SPEAKER = "Собеседник рядом"
 # Номер якоря владельца на микрофоне (ключ `mic:owner`).
 OWNER_N = -1
+
+
+_EMPTY = np.zeros(0)
 
 
 def _unit(x: np.ndarray) -> np.ndarray:
@@ -159,6 +221,14 @@ def _vector(value) -> np.ndarray | None:
     if not vec.size or not np.isfinite(vec).all() or not float(np.linalg.norm(vec)):
         return None
     return _unit(vec)
+
+
+_GENERIC = re.compile(r"^(?:Собеседник(?: \d+| рядом)?|Вы)$")
+
+
+def _generic(label: str) -> bool:
+    """Подпись без имени: «Собеседник», «Собеседник N», «Собеседник рядом», «Вы»."""
+    return bool(_GENERIC.match(label or ""))
 
 
 def track_of(key: str) -> str:
@@ -183,6 +253,17 @@ class _Cluster:
     role: str = OWNER
     room_streak: int = 0
     role_checked_s: float = 0.0
+    # Собеседники: номер подтверждённого голоса (1, 2, …) и его «две проверки
+    # подряд»; тень — сегмент, взявший голос соседа (`into`), с эмбеддингом.
+    voice: int | None = None
+    voice_streak: int = 0
+    voice_checked_s: float = 0.0
+    voice_since_s: float = 0.0  # речи у голоса на момент подтверждения
+    number: int | None = None  # номер в подписи «Собеседник N» (только безымянные)
+    own_sum: float = 0.0  # улика различия голосов (`LiveVoices._evidence`)
+    other_sum: float = 0.0
+    evidence: int = 0
+    shadow: bool = False
 
     @property
     def center(self) -> np.ndarray:
@@ -201,7 +282,7 @@ class TrackVoices:
     def __init__(self, track: str, *, prefix: str = "", assign: float = mic_split.LIVE_ASSIGN,
                  margin: float = mic_split.LIVE_MARGIN, merge: float = mic_split.LIVE_MERGE,
                  merge_min_s: float = mic_split.LIVE_MERGE_MIN_S,
-                 max_clusters: int = MAX_CLUSTERS, accept_name=None) -> None:
+                 max_clusters: int = MAX_CLUSTERS, accept_name=None, shadows: bool = False) -> None:
         self.track = track
         self.prefix = prefix
         self.assign_at = assign
@@ -215,6 +296,12 @@ class TrackVoices:
         self._recent: deque = deque(maxlen=RECENT)
         self._voiced = 0
         self._next = 0
+        # Тени (собеседники): сегмент без своего кластера с эмбеддингом — свой
+        # ключ, слитый в кластер соседа; решается заново по голосам (`shadows()`).
+        self.keep_shadows = shadows
+        self.shades: dict[int, _Cluster] = {}  # отдельно: `live()` их не перебирает
+        self._shadows: deque = deque(maxlen=SHADOWS_KEPT)
+        self._voice_next = 1
 
     def key(self, n: int) -> str:
         return f"{self.prefix}{self.track}:{'owner' if n == OWNER_N else n}"
@@ -229,9 +316,14 @@ class TrackVoices:
             return OWNER_N
         return int(tail) if tail.isdigit() else None
 
+    def get(self, n: int) -> _Cluster | None:
+        """Кластер или тень с номером `n`."""
+        c = self.clusters.get(n)
+        return c if c is not None else self.shades.get(n)
+
     def resolve(self, n: int) -> _Cluster:
         """Кластер, в который в итоге слит кластер `n` (сам он, если не слит)."""
-        c = self.clusters[n]
+        c = self.get(n)
         while c.into is not None:
             c = self.clusters[c.into]
         return c
@@ -243,6 +335,60 @@ class TrackVoices:
 
     def owner(self) -> _Cluster | None:
         return self.clusters.get(OWNER_N)
+
+    def voices(self) -> list[_Cluster]:
+        """Подтверждённые голоса дорожки (у них номер), по номеру."""
+        return sorted((c for c in self.live() if c.voice is not None), key=lambda c: c.voice)
+
+    def confirm(self, c: _Cluster) -> int:
+        """Кластер `c` — новый голос дорожки: следующий номер."""
+        c.voice = self._voice_next
+        self._voice_next += 1
+        c.voice_since_s = c.seconds
+        return c.voice
+
+    def shadows(self) -> list[_Cluster]:
+        """Последние тени (сегменты с голосом соседа), старые — первыми."""
+        return [self.shades[n] for n in self._shadows]
+
+    def shade(self, emb: np.ndarray, start: float, end: float, gap: float) -> str | None:
+        """Сегмент с эмбеддингом, не решённый сам: голос соседа (пауза до
+        `gap`), но под своим ключом — его можно решить заново задним числом."""
+        n = self._shade(emb, max(0.0, float(end) - float(start)), start, gap)
+        if n is None:
+            return None
+        self._recent.append((float(start), float(end), n))
+        return self.key(n)
+
+    def _shade(self, emb: np.ndarray, seconds: float, start: float, gap: float) -> int | None:
+        prev = self._previous(start, gap)
+        if prev is None:
+            return None
+        n = self._next
+        self._next += 1
+        self.shades[n] = _Cluster(n, emb * max(seconds, 1e-3), seconds, into=prev, shadow=True)
+        self._remember(n)
+        return n
+
+    def orphan(self, emb: np.ndarray, start: float, end: float, near: _Cluster) -> str:
+        """Тень без соседа по времени: голос `near` (ближайший из известных),
+        но под своим ключом — решится заново, как и другие тени."""
+        seconds = max(0.0, float(end) - float(start))
+        n = self._next
+        self._next += 1
+        self.shades[n] = _Cluster(n, emb * max(seconds, 1e-3), seconds, into=near.n, shadow=True)
+        self._remember(n)
+        self._recent.append((float(start), float(end), n))
+        return self.key(n)
+
+    def _remember(self, n: int) -> None:
+        """Тень — в последние SHADOWS_KEPT; вытесненной эмбеддинг не нужен
+        (решаются заново только последние): остаётся лишь её `into`."""
+        if len(self._shadows) == self._shadows.maxlen:
+            old = self.shades.get(self._shadows[0])
+            if old is not None:
+                old.total = _EMPTY
+        self._shadows.append(n)
 
     def observe(self, emb: np.ndarray | None, start: float, end: float) -> str | None:
         seconds = max(0.0, float(end) - float(start))
@@ -307,10 +453,12 @@ class TrackVoices:
             if old is not None:
                 old.retired = True
                 return self._new(emb, seconds)
+        if self.keep_shadows:
+            return self._shade(emb, seconds, start, INHERIT_GAP_S)
         return self._previous(start, INHERIT_GAP_S)
 
     def _recyclable(self) -> _Cluster | None:
-        small = [c for c in self.live() if c.name is None and c.role != ROOM
+        small = [c for c in self.live() if c.name is None and c.role != ROOM and c.voice is None
                  and c.seconds < mic_split.LIVE_MIN_SPEECH_S]
         return min(small, key=lambda c: c.n) if small else None
 
@@ -344,6 +492,10 @@ class TrackVoices:
         keep.seconds += gone.seconds
         if keep.name is None and gone.name is not None:
             keep.name, keep.named_s = gone.name, gone.named_s
+        if gone.voice is not None and (keep.voice is None or gone.voice < keep.voice):
+            keep.voice = gone.voice  # один голос под двумя номерами — меньший
+        if gone.number is not None and (keep.number is None or gone.number < keep.number):
+            keep.number = gone.number
         keep.role_checked_s = 0.0  # роль пересчитает ближайшая проверка по новому центроиду
         gone.into = keep.n
         return keep
@@ -386,9 +538,10 @@ class LiveVoices:
     `embed(clip) -> вектор` — эмбеддер (в тестах — фальшивый), `base` — база
     голосов {имя: [векторы]}, `owner` — образцы владельца
     (meet.owner_voice), `name_threshold` — T_live. `defaults` — подпись
-    дорожки без имени («Собеседник», имя владельца). Без базы собеседники не
-    кластеризуются (называть некем), без образца владельца или с `mic=False`
-    — микрофон. `session` — метка ключей (по умолчанию случайная)."""
+    дорожки без имени («Собеседник», имя владельца). Собеседники делятся по
+    голосам и без базы («Собеседник 1», «Собеседник 2»), база даёт имена; без
+    образца владельца или с `mic=False` микрофон не делится. `session` —
+    метка ключей (по умолчанию случайная)."""
 
     def __init__(self, embed, base, owner, *, name_threshold: float,
                  defaults: dict | None = None, mic: bool = True, device: str | None = None,
@@ -410,6 +563,10 @@ class LiveVoices:
         self.session = session or secrets.token_hex(4)
         self._tracks: dict[str, TrackVoices] = {}
         self._shown: dict[str, str] = {}  # подпись ключа в уже выданных строках
+        # Заметки агенту о смене подписей (`drain_notes`) и что он уже знает:
+        # подписи голосов собеседников с номерами (пусто — нумерации нет).
+        self._notes: list[str] = []
+        self._told: tuple[str, ...] = ()
         self._embed_error: str | None = None
         # Микрофон: секунды с эмбеддингом и из них похожие на образец; владелец
         # найден (§2.4) — иначе микрофон не делится.
@@ -420,10 +577,13 @@ class LiveVoices:
         self._missing_logged = False
         self._mic_run = 0  # сегменты владельца подряд (экономия)
         self._sys_run = 0  # сегменты названного собеседника подряд (экономия)
-        self.stats = {"embeds": 0, "embed_s": 0.0, "times": deque(maxlen=TIMES_KEPT), "skipped": 0}
+        self.stats = {"embeds": 0, "embed_s": 0.0, "times": deque(maxlen=TIMES_KEPT), "skipped": 0,
+                      "turns": 0}
 
     def active(self, track: str) -> bool:
-        return self._mic if track == "mic" else bool(self._base)
+        # Собеседники делятся по голосам всегда (имена — только при базе):
+        # иначе звонок с несколькими людьми — один «Собеседник».
+        return self._mic if track == "mic" else True
 
     def _default(self, track: str) -> str:
         return self.defaults.get(track, self.defaults["sys"])
@@ -434,16 +594,22 @@ class LiveVoices:
     def _track(self, track: str) -> TrackVoices:
         tv = self._tracks.get(track)
         if tv is None:
-            tv = self._tracks[track] = TrackVoices(track, prefix=f"{self.session}/",
-                                                   accept_name=self._name_holds)
+            other = track != "mic"
+            tv = self._tracks[track] = TrackVoices(
+                track, prefix=f"{self.session}/", accept_name=self._name_holds, shadows=other,
+                merge=SYS_MERGE if other else mic_split.LIVE_MERGE)
         return tv
 
-    def assign(self, track: str, clip: np.ndarray, start: float, end: float) -> Assigned:
+    def assign(self, track: str, clip: np.ndarray, start: float, end: float,
+               emb: np.ndarray | None = None) -> Assigned:
         """Голос сегмента `clip` (16 кГц) дорожки `track` → ключ, подпись на
-        сейчас и роль (для дублей микрофона)."""
+        сейчас и роль (для дублей микрофона). `emb` — эмбеддинг уже посчитан
+        (собеседники, `assign_turns`)."""
         if not self.active(track):
             return self._plain(track)
         tv = self._track(track)
+        if track != "mic":
+            return self._assign_other(track, tv, clip, start, end, emb)
         seconds = max(0.0, float(end) - float(start))
         emb = None
         if len(clip) >= EMBED_MIN_S * SAMPLE_RATE:
@@ -488,6 +654,118 @@ class LiveVoices:
         else:
             key = tv.observe(emb, start, end)
         return self._assigned(track, tv, key, emb)
+
+    def _assign_other(self, track: str, tv: TrackVoices, clip: np.ndarray, start: float, end: float,
+                      emb: np.ndarray | None) -> Assigned:
+        """Сегмент собеседников. Пока голос один — как раньше (ближайший
+        кластер или новый); от двух подтверждённых — к тому голосу, к которому
+        он ближе с отрывом (`_pick_voice`), как два голоса микрофона, и
+        короткие реплики от SHORT_EMBED_S — тоже. Сегмент, который сам не
+        решился (короткий, не похож ни на кого), берёт голос соседа под своим
+        ключом-тенью: подтвердится новый голос — тень решится заново."""
+        seconds = max(0.0, float(end) - float(start))
+        short = seconds < EMBED_MIN_S
+        if emb is None:
+            if len(clip) >= EMBED_MIN_S * SAMPLE_RATE:
+                short = False
+                if self._skip(track, tv, start, seconds):
+                    self.stats["skipped"] += 1
+                else:
+                    emb = self._embedding(self._middle(clip))
+            elif len(clip) >= SHORT_EMBED_S * SAMPLE_RATE:
+                short = True
+                emb = self._embedding(clip)
+        if emb is None:
+            key = tv.observe(None, start, end)
+        else:
+            pick = self._pick_voice(tv, emb)
+            if pick is not None and not short and float(emb @ pick.center) < tv.assign_at:
+                # Длинный сегмент, похожий на голос лишь отчасти, — может быть
+                # третьим человеком: свой кластер (прежний путь), чтобы его
+                # голос мог набраться; подпись — по ближайшему голосу (`speaker`).
+                pick = None
+            if pick is not None:
+                # Центроид растёт только от длинных сегментов (они и уверенные).
+                key = tv.attach(pick, emb, start, end, add=not short)
+                if not short:
+                    self._evidence(tv, pick, emb)
+            elif short:
+                key = tv.shade(emb, start, end, SHORT_INHERIT_GAP_S)
+                voices = tv.voices()
+                if key is None and len(voices) >= 2:
+                    # Соседа по времени нет, а голоса уже различаются: голос
+                    # ближайшего, под своим ключом (подпись без номера рядом с
+                    # «Собеседник 1/2» читалась бы как ещё один человек).
+                    key = tv.orphan(emb, start, end, max(voices, key=lambda c: float(emb @ c.center)))
+            else:
+                key = tv.observe(emb, start, end)
+        return self._assigned(track, tv, key, emb)
+
+    def _pick_voice(self, tv: TrackVoices, emb: np.ndarray, margin: float | None = None) -> _Cluster | None:
+        """Голос собеседника по подтверждённым (от двух): ближайший с отрывом
+        от второго не меньше `margin` (LIVE_MARGIN) и сходством от
+        TWO_VOICES_FLOOR; иначе None (решает прежний путь)."""
+        voices = tv.voices()
+        if len(voices) < 2:
+            return None
+        scored = sorted(((float(emb @ c.center), c.n) for c in voices), reverse=True)
+        (best, n), (second, _) = scored[0], scored[1]
+        if best >= TWO_VOICES_FLOOR and best - second >= (self.margin if margin is None else margin):
+            return tv.clusters[n]
+        return None
+
+    def _evidence(self, tv: TrackVoices, pick: _Cluster, emb: np.ndarray) -> None:
+        """Улика «это другой человек» у голоса: сходство его длинных сегментов
+        со своим центроидом и с ближайшим другим голосом (SYS_EVIDENCE_S речи
+        после подтверждения). Их отношение — оценка сходства самих голосов, без
+        перекоса от отбора окон: при разделении одного голоса на два «режима»
+        центроиды расходятся (каждый растёт только своими окнами), а отношение
+        остаётся высоким."""
+        if pick.seconds - pick.voice_since_s > SYS_EVIDENCE_S:
+            return
+        others = [float(emb @ c.center) for c in tv.voices() if c is not pick]
+        if others:
+            pick.own_sum += float(emb @ pick.center)
+            pick.other_sum += max(others)
+            pick.evidence += 1
+
+    def assign_turns(self, track: str, clip: np.ndarray, start: float, end: float,
+                     cuts=()) -> list[tuple[float, float, Assigned]]:
+        """Как `assign`, но сегмент собеседников с двумя голосами режется на
+        реплики: `cuts` — [(время, пауза)] границ между словами сегмента.
+        Режется по самой длинной паузе (от SHORT_EMBED_S с обеих сторон), если
+        окна SPLIT_WIN_S слева и справа от неё уверенно разных голосов (см.
+        SPLIT_*). → [(начало, конец, Assigned)] — одна или две части."""
+        whole = [(start, end, None)]
+        if track == "mic" or not self.active(track) or float(end) - float(start) < SPLIT_MIN_S:
+            return self._parts(track, clip, whole)
+        tv = self._track(track)
+        fits = [(gap, t) for t, gap in cuts
+                if t - start >= SHORT_EMBED_S and end - t >= SHORT_EMBED_S]
+        if len(tv.voices()) < 2 or not fits:
+            return self._parts(track, clip, whole)
+        _, cut = max(fits)
+        i = int(round((cut - start) * SAMPLE_RATE))
+        win = int(SPLIT_WIN_S * SAMPLE_RATE)
+        left = self._embedding(clip[max(0, i - win):i])
+        right = self._embedding(clip[i:i + win])
+        if left is None or right is None:
+            return self._parts(track, clip, whole)
+        a = self._pick_voice(tv, left, SPLIT_MARGIN)
+        b = self._pick_voice(tv, right, SPLIT_MARGIN)
+        if a is None or b is None or a is b:
+            # Один голос: два окна вместо середины.
+            return self._parts(track, clip, [(start, end, _unit(left + right))])
+        self.stats["turns"] += 1
+        return self._parts(track, clip, [(start, cut, left), (cut, end, right)])
+
+    def _parts(self, track: str, clip: np.ndarray, parts: list) -> list[tuple[float, float, Assigned]]:
+        origin = parts[0][0]
+        out = []
+        for a, b, emb in parts:
+            lo, hi = int(round((a - origin) * SAMPLE_RATE)), int(round((b - origin) * SAMPLE_RATE))
+            out.append((a, b, self.assign(track, clip[lo:hi], a, b, emb=emb)))
+        return out
 
     def _assigned(self, track: str, tv: TrackVoices, key: str | None, emb: np.ndarray | None) -> Assigned:
         if key is None:
@@ -561,7 +839,8 @@ class LiveVoices:
             self._mic_run += 1
             return self._mic_run % OWNER_FAST_EVERY != 0
         prev = tv.previous(start, PINNED_GAP_S)
-        if prev is None or prev.name is None:
+        if prev is None or prev.name is None or len(tv.voices()) >= 2:
+            # Несколько голосов — реплика встык бывает и чужой: каждый сегмент.
             self._sys_run = 0
             return False
         self._sys_run += 1
@@ -588,7 +867,7 @@ class LiveVoices:
     def _cluster(self, key: str) -> tuple[TrackVoices, _Cluster] | None:
         tv = self._tracks.get(track_of(key))
         n = tv.number(key) if tv is not None else None
-        if n is None or n not in tv.clusters:
+        if n is None or tv.get(n) is None:
             return None
         return tv, tv.resolve(n)
 
@@ -612,21 +891,92 @@ class LiveVoices:
         _, c = found
         if track == "mic":
             return (c.name or ROOM_SPEAKER) if self._is_room(c) else self._default(track)
-        return c.name or self._default(track)
+        if c.name:
+            return c.name
+        tv = found[0]
+        if c.voice is None and not c.retired:
+            # Обрывок, ещё не голос: при двух голосах — подпись того, к кому
+            # он уверенно ближе (свой кластер он сохраняет: может оказаться
+            # третьим человеком, тогда строки перейдут к нему).
+            near = self._pick_voice(tv, c.center)
+            if near is not None:
+                c = near
+                if c.name:
+                    return c.name
+        if c.voice is not None and self._numbered(tv):
+            self._number(tv)
+            return f"{self._default(track)} {c.number}"
+        return self._default(track)
+
+    @staticmethod
+    def _number(tv: TrackVoices) -> None:
+        """Номера безымянным голосам — в порядке подтверждения, каждому
+        наименьший свободный: после слияния ошибочно разделённого голоса и
+        рядом с голосом из базы номера не пропускаются. Голос с именем номер
+        отдаёт."""
+        voices = tv.voices()
+        for c in voices:
+            if c.name is not None:
+                c.number = None
+        used = {c.number for c in voices if c.number is not None}
+        for c in voices:
+            if c.name is None and c.number is None:
+                n = 1
+                while n in used:
+                    n += 1
+                c.number = n
+                used.add(n)
+
+    @staticmethod
+    def _numbered(tv: TrackVoices) -> bool:
+        """Подписи собеседников с номером — от двух безымянных голосов."""
+        return sum(1 for c in tv.voices() if c.name is None) >= 2
 
     def speakers(self) -> dict[str, str]:
         """Все выданные голоса → подпись на сейчас."""
         return {key: self.speaker(key) for key in self._shown}
 
     def drain(self) -> list[tuple[str, str]]:
-        """Переименования с прошлого вызова: [(ключ, новая подпись)]."""
+        """Переименования с прошлого вызова: [(ключ, новая подпись)]. Заодно
+        копит заметки агенту (`drain_notes`)."""
         out = []
+        named = {}
         for key, shown in self._shown.items():
             now = self.speaker(key)
             if now != shown:
                 self._shown[key] = now
                 out.append((key, now))
+                if track_of(key) != "mic" and not _generic(now) and _generic(shown):
+                    named.setdefault(now, shown)
+        self._note_changes(named)
         return out
+
+    def drain_notes(self) -> list[str]:
+        """Короткие заметки агенту, что подписи собеседников уточнились: агент
+        видит строку с подписью на момент выдачи, а она меняется задним числом."""
+        out, self._notes = self._notes, []
+        return out
+
+    def _note_changes(self, named: dict) -> None:
+        tv = self._tracks.get("sys")
+        labels = ()
+        if tv is not None and self._numbered(tv):
+            self._number(tv)
+            labels = tuple(f"{self._default('sys')} {c.number}"
+                           for c in sorted(tv.voices(), key=lambda c: c.number or 0) if c.name is None)
+        head = "Meet уточнил говорящих: "
+        if labels != self._told:
+            if labels and not self._told:
+                self._notes.append(head + f"в звонке различаются голоса — {', '.join(labels)}; "
+                                   f"подписи прежних реплик («{self._default('sys')}») могли смениться.")
+            elif labels:
+                self._notes.append(head + f"голоса звонка теперь — {', '.join(labels)}.")
+            else:
+                self._notes.append(head + "голоса звонка оказались одним человеком — снова "
+                                   f"«{self._default('sys')}».")
+            self._told = labels
+        for name, was in named.items():
+            self._notes.append(head + f"«{was}» — это {name}.")
 
     def role(self, key: str | None) -> str:
         """Роль голоса на сейчас (без сегмента): owner | room | unsure | other."""
@@ -722,6 +1072,8 @@ class LiveVoices:
             elif was and not self._present:
                 self._log("голоса: голос владельца больше не найден — микрофон снова весь владельца")
             self._absorb_small(tv)
+        else:
+            self._review_voices(tv)
         for c in tv.live():
             if c.into is not None:
                 continue  # слит на этом же обходе
@@ -730,6 +1082,103 @@ class LiveVoices:
                 if not self._is_room(c):
                     continue
             self._check_name(tv, c)
+
+    def _review_voices(self, tv: TrackVoices) -> None:
+        """Голоса собеседников: подтвердить новые (`_check_voice`), влить в
+        известные голоса похожие на них кластеры, а при новом голосе — решить
+        заново тени и мелкие кластеры. Их строки получают подпись задним
+        числом (`drain`)."""
+        # Слияние близких — на каждом обходе: при двух голосах сегменты идут
+        # мимо `observe` (и его счётчика MERGE_EVERY), а ошибочно разделённый
+        # голос должен склеиться, как только центроиды сойдутся.
+        tv.merge_close()
+        self._undo_splits(tv)
+        self._pool(tv)
+        added = False
+        for c in tv.live():
+            if c.into is None and self._check_voice(tv, c):
+                added = True
+        voices = tv.voices()
+        if len(voices) < 2:
+            # Голос один: подпись у всех кластеров та же («Собеседник»), а
+            # вливать без второго голоса для сравнения — копить в нём чужие
+            # обрывки, пока второй голос не наберётся.
+            return
+        for c in tv.live():
+            if c.voice is not None or c.name is not None:
+                continue
+            scored = sorted(((float(c.center @ v.center), v.n) for v in voices), reverse=True)
+            (best, n), (second, _) = scored[0], scored[1]
+            if best >= tv.assign_at and best - second >= self.margin:
+                # Тот же голос (другая интонация, шум линии). Похожий лишь
+                # отчасти не вливается — это может быть третий человек, чей
+                # голос ещё набирается; подпись ему и так даёт `speaker`.
+                tv.absorb(tv.clusters[n], c)
+        if added:
+            for sh in tv.shadows():
+                pick = self._pick_voice(tv, sh.center)
+                if pick is not None:
+                    sh.into = pick.n
+
+    @staticmethod
+    def _undo_splits(tv: TrackVoices) -> None:
+        """Голос, чьи сегменты почти так же похожи на другой голос, как на
+        свой (отношение от SYS_SAME_RATIO по SYS_EVIDENCE_N сегментам), — тот же
+        человек: сливается с ближайшим. Его строки задним числом — общая
+        подпись."""
+        for c in tv.voices():
+            if c.into is not None or c.evidence < SYS_EVIDENCE_N or c.own_sum <= 0:
+                continue
+            if c.other_sum / c.own_sum < SYS_SAME_RATIO:
+                continue
+            others = [o for o in tv.voices() if o is not c]
+            if not others:
+                return
+            near = max(others, key=lambda o: float(o.center @ c.center))
+            kept = tv.merge(near, c)
+            kept.own_sum = kept.other_sum = 0.0
+            kept.evidence = 0
+
+    @staticmethod
+    def _pool(tv: TrackVoices) -> None:
+        """Обрывки одного голоса — вместе: окна одного человека похожи друг на
+        друга слабее, чем на его центроид (v037: окно с окном ~0.5, ниже
+        LIVE_ASSIGN), и голос, который ещё не подтверждён, дробится на
+        кластеры по 2–5 с, ни один из которых не набирает SYS_VOICE_MIN_S.
+        Неподтверждённые безымянные кластеры, похожие друг на друга не меньше,
+        чем сегмент на свой кластер (LIVE_ASSIGN), сливаются."""
+        while True:
+            loose = [c for c in tv.live() if c.voice is None and c.name is None]
+            pairs = [(float(a.center @ b.center), a, b)
+                     for i, a in enumerate(loose) for b in loose[i + 1:]]
+            pairs = [p for p in pairs if p[0] >= tv.assign_at]
+            if not pairs:
+                return
+            _, a, b = max(pairs, key=lambda p: p[0])
+            tv.merge(a, b)
+
+    def _check_voice(self, tv: TrackVoices, c: _Cluster) -> bool:
+        """Кластер собеседников — новый голос? → подтверждён сейчас. Голос с
+        именем из базы — человек и так (имя прошло свои проверки)."""
+        if c.voice is not None:
+            return False
+        if c.name is not None:
+            tv.confirm(c)
+            return True
+        if c.seconds < SYS_VOICE_MIN_S or c.seconds - c.voice_checked_s < CHECK_STEP_S:
+            return False
+        c.voice_checked_s = c.seconds
+        known = tv.voices()
+        if known:
+            near = max(float(c.center @ v.center) for v in known)
+            c.voice_streak = c.voice_streak + 1 if near < SYS_DISTINCT else 0
+            if c.voice_streak < SYS_CHECKS:
+                return False
+        n = tv.confirm(c)
+        if n > 1:
+            self._log(f"голоса: у собеседников новый голос — всего {len(tv.voices())} "
+                      f"({c.seconds:.0f} с речи)")
+        return True
 
     def _absorb_small(self, tv: TrackVoices) -> None:
         """Мелкие кластеры микрофона (меньше ROOM_MIN_S речи — роли им не
@@ -832,6 +1281,8 @@ class LiveVoices:
         named = sum(1 for tv in self._tracks.values() for c in tv.live() if c.name)
         rooms = sum(1 for c in self._tracks["mic"].live() if self._is_room(c)) \
             if "mic" in self._tracks else 0
+        others = len(self._tracks["sys"].voices()) if "sys" in self._tracks else 0
         return (f"голоса живого режима: эмбеддингов {st['embeds']}, {st['embed_s']:.1f} с "
                 f"(в среднем {1000 * st['embed_s'] / st['embeds']:.0f} мс, p90 {1000 * p90:.0f} мс), "
-                f"пропущено {st['skipped']}, кластеров {clusters}, с именем {named}, рядом {rooms}")
+                f"пропущено {st['skipped']}, кластеров {clusters}, с именем {named}, рядом {rooms}, "
+                f"голосов собеседников {others}, реплик разрезано {st['turns']}")
