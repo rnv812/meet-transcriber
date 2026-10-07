@@ -100,6 +100,13 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_ask(body) / live_task(body)      прокси к /ask и /task ассистента
     live_hint(body) -> dict               закрепить, открепить, скрыть, вернуть подсказку
     live_events(last_event_id) -> stream  поток ассистента: get(timeout), close()
+    live_chat(params) / live_chat_post(body)  чат агента-участника идущей встречи
+    live_chat_paste(raw, type, name)      вставленная картинка (сырое тело до 10 МБ)
+    live_chat_attach(body)                файл или папка с диска {"path"}
+    live_chat_click(id, body) / live_chat_react(id, body) / live_chat_stop(body)
+    agent_frequency(body)                 «Как часто писать»: в настройки и агенту
+    recording_chat(id) -> dict            чат записи после встречи (+ legacy)
+    continue_chat(id, body) -> dict       «Продолжить разговор»: сообщение и задача chat
 """
 
 import json
@@ -378,7 +385,7 @@ def _make_handler(server: ControlServer):
             origin = self.headers.get("Origin")
             if origin and _origin_allowed(origin):
                 self.send_header("Access-Control-Allow-Origin", origin)
-                self.send_header("Access-Control-Allow-Headers", "authorization,content-type")
+                self.send_header("Access-Control-Allow-Headers", "authorization,content-type,x-file-name")
                 self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
             self.end_headers()
             if body:
@@ -859,6 +866,15 @@ _ROUTES = {
     ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
     ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),
     ("POST", "/live/hint"): lambda h, p: _server_of(h).state.live_hint(h._body()),
+    # Чат агента-участника идущей встречи (прокси к ребёнку; V4, задача 6).
+    ("GET", "/live/chat"): lambda h, p: _server_of(h).state.live_chat(
+        {k: v[0] for k, v in p.items() if k != "token" and v}),
+    ("POST", "/live/chat"): lambda h, p: _server_of(h).state.live_chat_post(h._body()),
+    ("POST", "/live/chat/paste"): lambda h, p: _server_of(h).state.live_chat_paste(
+        h._raw_body(), h.headers.get("Content-Type"), h.headers.get("X-File-Name")),
+    ("POST", "/live/chat/attach"): lambda h, p: _server_of(h).state.live_chat_attach(h._body()),
+    ("POST", "/live/chat/stop"): lambda h, p: _server_of(h).state.live_chat_stop(h._body()),
+    ("PUT", "/agent/frequency"): lambda h, p: _server_of(h).state.agent_frequency(h._body()),
     ("GET", "/export/preview"): lambda h, p: _server_of(h).state.export_preview(
         {k: v[0] for k, v in p.items() if k != "token" and v}
     ),
@@ -928,6 +944,16 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.ask(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),
      lambda h, p, rid: _server_of(h).state.qa(unquote(rid))),
+    # Чат ассистента записи после встречи: лента (+ legacy у старых встреч) и
+    # «Продолжить разговор» (сообщение в журнал и задача chat).
+    ("GET", re.compile(r"^/recordings/([^/]+)/chat$"),
+     lambda h, p, rid: _server_of(h).state.recording_chat(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/chat$"),
+     lambda h, p, rid: _server_of(h).state.continue_chat(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/live/chat/([^/]+)/click$"),
+     lambda h, p, mid: _server_of(h).state.live_chat_click(unquote(mid), h._body())),
+    ("POST", re.compile(r"^/live/chat/([^/]+)/react$"),
+     lambda h, p, mid: _server_of(h).state.live_chat_react(unquote(mid), h._body())),
     # Анализ встречи (analysis.json): состояние и разметка; POST — поставить заново.
     # У POST итогов, вопроса, анализа, улучшения и названия тело {"provider": …} —
     # модель, выбранная человеком для этого действия (только из включённых);

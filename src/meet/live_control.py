@@ -63,6 +63,7 @@ import http.client
 import json
 import re
 import os
+import secrets
 import queue
 import socket
 import subprocess
@@ -117,6 +118,10 @@ STOPPED_MARK = "Остановлено:"  # run_assist печатает посл
 FINALIZE_GRACE_S = 2.0
 STOP_ATTEMPTS = 2  # /stop не дошёл — ещё одна попытка, потом только дедлайн
 TAP_TOKEN_ENV = "MEET_TAP_TOKEN"
+# Токен доверенного вызывающего для маршрутов чата ребёнка (`POST /chat/attach`
+# — путь к файлу): ребёнку в окружении, в заголовке `X-Meet-Token` — от нас.
+CONTROL_TOKEN_ENV = "MEET_ASSIST_TOKEN"
+CONTROL_TOKEN_HEADER = "X-Meet-Token"
 # Чем кончился последний запуск (`status()["ended_by"]`): остановилась запись,
 # к которой ассистент был подключён; его выключили («Выключить ассистента»);
 # упал сам; остановили обычный ассистент. Трей по этому молчит, когда
@@ -134,8 +139,12 @@ POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
 RELAY_THREAD = "meet-live-relay"
-# `voices` — подписи голосов задним числом и спрятанные дубли (meet.assist.web).
-RELAYED_EVENTS = ("state", "line", "qa", "qa_partial", "voices")
+# `voices` — подписи голосов задним числом и спрятанные дубли (meet.assist.web);
+# `chat_snapshot`, `chat`, `chat_partial`, `agent` — чат агента-участника (V4).
+RELAYED_EVENTS = ("state", "line", "qa", "qa_partial", "voices",
+                  "chat_snapshot", "chat", "chat_partial", "agent")
+# Разбор файла, приложенного к чату (`/chat/attach`): у ребёнка до 90 с.
+ATTACH_TIMEOUT_S = 100.0
 ERROR_MAX_CHARS = 300
 # Быстрые действия вопросов (`meet.assist.qa.QUICK`): «Что я пропустил?»,
 # «Какие решения уже приняты?», «Что мне ответить?», «Кратко за 1 минуту».
@@ -469,6 +478,8 @@ class LiveControl:
         self.bus = bus
         self._spawn = spawn or _spawn_process
         self._kill = kill or _kill_tree
+        # Токен доверенного вызывающего для чата ребёнка (на жизнь резидента).
+        self._control_token = secrets.token_urlsafe(24)
         self._log = log or (lambda message: None)
         self._start_timeout = start_timeout
         self._stop_timeout = stop_timeout
@@ -729,9 +740,10 @@ class LiveControl:
         return argv
 
     def _spawn_with(self, argv: list[str], log_file, attach: dict | None):
-        if attach is None:
-            return self._spawn(argv, log_file)
-        return self._spawn(argv, log_file, {TAP_TOKEN_ENV: attach["server"].token})
+        env = {CONTROL_TOKEN_ENV: self._control_token}
+        if attach is not None:
+            env[TAP_TOKEN_ENV] = attach["server"].token
+        return self._spawn(argv, log_file, env)
 
     def adopt_orphan(self) -> bool:
         """Старт резидента: ребёнок прошлого (умершего жёстко) резидента ещё
@@ -1169,11 +1181,23 @@ class LiveControl:
             return self._port
 
     @staticmethod
-    def _request(port: int, path: str, payload: dict, timeout: float) -> dict:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def _request(port: int, path: str, payload: dict | None, timeout: float, *,
+                 method: str = "POST", raw: bytes | None = None,
+                 content_type: str = "application/json", headers: dict | None = None) -> dict:
+        """Запрос к ребёнку: JSON (`payload`) или сырое тело (`raw`); ответ —
+        JSON. 4xx — LiveError с текстом ребёнка, остальное — RuntimeError."""
+        if raw is not None:
+            body = raw
+        elif payload is not None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        else:
+            body = None
         req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body,
-                                     method="POST")
-        req.add_header("Content-Type", "application/json")
+                                     method=method)
+        if body is not None:
+            req.add_header("Content-Type", content_type)
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 raw = response.read().decode("utf-8")
@@ -1208,6 +1232,50 @@ class LiveControl:
     def task(self, text: str) -> dict:
         self._request(self._active_port(), "/task", {"task": text}, REQUEST_TIMEOUT_S)
         return {"ok": True}
+
+    # --- чат агента-участника (V4) ---------------------------------------
+
+    def chat(self, limit: int | None = None) -> dict:
+        """Лента чата (`GET /chat`): `{"messages", "seq", "agent", "partial"}`."""
+        path = "/chat" if limit is None else f"/chat?limit={int(limit)}"
+        return self._request(self._active_port(), path, None, REQUEST_TIMEOUT_S, method="GET")
+
+    def chat_post(self, payload: dict) -> dict:
+        """Сообщение пользователя (`POST /chat`, ответ сразу — 202)."""
+        return self._request(self._active_port(), "/chat", payload, REQUEST_TIMEOUT_S)
+
+    def chat_paste(self, data: bytes, content_type: str, name: str | None = None) -> dict:
+        """Вставленная картинка — тем же телом ребёнку (`POST /chat/paste`)."""
+        from urllib.parse import quote
+
+        headers = {"X-File-Name": quote(name, safe="")} if name else {}
+        return self._request(self._active_port(), "/chat/paste", None, ATTACH_TIMEOUT_S,
+                             raw=data, content_type=content_type, headers=headers)
+
+    def chat_attach(self, path: str) -> dict:
+        """Файл или папка с диска (`POST /chat/attach`, с токеном доверенного
+        вызывающего); разбор — у ребёнка, до ATTACH_TIMEOUT_S."""
+        return self._request(self._active_port(), "/chat/attach", {"path": path},
+                             ATTACH_TIMEOUT_S,
+                             headers={CONTROL_TOKEN_HEADER: self._control_token})
+
+    def chat_click(self, mid: str, payload: dict) -> dict:
+        return self._request(self._active_port(), f"/chat/{mid}/click", payload,
+                             REQUEST_TIMEOUT_S)
+
+    def chat_react(self, mid: str, payload: dict) -> dict:
+        return self._request(self._active_port(), f"/chat/{mid}/react", payload,
+                             REQUEST_TIMEOUT_S)
+
+    def chat_stop(self, payload: dict) -> dict:
+        return self._request(self._active_port(), "/chat/stop", payload, REQUEST_TIMEOUT_S)
+
+    def agent_frequency(self, key: str) -> dict:
+        """«Как часто писать» — агенту идущей встречи; в настройки сохраняет
+        резидент сам (`persist: false`)."""
+        return self._request(self._active_port(), "/agent/frequency",
+                             {"frequency": key, "persist": False}, REQUEST_TIMEOUT_S,
+                             method="PUT")
 
     def open_events(self, last_event_id: str | None = None) -> "LiveStream":
         """Подписка на поток ассистента для ретрансляции клиенту панели."""

@@ -191,6 +191,20 @@ KB_EXCLUDE_DEFAULT = ("Личное/", ".trash/")
 HINTS_MODELS = ("agent", "fast")
 # «Как часто писать» агента-участника (0.3.6): реже / обычно / чаще.
 ASSIST_FREQUENCIES = ("less", "normal", "more")
+# «Как часто писать»: ключ настроек → подпись, которую видят агент и окно
+# (`participant_prompts.FREQUENCIES`). Обратное — `frequency_key`.
+FREQUENCY_LABELS = {"less": "реже", "normal": "обычно", "more": "чаще"}
+
+
+def frequency_key(value) -> str | None:
+    """Ключ `assist.frequency` по ключу (`more`) или подписи («чаще»), без
+    учёта регистра и пробелов по краям; иное — None."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if text in FREQUENCY_LABELS:
+        return text
+    return next((key for key, label in FREQUENCY_LABELS.items() if label == text), None)
 # Распознавание живого режима: `auto` — GigaAM короткими окнами, если язык
 # русский и модель GigaAM скачана (иначе Whisper); `whisper` — всегда Whisper.
 LIVE_ASR = ("auto", "whisper")
@@ -1001,7 +1015,9 @@ class Assist:
     «Спросить» выключены (сводка остаётся); выключен — как в 0.3.5. По
     умолчанию выключен, пока в окне нет чата ассистента (задача 7).
     `frequency` — «Как часто писать»: `less` / `normal` / `more` (по
-    умолчанию «чаще» — активное участие)."""
+    умолчанию «чаще» — активное участие). «Только сводка» (`activity:
+    summary`) выключает и агента-участника (`participant_on`): человек
+    просил не писать ему во время встречи."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -1021,6 +1037,11 @@ class Assist:
     kb_exclude: tuple[str, ...] = KB_EXCLUDE_DEFAULT
     participant: bool = False
     frequency: str = "more"
+
+    @property
+    def participant_on(self) -> bool:
+        """Агент-участник во время встречи: включён и не «Только сводка»."""
+        return bool(self.participant) and self.activity != "summary"
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Assist":

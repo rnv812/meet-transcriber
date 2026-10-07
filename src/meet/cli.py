@@ -132,6 +132,16 @@ def _take_tap_token() -> str | None:
     return os.environ.pop(TAP_TOKEN_ENV, None)
 
 
+def _take_control_token() -> str | None:
+    """Токен резидента для доверенных маршрутов чата ассистента (путь к файлу
+    в `POST /chat/attach`) — и убрать его из окружения, как токен отвода."""
+    import os
+
+    from meet.live_control import CONTROL_TOKEN_ENV
+
+    return os.environ.pop(CONTROL_TOKEN_ENV, None)
+
+
 @contextlib.contextmanager
 def _fatal_exit_code():
     """Ошибка с текстом (`SystemExit("…")`: нет провайдера, вход в Claude,
@@ -504,7 +514,8 @@ def main(argv: list[str] | None = None) -> int | None:
                        knowledge_dir=str(knowledge) if knowledge else None,
                        parent_pid=args.parent_pid,
                        attach_to=args.attach_to, tap_port=args.tap_port,
-                       tap_token=_take_tap_token() if args.attach_to else None)
+                       tap_token=_take_tap_token() if args.attach_to else None,
+                       control_token=_take_control_token())
     elif args.command == "status":
         print_status()
     elif args.command == "live-stop":

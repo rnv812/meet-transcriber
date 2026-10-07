@@ -19,6 +19,14 @@
 4. После успешной расшифровки исходные записи удаляются, если не просили
    оставить (это решает резидент или `meet merge`, см. `originals`).
 
+Чат ассистента (`assistant/chat.jsonl`, V4) частей склеивается в журнал
+объединённой записи (`merge_chats`, в `run` после звука): сообщения по
+времени, `t` — со сдвигом части, id — заново, ссылки между сообщениями
+переписаны, перед каждой частью — строка «— часть N —». Картинки и тексты
+вложений копируются в папку объединённой записи с приставкой части.
+Сеансы агента (`sessions.json`) не переносятся: у объединённой встречи —
+новый сеанс с затравкой из журнала.
+
 Импорт среди звонков: его звук — запись чужого разговора целиком, ближе всего
 к «собеседникам», поэтому он идёт в `sys`, а микрофон этой части — тишина.
 Одни импорты — одна дорожка `source`, как у обычного импорта.
@@ -480,6 +488,10 @@ def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None,
         if stages is not None:
             stages.stop_ticking()
     total = sum(p.duration_s for p in parts)
+    try:
+        merge_chats(folder, parts, parts_meta(parts))
+    except Exception as e:  # чат — не повод терять собранный звук
+        print(f"объединение: чат ассистента не склеен ({type(e).__name__}: {e})", flush=True)
     _write_events(folder, parts[0].start, total)
     library.update_meta(folder, lambda m: {
         **m, "parts": parts_meta(parts),
@@ -488,6 +500,101 @@ def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None,
     if stages is not None:
         stages.finish()
     return folder
+
+
+# --- чат ассистента ----------------------------------------------------------------
+
+
+def merge_chats(folder: Path, parts: list[Part], meta: list[dict]) -> int:
+    """Журналы чата частей → журнал объединённой записи (см. docstring
+    модуля). `meta` — `parts_meta(parts)` (сдвиги). Чата нет ни у одной части
+    или у объединённой он уже есть (повтор сборки) — ничего. → сколько
+    сообщений записано."""
+    from meet.assist import chatlog
+
+    folder = Path(folder)
+    if chatlog.has_chat(folder):
+        return 0
+    blocks = []
+    for n, (part, info) in enumerate(zip(parts, meta), start=1):
+        if chatlog.has_chat(part.folder):
+            msgs = chatlog.ChatLog(part.folder).load()
+            if msgs:
+                blocks.append((n, part, float(info.get("start_offset_s") or 0.0), msgs))
+    if not blocks:
+        return 0
+    entries = []   # (at, порядок, номер части, сообщение)
+    order = 0
+    for n, part, offset, msgs in blocks:
+        ats = [m["at"] for m in msgs if isinstance(m.get("at"), (int, float))]
+        if len(blocks) > 1:
+            first = min(ats) if ats else 0.0
+            entries.append((first - 0.001, order, n, {
+                "kind": "meeting", "event": "session", "text": f"— часть {n} —",
+                "t": round(offset, 3), "at": first - 0.001, "_part": n}))
+            order += 1
+        for m in msgs:
+            msg = dict(m)
+            if isinstance(msg.get("t"), (int, float)) and not isinstance(msg.get("t"), bool):
+                msg["t"] = round(float(msg["t"]) + offset, 3)
+            if msg.get("status") == chatlog.WRITING:   # ответ не дописан — уже не будет
+                msg["status"] = "cancelled"
+                msg.setdefault("error", "ответ прерван")
+            msg["_old"] = msg.get("id")
+            msg["_part"] = n
+            at = msg["at"] if isinstance(msg.get("at"), (int, float)) else (max(ats) if ats else 0.0)
+            entries.append((at, order, n, msg))
+            order += 1
+    entries.sort(key=lambda e: (e[0], e[1]))
+    ids: dict[tuple[int, str], str] = {}
+    counters = {"a": 0, "m": 0}
+    for _, _, n, msg in entries:
+        prefix = "a" if msg.get("kind") == "attachment" else "m"
+        counters[prefix] += 1
+        new = f"{prefix}{counters[prefix]}"
+        if msg.get("_old"):
+            ids[(n, msg["_old"])] = new
+        msg["id"] = new
+    out = []
+    for _, _, n, msg in entries:
+        msg.pop("_old", None)
+        part_n = msg.pop("_part")
+        for key in ("re", "merged_into"):
+            if isinstance(msg.get(key), str):
+                msg[key] = ids.get((part_n, msg[key]), msg[key])
+        if isinstance(msg.get("attachments"), list):
+            msg["attachments"] = [ids.get((part_n, a), a) if isinstance(a, str) else a
+                                  for a in msg["attachments"]]
+        if msg.get("kind") == "attachment":
+            source = next(p.folder for k, p, _, _ in blocks if k == part_n)
+            _copy_attachment(msg, source, folder, part_n)
+        out.append(msg)
+    return chatlog.ChatLog(folder).write_journal(out)
+
+
+def _copy_attachment(msg: dict, source: Path, target: Path, n: int) -> None:
+    """Файл вложения части (`assistant/files/…`, `assistant/materials/….txt`)
+    — в папку объединённой записи с приставкой `p<N>-`: исходные части
+    удаляются после объединения. Путь вне папки ассистента части — как есть."""
+    from meet.assist.chatlog import CHAT_DIR
+
+    raw = msg.get("path")
+    if isinstance(msg.get("ref"), str):
+        msg["ref"] = f"p{n}-{msg['ref']}"
+    if not isinstance(raw, str) or not raw:
+        return
+    try:
+        path = Path(raw).resolve()
+        rel = path.relative_to((Path(source) / CHAT_DIR).resolve())
+    except (OSError, ValueError):
+        return
+    dest = Path(target) / CHAT_DIR / rel.parent / f"p{n}-{rel.name}"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest)
+    except OSError:
+        return  # нет файла — запись остаётся с прежним путём
+    msg["path"] = str(dest)
 
 
 # Перекодирование склейки в Opus, «время / длительность звука» одной дорожки:

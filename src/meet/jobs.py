@@ -65,10 +65,16 @@ IMPROVE = "improve"
 # С `derive` в options — поиск голоса по прошлым встречам (meet.owner_derive):
 # тот же слот, поэтому запись образца и поиск не идут одновременно.
 OWNER_VOICE = "owner_voice"
+# «Продолжить разговор» с ассистентом после встречи (V4): ответ агента на
+# сообщение, которое резидент уже записал в журнал чата (`options.message`).
+# Очередь модели. По ходу задача шлёт строки `chat.updated` — событием шины
+# CHAT_UPDATED (`{"id": папка записи, "partial"?}`) окно перечитывает чат.
+CHAT = "chat"
+CHAT_UPDATED = "chat.updated"
 KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT, REDIARIZE,
-         ANALYZE, IMPROVE, OWNER_VOICE)
+         ANALYZE, IMPROVE, OWNER_VOICE, CHAT)
 # Задачи модели над папкой записи: пишут в неё итоги, ответы и разметку.
-MODEL_KINDS = (SUMMARY, ASK, ANALYZE, IMPROVE)
+MODEL_KINDS = (SUMMARY, ASK, ANALYZE, IMPROVE, CHAT)
 # Задачи, которые пишут в папку записи звук или транскрипт: пока такая ждёт или
 # идёт, запись нельзя удалить, объединить или поставить вторую такую же.
 FOLDER_KINDS = (TRANSCRIBE, IMPORT, MERGE)
@@ -263,6 +269,8 @@ def worker_argv(job: Job) -> list[str]:
         # Одним аргументом через «=»: вопрос с ведущим дефисом argparse иначе
         # принял бы за флаг.
         return argv + [f"--question={options.get('question') or ''}", *chosen]
+    if job.kind == CHAT:
+        return argv + [f"--message={options.get('message') or ''}", *chosen]
     if options.get("speakers"):
         argv += ["--speakers", str(int(options["speakers"]))]
     if options.get("hotwords"):
@@ -593,6 +601,10 @@ class JobQueue:
             # событию хода, а не ждёт конца задачи.
             job.text_ready = True
             self._emit(JOB_PROGRESS, job)
+        elif kind == CHAT_UPDATED:
+            # Журнал чата записи изменился (ответ начат, пишется, готов).
+            extra = {"partial": payload["partial"]} if isinstance(payload.get("partial"), dict) else {}
+            self.bus.emit(CHAT_UPDATED, id=Path(job.folder).name, **extra)
         elif kind == "job.result":
             job.result = payload.get("path")
         elif kind == "error":

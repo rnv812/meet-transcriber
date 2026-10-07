@@ -131,6 +131,20 @@ def _tail(path: Path, lines: int) -> list[str]:
 PROVIDER_TTL_S = 60.0
 CHECK_TIMEOUT_S = 90
 QUESTION_MAX_CHARS = 4000
+# Чат агента-участника (V4): сообщение не длиннее; вложений-ссылок в нём не больше.
+CHAT_TEXT_MAX = 8000
+CHAT_ATTACHMENTS_MAX = 10
+CHAT_CLIENT_ID_MAX = 100
+CHAT_PATH_MAX = 1024
+CHAT_PASTE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp",
+                    "image/tiff")
+_CHAT_MESSAGE_ID = re.compile(r"m\d{1,9}")
+_CHAT_ATTACHMENT_ID = re.compile(r"a\d{1,9}")
+# Событие шины: чат записи после встречи изменился ({"id": папка записи,
+# "partial"?: {"id", "text"}}) — окно перечитывает GET /recordings/{id}/chat.
+CHAT_UPDATED = jobs.CHAT_UPDATED
+# Переписка с ассистентом для вкладки «Агент» (meet.assist.chatlog.ASSISTANT_CHAT_MD).
+ASSISTANT_CHAT_MD = "assistant_chat.md"
 
 
 class ProviderCache:
@@ -288,6 +302,95 @@ def _job_provider(job) -> str | None:
 
 def _with_provider(options: dict, provider: str | None) -> dict:
     return {**options, "provider": provider} if provider else options
+
+
+def _has_chat(folder: Path) -> bool:
+    from meet.assist import chatlog
+
+    return chatlog.has_chat(folder)
+
+
+def _unavailable(text: str):
+    """503 для API: занято на время (журнал чата под замком)."""
+    from meet.control import Unavailable
+
+    return Unavailable(text)
+
+
+def _chat_client_id(body: dict) -> str | None:
+    value = body.get("client_id")
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) > CHAT_CLIENT_ID_MAX:
+        raise _bad_request(f"client_id — строка до {CHAT_CLIENT_ID_MAX} символов")
+    return value
+
+
+def _chat_mid(mid) -> str:
+    if not isinstance(mid, str) or not _CHAT_MESSAGE_ID.fullmatch(mid):
+        raise _bad_request("неизвестное сообщение")
+    return mid
+
+
+def _chat_message(body: dict | None) -> dict:
+    """Тело сообщения чата: текст и/или id вложений (`a3`), `client_id`."""
+    body = body or {}
+    text = body.get("text", "")
+    if not isinstance(text, str):
+        raise _bad_request("text — строка")
+    text = text.strip()
+    if len(text) > CHAT_TEXT_MAX:
+        raise _bad_request(f"сообщение длиннее {CHAT_TEXT_MAX} символов")
+    refs = body.get("attachments") or []
+    if (not isinstance(refs, list) or len(refs) > CHAT_ATTACHMENTS_MAX
+            or not all(isinstance(r, str) and _CHAT_ATTACHMENT_ID.fullmatch(r) for r in refs)):
+        raise _bad_request(f"attachments — до {CHAT_ATTACHMENTS_MAX} id вложений («a3»)")
+    if not text and not refs:
+        raise _bad_request("пустое сообщение")
+    out: dict = {"text": text}
+    if refs:
+        out["attachments"] = list(dict.fromkeys(refs))
+    cid = _chat_client_id(body)
+    if cid:
+        out["client_id"] = cid
+    return out
+
+
+def _chat_path(raw) -> str:
+    """Путь вложения из окна: полный локальный путь существующего файла или
+    папки; сетевые пути и пути устройств — нет."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > CHAT_PATH_MAX or "\x00" in raw:
+        raise _bad_request("путь — непустая строка")
+    text = raw.strip()
+    if text.startswith(("\\\\", "//")):
+        raise _bad_request("сетевые пути не принимаются")
+    path = Path(text)
+    if not path.is_absolute():
+        raise _bad_request("нужен полный путь")
+    try:
+        exists = path.is_file() or path.is_dir()
+    except OSError:
+        exists = False
+    if not exists:
+        raise _bad_request(f"нет такого файла или папки: {path.name or text}")
+    return str(path)
+
+
+def _legacy_assistant(folder: Path) -> dict | None:
+    """Прежний ассистент встречи до 0.3.6 (§8): подсказки из `live_state.json`
+    и вопросы `qa.jsonl` — только для чтения. Нет ни того, ни другого — None."""
+    from meet import assistant
+    from meet.assist.live_state import load_saved
+
+    saved = load_saved(folder) or {}
+    hints = [h for h in saved.get("hints") or [] if isinstance(h, dict)]
+    try:
+        qa = assistant.read_qa(folder)
+    except Exception:
+        qa = []
+    if not hints and not qa:
+        return None
+    return {"hints": hints, "qa": qa}
 
 
 def _marked_provider(mark: dict) -> str | None:
@@ -635,6 +738,9 @@ class TrayControl:
             # Задача кончилась (или её отменили) — повторять после перезапуска
             # нечего. Задачи, убитые остановкой резидента, отметку сохраняют.
             self._mark_pending(Path(folder), False)
+        if kind == jobs.CHAT and folder:
+            # Ответ после встречи готов или не удался — окно перечитает чат.
+            self.bus.emit(CHAT_UPDATED, id=Path(folder).name)
         if kind == jobs.ANALYZE and folder:
             stopping = bool(getattr(self.llm_queue, "stopping", False))
             self._background(lambda: self._analysis_finished(Path(folder), job.get("state"),
@@ -1385,6 +1491,91 @@ class TrayControl:
 
     def live_events(self, last_event_id: str | None = None):
         return self._live_call(self.live.open_events, last_event_id)
+
+    # --- чат агента-участника: во время встречи — прокси к ребёнку --------
+
+    def live_chat(self, params: dict | None = None) -> dict:
+        """Лента чата идущей встречи (`GET /chat` ребёнка)."""
+        limit = (params or {}).get("limit")
+        if limit is not None:
+            try:
+                limit = max(0, min(int(limit), 5000))
+            except (TypeError, ValueError):
+                raise _bad_request("limit — число")
+        return self._live_call(self.live.chat, limit)
+
+    def live_chat_post(self, body: dict | None) -> dict:
+        """Сообщение пользователя агенту: `{"text", "attachments"?: ["a3"],
+        "client_id"?}`. Ответ сразу (ребёнок — 202), повтор с тем же
+        `client_id` — то же сообщение."""
+        return self._live_call(self.live.chat_post, _chat_message(body))
+
+    def live_chat_paste(self, data: bytes, content_type: str | None,
+                        name: str | None = None) -> dict:
+        """Вставленная картинка (сырое тело до 10 МБ) — ребёнку тем же телом."""
+        kind = (content_type or "").split(";")[0].strip().lower()
+        if kind not in CHAT_PASTE_TYPES:
+            raise _bad_request("нужна картинка: PNG, JPEG, WEBP, GIF, BMP или TIFF")
+        if name is not None:
+            from urllib.parse import unquote
+
+            name = os.path.basename(unquote(name).replace("\\", "/"))[:200] or None
+        return self._live_call(self.live.chat_paste, data, kind, name)
+
+    def live_chat_attach(self, body: dict | None) -> dict:
+        """Файл или папка с диска (выбор файла, перетаскивание в окне):
+        `{"path"}`. Проверяет и резидент (полный локальный путь, существует),
+        и ребёнок; ребёнку путь уходит с токеном доверенного вызывающего."""
+        return self._live_call(self.live.chat_attach, _chat_path((body or {}).get("path")))
+
+    def live_chat_click(self, mid: str, body: dict | None) -> dict:
+        """Нажатие кнопки сообщения агента: `{"label", "client_id"?}`."""
+        mid = _chat_mid(mid)
+        body = body or {}
+        label = body.get("label")
+        if not isinstance(label, str) or not label.strip() or len(label) > 200:
+            raise _bad_request("label — надпись кнопки")
+        payload = {"label": label}
+        cid = _chat_client_id(body)
+        if cid:
+            payload["client_id"] = cid
+        return self._live_call(self.live.chat_click, mid, payload)
+
+    def live_chat_react(self, mid: str, body: dict | None) -> dict:
+        """Реакция на сообщение агента: `{"emoji": "👍|👎|❓", "on"?: bool|null}`."""
+        mid = _chat_mid(mid)
+        body = body or {}
+        emoji, on = body.get("emoji"), body.get("on")
+        if emoji not in ("👍", "👎", "❓"):
+            raise _bad_request("реакция — 👍, 👎 или ❓")
+        if on is not None and not isinstance(on, bool):
+            raise _bad_request("on — true, false или null")
+        return self._live_call(self.live.chat_react, mid, {"emoji": emoji, "on": on})
+
+    def live_chat_stop(self, body: dict | None) -> dict:
+        """«Стоп» у ответа, который пишется: `{"id"?}`."""
+        mid = (body or {}).get("id")
+        payload = {} if mid is None else {"id": _chat_mid(mid)}
+        return self._live_call(self.live.chat_stop, payload)
+
+    def agent_frequency(self, body: dict | None) -> dict:
+        """«Как часто писать» (`{"frequency": less|normal|more|реже|обычно|
+        чаще}`): в настройки ключом (`assist.frequency`) и агенту идущей
+        встречи сразу, если он есть. → `{"frequency", "label", "live"}`."""
+        key = settings.frequency_key((body or {}).get("frequency"))
+        if key is None:
+            raise _bad_request("frequency — less, normal или more (реже, обычно, чаще)")
+        settings.patch({"assist": {"frequency": key}})
+        live = False
+        try:
+            self.live.agent_frequency(key)
+            live = True
+        except live_control.LiveNotRunning:
+            pass
+        except (live_control.LiveError, RuntimeError) as e:
+            # Ассистент без агента-участника или старый — настройка всё равно сохранена.
+            self.tray.log(f"«Как часто писать» не передано ассистенту: {e}")
+        return {"frequency": key, "label": settings.FREQUENCY_LABELS[key], "live": live}
 
     def adopt_recording(self) -> dict:
         """Автозапись → ручная: детектор её больше не остановит."""
@@ -2231,6 +2422,8 @@ class TrayControl:
             out = {"files": [AGENT_TRANSCRIPT_MD], "live": True}
         else:
             out = {"files": [], "live": False}
+        if out["files"] and _has_chat(folder):
+            out["files"].append(ASSISTANT_CHAT_MD)  # переписка с ассистентом (V4)
         # `sessions` — агенты, уже работавшие в папке (только если такие есть).
         sessions = _agent_sessions(library.read_meta(folder))
         if sessions:
@@ -2316,11 +2509,29 @@ class TrayControl:
         files = [AGENT_TRANSCRIPT_MD]
         if not live:
             files += self._agent_extras(folder)
+        if self._write_chat_md(folder):
+            files.append(ASSISTANT_CHAT_MD)
         out = {"folder": str(folder), "files": files}
         session = self._mark_agent_session(folder, body or {})
         if session:
             out["session"] = session
         return out
+
+    def _write_chat_md(self, folder: Path) -> bool:
+        """`assistant_chat.md` — переписка с ассистентом в читаемом виде для
+        агента во вкладке «Агент» (§2.5). Только если чат есть (`has_chat`):
+        у встреч до 0.3.6 файла не будет. Не записался — без него."""
+        if not _has_chat(folder):
+            return False
+        from meet.assist import chatlog
+
+        try:
+            chatlog.ChatLog(folder, log=self.tray.log).write_md(
+                title=f"Разговор с ассистентом — {library.read_meta(folder).get('title') or folder.name}")
+        except OSError as e:
+            self.tray.log(f"assistant_chat.md не записан ({folder.name}): {e}")
+            return False
+        return True
 
     def save_transcript(self, recording_id: str, data: dict) -> dict:
         """Сохранить правки редактора. Пишем как есть: редактор — владелец
@@ -3112,6 +3323,73 @@ class TrayControl:
         self._ready_for_model(folder, provider)
         return self.llm_queue.submit(jobs.ASK, str(folder),
                                      _with_provider({"question": question}, provider)).to_raw()
+
+    # --- чат ассистента после встречи («Продолжить разговор») -------------
+
+    def recording_chat(self, recording_id: str) -> dict:
+        """Чат записи: `{"messages", "seq", "legacy", "live", "job"}`.
+        `messages` — лента (`visible_in_feed`); у встречи без чата (до
+        0.3.6) `legacy` — прежние подсказки (`live_state.json`) и вопросы
+        (`qa.jsonl`), иначе null. `live` — идёт живой режим этой записи (писать
+        через /live/chat); `job` — задача ответа, которая ждёт или идёт."""
+        from meet.assist import chatlog
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        out: dict = {"messages": [], "seq": 0, "legacy": None}
+        if chatlog.has_chat(folder):
+            out.update(chatlog.ChatLog(folder, log=self.tray.log).snapshot(feed=True))
+        else:
+            out["legacy"] = _legacy_assistant(folder)
+        out["live"] = self._live_folder(folder)
+        job = self.llm_queue.active_for(str(folder), (jobs.CHAT,))
+        out["job"] = job.to_raw() if job is not None else None
+        return out
+
+    def continue_chat(self, recording_id: str, body: dict | None) -> dict:
+        """«Продолжить разговор» после встречи: сообщение — сразу в журнал
+        записи (окно видит его), ответ агента — задачей `jobs.CHAT` в очереди
+        модели (продолжение сеанса агента встречи, иначе затравка из журнала).
+        `{"text", "attachments"?: ["a3"], "client_id"?, "provider"?}` →
+        `{"message", "job", "duplicate"?}`. Идёт живой режим этой записи — 409
+        (писать через /live/chat)."""
+        from meet.assist import chatlog
+
+        provider = self._chosen(body)
+        payload = _chat_message(body)
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        if self._live_folder(folder):
+            raise _conflict("Идёт живой режим этой записи — пишите ассистенту в чат встречи")
+        if self._key(folder) in self._busy_now():
+            raise _conflict("Запись ещё идёт — продолжить разговор можно после её окончания")
+        self._ready_for_model(folder, provider)
+        log = chatlog.ChatLog(folder, log=self.tray.log)
+        try:
+            added = log.append("user", client_id=payload.get("client_id"),
+                               text=payload["text"], attachments=payload.get("attachments", []),
+                               after_meeting=True)
+        except chatlog.FileLockTimeout:
+            raise _unavailable("Журнал чата занят — повторите")
+        message = added.message
+        if not added.created:
+            job = self.llm_queue.active_for(str(folder), (jobs.CHAT,))
+            return {"message": message, "job": job.to_raw() if job is not None else None,
+                    "duplicate": True}
+        self.bus.emit(CHAT_UPDATED, id=folder.name)
+        job = self.llm_queue.submit(jobs.CHAT, str(folder),
+                                    _with_provider({"message": message["id"]}, provider))
+        return {"message": message, "job": job.to_raw()}
+
+    def _live_folder(self, folder: Path) -> bool:
+        """Идёт ли живой режим этой записи (тогда пишет ребёнок)."""
+        try:
+            live_folder = self.live.status().get("folder")
+        except Exception:
+            return False
+        return bool(live_folder) and self._key(Path(live_folder)) == self._key(folder)
 
     def qa(self, recording_id: str) -> dict:
         from meet import assistant

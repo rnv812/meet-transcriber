@@ -49,8 +49,9 @@
 (он же держит порядок записей), разбор вложений и запросы к базе — в
 потоках `asyncio.to_thread`. Цикл событий не блокируется.
 
-API для окна (задача 6): `post_user_message`, `click`, `react`,
-`stop_reply`, `set_frequency`, `snapshot`, `view`; события —
+API для окна (задача 6): `post_user_message`, `attach`, `click`, `react`,
+`stop_reply`, `set_frequency`, `snapshot`, `view`; «Продолжить разговор»
+после встречи — `queue_existing` и `add_note`; события —
 `add_listener(fn(name, data))`: `chat` (событие журнала), `chat_partial`
 (`{"id","text"}`), `agent` (`view()`).
 """
@@ -86,6 +87,7 @@ TOOL_ROUNDS_MAX = 3            # запросов подряд без ответ
 TOOL_RESULT_MAX = 12_000       # символов ответа Meet модели
 
 MERGED_MAX = 8_000             # склеенное сообщение — не длиннее
+TASK_NOTE_MAX = 2_000          # контекст задачи в заметке агенту
 WORKDIR = "meet-agent"         # рабочая папка процесса Claude Code агента
 TOOL_PROVIDERS = ("claude-code", "codex", "opencode")
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")
@@ -275,6 +277,7 @@ class _Turn:
     send_task: asyncio.Future | None = None
     task: asyncio.Future | None = None
     session: object = None
+    answered: bool = False             # модель ответила: входы доставлены (ревью M5)
 
 
 class Participant:
@@ -289,7 +292,8 @@ class Participant:
     из meta.json); `owner_*` — подпись и имена владельца; `frequency` —
     «Как часто писать»; `model`/`proxy` — Claude Code; `on_fresh_audio` —
     дорасшифровать хвост речи перед ответом пользователю; `clock` — часы
-    (тесты — поддельные)."""
+    (тесты — поддельные); `after_meeting` — разговор после встречи (задача
+    «Продолжить разговор»): у записей нет секунд встречи `t`."""
 
     def __init__(self, bus, chatlog, *, provider: str, folder, runner=None, conversation=None,
                  kb=None, library_root=None, group=None, owner_name: str = "",
@@ -299,7 +303,8 @@ class Participant:
                  glossary: str = "", task_context: str = "", on_fresh_audio=None,
                  clock=time.monotonic, log=print, merge_window_s: float = MERGE_WINDOW_S,
                  pause_s: float = PAUSE_S, max_interval_s: float = MAX_INTERVAL_S,
-                 min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S) -> None:
+                 min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S,
+                 after_meeting: bool = False) -> None:
         from meet import llm
 
         self._bus = bus
@@ -328,6 +333,8 @@ class Participant:
         self._max_interval = max_interval_s
         self._min_gap = min_gap_s
         self._turn_timeout = turn_timeout_s
+        # «Продолжить разговор» после встречи: у сообщений нет секунд записи.
+        self._after_meeting = after_meeting
 
         self.tools = provider in TOOL_PROVIDERS
         self.vision = llm.vision(provider)
@@ -505,7 +512,14 @@ class Participant:
         return name
 
     def set_task_context(self, text: str) -> None:
-        self._task_context = text or ""
+        """Контекст задачи (`/task`): системный промпт новых сеансов и —
+        если сеанс уже идёт — заметка в ближайший ход (ревью M11)."""
+        text = text or ""
+        changed = text != self._task_context
+        self._task_context = text
+        if changed and text and self._session is not None:
+            self.add_note("Пользователь задал контекст задачи встречи (учитывай дальше):\n"
+                          + text[:TASK_NOTE_MAX])
 
     # --- сессия ---
 
@@ -635,6 +649,8 @@ class Participant:
         return lines
 
     def _now_t(self) -> float | None:
+        if self._after_meeting:
+            return None
         entries, _ = self._bus.entries_since(max(0, self._bus.size() - 5))
         times = [e.get("end") if isinstance(e.get("end"), (int, float)) else e.get("t")
                  for e in entries]
@@ -801,7 +817,10 @@ class Participant:
         except Exception as e:  # сбой цикла не роняет ассистента
             self._log(f"агент: ход упал ({type(e).__name__}: {e})")
             self._failed(f"{type(e).__name__}: {e}")
-            self._requeue(turn.inputs)
+            if not turn.answered:
+                # Модель ответила — входы она уже видела: повтор задублировал
+                # бы показанное сообщение (сбой журнала посреди показа, M5).
+                self._requeue(turn.inputs)
             if turn.reply_id is not None:
                 with _quiet():
                     self._emit_chat([await self._io(
@@ -879,6 +898,7 @@ class Participant:
             return
         self._failures = 0
         self.turns += 1
+        turn.answered = True
         await self._apply(turn, reply)
         self._set_state(LISTENING)
 
@@ -1255,6 +1275,50 @@ class Participant:
         self._kick()
         return events
 
+    async def attach(self, item) -> dict:
+        """Вложение до сообщения (окно: вставка картинки, путь от доверенного
+        вызывающего) → запись журнала (`kind: attachment`, id `a<N>`; не
+        разобралось — `status: "failed"` с `error`). Сообщение потом ссылается
+        на неё id (`post_user_message(attachments=["a3"])`). Id, которого нет
+        в журнале, — ValueError."""
+        record, _descriptor_, _image = await self._attach(item, 0)
+        if record is None:
+            raise ValueError(f"вложения {item} нет в журнале")
+        return record
+
+    async def queue_existing(self, mid: str) -> dict:
+        """Сообщение пользователя, уже записанное в журнал другим писателем
+        (резидент после встречи: «Продолжить разговор»), — в ближайший ход,
+        как `post_user_message`, но без новой записи. Нет такого сообщения
+        пользователя — ValueError."""
+        message = await self._io(self._chatlog.get, mid)
+        if message is None or message.get("kind") != "user":
+            raise ValueError(f"{mid}: нет такого сообщения пользователя")
+        described, images, image_ids = [], [], {}
+        for aid in message.get("attachments") or ():
+            if not isinstance(aid, str):
+                continue
+            record, descriptor, image = await self._attach(aid, len(images))
+            if record is None:
+                continue
+            described.append(descriptor)
+            if image and len(images) < _max_images():
+                images.append(image)
+                image_ids[str(image)] = record["id"]
+        re_id = message.get("re")
+        if message.get("via") == "button" and isinstance(re_id, str) and re_id not in self._agent_texts:
+            agent = await self._io(self._chatlog.get, re_id)
+            self._agent_texts[re_id] = (agent or {}).get("text") or ""
+        self._queue_user({**message, "attachments": described, "_images": images,
+                          "_image_ids": image_ids})
+        self._kick()
+        return message
+
+    def add_note(self, text: str) -> None:
+        """Заметка Meet агенту — в ближайший ход (сама ход не вызывает)."""
+        if text and text not in self._notes:
+            self._notes.append(text)
+
     async def stop_reply(self, mid: str | None = None) -> bool:
         """«Стоп» у ответа, который пишется. False — такого хода нет."""
         turn = self._turn
@@ -1341,7 +1405,41 @@ class Participant:
         return fields
 
 
+# --- сборка по настройкам ---
+
+def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None,
+                  glossary: str = "", on_fresh_audio=None, log=print, chatlog=None,
+                  **kwargs) -> "Participant":
+    """Агент-участник записи по настройкам (`assist.*`, `recording.*`,
+    `llm.*`): журнал папки записи, база знаний на сессию (карта, исключения,
+    запасные запросы), библиотека — папка, где лежит запись. Так его собирают
+    и живой ассистент, и задача «Продолжить разговор» после встречи."""
+    from meet import llm
+    from meet.assist.chatlog import ChatLog
+    from meet.assist.kb_prep import KnowledgeBase
+
+    folder = Path(folder)
+    knowledge = knowledge_dir or cfg.assistant.knowledge_dir
+    knowledge = knowledge if knowledge and Path(knowledge).is_dir() else None
+    library_root = folder.parent
+    kb = KnowledgeBase(knowledge, exclude=cfg.assist.kb_exclude, library_root=library_root,
+                       show_map=cfg.assist.kb_map)
+    return Participant(
+        bus, chatlog if chatlog is not None else ChatLog(folder, log=log), provider=provider,
+        folder=folder, runner=runner, kb=kb, library_root=library_root,
+        owner_name=cfg.recording.speaker_name, owner_speaker=cfg.recording.speaker_name,
+        owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
+        frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
+        proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log, **kwargs)
+
+
 # --- помощники ---
+
+def _max_images() -> int:
+    from meet.assist import attachments as att
+
+    return att.MAX_PER_MESSAGE
+
 
 class _quiet:
     """Уборка хода не роняет цикл (журнал мог не записаться)."""

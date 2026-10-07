@@ -111,6 +111,11 @@ class AssistState:
         # Агент-участник (`assist.participant`, 0.3.6): тогда qa — None, а
         # линия подсказок дайджестера выключена (сводка остаётся).
         self.participant = None
+        # События чата для SSE (`web.ChatFeed`) — при агенте-участнике.
+        self.chat_feed = None
+        # Токен доверенного вызывающего (резидент): `POST /chat/attach` с
+        # путём к файлу — только с ним (`web._trusted`).
+        self.control_token: str | None = None
         self.stop_event: asyncio.Event | None = None  # ставит _main
         self.loop: asyncio.AbstractEventLoop | None = None  # ставит _main
         self._stop_early = False  # остановка пришла до _main (конец записи)
@@ -232,6 +237,13 @@ class AssistState:
                 self.on_change()
             self.changes.notify()
         return changed
+
+    def persist_frequency(self, key: str) -> None:
+        """«Как часто писать» из окна — в настройки (`assist.frequency`,
+        ключом `less|normal|more`). Блокирующее: из маршрута — в потоке."""
+        from meet import settings
+
+        settings.patch({"assist": {"frequency": key}})
 
     def request_stop(self) -> None:
         """`POST /stop`: штатная остановка (дорожки дописывает run_assist)."""
@@ -517,7 +529,8 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                endpoint_file: str | None = None, provider: str | None = None,
                cfg=None, knowledge_dir: str | None = None,
                parent_pid: int | None = None, attach_to: str | None = None,
-               tap_port: int | None = None, tap_token: str | None = None) -> None:
+               tap_port: int | None = None, tap_token: str | None = None,
+               control_token: str | None = None) -> None:
     """`port=0` — эфемерный порт; `endpoint_file` получает
     `{"port", "pid", "folder", "ready", "capturing", "stage"}`, как только
     поднят веб, переписывается на каждом этапе старта и удаляется при любом
@@ -525,7 +538,8 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     `knowledge_dir` — база знаний на чтение для вопросов и дайджеста;
     `parent_pid` — резидент: умер он — штатная остановка, как по /stop;
     `attach_to`/`tap_port`/`tap_token` — подключиться к идущей обычной записи
-    (папка и отвод звука резидента)."""
+    (папка и отвод звука резидента); `control_token` — токен резидента для
+    доверенных маршрутов чата (`POST /chat/attach`)."""
     from meet import tempdirs
 
     endpoint = Path(endpoint_file) if endpoint_file else None
@@ -538,7 +552,8 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                         no_voices, open_browser=open_browser, endpoint=endpoint,
                         provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
                         parent_pid=parent_pid, attach_to=attach_to,
-                        tap_port=tap_port, tap_token=tap_token)
+                        tap_port=tap_port, tap_token=tap_token,
+                        control_token=control_token)
     finally:
         remove_endpoint(endpoint)
         # Остановили посреди загрузки модели: её поток ещё работает. Запись
@@ -730,7 +745,7 @@ class StartClock:
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 no_voices, *, open_browser, endpoint, provider, cfg,
                 knowledge_dir=None, parent_pid=None, attach_to=None,
-                tap_port=None, tap_token=None) -> None:
+                tap_port=None, tap_token=None, control_token=None) -> None:
     def log(line: str) -> None:
         # Одной записью со своим переводом строки: строки этапов пишут и
         # фоновые потоки старта, print() кусками их перемешивал бы.
@@ -767,7 +782,10 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     bus = TranscriptBus()
     cadence = cadence_of(cfg.assist)
-    participant_on = bool(getattr(cfg.assist, "participant", False))
+    # «Только сводка» выключает и агента-участника (ревью участника M10):
+    # человек просил ничего не писать ему во время встречи.
+    participant_on = bool(getattr(cfg.assist, "participant_on",
+                                  getattr(cfg.assist, "participant", False)))
     if participant_on:
         # Агент-участник пишет сам: линии подсказок нет, сводка (черновик
         # итогов и название) остаётся.
@@ -805,6 +823,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         owner=cfg.recording.speaker_name,
     )
     state.ready = False
+    state.control_token = control_token or None
     # Распознавание: GigaAM короткими окнами для русского (если скачана),
     # иначе Whisper; правила замены и латиница — к каждой реплике. Здесь
     # модель только выбирается — грузится она в prepare.
@@ -863,6 +882,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         state.participant = _make_participant(
             cfg, bus, out_dir, provider_name, runner, knowledge_dir=knowledge_dir,
             glossary=state._glossary, on_fresh_audio=fresh_audio, log=log)
+        from meet.assist.web import ChatFeed
+
+        state.chat_feed = ChatFeed(state.participant)
     else:
         state.qa = QAService(
             bus, live, system_prompt=state.qa_system,
@@ -998,25 +1020,12 @@ def _make_participant(cfg, bus: TranscriptBus, out_dir: Path, provider: str, run
                       knowledge_dir=None, glossary: str = "", on_fresh_audio=None, log=print):
     """Агент-участник встречи (`assist.participant`): журнал папки записи,
     база знаний на сессию (карта, исключения, запасные запросы), библиотека —
-    папка, где лежит запись."""
-    from meet import llm
-    from meet.assist.chatlog import ChatLog
-    from meet.assist.kb_prep import KnowledgeBase
-    from meet.assist.participant import Participant
+    папка, где лежит запись (`participant.from_settings`)."""
+    from meet.assist.participant import from_settings
 
-    knowledge = knowledge_dir or cfg.assistant.knowledge_dir
-    knowledge = knowledge if knowledge and Path(knowledge).is_dir() else None
-    library_root = out_dir.parent
-    kb = KnowledgeBase(knowledge, exclude=cfg.assist.kb_exclude, library_root=library_root,
-                       show_map=cfg.assist.kb_map)
-    participant = Participant(
-        bus, ChatLog(out_dir, log=log), provider=provider, folder=out_dir, runner=runner, kb=kb,
-        library_root=library_root, owner_name=cfg.recording.speaker_name,
-        owner_speaker=cfg.recording.speaker_name,
-        owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
-        frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
-        proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log)
-    # Новое в чате и у агента — сигнал окнам (SSE `state`; маршруты чата — задача 6).
+    participant = from_settings(cfg, bus, out_dir, provider, runner, knowledge_dir=knowledge_dir,
+                                glossary=glossary, on_fresh_audio=on_fresh_audio, log=log)
+    # Новое в чате и у агента — сигнал окнам (SSE `state`, `chat`, `chat_partial`, `agent`).
     participant.add_listener(lambda _name, _data: bus.changed.notify())
     print(f"агент-участник: {participant.label}, «Как часто писать»: {participant.frequency}",
           flush=True)

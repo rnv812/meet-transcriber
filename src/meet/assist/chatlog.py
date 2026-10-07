@@ -720,6 +720,58 @@ class ChatLog:
         message = _copy(self._view[rid])
         return Appended(message, {"seq": seq, "op": "add", "message": _copy(message)})
 
+    def write_journal(self, messages) -> int:
+        """Низкоуровневое: новый журнал из готовых сообщений (свёрнутых, как
+        их отдаёт `load`) — объединение записей (`merge.merge_chats`). Каждое
+        — одна запись `msg` с тем же `id`, `kind`, `at`, `client_id` и полями,
+        `seq` — по порядку с 1 (порядок задаёт вызывающий). Id — `a<N>` у
+        вложений и `m<N>` у остальных, без повторов; повтор `client_id` —
+        у первого. Журнал уже есть — FileExistsError: он не переписывается
+        никогда. Файл пишется целиком атомарно (временный + замена), под
+        строгим замком. `sessions.json` не трогается. → сколько записано."""
+        records: list[dict] = []
+        ids: set[str] = set()
+        clients: set[str] = set()
+        for n, msg in enumerate(messages or (), start=1):
+            if not isinstance(msg, dict):
+                raise ValueError(f"сообщение {n}: не словарь")
+            kind, rid = msg.get("kind"), msg.get("id")
+            if kind not in KINDS:
+                raise ValueError(f"сообщение {n}: неизвестный вид {kind!r}")
+            m = _ID.match(rid) if isinstance(rid, str) else None
+            if m is None or m.group(1) != ("a" if kind == "attachment" else "m"):
+                raise ValueError(f"сообщение {n}: негодный id {rid!r} для {kind}")
+            if rid in ids:
+                raise ValueError(f"сообщение {n}: повтор id {rid}")
+            ids.add(rid)
+            at = _num(msg.get("at"))
+            rec = {"v": VERSION, "seq": n, "at": round(at if at is not None else float(self._clock()), 3),
+                   "rec": "msg", "id": rid, "kind": kind}
+            cid = msg.get("client_id")
+            if isinstance(cid, str) and cid and cid not in clients:
+                clients.add(cid)
+                rec["client_id"] = _clean(cid)
+            fields = {k: v for k, v in msg.items() if k not in (*PROTECTED, "seq")}
+            rec.update(_check_fields(kind, _clean(fields)))
+            records.append(rec)
+        data = b"".join(_encode(r) for r in records)
+        with self._write_lock():
+            if self.path.exists():
+                raise FileExistsError(f"{self.path}: журнал уже есть — не переписывается")
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                library.replace_atomic(tmp, self.path)
+            finally:
+                tmp.unlink(missing_ok=True)
+            self._reset()
+            self._sync()
+        return len(records)
+
     # --- реакции человека на реплики агента ---
 
     def react(self, mid: str, emoji: str, on: bool | None = None, *, t: float | None = None) -> list[dict]:

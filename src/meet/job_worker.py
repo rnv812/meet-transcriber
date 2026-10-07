@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
                                  "summary", "ask", "merge", "speaker_split", "rediarize",
-                                 "analyze", "improve", "owner_voice"])
+                                 "analyze", "improve", "owner_voice", "chat"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -72,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
                         default=None)
     parser.add_argument("--flavor", choices=["cuda", "cpu"])
     parser.add_argument("--question")
+    parser.add_argument("--message")
     parser.add_argument("--label")
     parser.add_argument("--num-speakers", type=int)
     parser.add_argument("--min-speakers", type=int)
@@ -102,6 +103,8 @@ def _dispatch(args) -> int:
     os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
     if args.kind in ("summary", "ask"):
         return _assistant(args.kind, args.path, args.question, args.provider or None)
+    if args.kind == "chat":
+        return _chat(args.path, args.message or "", args.provider or None)
     if args.kind == "analyze":
         return _analyze(args.path, args.provider or None)
     if args.kind == "improve":
@@ -562,6 +565,153 @@ def _assistant(kind: str, folder_str: str, question: str | None, chosen: str | N
         return 1
     _emit({"kind": "job.result", "path": str(out)})
     return 0
+
+
+# Заметка агенту в ход «Продолжить разговор»: встреча уже закончилась.
+CHAT_AFTER_NOTE = ("Встреча уже закончилась: пользователь продолжает разговор с тобой после неё. "
+                   "Новых реплик встречи не будет — отвечай на его сообщение.")
+CHAT_TURNS_MAX = 6          # ходов на одно сообщение (запросы к Meet у локальной модели)
+CHAT_PARTIAL_EVERY_S = 0.5  # кусок ответа — строкой chat.updated не чаще
+
+
+def _chat(folder_str: str, message_id: str, chosen: str | None = None, *,
+          runner=None, provider: str | None = None, conversation=None) -> int:
+    """«Продолжить разговор» после встречи (V4, `jobs.CHAT`): ответ агента на
+    сообщение пользователя `message_id`, которое резидент уже записал в журнал
+    записи. Тот же агент-участник, что во время встречи (`participant`):
+    продолжение его сеанса (`assistant/sessions.json`), не вышло или его нет —
+    затравка из журнала и расшифровки встречи. Ответ — в журнал; строки
+    `chat.updated` — окну по ходу. `runner`/`provider`/`conversation` —
+    подмена модели в тестах."""
+    import asyncio
+    import time
+    from pathlib import Path
+
+    from meet import events, settings
+    from meet.assist import participant as participant_mod
+    from meet.assist.bus import TranscriptBus
+    from meet.assist.chatlog import ChatLog
+
+    folder = Path(folder_str)
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    bus.progress("chat", label="ассистент отвечает")
+    cfg = settings.load()
+    if not message_id:
+        _emit({"kind": "error", "text": "не сказано, на какое сообщение отвечать"})
+        return 3
+    chatlog = ChatLog(folder, log=lambda text: _emit({"kind": "log", "text": text}))
+    if runner is None and conversation is None:
+        try:
+            provider, runner = _pick(cfg, chosen)
+        except _NoModel as e:
+            _chat_failed(chatlog, message_id, str(e))
+            _emit({"kind": "error", "text": str(e)})
+            return 2
+        tracker, runner = _llm_tracker(bus, "chat", "ответ ассистента", provider, runner,
+                                       stage="chat")
+    else:
+        tracker = _NullContext()
+    tbus = TranscriptBus()
+    for line, entry in _meeting_lines(folder):
+        tbus.publish(line, entry)
+    extra = {"conversation": conversation} if conversation is not None else {}
+    agent = participant_mod.from_settings(cfg, tbus, folder, provider, runner, chatlog=chatlog,
+                                          log=lambda text: _emit({"kind": "log", "text": text}),
+                                          after_meeting=True, **extra)
+    agent.skip_existing()   # расшифровка — контекст затравки, а не новые реплики
+    last = {"partial": 0.0}
+
+    def on_event(name: str, data) -> None:
+        if name == "chat":
+            _emit({"kind": "chat.updated"})
+        elif name == "chat_partial":
+            now = time.monotonic()
+            if now - last["partial"] >= CHAT_PARTIAL_EVERY_S:
+                last["partial"] = now
+                _emit({"kind": "chat.updated", "partial": data})
+
+    agent.add_listener(on_event)
+
+    async def answer() -> str | None:
+        try:
+            await agent.start()
+            await agent.queue_existing(message_id)
+            agent.add_note(CHAT_AFTER_NOTE)
+            turns = 0
+            while turns < CHAT_TURNS_MAX and await agent.tick():
+                turns += 1
+            return agent.error if agent.state == participant_mod.ERROR else None
+        finally:
+            await agent.shutdown()
+
+    try:
+        with tracker:
+            error = asyncio.run(answer())
+    except ValueError as e:     # нет такого сообщения
+        _emit({"kind": "error", "text": str(e)})
+        return 3
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 1
+    if error:
+        _emit({"kind": "error", "text": error})
+        return 1
+    _emit({"kind": "job.result", "path": str(chatlog.path)})
+    return 0
+
+
+class _NullContext:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _chat_failed(chatlog, message_id: str, error: str) -> None:
+    """Ответа не будет (модель не подключена): видимая ошибка у сообщения."""
+    try:
+        chatlog.append("agent", mode="reply", re=message_id, text="", status="failed",
+                       error=error[:300])
+        _emit({"kind": "chat.updated"})
+    except Exception:
+        pass
+
+
+def _meeting_lines(folder) -> list[tuple[str, dict]]:
+    """Реплики встречи для затравки агента: точная расшифровка, а если её
+    ещё нет — лента живого режима (`live_transcript.md`)."""
+    import re
+
+    from meet import library
+
+    out: list[tuple[str, dict]] = []
+    try:
+        data = library.read_transcript(folder)
+    except Exception:
+        data = None
+    for seg in (data or {}).get("segments") or []:
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        t = seg.get("start") if isinstance(seg.get("start"), (int, float)) else 0.0
+        speaker = str(seg.get("speaker") or "Спикер")
+        out.append((f"{speaker}: {text}", {"t": float(t), "speaker": speaker, "text": text}))
+    if out:
+        return out
+    try:
+        feed = (folder / "live_transcript.md").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    pattern = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] ([^:]+): (.*)$")
+    for line in feed.splitlines():
+        m = pattern.match(line)
+        if m:
+            h, mi, sec, speaker, said = m.groups()
+            out.append((line, {"t": float(int(h) * 3600 + int(mi) * 60 + int(sec)),
+                               "speaker": speaker, "text": said}))
+    return out
 
 
 def _analyze(folder_str: str, chosen: str | None = None) -> int:
