@@ -339,3 +339,16 @@
 .local-find .btn { flex: none; }
 .local-find__status { flex: 1 1 100%; min-height: 18px; font-size: 12px; }
 .local-find__status:empty { display: none; }
+
+/* Агент-участник: исключённые папки базы знаний и пометки. */
+.kb-exclude { display: flex; flex-direction: column; gap: 6px; }
+.kb-exclude__list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; }
+.kb-exclude__item { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 8px;
+  border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
+.kb-exclude__empty { font-size: 12px; }
+.kb-exclude__add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.kb-exclude__add input { width: 160px; }
+.kb-exclude__note { align-self: flex-start; padding: 0 6px; border-radius: 8px; background: rgba(240, 191, 0, 0.12);
+  color: var(--amber); font-size: 11.5px; line-height: 18px; }
+.participant__warn { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; color: var(--amber); font-size: 12px; }
+.participant__vision { margin-top: 2px; }

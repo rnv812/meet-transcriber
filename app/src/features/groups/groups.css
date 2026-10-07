@@ -102,3 +102,9 @@
 .drag-ghost--over { border-color: var(--accent); }
 /* Пока тащат — без выделения текста и с курсором «тащу» везде. */
 html.group-dragging, html.group-dragging * { cursor: grabbing !important; user-select: none !important; }
+
+/* Папка базы знаний группы — в заголовке группы. */
+.group-head__kb {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 40%;
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}

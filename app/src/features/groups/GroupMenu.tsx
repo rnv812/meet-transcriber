@@ -1,12 +1,13 @@
 /**
  * Меню группы — у строки в левой панели («⋯», правая кнопка, Shift+F10) и у
- * заголовка группы над списком: Переименовать, Цвет ▸, Выше, Ниже, Удалить.
+ * заголовка группы над списком: Переименовать, Цвет ▸, Папка базы знаний…
+ * (и «Убрать папку базы знаний», если задана), Выше, Ниже, Удалить.
  * У неизвестной группы (id есть у встреч, а в списке нет) — «Назвать…» (с тем
  * же id) и «Убрать из встреч». Файл групп только для чтения — меню групп нет,
  * а у неизвестной остаётся «Убрать из встреч» (правится только meta.json встреч).
  */
 
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Palette, Pencil, Trash2, Unlink } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, FolderMinus, FolderOpen, Palette, Pencil, Trash2, Unlink } from "lucide-react";
 import { useState, type RefObject } from "react";
 import { CATEGORY_PALETTE } from "../../lib/categories";
 import { UNKNOWN_NAME } from "../../lib/groups";
@@ -63,6 +64,11 @@ export function GroupMenu({ ui, id, at, anchor, align = "start", onClose }: {
       { label: "Переименовать…", icon: <Pencil {...ICON} />, onSelect: run(() => ui.rename(id)) },
       { label: "Цвет", icon: <Palette {...ICON} />, trailing: <ChevronRight {...ICON} />, autoFocus: back,
         onSelect: () => setColors(true) },
+      { label: "Папка базы знаний…", icon: <FolderOpen {...ICON} />,
+        hint: group.kb_folder ? `Сейчас: ${group.kb_folder}` : "Ассистент встреч группы видит её структуру первой",
+        onSelect: run(() => ui.pickKbFolder(id)) },
+      ...(group.kb_folder ? [{ label: "Убрать папку базы знаний", icon: <FolderMinus {...ICON} />,
+        onSelect: run(() => ui.clearKbFolder(id)) }] : []),
       { label: "Выше", icon: <ArrowUp {...ICON} />, hint: "Alt+↑", disabled: index <= 0,
         onSelect: run(() => ui.shift(id, -1)) },
       { label: "Ниже", icon: <ArrowDown {...ICON} />, hint: "Alt+↓", disabled: index < 0 || index >= order.length - 1,

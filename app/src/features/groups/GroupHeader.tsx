@@ -1,9 +1,10 @@
 /**
- * Над списком, когда открыта группа: «Проект Альфа · 12 встреч», меню группы
- * («⋯») и «×» — назад ко всем записям. Пустая группа — EmptyState.
+ * Над списком, когда открыта группа: «Проект Альфа · 12 встреч», папка базы
+ * знаний группы (если задана), меню группы («⋯») и «×» — назад ко всем
+ * записям. Пустая группа — EmptyState.
  */
 
-import { Ellipsis, X } from "lucide-react";
+import { Ellipsis, Folder, X } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { meetingsText, NO_GROUP } from "../../lib/groups";
 import { Button } from "../../ui/Button";
@@ -20,6 +21,7 @@ export function GroupHeader({ ui }: { ui: GroupsUi }) {
   if (!ui.shown || !ui.scope || ui.scopeName === null) return null;
   const scope = ui.scope;
   const color = scope === NO_GROUP ? null : ui.groups.find((g) => g.id === scope)?.color ?? null;
+  const kbFolder = scope === NO_GROUP ? null : ui.groups.find((g) => g.id === scope)?.kb_folder ?? null;
   // Только для чтения меню — лишь у неизвестной группы («Убрать из встреч»).
   const editable = scope !== NO_GROUP && (!ui.readOnly || !ui.groups.some((g) => g.id === scope));
   const close = (focusBack = true) => { setMenu(false); if (focusBack) more.current?.focus(); };
@@ -30,6 +32,12 @@ export function GroupHeader({ ui }: { ui: GroupsUi }) {
         <span className="group-head__name">{ui.scopeName}</span>
         {ui.scopeCount !== null && <span className="group-head__count muted"> · {meetingsText(ui.scopeCount)}</span>}
       </h2>
+      {kbFolder && (
+        <span className="group-head__kb muted" title="Папка базы знаний группы: ассистент видит её структуру первой">
+          <Folder size={14} strokeWidth={1.75} aria-hidden="true" />
+          <span className="sr-only">Папка базы знаний: </span>{kbFolder}
+        </span>
+      )}
       {editable && (
         <IconButton ref={more} icon={Ellipsis} size="sm" label={`Действия с группой «${ui.scopeName}»`}
           aria-haspopup="menu" aria-expanded={menu} onClick={() => (menu ? close() : setMenu(true))} />

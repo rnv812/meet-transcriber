@@ -1,0 +1,147 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { SettingsPane } from "./SettingsPane";
+import { VISION_NOTE } from "./ParticipantRows";
+import * as api from "../../lib/api";
+import * as shell from "../../lib/shell";
+import type { AssistantInfo } from "../../lib/types";
+
+/** Настройки агента-участника в разделе «Ассистент» (0.3.6). */
+
+vi.mock("../../lib/api", async (orig) => ({
+  ...(await orig<typeof import("../../lib/api")>()),
+  getSettings: vi.fn(),
+  patchSettings: vi.fn(),
+  getDevices: vi.fn(),
+  getProcesses: vi.fn(),
+  getAssistant: vi.fn(),
+  checkProvider: vi.fn(),
+  listLocalModels: vi.fn(),
+}));
+vi.mock("../../lib/shell", async (orig) => ({
+  ...(await orig<typeof import("../../lib/shell")>()),
+  pickFolder: vi.fn(),
+  openUrl: vi.fn(async () => {}),
+}));
+
+const ep = { base: "/api", token: null };
+type Patch = Record<string, Record<string, unknown>>;
+const settings: Patch = {
+  recording: { speaker_name: "Вы" },
+  ui: { notifications: "all" },
+  llm: { provider: "auto", model: "sonnet", base_url: "http://127.0.0.1:1234/v1", enabled: ["claude-code", "codex"] },
+  assist: { window_seconds: 20, activity: "calm", kb_map: true, kb_exclude: ["Личное/", ".trash/"], frequency: "more" },
+  assistant: { knowledge_dir: "D:\\KB", notes_dir: null },
+};
+const info = (provider = "claude-code"): AssistantInfo => ({
+  provider, setting: "auto", checking: false, knowledge_dir: "D:\\KB",
+  available: { "claude-code": { found: true, path: "C:\\claude.exe" }, codex: { found: true, path: "C:\\codex.exe" } },
+} as AssistantInfo);
+const merge = (base: Patch, u: Patch): Patch => {
+  const out = structuredClone(base);
+  for (const [g, v] of Object.entries(u)) out[g] = { ...(out[g] ?? {}), ...v };
+  return out;
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(api.getSettings).mockResolvedValue(structuredClone(settings));
+  vi.mocked(api.patchSettings).mockImplementation(async (_e, u) => ({ settings: merge(settings, u as Patch), restart_required: [] }));
+  vi.mocked(api.getDevices).mockResolvedValue({ available: false, pinning: false });
+  vi.mocked(api.getProcesses).mockResolvedValue({ available: false });
+  vi.mocked(api.getAssistant).mockResolvedValue(info());
+  vi.mocked(shell.pickFolder).mockResolvedValue(null);
+});
+
+const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
+const save = () => userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+test("участник включён (по умолчанию): частота, структура базы, исключения; прежних подсказок нет", async () => {
+  open();
+  expect(await screen.findByRole("switch", { name: "Ассистент-участник" })).toHaveAttribute("aria-checked", "true");
+  const freq = screen.getByRole("radiogroup", { name: "Как часто писать" });
+  expect(within(freq).getByRole("radio", { name: "чаще" })).toBeChecked();
+  expect(screen.getByRole("switch", { name: "Показывать ассистенту структуру базы знаний" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("list", { name: "Исключённые папки базы знаний" })).toHaveTextContent("Личное/");
+  expect(screen.getByText(VISION_NOTE)).toBeInTheDocument();
+  // Прежние подсказки и их ритм скрыты; «Не отвлекать по умолчанию» — общее.
+  expect(screen.queryByRole("radiogroup", { name: "Активность подсказок" })).toBeNull();
+  expect(screen.queryByRole("radiogroup", { name: "Модель для живых подсказок" })).toBeNull();
+  expect(screen.queryByLabelText("Сколько подсказок держать")).toBeNull();
+  expect(screen.getByRole("switch", { name: "Не отвлекать по умолчанию" })).toBeInTheDocument();
+  await userEvent.click(within(freq).getByRole("radio", { name: "реже" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Показывать ассистенту структуру базы знаний" }));
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { frequency: "less", kb_map: false } }));
+});
+
+test("участник выключен: прежние подсказки видны (запасной режим), настроек участника нет", async () => {
+  open();
+  await userEvent.click(await screen.findByRole("switch", { name: "Ассистент-участник" }));
+  expect(screen.getByRole("radiogroup", { name: "Активность подсказок" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Сколько подсказок держать")).toBeInTheDocument();
+  expect(screen.queryByRole("radiogroup", { name: "Как часто писать" })).toBeNull();
+  expect(screen.queryByRole("group", { name: "Исключённые папки" })).toBeNull();
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { participant: false } }));
+});
+
+test("исключения: папка из диалога — путь внутри базы; вне базы — отказ; вручную; убрать; по умолчанию", async () => {
+  open();
+  const editor = await screen.findByRole("group", { name: "Исключённые папки" });
+  vi.mocked(shell.pickFolder).mockResolvedValueOnce("D:\\KB\\Проекты\\Секрет");
+  await userEvent.click(within(editor).getByRole("button", { name: "Выбрать папку…" }));
+  expect(shell.pickFolder).toHaveBeenCalledWith("D:\\KB");
+  expect(within(editor).getByRole("list")).toHaveTextContent("Проекты/Секрет/");
+  vi.mocked(shell.pickFolder).mockResolvedValueOnce("C:\\Users\\me\\Desktop");
+  await userEvent.click(within(editor).getByRole("button", { name: "Выбрать папку…" }));
+  expect(within(editor).getByRole("alert")).toHaveTextContent("вне базы знаний");
+  await userEvent.type(within(editor).getByRole("textbox", { name: "Папка внутри базы знаний" }), "..\\вне{Enter}");
+  expect(within(editor).getByRole("alert")).toHaveTextContent("без буквы диска");
+  await userEvent.clear(within(editor).getByRole("textbox", { name: "Папка внутри базы знаний" }));
+  await userEvent.type(within(editor).getByRole("textbox", { name: "Папка внутри базы знаний" }), "Архив\\2024{Enter}");
+  await userEvent.click(within(editor).getByRole("button", { name: "Убрать исключение .trash/" }));
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    assist: { kb_exclude: ["Личное/", "Проекты/Секрет/", "Архив/2024/"] },
+  }));
+  await userEvent.click(within(editor).getByRole("button", { name: "По умолчанию" }));
+  expect(within(editor).getByRole("list")).toHaveTextContent("Личное/.trash/");
+});
+
+test("без базы знаний — выбрать папку нельзя, видно почему", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assistant: { knowledge_dir: null } }));
+  open();
+  const editor = await screen.findByRole("group", { name: "Исключённые папки" });
+  expect(within(editor).getByRole("button", { name: "Выбрать папку…" })).toBeDisabled();
+  expect(screen.getByText(/Сначала задайте базу знаний выше/)).toBeInTheDocument();
+});
+
+test("модель по умолчанию — Codex: «исключения — только просьба» и без пометки о картинках", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(info("codex"));
+  open();
+  expect(await screen.findByText("Codex: исключения — только просьба")).toBeInTheDocument();
+  expect(screen.getByText(VISION_NOTE)).toBeInTheDocument();
+});
+
+test("Claude Code — пометки «только просьба» нет", async () => {
+  open();
+  await screen.findByRole("group", { name: "Исключённые папки" });
+  expect(screen.queryByText(/исключения — только просьба/)).toBeNull();
+});
+
+test("локальная модель по умолчанию — пометка, что она не видит картинки", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(info("openai-compatible"));
+  open();
+  expect(await screen.findByText(`${VISION_NOTE}. Локальная модель картинки не видит`)).toBeInTheDocument();
+});
+
+test("осталась «Только сводка» прежнего ассистента — предупреждение и «Вернуть чат»", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary" } }));
+  open();
+  expect(await screen.findByText(/Выбрано «Только сводка»/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Вернуть чат" }));
+  expect(screen.queryByText(/Выбрано «Только сводка»/)).toBeNull();
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { activity: "calm" } }));
+});

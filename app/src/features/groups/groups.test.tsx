@@ -18,6 +18,7 @@ vi.mock("../../lib/api", async (orig) => ({
   orderGroups: vi.fn(),
   setGroupMembers: vi.fn(),
   getRecordings: vi.fn(),
+  getAssistant: vi.fn(),
 }));
 // Строка записи зовёт useAgentLive на каждую отрисовку: по числу вызовов видно, сколько строк перерисовано.
 vi.mock("../card/agentSessions", async (orig) => {
@@ -27,7 +28,9 @@ vi.mock("../card/agentSessions", async (orig) => {
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
   agentKillRecording: vi.fn(async () => {}),
+  pickFolder: vi.fn(async () => null),
 }));
+import * as shell from "../../lib/shell";
 
 const ep = { base: "/api", token: null };
 const rec = (id: string, extra: Partial<Recording> = {}): Recording => ({
@@ -201,7 +204,7 @@ test("меню группы: Переименовать, Цвет, Выше/Ни
   await userEvent.click(panel().getByRole("button", { name: "Действия с группой «Бета»" }));
   const menu = screen.getByRole("menu", { name: "Действия с группой «Бета»" });
   expect(within(menu).getAllByRole("menuitem").map((b) => b.textContent))
-    .toEqual(["Переименовать…", "Цвет", "Выше", "Ниже", "Удалить"]);
+    .toEqual(["Переименовать…", "Цвет", "Папка базы знаний…", "Выше", "Ниже", "Удалить"]);
   expect(within(menu).getByRole("menuitem", { name: "Ниже" })).toBeDisabled();
   await userEvent.click(within(menu).getByRole("menuitem", { name: "Выше" }));
   expect(api.orderGroups).toHaveBeenCalledWith(ep, ["g-b", "g-a"]);
@@ -689,4 +692,47 @@ test("«Отменить» удаление пустой открытой гру
   expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", '["g-d"]');
   expect(window.localStorage.getItem("meet.groupScope")).toBe('"g-d"');
   expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Пустая · 0 встреч");
+});
+
+// --- папка базы знаний группы ----------------------------------------------------------------
+
+test("«Папка базы знаний…» в меню группы: папка внутри базы — PATCH kb_folder, видна в заголовке группы", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue({ knowledge_dir: "D:\\KB" } as never);
+  vi.mocked(shell.pickFolder).mockResolvedValueOnce("D:\\KB\\Проекты\\Альфа");
+  const view = await setup();
+  await userEvent.click(panel().getByRole("button", { name: "Действия с группой «Проект Альфа»" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Папка базы знаний…" }));
+  await waitFor(() => expect(api.patchGroup).toHaveBeenCalledWith(ep, "g-a", { kb_folder: "Проекты/Альфа" }));
+  expect(shell.pickFolder).toHaveBeenCalledWith("D:\\KB");
+  await said("Папка базы знаний группы «Проект Альфа»: Проекты/Альфа");
+  // Резидент отдал группу с папкой: она в заголовке открытой группы и в меню — «Убрать…».
+  vi.mocked(api.getGroups).mockResolvedValue({
+    ...INFO, groups: [{ ...INFO.groups[0]!, kb_folder: "Проекты/Альфа" }, INFO.groups[1]!],
+  });
+  view.unmount();
+  await setup({ ...INFO, groups: [{ ...INFO.groups[0]!, kb_folder: "Проекты/Альфа" }, INFO.groups[1]!] });
+  await userEvent.click(rowOf("Проект Альфа"));
+  expect(document.querySelector(".group-head")).toHaveTextContent("Папка базы знаний: Проекты/Альфа");
+  await userEvent.click(panel().getByRole("button", { name: "Действия с группой «Проект Альфа»" }));
+  vi.mocked(shell.pickFolder).mockResolvedValueOnce(null);
+  await userEvent.click(screen.getByRole("menuitem", { name: "Папка базы знаний…" }));
+  expect(shell.pickFolder).toHaveBeenLastCalledWith("D:\\KB\\Проекты\\Альфа");
+  await userEvent.click(panel().getByRole("button", { name: "Действия с группой «Проект Альфа»" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Убрать папку базы знаний" }));
+  await waitFor(() => expect(api.patchGroup).toHaveBeenLastCalledWith(ep, "g-a", { kb_folder: null }));
+});
+
+test("«Папка базы знаний…»: папка вне базы — уведомление, ничего не записано; базы нет — подсказка", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue({ knowledge_dir: "D:\\KB" } as never);
+  vi.mocked(shell.pickFolder).mockResolvedValueOnce("C:\\Users\\me\\Desktop");
+  await setup();
+  await userEvent.click(panel().getByRole("button", { name: "Действия с группой «Бета»" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Папка базы знаний…" }));
+  await alerted("Папка вне базы знаний");
+  expect(api.patchGroup).not.toHaveBeenCalled();
+  vi.mocked(api.getAssistant).mockResolvedValue({ knowledge_dir: null } as never);
+  await userEvent.click(panel().getByRole("button", { name: "Действия с группой «Бета»" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Папка базы знаний…" }));
+  await alerted("Базы знаний нет");
+  expect(shell.pickFolder).toHaveBeenCalledTimes(1);
 });

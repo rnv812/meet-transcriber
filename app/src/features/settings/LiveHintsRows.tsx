@@ -1,7 +1,8 @@
 /**
  * Настройки живых подсказок (раздел «Ассистент» → «Живой ассистент»):
  * активность, модель для подсказок, сколько подсказок держать и «Не
- * отвлекать» по умолчанию. Всё — секция `assist`; ассистент читает её при
+ * отвлекать» по умолчанию. С агентом-участником (0.3.6) подсказок нет — их
+ * строки скрыты (`hints={false}`), остаётся «Не отвлекать». Всё — секция `assist`; ассистент читает её при
  * запуске, поэтому применяется со следующей записи с ассистентом.
  */
 
@@ -82,16 +83,27 @@ export function QuietTip() {
   );
 }
 
-export function LiveHintsRows({ draft, set, provider }: {
+export function LiveHintsRows({ draft, set, provider, hints = true }: {
   draft: Raw; set: SetFn;
   /** Кто отвечает сейчас (для пояснения «Быстрее»), null — неизвестно. */
   provider: string | null;
+  /**
+   * Прежние подсказки и их ритм: только при выключенном агенте-участнике (запасной
+   * режим 0.3.6); иначе — лишь «Не отвлекать по умолчанию».
+   */
+  hints?: boolean;
 }) {
   const assist = draft.assist ?? {};
   const activity = (ACTIVITIES.some((a) => a.value === assist.activity) ? assist.activity : "calm") as Activity;
   const tier = (assist.hints_model === "fast" ? "fast" : "agent") as Tier;
   const maxHints = typeof assist.max_hints === "number" ? assist.max_hints : 0;
   const choices = MAX_HINTS_CHOICES.includes(maxHints) ? MAX_HINTS_CHOICES : [...MAX_HINTS_CHOICES, maxHints].sort((a, b) => a - b);
+  const quiet = (
+    <Switch label="Не отвлекать по умолчанию" help={<QuietTip />}
+      hint="Панель открывается без подсветки и счётчиков"
+      value={assist.quiet_default === true} onChange={(v) => set("assist", "quiet_default", v)} />
+  );
+  if (!hints) return quiet;
   return (
     <>
       <Radio label="Активность подсказок" help={<LiveActivityTip />} value={activity} options={ACTIVITIES}
@@ -110,9 +122,7 @@ export function LiveHintsRows({ draft, set, provider }: {
           ))}
         </select>
       </Row>
-      <Switch label="Не отвлекать по умолчанию" help={<QuietTip />}
-        hint="Панель открывается без подсветки и счётчиков"
-        value={assist.quiet_default === true} onChange={(v) => set("assist", "quiet_default", v)} />
+      {quiet}
     </>
   );
 }

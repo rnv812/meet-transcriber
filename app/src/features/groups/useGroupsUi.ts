@@ -17,10 +17,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  createGroup, deleteGroup, type Endpoint, getGroups, getRecordings, libraryFilterKey, orderGroups, patchGroup,
-  setGroupMembers,
+  createGroup, deleteGroup, type Endpoint, getAssistant, getGroups, getRecordings, libraryFilterKey, orderGroups,
+  patchGroup, setGroupMembers,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { kbJoin, kbRelative } from "../../lib/kb";
+import { pickFolder } from "../../lib/shell";
 import {
   isScope, loadGroupScope, NO_GROUP, NO_GROUP_NAME, reorderIds, saveGroupScope, sentence, shiftId, UNKNOWN_NAME,
   type GroupScope,
@@ -84,6 +86,14 @@ export type GroupsUi = {
   rename: (id: string) => void;
   nameUnknown: (id: string) => void;
   setColor: (id: string, color: string) => Promise<void>;
+  /**
+   * «Папка базы знаний…»: выбрать папку внутри базы знаний (диалог оболочки) —
+   * ассистент встреч группы видит её структуру целиком первой. Базы нет или
+   * папка вне неё — уведомление.
+   */
+  pickKbFolder: (id: string) => Promise<void>;
+  /** Убрать папку базы знаний группы. */
+  clearKbFolder: (id: string) => Promise<void>;
   /** Группа на шаг выше/ниже; true — порядок поменялся. */
   shift: (id: string, delta: -1 | 1) => Promise<boolean>;
   /** Новый порядок; true — поменялся (тот же порядок или ошибка — false). */
@@ -274,6 +284,46 @@ export function useGroupsUi(ep: Endpoint | null, tick: number, q: string, filter
     } catch (cause) { fail(cause); }
   }, [changed, fail, noteMoved]);
 
+  const setKbFolder = useCallback(async (id: string, folder: string | null, text: string) => {
+    const { ep: e } = latest.current;
+    if (!e) return;
+    try {
+      noteMoved(await patchGroup(e, id, { kb_folder: folder }));
+      await changed();
+      say(text);
+    } catch (cause) { fail(cause); }
+  }, [changed, fail, noteMoved, say]);
+
+  const pickKbFolder = useCallback(async (id: string) => {
+    const { ep: e, groups: list } = latest.current;
+    const group = list.find((g) => g.id === id);
+    if (!e || !group) return;
+    let root: string | null = null;
+    try {
+      root = (await getAssistant(e)).knowledge_dir ?? null;
+    } catch (cause) { fail(cause); return; }
+    if (!root) {
+      setToast({ n: ++toastN.current, error: true,
+        text: "Базы знаний нет — задайте её в настройках ассистента, потом выберите папку группы" });
+      return;
+    }
+    const path = await pickFolder(group.kb_folder ? kbJoin(root, group.kb_folder) : root).catch(() => null);
+    if (!path) return;
+    const rel = kbRelative(root, path);
+    if (rel === null || rel === "") {
+      setToast({ n: ++toastN.current, error: true,
+        text: rel === "" ? "Это сама база знаний — выберите папку внутри неё"
+          : `Папка вне базы знаний — выберите папку внутри ${root}` });
+      return;
+    }
+    await setKbFolder(id, rel, `Папка базы знаний группы «${group.name}»: ${rel}`);
+  }, [fail, setKbFolder]);
+
+  const clearKbFolder = useCallback(async (id: string) => {
+    const group = latest.current.groups.find((g) => g.id === id);
+    if (group) await setKbFolder(id, null, `У группы «${group.name}» больше нет папки базы знаний`);
+  }, [setKbFolder]);
+
   const reorder = useCallback(async (ids: string[]) => {
     const { ep: e, groups: list } = latest.current;
     if (!e || ids.join() === list.map((g) => g.id).join()) return false;
@@ -397,7 +447,8 @@ export function useGroupsUi(ep: Endpoint | null, tick: number, q: string, filter
     shown, supported: info.supported, unavailable, retry, groups, unknown, none, total,
     readOnly: shown && info.newer, broken, dismissBroken,
     scope: shown ? scope : null, setScope, scopeName, scopeCount, libraryScope, nameOf,
-    create, rename, nameUnknown, setColor, shift, reorder, remove, clearUnknown, moveMeetings, drag,
+    create, rename, nameUnknown, setColor, pickKbFolder, clearKbFolder, shift, reorder, remove, clearUnknown,
+    moveMeetings, drag,
     dialog, closeDialog, submitDialog, clearAsk, answerClear, toast, closeToast, holdToast,
   };
 }

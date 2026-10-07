@@ -359,7 +359,8 @@ test.each([
   else expect(error).toContain(fragment);
 });
 
-test("живые подсказки: по умолчанию «Сдержанно» и «Как у агента»; выбор уходит в assist", async () => {
+test("живые подсказки (агент-участник выключен): по умолчанию «Сдержанно» и «Как у агента»; выбор уходит в assist", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { participant: false } }));
   open();
   const activity = await screen.findByRole("radiogroup", { name: "Активность подсказок" });
   expect(within(activity).getByRole("radio", { name: "Сдержанно" })).toBeChecked();
@@ -378,7 +379,7 @@ test("живые подсказки: по умолчанию «Сдержанн�
 });
 
 test("«Только сводка» — число подсказок не выбирается; у каждой настройки есть «?»", async () => {
-  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0 } }));
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0, participant: false } }));
   open();
   expect(await screen.findByLabelText("Сколько подсказок держать")).toBeDisabled();
   expect(screen.getByRole("option", { name: "По активности (5 или 8)" })).toBeInTheDocument();
