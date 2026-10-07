@@ -1,6 +1,6 @@
 [project]
 name = "meet-transcriber"
-version = "0.3.5"
+version = "0.3.6"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
