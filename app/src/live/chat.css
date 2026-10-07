@@ -4,7 +4,13 @@
 .chat-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .chat-ws__main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .chat-ws__feed { flex: 1; min-height: 0; font-size: 12px; }
-.chat-ws__transcript { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.chat-ws__transcript { min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+/* Узкая колонка расшифровки: время — над репликой, слова не рвутся посередине. */
+@container (max-width: 200px) {
+  .chat-ws__feed .live-feed__line { flex-direction: column; gap: 0; }
+  .chat-ws__feed .live-feed__t { padding-top: 0; }
+  .chat-ws__feed .live-feed__text { overflow-wrap: break-word; }
+}
 
 /*
  * Одна раскладка при любой ширине (0.3.7): расшифровка — колонкой слева (по
@@ -13,13 +19,13 @@
  */
 .chat-ws__body {
   flex: 1; min-height: 0; display: grid; gap: 12px;
-  grid-template-columns: var(--chat-side, clamp(96px, 30%, 480px)) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: var(--chat-side, clamp(120px, 30%, 480px)) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
 }
 .chat-ws__body > .chat-ws__transcript { grid-column: 1; grid-row: 1; padding-right: 12px; border-right: 1px solid var(--line); }
 .chat-ws__body > .chat-ws__main { grid-column: 2; grid-row: 1; }
 .chat-ws__body > .chat-ws__split { grid-column: 2; grid-row: 1; justify-self: start; margin-left: -12px; }
 .chat-ws__body > .chat-ws__edge {
-  grid-column: 2; grid-row: 1; justify-self: start; align-self: start; z-index: 2; margin: 2px 0 0 -22px;
+  grid-column: 2; grid-row: 1; justify-self: start; align-self: start; z-index: 16; margin: 2px 0 0 -22px;
 }
 /* Расшифровку убрали сами: узкая полоса с «›» и чат на всю ширину. */
 .chat-ws__body.is-hidden { grid-template-columns: 20px minmax(0, 1fr); gap: 6px; }

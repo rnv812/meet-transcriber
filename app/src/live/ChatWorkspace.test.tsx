@@ -273,7 +273,7 @@ describe("одна раскладка", () => {
     const room = { px: 1600 };
     const win = sideLayout(room);
     render(<Host live={makeLive({ agent: agentInfo() })} />);
-    for (const px of [600, 420, 300, 280]) {
+    for (const px of [600, 420, 360, 300]) {
       win.resize(px);
       const side = parseInt(body().style.getPropertyValue("--chat-side"), 10);
       expect(side).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
@@ -281,6 +281,8 @@ describe("одна раскладка", () => {
       expect(px - side - 12).toBeGreaterThanOrEqual(CHAT_FLOOR);
       expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
     }
+    win.resize(260);                                              // ещё уже — уступает колонка, чат не уже минимума
+    expect(260 - parseInt(body().style.getPropertyValue("--chat-side"), 10) - 12).toBeGreaterThanOrEqual(CHAT_FLOOR);
     expect(localStorage.getItem("meet.pane.live-chat-side")).toBe("900");
   });
 
