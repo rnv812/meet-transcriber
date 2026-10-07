@@ -1015,9 +1015,12 @@ def _quote(value: str, mark: bool) -> str:
     кавычка (`\\"`) и косые прямо перед кавычкой или в конце строки
     (удваиваются) — так из показа однозначно видно, где строка кончается, и
     поддельный ключ внутри значения выдаёт себя `\\"`. Переводы строк —
-    пометкой «↵» и настоящим переводом."""
+    пометкой «↵» и настоящим переводом; строки-продолжения — с «│ », чтобы
+    не изобразить строку ключа даже похожими кавычками (`＂…＂`, ревью GP2)."""
     escaped = re.sub(r'(\\*)("|\Z)', lambda m: m.group(1) * 2 + ('\\"' if m.group(2) else ""), str(value))
-    return '"' + (display_text(escaped, shell=True) if mark else escaped) + '"'
+    if not mark:
+        return '"' + escaped + '"'
+    return '"' + display_text(escaped, shell=True).replace("\n", "\n│ ") + '"'
 
 
 def pretty_args(value, mark: bool = True, indent: int = 0) -> str:
@@ -1110,6 +1113,26 @@ def _file_text(tool: str, data: dict, mark: bool) -> str | None:
     return None
 
 
+def web_host(url: str) -> tuple[str, str, bool]:
+    """(хост, его punycode, есть ли часть до «@») — из разобранного адреса,
+    как его поймёт клиент: у `https://good.com@evil.com/x` хост — evil.com."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        userinfo = "@" in (parts.netloc or "")
+    except ValueError:
+        return "", "", False
+    try:
+        puny = host.encode("idna").decode("ascii") if host else ""
+    except UnicodeError:
+        puny = host
+    return host, puny, userinfo
+
+
+def userinfo_warning(host: str) -> str:
+    return f"⚠ в адресе есть часть до @ — запрос уйдёт на {host or '⟨нет хоста⟩'}"
+
+
 def card_text(tool: str, data: dict, *, mark: bool = True) -> str:
     """Вызов для карточки — по инструменту (`mark=False` — без пометок, для
     размера): команда — как есть; WebFetch — адрес и что найти; Write —
@@ -1122,18 +1145,18 @@ def card_text(tool: str, data: dict, *, mark: bool = True) -> str:
         command = str(data.get("command") or "")
         return display_text(command, shell=True) if mark else command
     if tool in WEB_FETCH and isinstance(data.get("url", ""), str) and isinstance(data.get("prompt", ""), str):
-        # Адрес и что найти — каждое своей строкой; перевод строки внутри — пометкой «↵»,
-        # чтобы текст запроса не изобразил строку «(хост: …)» или «Другие параметры».
-        lines = [_inline(str(data.get("url") or ""), mark)]
+        # Первая строка — всегда хост, который Meet сам вынул из адреса (ревью GP1):
+        # куда уйдёт запрос, видно до всего, что написал агент; часть до «@» —
+        # предупреждением. Текст запроса — строками с «│ », так что он не
+        # изобразит строку Meet.
+        url = str(data.get("url") or "")
+        host, puny, userinfo = web_host(url)
+        lines = [f"хост: {_inline(host, mark) if host else '⟨нет⟩'}" + (f" ({puny})" if puny != host else "")]
+        if userinfo:
+            lines.append(userinfo_warning(host))
+        lines.append(f"адрес: {_inline(url, mark)}")
         if data.get("prompt"):
-            lines.append(f"(что найти: {_inline(data['prompt'], mark)})")
-        host = urlsplit(str(data.get("url") or "")).hostname or ""
-        try:
-            puny = host.encode("idna").decode("ascii") if host else ""
-        except UnicodeError:
-            puny = host
-        if puny and puny != host:
-            lines.append(f"(хост: {puny})")
+            lines += ["что найти:", *("│ " + x for x in _block(data["prompt"], mark))]
         return "\n".join(lines + _others(data, ("url", "prompt"), mark))
     if tool in FILE_WRITE:
         text = _file_text(tool, data, mark)
@@ -1165,9 +1188,14 @@ def card_for(tool: str, data: dict, grant: tuple[str, str] | None = None) -> dic
     else:
         title = tool
     args = card_text(tool, data)
+    warnings = bash_warnings(tool, data)
+    if tool in WEB_FETCH:
+        host, _puny, userinfo = web_host(str(data.get("url") or ""))
+        if userinfo:
+            warnings.append(userinfo_warning(host))      # и крупно над вызовом
     return {"tool": tool, "title": title, "args": args, "preview": card_preview(args),
             "size": _size(card_text(tool, data, mark=False)),
-            "warnings": bash_warnings(tool, data), "what": what, "kind": kind,
+            "warnings": warnings, "what": what, "kind": kind,
             "grant": {"key": grant[0], "label": grant[1]} if grant else None}
 
 
@@ -1189,15 +1217,25 @@ class Decision:
         return self.outcome == ALLOW
 
 
-def _shown_parent(path, cwd) -> str:
-    """Папка файла — для подписи разрешения, как её написал агент (абсолютная)."""
+def _shown_dir(folder: str, written=None, cwd=None, *, parent: bool = False) -> str:
+    """Папка для подписи разрешения — та, что на деле покрыта (ревью GP3):
+    путь после разбора ссылок и соединений (`realpath`, с настоящим
+    регистром). Не совпал с ключом разрешения — сам ключ (`folder`)."""
     try:
-        text = os.path.expandvars(os.path.expanduser(str(path)))
+        text = os.path.expandvars(os.path.expanduser(str(written)))
         if not os.path.isabs(text) and cwd:
             text = os.path.join(str(cwd), text)
-        return os.path.dirname(os.path.normpath(text))
-    except (TypeError, ValueError):
-        return ""
+        if parent:
+            text = os.path.dirname(os.path.normpath(text))
+        real = os.path.realpath(text)
+        for prefix in ("\\\\?\\", "//?/"):
+            if real.startswith(prefix):
+                real = real[len(prefix):]
+        if written is not None and _norm_text(real) == folder:
+            return real
+    except (TypeError, ValueError, OSError):
+        pass
+    return os.path.normpath(folder)
 
 
 def _canonical(tool: str, data) -> str:
@@ -1226,14 +1264,14 @@ class ConsentGate:
                  confirmer=None, blocked_roots=()) -> None:
         self._cwd = str(cwd) if cwd else None
         self._own = [r for r in (resolve(d, self._cwd) for d in own_dirs or () if d) if r]
-        # Папка для подписи разрешения — как её знает человек (регистр, «\»).
-        self._dir_shown = {r: os.path.normpath(str(d)) for d in own_dirs or () if d
+        # Папка для подписи разрешения — настоящая (после ссылок), с регистром и «\».
+        self._dir_shown = {r: _shown_dir(r, d, self._cwd) for d in own_dirs or () if d
                            for r in [resolve(d, self._cwd)] if r}
         if self._cwd:
             own_cwd = resolve(self._cwd)
             if own_cwd:
                 self._own.append(own_cwd)
-                self._dir_shown.setdefault(own_cwd, os.path.normpath(self._cwd))
+                self._dir_shown.setdefault(own_cwd, _shown_dir(own_cwd, self._cwd))
         self._deny = [r for r in (resolve(d, self._cwd) for d in deny_paths or () if d) if r]
         self._blocked = [r for r in (resolve(d, self._cwd) for d in blocked_roots or () if d) if r]
         self._ask_first = ASK_FIRST_PERSONAL if self._blocked else ASK_FIRST
@@ -1637,8 +1675,8 @@ class ConsentGate:
                     if target:
                         folder = target.rsplit("/", 1)[0]
                         self._approved_dirs.add(folder)
-                        self._dir_shown.setdefault(folder, _shown_parent(
-                            data.get("file_path") or data.get("notebook_path"), self._cwd) or folder)
+                        self._dir_shown.setdefault(folder, _shown_dir(
+                            folder, data.get("file_path") or data.get("notebook_path"), self._cwd, parent=True))
                 if answer == ALLOW_MEETING and card.get("grant"):
                     self._grants[card["grant"]["key"]] = card["grant"]["label"]
             return Decision(ALLOW, what=decision.what, kind=decision.kind,

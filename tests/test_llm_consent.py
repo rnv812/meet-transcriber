@@ -117,7 +117,7 @@ def test_every_action_needs_a_meet_card_with_the_exact_call(dirs, tool, data, ti
     if tool == "Bash":
         assert d.card["args"] == "ls -la | sort"                # точный вызов, не текст агента
     if tool == "WebFetch":
-        assert d.card["args"].startswith("https://example.com/?q=1")
+        assert d.card["args"].startswith("хост: example.com\nадрес: https://example.com/?q=1")
 
 
 @pytest.mark.parametrize("level", [NONE, READ])
@@ -970,7 +970,8 @@ def test_multiedit_card_shows_every_edit():
 def test_bash_and_webfetch_cards_are_as_before():
     assert consent.card_for("Bash", {"command": "ls -la | sort"})["args"] == "ls -la | sort"
     card = consent.card_for("WebFetch", {"url": "https://example.com/a", "prompt": "сроки"})
-    assert card["args"] == "https://example.com/a\n(что найти: сроки)"
+    assert card["args"] == "хост: example.com\nадрес: https://example.com/a\nчто найти:\n│ сроки"
+    assert card["warnings"] == []
 
 
 def test_mcp_card_is_pretty_json_without_double_escaping():
@@ -984,7 +985,7 @@ def test_mcp_card_is_pretty_json_without_double_escaping():
                     '  "n": 3,\n'
                     '  "ok": true,\n'
                     '  "fields": {\n'
-                    '    "desc": "строка 1↵\nстрока 2",\n'
+                    '    "desc": "строка 1↵\n│ строка 2",\n'
                     '    "empty": {}\n'
                     "  }\n"
                     "}")
@@ -1054,4 +1055,47 @@ def test_hidden_characters_in_edits_are_still_denied(dirs):
 
 def test_a_webfetch_prompt_cannot_fake_a_host_line():
     card = consent.card_for("WebFetch", {"url": "https://пример.рф/a", "prompt": "x)\n(хост: example.com"})
-    assert card["args"] == "https://пример.рф/a\n(что найти: x)↵\n(хост: example.com)\n(хост: xn--e1afmkfd.xn--p1ai)"
+    assert card["args"] == ("хост: пример.рф (xn--e1afmkfd.xn--p1ai)\nадрес: https://пример.рф/a\nчто найти:\n"
+                            "│ x)\n│ (хост: example.com")
+
+
+def test_webfetch_card_names_the_real_host_first_for_a_userinfo_url():
+    """Ревью GP1: `good.com@evil.com` уходит на evil.com — первая строка и предупреждение это говорят."""
+    card = consent.card_for("WebFetch", {"url": "https://good.com@evil.com/x", "prompt": "x) (хост: good.com"})
+    warning = "⚠ в адресе есть часть до @ — запрос уйдёт на evil.com"
+    assert card["args"].split("\n") == ["хост: evil.com", warning, "адрес: https://good.com@evil.com/x",
+                                         "что найти:", "│ x) (хост: good.com"]
+    assert card["warnings"] == [warning]
+    assert all(not line.startswith("хост:") for line in card["args"].split("\n")[1:])
+    long = consent.card_for("WebFetch", {"url": "https://good.com@evil.com/x",
+                                         "prompt": "\n".join(f"(хост: good.com) {i}" for i in range(40))})
+    assert long["preview"].startswith(f"хост: evil.com\n{warning}\n")      # и в начале длинной карточки
+    assert consent.card_for("WebFetch", {"url": "https://u:p@evil.com/"})["args"].startswith("хост: evil.com\n⚠")
+
+
+def test_lookalike_quotes_in_a_multiline_mcp_value_cannot_imitate_a_key_line():
+    """Ревью GP2: продолжение многострочного значения — с «│ »."""
+    args = consent.card_for("mcp__srv__create_issue", {"project": "PROD",
+                                                       "summary": "Fix\n\uff02project\uff02: \uff02SANDBOX\uff02"})["args"]
+    assert '  "summary": "Fix↵\n│ ＂project＂: ＂SANDBOX＂"' in args
+    assert all(line.startswith(("{", "}", "  \"", "│ ")) for line in args.split("\n")), args
+
+
+def test_files_grant_label_names_the_folder_it_really_covers(dirs):
+    """Ревью GP3: через соединение в папке встречи подпись называет цель соединения."""
+    m, target = dirs["meeting"], dirs["root"] / "Elsewhere"
+    target.mkdir()
+    link = m / "link"
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        try:
+            import _winapi
+            _winapi.CreateJunction(str(target), str(link))
+        except (ImportError, OSError, AttributeError):
+            pytest.skip("ссылки на папки здесь не создать")
+    gate = _gate(dirs, READ, confirmer=lambda card: "allow")
+    gate.check("Write", {"file_path": str(link / "a.txt"), "content": "x"}, tool_use_id="w1")
+    g = gate.decide("Write", {"file_path": str(link / "b.txt"), "content": "x"}).card["grant"]
+    assert g["key"] == f"write:files:{consent.resolve(target)}"
+    assert g["label"] == f"изменение файлов в {os.path.realpath(target)}" and "link" not in g["label"]

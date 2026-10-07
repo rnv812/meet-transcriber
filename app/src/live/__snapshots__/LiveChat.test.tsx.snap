@@ -1,5 +1,60 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`карточка WebFetch: настоящий хост первой строкой, часть до @ — предупреждением (ревью GP1) > WebFetch 1`] = `
+<section
+  aria-label="Ассистент хочет выполнить: открыть адрес"
+  class="chat-card chat-card--open"
+  role="group"
+>
+  <div
+    class="chat-card__title"
+  >
+    Ассистент хочет выполнить: 
+    <b>
+      открыть адрес
+    </b>
+    <span
+      class="chat-card__size muted"
+    >
+       · 
+      5 строк, 135 симв.
+    </span>
+  </div>
+  <div
+    class="chat-card__warn"
+    role="note"
+  >
+    ⚠ в адресе есть часть до @ — запрос уйдёт на evil.com
+  </div>
+  <pre
+    class="chat-card__args"
+    dir="ltr"
+  >
+    хост: evil.com
+⚠ в адресе есть часть до @ — запрос уйдёт на evil.com
+адрес: https://good.com@evil.com/x
+что найти:
+│ x) (хост: good.com
+  </pre>
+  <div
+    class="chat-card__actions"
+  >
+    <button
+      class="chat-btn chat-card__allow"
+      type="button"
+    >
+      Разрешить один раз
+    </button>
+    <button
+      class="chat-btn chat-card__deny"
+      type="button"
+    >
+      Отклонить
+    </button>
+  </div>
+</section>
+`;
+
 exports[`карточка записи: начало и конец с пометкой, «Показать полностью» — всё содержимое > Write, полностью 1`] = `
 <section
   aria-label="Ассистент хочет выполнить: запись в файл"
