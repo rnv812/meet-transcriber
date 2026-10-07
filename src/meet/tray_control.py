@@ -1554,6 +1554,13 @@ class TrayControl:
             raise _bad_request("on — true, false или null")
         return self._live_call(self.live.chat_react, mid, {"emoji": emoji, "on": on})
 
+    def live_chat_remove(self, aid: str) -> dict:
+        """Вложение убрали из строки ввода до отправки (`a<N>`): ни в ленте, ни
+        у агента его не будет. Уже отправленное — 400 от ребёнка."""
+        if not isinstance(aid, str) or not re.fullmatch(r"a\d{1,9}", aid):
+            raise _bad_request("неизвестное вложение")
+        return self._live_call(self.live.chat_remove, aid)
+
     def live_chat_stop(self, body: dict | None) -> dict:
         """«Стоп» у ответа, который пишется: `{"id"?}`."""
         mid = (body or {}).get("id")
@@ -3369,7 +3376,10 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        if self._live_folder(folder):
+        if not settings.load().assist.participant:
+            # Ревью chat-api, M7: агент-участник выключен в настройках — и после встречи.
+            raise _conflict("Чат с ассистентом выключен в настройках")
+        if self._live_folder(folder, strict=True):
             raise _conflict("Идёт живой режим этой записи — пишите ассистенту в чат встречи")
         if self._key(folder) in self._busy_now():
             raise _conflict("Запись ещё идёт — продолжить разговор можно после её окончания")
@@ -3420,11 +3430,15 @@ class TrayControl:
         if events:
             self.bus.emit(CHAT_UPDATED, id=folder.name)
 
-    def _live_folder(self, folder: Path) -> bool:
-        """Идёт ли живой режим этой записи (тогда пишет ребёнок)."""
+    def _live_folder(self, folder: Path, *, strict: bool = False) -> bool:
+        """Идёт ли живой режим этой записи (тогда пишет ребёнок). Не удалось
+        узнать: для чтения — «нет», для записи в журнал (`strict`) — 503, чтобы
+        не писать в него вдвоём с ребёнком (ревью chat-api, M7)."""
         try:
             live_folder = self.live.status().get("folder")
         except Exception:
+            if strict:
+                raise _unavailable("Не удалось узнать, идёт ли живой режим — повторите")
             return False
         return bool(live_folder) and self._key(Path(live_folder)) == self._key(folder)
 

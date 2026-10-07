@@ -135,6 +135,8 @@ def test_proxy_routes_reach_the_child(child, tmp_path):
     note.write_text("# План\n\nСрок — пятница.\n", encoding="utf-8")
     attached = live.chat_attach(str(note))
     assert attached["attachment"]["type"] == "doc"
+    assert live.chat_remove(attached["id"]) == {"ok": True, "changed": True}
+    assert child.state.chat.get(attached["id"])["status"] == "removed"
     agent = child.state.chat.append("agent", status="shown", text="Глянуть?", buttons=["Глянь"]).message
     assert live.chat_click(agent["id"], {"label": "Глянь"})["ok"] is True
     assert live.chat_react(agent["id"], {"emoji": "❓", "on": None}) == {"ok": True, "changed": True}
@@ -300,6 +302,11 @@ def test_live_chat_validates_and_forwards(state, tmp_path):
         state.live_chat_react("m3", {"emoji": "🔥"})
     state.live_chat_stop({"id": "m4"})
     assert state.live.calls[-1] == ("chat_stop", {"id": "m4"})
+    state.live_chat_remove("a7")
+    assert state.live.calls[-1] == ("chat_remove", "a7")
+    for bad in ("m7", "../a7", "a", 7):
+        with pytest.raises(control.BadRequest):
+            state.live_chat_remove(bad)
     state.live_chat_paste(b"png", "image/png; charset=binary", "%D1%84.png")
     assert state.live.calls[-1] == ("chat_paste", b"png", "image/png", "ф.png")
     with pytest.raises(control.BadRequest):
@@ -390,6 +397,24 @@ def test_continue_chat_during_live_of_this_recording_is_409(state, tmp_path):
     assert state.recording_chat(RID)["live"] is True
 
 
+def test_continue_chat_needs_the_participant_setting(state, tmp_path):
+    cfg = json.loads((tmp_path / "meet" / "config.json").read_text(encoding="utf-8"))
+    _write_config(tmp_path, {**cfg, "assist": {"participant": False}})
+    with pytest.raises(control.Conflict, match="выключен в настройках"):
+        state.continue_chat(RID, {"text": "привет"})
+    assert state.llm_queue.listing() == []
+
+
+def test_continue_chat_refuses_when_live_status_is_unknown(state):
+    def broken():
+        raise RuntimeError("ребёнок не отвечает")
+
+    state.live.status = broken
+    with pytest.raises(control.Unavailable, match="живой режим"):
+        state.continue_chat(RID, {"text": "привет"})
+    assert state.recording_chat(RID)["live"] is False     # чтение — как раньше
+
+
 def test_chat_job_end_emits_chat_updated(state, app):
     got = _events(app)
     job = jobs.Job(id="j1", kind=jobs.CHAT, folder=str(state._root() / RID))
@@ -468,6 +493,8 @@ def test_control_routes_for_chat(server):
     assert calls[-1] == ("live_chat_attach", {"path": "C:/x.md"})
     _call(server, "/live/chat/stop", {"id": "m2"})
     assert calls[-1] == ("live_chat_stop", {"id": "m2"})
+    _call(server, "/live/chat/attachments/a3/remove", {})
+    assert calls[-1] == ("live_chat_remove", "a3")
     _call(server, "/live/chat/m3/click", {"label": "Глянь"})
     assert calls[-1] == ("live_chat_click", "m3", {"label": "Глянь"})
     _call(server, "/live/chat/m3/react", {"emoji": "👍"})

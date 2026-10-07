@@ -1270,6 +1270,11 @@ class LiveControl:
     def chat_stop(self, payload: dict) -> dict:
         return self._request(self._active_port(), "/chat/stop", payload, REQUEST_TIMEOUT_S)
 
+    def chat_remove(self, aid: str) -> dict:
+        """Вложение убрали из строки ввода до отправки."""
+        return self._request(self._active_port(), f"/chat/attachments/{aid}/remove", {},
+                             REQUEST_TIMEOUT_S)
+
     def agent_frequency(self, key: str) -> dict:
         """«Как часто писать» — агенту идущей встречи; в настройки сохраняет
         резидент сам (`persist: false`)."""

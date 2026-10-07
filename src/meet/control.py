@@ -104,6 +104,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_chat_paste(raw, type, name)      вставленная картинка (сырое тело до 10 МБ)
     live_chat_attach(body)                файл или папка с диска {"path"}
     live_chat_click(id, body) / live_chat_react(id, body) / live_chat_stop(body)
+    live_chat_remove(id)                  вложение убрали из строки ввода до отправки
     agent_frequency(body)                 «Как часто писать»: в настройки и агенту
     recording_chat(id) -> dict            чат записи после встречи (+ legacy)
     continue_chat(id, body) -> dict       «Продолжить разговор»: сообщение и задача chat
@@ -954,6 +955,8 @@ _PATTERNS = (
      lambda h, p, mid: _server_of(h).state.live_chat_click(unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/react$"),
      lambda h, p, mid: _server_of(h).state.live_chat_react(unquote(mid), h._body())),
+    ("POST", re.compile(r"^/live/chat/attachments/([^/]+)/remove$"),
+     lambda h, p, aid: _server_of(h).state.live_chat_remove(unquote(aid))),
     # Анализ встречи (analysis.json): состояние и разметка; POST — поставить заново.
     # У POST итогов, вопроса, анализа, улучшения и названия тело {"provider": …} —
     # модель, выбранная человеком для этого действия (только из включённых);

@@ -1312,6 +1312,60 @@ class Participant:
             raise ValueError(f"вложения {item} нет в журнале")
         return record
 
+    async def remove_attachment(self, aid: str) -> dict | None:
+        """Вложение убрали из строки ввода до отправки («×» в окне): запись
+        журнала — `status: "removed"` (её нет ни в ленте, ни в затравке), файл
+        картинки или материал с текстом — с диска, если на них не ссылается
+        другое вложение. Уже отправленное (на него ссылается сообщение) или
+        не вложение — ValueError. → событие журнала (None — уже убрано)."""
+        from meet.assist.chatlog import REMOVED
+
+        if not isinstance(aid, str) or not _ATTACHMENT_ID.match(aid):
+            raise ValueError("неизвестное вложение")
+        messages = await self._io(self._chatlog.messages)
+        record = next((m for m in messages if m.get("id") == aid), None)
+        if record is None or record.get("kind") != "attachment":
+            raise ValueError(f"вложения {aid} нет в журнале")
+        if record.get("status") == REMOVED:
+            return None
+        if any(m.get("kind") == "user" and aid in (m.get("attachments") or []) for m in messages):
+            raise ValueError("вложение уже отправлено — убрать его нельзя")
+        event = await self._io(self._chatlog.patch, aid, {"status": REMOVED})
+        others = [m for m in messages if m.get("kind") == "attachment" and m.get("id") != aid
+                  and m.get("status") != REMOVED]
+        ref = record.get("ref")
+        if isinstance(ref, str) and not any(m.get("ref") == ref for m in others):
+            await asyncio.to_thread(self._drop_files, record)
+        if record.get("status") == "ready":
+            if record.get("type") == "image":
+                self._images = max(0, self._images - 1)
+            elif record.get("type") == "doc":
+                self._materials = max(0, self._materials - 1)
+        if event is not None:
+            self._emit_chat([event])
+        self._changed()
+        return event
+
+    def _drop_files(self, record: dict) -> None:
+        """Файлы убранного вложения: картинка (`assistant/files/…`) или
+        материал (`materials/<ref>.json` и текст рядом). Только внутри папки встречи."""
+        from meet import materials
+
+        ref = str(record.get("ref") or "")
+        paths = []
+        if record.get("type") == "doc" and ref:
+            paths += [materials.materials_dir(self._folder) / f"{ref}.json", _text_dump_path(self._folder, ref)]
+        elif record.get("type") == "image" and record.get("path"):
+            paths.append(Path(record["path"]))
+        root = self._folder.resolve()
+        for path in paths:
+            try:
+                if not path.resolve().is_relative_to(root):
+                    continue
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                self._log(f"агент: файл убранного вложения не удалён ({path.name}: {e})")
+
     async def queue_existing(self, mid: str) -> dict:
         """Сообщение пользователя, уже записанное в журнал другим писателем
         (резидент после встречи: «Продолжить разговор»), — в ближайший ход,
@@ -1372,6 +1426,9 @@ class Participant:
 
         if isinstance(item, str) and _ATTACHMENT_ID.match(item):
             record = await self._io(self._chatlog.get, item)
+            if record is not None and record.get("status") == "removed":
+                self._log(f"агент: вложение {item} убрано до отправки")
+                return None, {}, None
             if record is None or record.get("kind") != "attachment":
                 self._log(f"агент: вложения {item} нет в журнале")
                 return None, {}, None

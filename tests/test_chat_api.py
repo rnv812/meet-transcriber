@@ -9,6 +9,7 @@ FakeState в test_assist_web.py."""
 import asyncio
 import io
 import json
+from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -586,3 +587,63 @@ def test_duplicate_post_of_an_unanswered_message_queues_it_again(tmp_path):
     _run(main())
     agent = [m for m in state.chat.messages() if m["kind"] == "agent"]
     assert agent[0]["re"] == "m1" and agent[0]["text"] == "Отвечаю"
+
+
+# --- вложение убрали до отправки (ревью M8) ---------------------------------------------
+
+
+def test_removed_attachment_leaves_the_feed_the_disk_and_the_agent(tmp_path):
+    note = tmp_path / "План.md"
+    note.write_text("# План\n\nСрок — пятница.\n", encoding="utf-8")
+
+    async def scenario():
+        state = ChatState(tmp_path, token="s3cret")
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post("/chat/paste", data=_png(), headers={"Content-Type": "image/png"})
+            image = await r.json()
+            r = await client.post("/chat/attach", json={"path": str(note)}, headers={TOKEN_HEADER: "s3cret"})
+            doc = await r.json()
+            image_path = Path(image["attachment"]["path"])
+            assert image_path.is_file()
+            assert state.participant.view()["sees"]["images"] == 1
+            assert state.participant.view()["sees"]["materials"] == 1
+            from meet import materials
+            assert len(materials.records(state.folder)) == 1
+
+            for aid in (image["id"], doc["id"]):
+                r = await client.post(f"/chat/attachments/{aid}/remove")
+                assert r.status == 200 and (await r.json()) == {"ok": True, "changed": True}
+            r = await client.post(f"/chat/attachments/{image['id']}/remove")
+            assert (await r.json())["changed"] is False          # уже убрано
+            assert not image_path.exists() and materials.records(state.folder) == []
+            sees = state.participant.view()["sees"]
+            assert sees["images"] == 0 and sees["materials"] == 0
+            r = await client.get("/chat")
+            assert [m["kind"] for m in (await r.json())["messages"]] == []
+            assert "План" not in state.chat.context(4000)
+            assert "План" not in state.chat.render_md()
+
+            # Сообщение со ссылкой на убранное — без него.
+            r = await client.post("/chat", json={"text": "без файла", "attachments": [doc["id"]],
+                                                 "client_id": "c-9"})
+            assert (await r.json())["attachments"] == []
+
+    _run(scenario())
+
+
+def test_sent_attachment_cannot_be_removed(tmp_path):
+    async def scenario():
+        state = ChatState(tmp_path)
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post("/chat/paste", data=_png(), headers={"Content-Type": "image/png"})
+            aid = (await r.json())["id"]
+            await client.post("/chat", json={"text": "вот", "attachments": [aid], "client_id": "c-1"})
+            r = await client.post(f"/chat/attachments/{aid}/remove")
+            assert r.status == 400 and "уже отправлено" in await r.text()
+            r = await client.post("/chat/attachments/m1/remove")
+            assert r.status == 400
+            r = await client.post("/chat/attachments/a99/remove")
+            assert r.status == 400
+            assert state.chat.get(aid)["status"] == "ready"
+
+    _run(scenario())

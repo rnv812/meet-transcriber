@@ -40,6 +40,9 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
 - `POST /chat/{id}/click` `{"label", "client_id"?}` → `{"ok", "id"}`;
 - `POST /chat/{id}/react` `{"emoji", "on"?}` → `{"ok", "changed"}`;
 - `POST /chat/stop` `{"id"?}` → `{"ok"}`;
+- `POST /chat/attachments/{aid}/remove` → `{"ok", "changed"}`: вложение
+  убрали из строки ввода до отправки (запись — `removed`, файлы — с диска);
+  уже отправленное — 400;
 - `PUT /agent/frequency` `{"frequency": "less|normal|more|реже|обычно|чаще",
   "persist"?}` → `{"frequency", "label", "live", "saved"}`: агенту — сразу,
   в настройки (`assist.frequency`) — ключом, если не `persist: false`
@@ -636,6 +639,14 @@ def build_app(state) -> web.Application:
         stopped = await _guarded(participant.stop_reply(mid))
         return _json_response({"ok": bool(stopped)})
 
+    async def chat_remove(request):
+        participant = _participant(state)
+        aid = request.match_info["aid"]
+        if not _ATTACHMENT_ID.match(aid):
+            raise web.HTTPBadRequest(text="неизвестное вложение")
+        event = await _guarded(participant.remove_attachment(aid))
+        return _json_response({"ok": True, "changed": event is not None})
+
     async def agent_frequency(request):
         from meet.settings import FREQUENCY_LABELS, frequency_key
 
@@ -675,6 +686,7 @@ def build_app(state) -> web.Application:
         web.post("/chat/paste", chat_paste),
         web.post("/chat/attach", chat_attach),
         web.post("/chat/stop", chat_stop),
+        web.post("/chat/attachments/{aid}/remove", chat_remove),
         web.post("/chat/{mid}/click", chat_click),
         web.post("/chat/{mid}/react", chat_react),
         web.put("/agent/frequency", agent_frequency),

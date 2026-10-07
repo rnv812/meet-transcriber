@@ -170,6 +170,9 @@ WRITING = "writing"
 STATUSES = (WRITING, "shown", "held", "dropped", "superseded", "dismissed", "cancelled", "failed")
 # Реплики агента, которых в чате не было видно.
 HIDDEN_STATUSES = ("held", "dropped", "superseded")
+# Вложение, убранное из строки ввода до отправки (окно, «×»): его нет ни в
+# ленте, ни в затравке, ни в `assistant_chat.md` (ревью chat-api, M8).
+REMOVED = "removed"
 # Реакции человека на реплики агента (`react`): эмодзи → подпись.
 REACTIONS = {"👍": "норм", "👎": "не норм", "❓": "вопрос"}
 # Поля записи, которые ставит журнал: ни в `append(**fields)`, ни в `patch`.
@@ -378,6 +381,10 @@ def _check_fields(kind, fields: dict) -> dict:
     return fields
 
 
+def _removed(record: dict) -> bool:
+    return record.get("kind") == "attachment" and record.get("status") == REMOVED
+
+
 def visible_in_feed(record: dict) -> bool:
     """Показывать ли сообщение в ленте окна (`snapshot(feed=True)`, SSE
     `chat` add): нет служебных записей `tool`, событий реакций и «озвучено»
@@ -390,6 +397,8 @@ def visible_in_feed(record: dict) -> bool:
     if kind == "tool":
         return False
     if kind == "meeting" and record.get("event") in ("reaction", "voiced"):
+        return False
+    if kind == "attachment" and record.get("status") == REMOVED:
         return False
     return not (kind == "agent" and record.get("status") in HIDDEN_STATUSES)
 
@@ -1037,7 +1046,8 @@ class ChatLog:
         view = {m["id"]: m for m in everything}
         msgs = [m for m in everything
                 if not (m.get("kind") == "meeting" and m.get("event") == "voiced")
-                and m.get("status") != WRITING and not _system_error(m)]
+                and m.get("status") != WRITING and not _system_error(m)
+                and not _removed(m)]
         if not msgs:
             return ""
         split, counted = len(msgs), 0
@@ -1222,7 +1232,7 @@ class ChatLog:
         """Переписка в читаемом виде (для вкладки «Агент», `agent_context`).
         Только то, что было видно в чате: без `held`/`dropped`/`superseded`
         и без незаконченного ответа (`writing`)."""
-        msgs = self.messages()
+        msgs = [m for m in self.messages() if not _removed(m)]
         view = {m["id"]: m for m in msgs}
         out = [f"# {title or 'Разговор с ассистентом'}", "",
                f"Журнал чата ассистента этой встречи ({CHAT_DIR}/{CHAT_JSONL}) в читаемом "
