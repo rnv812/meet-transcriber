@@ -172,6 +172,10 @@ class VoiceMatcher:
         if self.owner:
             parts.append("микрофон по голосам" if self.mic else "образец владельца есть, "
                          "микрофон не делится (настройки)")
+        elif self.mic:
+            # Без образца микрофон весь владельца: люди рядом (встреча за одним
+            # ноутбуком) подписываются «Вы» — причина должна быть видна в журнале.
+            parts.append("микрофон не делится: нет образца вашего голоса")
         self._log(f"голоса: live-имена включены ({', '.join(parts)}, порог {self.threshold:.2f})")
 
     def live_voices(self, defaults: dict | None = None, log=None):

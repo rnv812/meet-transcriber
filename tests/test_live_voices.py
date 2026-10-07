@@ -3,6 +3,7 @@
 первого сэмпла → вектор)."""
 
 import numpy as np
+import pytest
 
 from meet import live_voices as lv
 from meet.owner_voice import OwnerSample
@@ -491,9 +492,10 @@ def _toward(rng, o, c):
     return _u(c * o + np.sqrt(1 - c ** 2) * u)
 
 
-def spread_run(c0, plan, seed=0, sample_of="owner"):
+def spread_run(c0, plan, seed=0, sample_of="owner", short_share=0.0):
     """`plan` — [(кто, секунды)]: owner, room или b (третий человек, cos 0.35
-    с владельцем). Образец — голоса `sample_of` с качеством c0."""
+    с владельцем). Образец — голоса `sample_of` с качеством c0. `short_share`
+    — доля коротких реплик 1–1,5 с (их эмбеддинг шумнее)."""
     rng = np.random.default_rng(seed)
     o = _u(rng.standard_normal(SPREAD_D))
     r = rng.standard_normal(SPREAD_D)
@@ -508,8 +510,10 @@ def spread_run(c0, plan, seed=0, sample_of="owner"):
     for who, total in plan:
         said = 0.0
         while said < total:
-            d = float(rng.uniform(1.5, 4.0))
-            nxt["v"] = _u(voice[who] + SPREAD_SIG * _u(rng.standard_normal(SPREAD_D)))
+            short = bool(short_share) and rng.random() < short_share
+            d = float(rng.uniform(1.0, 1.5)) if short else float(rng.uniform(1.5, 4.0))
+            sig = SPREAD_SIG * (1.6 if short else 1.0)
+            nxt["v"] = _u(voice[who] + sig * _u(rng.standard_normal(SPREAD_D)))
             a = v.assign("mic", np.zeros(int(d * SR), dtype=np.float32), t, t + d)
             lines.append((who, a.voice, d))
             t += d + 0.4
@@ -601,3 +605,152 @@ def test_presence_changes_are_logged_with_the_labels():
 def test_session_prefix_is_32_bits():
     v = voices(session=None)
     assert len(v.session) == 8
+
+
+# --- два голоса микрофона: встреча за одним ноутбуком -------------------------------
+# Владелец и сосед говорят в один микрофон, реплики встык. Когда оба голоса
+# известны (якорь владельца и человек рядом), сегмент решается сравнением с их
+# живыми центроидами, а не порогом образца.
+
+
+def _both_known(v):
+    """Владелец 12 с, потом человек рядом 16 с: оба голоса известны."""
+    _, t = feed(v, "mic", 3, 6)
+    room, t = feed(v, "mic", 4, 8, start=t)
+    assert room[-1].role == lv.ROOM and v._both(v._tracks["mic"])
+    return t
+
+
+def test_segment_like_the_sample_but_closer_to_the_room_voice_is_room():
+    """Голос соседа бывает похож на образец выше T_WIN_FAST (cos 0.5): раньше
+    такой сегмент уходил в якорь владельца и подписывался «Вы»."""
+    VOICES[9] = lv._unit(0.5 * OWNER + 0.866 * ROOM)
+    try:
+        v = voices(owner=owner_samples())
+        t = _both_known(v)
+        got = v.assign("mic", clip(9), t, t + 2.0)
+    finally:
+        del VOICES[9]
+    assert got.role == lv.ROOM and got.speaker == lv.ROOM_SPEAKER
+    assert v._tracks["mic"].owner().seconds == 12.0  # якорь владельца чужим окном не вырос
+
+
+def test_owner_segment_below_the_sample_threshold_stays_owner_when_both_known():
+    VOICES[9] = lv._unit(0.40 * OWNER + 0.2 * ROOM + 0.894 * IVAN)  # с образцом 0.40
+    try:
+        v = voices(owner=owner_samples())
+        t = _both_known(v)
+        got = v.assign("mic", clip(9), t, t + 2.0)
+    finally:
+        del VOICES[9]
+    assert got.speaker == "Вы" and got.role == lv.OWNER
+    assert v._tracks["mic"].owner().seconds == 12.0  # не похож на образец — якорь не растёт
+
+
+def test_short_reply_between_owner_phrases_is_decided_by_voice():
+    calls = []
+    v = voices(owner=owner_samples(), calls=calls)
+    t = _both_known(v)
+    feed(v, "mic", 3, 1, start=t)  # владелец…
+    n = len(calls)
+    # …и сразу «да» соседа на 1,2 с: раньше — без голоса, подпись предыдущего («Вы»).
+    got = v.assign("mic", clip(4, 1.2), t + 2.2, t + 3.4)
+    assert len(calls) == n + 1 and calls[-1] == int(1.2 * SR)
+    assert got.role == lv.ROOM and got.speaker == lv.ROOM_SPEAKER
+    tv = v._tracks["mic"]
+    room = tv.resolve(tv.number(got.voice))
+    before = room.seconds
+    v.assign("mic", clip(4, 1.2), t + 3.5, t + 4.7)
+    assert room.seconds == before  # короткая реплика центроид не растит
+
+
+def test_short_reply_is_not_embedded_until_both_voices_are_known():
+    calls = []
+    v = voices(owner=owner_samples(), calls=calls)
+    _, t = feed(v, "mic", 3, 6)
+    n = len(calls)
+    got = v.assign("mic", clip(4, 1.2), t, t + 1.2)
+    assert len(calls) == n  # сосед ещё не известен — как раньше, без голоса
+    assert got.voice == "s/mic:owner"  # подпись предыдущего сегмента
+
+
+def test_reply_shorter_than_a_second_is_never_embedded():
+    calls = []
+    v = voices(owner=owner_samples(), calls=calls)
+    t = _both_known(v)
+    n = len(calls)
+    v.assign("mic", clip(4, 0.9), t, t + 0.9)
+    assert len(calls) == n
+
+
+def test_voice_far_from_both_known_voices_gets_its_own_cluster():
+    """Третий голос (не похож ни на владельца, ни на соседа) — не в «Вы» и не
+    в соседа, а свой кластер (может стать своим человеком рядом)."""
+    v = voices(owner=owner_samples())
+    t = _both_known(v)
+    got = v.assign("mic", clip(1), t, t + 2.5)  # голос Демьяна
+    tv = v._tracks["mic"]
+    c = tv.resolve(tv.number(got.voice))
+    assert c.n != lv.OWNER_N and c.role != lv.ROOM
+    assert c.seconds == pytest.approx(2.5)
+
+
+def test_room_voice_in_pieces_accumulates_in_one_cluster():
+    """Сосед говорит урывками, окна его голоса похожи друг на друга слабо (cos
+    0.5 < LIVE_ASSIGN): раньше каждое заводило свой кластер, и ни один не
+    набирал ROOM_MIN_S речи. Ближе к нему, чем к владельцу, — копится в нём."""
+    VOICES[8] = lv._unit(ROOM + IVAN)
+    VOICES[9] = lv._unit(ROOM + PETR)  # cos(8, 9) = 0.5
+    try:
+        v = voices(owner=owner_samples())
+        _, t = feed(v, "mic", 3, 6)
+        got = []
+        for i in range(8):
+            got.append(v.assign("mic", clip(8 if i % 2 == 0 else 9), t, t + 2.0))
+            t += 2.2
+    finally:
+        del VOICES[8], VOICES[9]
+    tv = v._tracks["mic"]
+    assert len({tv.resolve(tv.number(a.voice)).n for a in got}) == 1
+    assert got[-1].role == lv.ROOM
+
+
+def test_small_fragment_closer_to_the_room_voice_is_relabelled_retroactively():
+    """Кусок голоса соседа, сказанный до того, как сосед стал известен, —
+    мелкий кластер без роли («Вы»). Когда сосед известен, кусок вливается в
+    него, и его строки получают подпись задним числом. Кусок, который ближе к
+    владельцу, остаётся «Вы»."""
+    v = voices(owner=owner_samples())
+    feed(v, "mic", 3, 6)
+    tv = v._tracks["mic"]
+    near_room = tv.clusters[tv._new(lv._unit(0.3 * OWNER + 0.6 * ROOM + 0.742 * IVAN), 2.0)]
+    near_owner = tv.clusters[tv._new(lv._unit(0.6 * OWNER + 0.3 * ROOM + 0.742 * IVAN), 2.0)]
+    for c in (near_room, near_owner):
+        v._shown[tv.key(c.n)] = v.speaker(tv.key(c.n))
+    assert v.speaker(tv.key(near_room.n)) == "Вы"
+    room = tv.clusters[tv._new(ROOM, 12.0)]
+    room.role, v._present = lv.ROOM, True
+    v._review("mic", tv)
+    assert near_room.into == room.n and near_owner.into is None
+    assert room.role == lv.ROOM  # роль соседа не сбросилась, как при merge
+    assert (tv.key(near_room.n), lv.ROOM_SPEAKER) in v.drain()
+    assert v.speaker(tv.key(near_owner.n)) == "Вы"
+
+
+def test_fast_turns_with_short_replies_split_owner_and_room():
+    """Разговор лицом к лицу: короткие реплики встык, треть — 1–1,5 с.
+    Владелец «рядом» почти не бывает, сосед почти не бывает «Вы»."""
+    for c0 in (0.70, 0.86):
+        for seed in range(3):
+            out, _ = spread_run(c0, [("owner", 8), ("room", 4)] * 60, seed, short_share=0.4)
+            owner = sum(x for (who, _), x in out.items() if who == "owner")
+            room = sum(x for (who, _), x in out.items() if who == "room")
+            owner_as_room = sum(x for (who, label), x in out.items() if who == "owner" and label != "Вы")
+            room_as_you = out.get(("room", "Вы"), 0.0)
+            assert owner_as_room <= 0.03 * owner, (c0, seed, out)
+            assert room_as_you <= 0.10 * room, (c0, seed, out)
+
+
+def test_fast_turns_with_a_bad_sample_keep_the_whole_mic_as_owner():
+    out, _ = spread_run(0.55, [("owner", 8), ("room", 4)] * 60, 0, short_share=0.4)
+    assert all(label == "Вы" for (_, label) in out)

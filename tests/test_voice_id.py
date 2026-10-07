@@ -247,3 +247,19 @@ def test_live_engine_starts_with_failing_embedder(tmp_path, monkeypatch):
     with pytest.raises(Stop):  # дошли до подключения — загрузка матчера не упала
         engine.start()
     assert not matcher.enabled
+
+
+def test_load_says_why_the_mic_is_not_split_without_owner_sample(monkeypatch):
+    """Без образца владельца микрофон весь «Вы» (встреча за одним ноутбуком —
+    сосед тоже «Вы»): причина — в строке журнала, а не молча."""
+    import meet.voice_id as vid
+
+    monkeypatch.setattr(vid, "load_voices", _base)
+    monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: [])
+    monkeypatch.setattr(vid, "_load_embedder", lambda: _embed)
+    lines = []
+    VoiceMatcher(threshold=0.7, mic=True, log=lines.append).load()
+    assert any("нет образца вашего голоса" in line for line in lines)
+    lines.clear()
+    VoiceMatcher(threshold=0.7, mic=False, log=lines.append).load()
+    assert not any("образца" in line for line in lines)  # делить и не просили
