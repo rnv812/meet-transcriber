@@ -140,7 +140,7 @@ def _xlsx(path: Path) -> Path:
     workbook = (f'<workbook xmlns="{S}" xmlns:r="{R}"><sheets>'
                 f'<sheet name="Бюджет" sheetId="1" r:id="rId1"/><sheet name="Пусто" sheetId="2" r:id="rId2"/>'
                 f"</sheets></workbook>")
-    shared = f'<sst xmlns="{S}"><si><t>Статья</t></si><si><t>Сумма</t></si><si><r><t>Мат</t></r><r><t>веры</t></r></si></sst>'
+    shared = f'<sst xmlns="{S}"><si><t>Статья</t></si><si><t>Сумма</t></si><si><r><t>Серв</t></r><r><t>еры</t></r></si></sst>'
     sheet = (f'<worksheet xmlns="{S}"><sheetData>'
              f'<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
              f'<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>300000</v></c></row>'
