@@ -18,6 +18,7 @@ import { Bell, BellOff } from "lucide-react";
 import { IconButton } from "../../ui/IconButton";
 import { useQuiet } from "../../live/useAttention";
 import { useLiveAsk } from "../../live/useLastLook";
+import { useChat } from "../../live/useChat";
 import { useLive } from "../../live/useLive";
 import { useWide } from "../../live/useWide";
 
@@ -30,7 +31,8 @@ export function LiveCard({ endpoint, live, onAskAgent }: {
   const stopping = live.stopping || !live.active;
   // При остановке резидент поток уже закрыл: без `!stopping` хук
   // переподключался бы и писал «Нет связи с ассистентом».
-  const state = useLive(endpoint, !stopping);
+  const chat = useChat(endpoint);
+  const state = useLive(endpoint, !stopping, chat.sink);
   const ask = useLiveAsk(state, true);
   const [quiet, setQuiet] = useQuiet(state.quietDefault);
   const root = useRef<HTMLDivElement>(null);
@@ -47,7 +49,8 @@ export function LiveCard({ endpoint, live, onAskAgent }: {
           tooltip="Не отвлекать: без подсветки и счётчиков" onClick={() => setQuiet(!quiet)} />
       </div>
       <div className="live-card__body">
-        <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} place="card" />
+        <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} place="card"
+          chat={chat} />
       </div>
     </div>
   );

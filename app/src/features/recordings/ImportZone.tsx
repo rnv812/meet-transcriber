@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, importFile } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { inTauri, pickMedia } from "../../lib/shell";
+import { inTauri, overChatDrop, pickMedia } from "../../lib/shell";
 import { Icon } from "../../ui/Icon";
 
 const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
@@ -42,7 +42,11 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
       const { getCurrentWebview } = await import("@tauri-apps/api/webview");
       const un = await getCurrentWebview().onDragDropEvent((e) => {
         const p = e.payload;
-        if (p.type === "enter" || p.type === "over") setOver(true);
+        // Над чатом ассистента (карточка идущей записи) файлы — вложения в чат, не импорт.
+        const scale = window.devicePixelRatio || 1;
+        const inChat = p.type !== "leave" && !!p.position && overChatDrop(p.position.x / scale, p.position.y / scale);
+        if (inChat) setOver(false);
+        else if (p.type === "enter" || p.type === "over") setOver(true);
         else if (p.type === "leave") setOver(false);
         else if (p.type === "drop") {
           setOver(false);

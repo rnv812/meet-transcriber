@@ -22,12 +22,14 @@ import { clock } from "../lib/format";
 import type { LiveCatchup, LiveHint, LiveQuick } from "../lib/types";
 import { Button } from "../ui/Button";
 import { PaneResizer } from "../ui/PaneResizer";
+import { ChatWorkspace } from "./ChatWorkspace";
 import { LiveAsk } from "./LiveAsk";
 import { type FeedFocus, LiveFeed } from "./LiveFeed";
 import { LiveHints } from "./LiveHints";
 import { LiveSummary } from "./LiveSummary";
 import { hintKey, summaryEntries } from "./liveModel";
 import { useFresh, useUnseen } from "./useAttention";
+import type { Chat } from "./useChat";
 import type { Live } from "./useLive";
 import "./live.css";
 
@@ -236,7 +238,33 @@ export function CatchupNote({ catchup }: { catchup: LiveCatchup }) {
   );
 }
 
-export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint, place = "panel" }: {
+/** Агент-участник включён: окно показывает чат (`ChatWorkspace`), а не подсказки и «Спросить». */
+export function participantOn(live: Live, chat?: Chat | null): boolean {
+  return !!(chat && (chat.agent || live.agent));
+}
+
+/**
+ * Рабочая область: с агентом-участником — чат (`ChatWorkspace`), без него
+ * (`assist.participant` выключен, «Только сводка») — прежняя раскладка.
+ */
+export function LiveWorkspace(props: {
+  live: Live;
+  view: LiveView;
+  onAsk: (question: string, quick?: LiveQuick) => void | Promise<void>;
+  onAskHint?: (hint: LiveHint) => void;
+  disabled?: boolean;
+  place?: LivePlace;
+  /** Чат агента-участника (`useChat`): есть агент — показывается он. */
+  chat?: Chat | null;
+}) {
+  const { chat, ...rest } = props;
+  if (chat && participantOn(props.live, chat)) {
+    return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place} />;
+  }
+  return <ClassicWorkspace {...rest} />;
+}
+
+function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, place = "panel" }: {
   live: Live;
   view: LiveView;
   onAsk: (question: string, quick?: LiveQuick) => void | Promise<void>;

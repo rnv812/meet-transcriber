@@ -32,8 +32,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type Endpoint, liveAsk, liveHint, liveTask, openLiveEvents } from "../lib/api";
 import { errorText } from "../lib/format";
-import type { LiveCatchup, LiveHint, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
+import type { AgentInfo, LiveCatchup, LiveHint, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
 import { EMPTY_SUMMARY } from "./liveModel";
+import type { ChatSink } from "./useChat";
 
 export const MAX_LINES = 300;
 const RETRY_MIN_MS = 1000;
@@ -82,6 +83,11 @@ export type Live = {
   quietDefault: boolean | null;
   /** Ассистент включён посреди записи: ход догонялки начала встречи; null — её нет. */
   catchup: LiveCatchup | null;
+  /**
+   * Агент-участник (`assist.participant`, 0.3.6): есть — окно показывает чат
+   * вместо подсказок и «Спросить»; null/нет — прежний ассистент.
+   */
+  agent?: AgentInfo | null;
   /** История вопросов (у ассистента); у ответа, который пишется, — `partial`. */
   qa: LiveQa[];
   /** Хоть одно `state` пришло: дальше новое — действительно новое. */
@@ -158,7 +164,11 @@ function withPending(hints: LiveHint[], pending: Pending): LiveHint[] {
 const unconfirmed = (cur: Pending): Pending =>
   Object.fromEntries(Object.entries(cur).filter(([, p]) => !p.done));
 
-export function useLive(ep: Endpoint | null, active = true): Live {
+/**
+ * `chat` — куда отдавать события чата агента-участника (`useChat().sink`):
+ * поток один на окно, чат его не открывает сам.
+ */
+export function useLive(ep: Endpoint | null, active = true, chat?: ChatSink): Live {
   const [lines, setLines] = useState<FeedLine[]>([]);
   const [digest, setDigest] = useState("");
   const [summary, setSummary] = useState<LiveSummary>(EMPTY_SUMMARY);
@@ -166,6 +176,9 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [hintsEnabled, setHintsEnabled] = useState(true);
   const [quietDefault, setQuietDefault] = useState<boolean | null>(null);
   const [catchup, setCatchup] = useState<LiveCatchup | null>(null);
+  const [agent, setAgent] = useState<AgentInfo | null>(null);
+  const chatSink = useRef(chat);
+  chatSink.current = chat;
   const [pending, setPending] = useState<Pending>({});
   const [qa, setQa] = useState<LiveQa[]>([]);
   const [partials, setPartials] = useState<Record<number, string>>({});
@@ -208,6 +221,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           setSummary(s.summary ?? EMPTY_SUMMARY);
           setHints(Array.isArray(s.hints) ? s.hints : []);
           setCatchup(s.catchup ?? null);
+          setAgent(s.agent && typeof s.agent === "object" ? s.agent : null);
           setHintsEnabled(s.hints_enabled !== false);
           setQuietDefault(s.prefs?.quiet_default === true);
           setPending(unconfirmed); // принятые ассистентом действия уже в его состоянии
@@ -244,6 +258,14 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           alive();
           session.current = v.session;
           setVoices((cur) => nextVoices(cur, v));
+        },
+        onChatSnapshot: (snap) => { alive(); chatSink.current?.onChatSnapshot(snap); },
+        onChat: (e) => { alive(); chatSink.current?.onChat(e); },
+        onChatPartial: (p) => { alive(); chatSink.current?.onChatPartial(p); },
+        onAgent: (a) => {
+          alive();
+          setAgent(a);
+          chatSink.current?.onAgent(a);
         },
         onError: (gaveUp) => {
           if (!gaveUp || closed) return; // браузер переподключится сам
@@ -311,7 +333,8 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   );
 
   return {
-    status, lines: linesView, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, qa: qaView, loaded, error,
+    status, lines: linesView, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, agent,
+    qa: qaView, loaded, error,
     asking, askError, hintError, ask, hint, setTask,
   };
 }

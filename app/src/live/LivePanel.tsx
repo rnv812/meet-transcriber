@@ -24,6 +24,7 @@
 
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
+import { plainMarkdown } from "../lib/agentRef";
 import { type Endpoint, NoResidentError, liveDetach, liveStop, resolveEndpoint } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { inTauri, invoke } from "../lib/shell";
@@ -31,9 +32,11 @@ import type { LiveHint } from "../lib/types";
 import { Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, PowerOff, Square } from "lucide-react";
 import { IconButton } from "../ui/IconButton";
 import { Truncate } from "../ui/Truncate";
-import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
+import { isFinalAgent } from "./chatModel";
+import { LiveWorkspace, participantOn, useLiveView } from "./LiveWorkspace";
 import { KIND_LABEL, isUrgent, topHint } from "./liveModel";
-import { useQuiet } from "./useAttention";
+import { useQuiet, useUnseen } from "./useAttention";
+import { useChat } from "./useChat";
 import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
@@ -117,7 +120,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // До первого снимка считаем режим идущим: окно существует только при нём.
   // Дописывает запись — поток резидент уже закрыл, переподключаться незачем
   // (иначе «Нет связи с ассистентом» на всё время остановки).
-  const live = useLive(endpoint, (status ? status.active : true) && !stopping);
+  const chat = useChat(endpoint);
+  const live = useLive(endpoint, (status ? status.active : true) && !stopping, chat.sink);
+  const participant = participantOn(live, chat);
   const elapsed = useElapsed(status?.started_at);
   const { view, setExpanded, setMaximized, setPinned, startDrag } = useLiveWindow();
   const [stopError, setStopError] = useState<string | null>(null);
@@ -130,6 +135,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const ws = useLiveView(live, { open, wide, quiet });
   const shown = useShownHint(live.hints, quiet);
   const hintNote = useHintNote(live.hintError);
+  // Агент-участник: свёрнутая строка — закреплённый вопрос или последнее сообщение агента.
+  const agentKeys = chat.items.flatMap((it) => (it.type === "message" && isFinalAgent(it.message) ? [it.message.id] : []));
+  const unseenAgent = useUnseen(agentKeys, open, chat.loaded);
 
   // Esc возвращает обычный размер (клавиатура у панели, только если по ней
   // щёлкнули). В поле вопроса Esc — дело поля, окно не трогаем.
@@ -173,7 +181,8 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
     : catchup ? `Догоняю ${catchup.percent} %` : "Слушает";
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
   const last = live.lines.at(-1);
-  const newHints = quiet ? 0 : ws.unseen.hints;
+  const newHints = quiet ? 0 : participant ? unseenAgent : ws.unseen.hints;
+  const agentLine = participant ? (chat.pinned ?? chat.lastAgent) : null;
   const mods = `${open ? " live-panel--open" : ""}${view.maximized ? " live-panel--maximized" : ""}`;
   // Свёрнутую панель можно тащить за любое свободное место, а не только за шапку.
   const dragAnywhere = (e: MouseEvent) => {
@@ -236,8 +245,24 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       </header>
       {open ? (
         <div className="live-panel__body">
-          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} />
+          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} />
         </div>
+      ) : participant ? (
+        <button type="button" className={`live-last${chat.pinned ? " live-last--urgent" : ""}`} onClick={() => setExpanded(true)}
+          aria-label={agentLine ? `${chat.pinned ? "Вопрос вам" : "Ассистент"}: ${plainMarkdown(agentLine.text ?? "")}. Открыть чат` : "Развернуть панель"}>
+          {agentLine ? (
+            <>
+              <span className="live-last__kind live-last__kind--agent">{chat.pinned ? "Вопрос вам" : "Ассистент"}</span>
+              <Truncate className="live-last__text">{plainMarkdown(agentLine.text ?? agentLine.error ?? "")}</Truncate>
+            </>
+          ) : last ? (
+            <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
+              {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
+              <span>{last.text}</span>
+            </Truncate>
+          ) : <span className="live-last__text muted">Ассистент слушает встречу</span>}
+          {newHints > 0 && <span className="live-last__count" aria-label={`новых сообщений: ${newHints}`}>{newHints}</span>}
+        </button>
       ) : (
         <button type="button" className={`live-last${shown && isUrgent(shown) ? " live-last--urgent" : ""}`} onClick={openHints}
           aria-label={shown ? `Подсказка: ${shown.text}. Открыть подсказки` : "Развернуть панель"}>

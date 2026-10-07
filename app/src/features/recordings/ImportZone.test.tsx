@@ -2,8 +2,10 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ImportZone } from "./ImportZone";
 
-const h = vi.hoisted(() => ({ handler: null as null | ((e: unknown) => void), subscribe: vi.fn(), importFile: vi.fn() }));
-vi.mock("../../lib/shell", () => ({ inTauri: () => true, pickMedia: async () => null }));
+const h = vi.hoisted(() => ({
+  handler: null as null | ((e: unknown) => void), subscribe: vi.fn(), importFile: vi.fn(), overChat: vi.fn(() => false),
+}));
+vi.mock("../../lib/shell", () => ({ inTauri: () => true, pickMedia: async () => null, overChatDrop: h.overChat }));
 vi.mock("../../lib/api", () => ({ importFile: h.importFile }));
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
@@ -64,4 +66,15 @@ test("удачный импорт стирает прошлые ошибки", a
   h.handler!({ payload: { type: "drop", paths: ["C:\\m\\a.mp3"] } });
   await vi.waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(h.importFile).toHaveBeenCalledTimes(2);
+});
+
+test("файлы, брошенные на чат ассистента, не импортируются", async () => {
+  h.importFile.mockReset();
+  h.overChat.mockReturnValue(true);
+  render(<ImportZone endpoint={ep} />);
+  await vi.waitFor(() => expect(h.handler).not.toBeNull());
+  h.handler!({ payload: { type: "drop", paths: ["C:\m\a.mp3"], position: { x: 10, y: 10 } } });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(h.importFile).not.toHaveBeenCalled();
+  h.overChat.mockReturnValue(false);
 });
