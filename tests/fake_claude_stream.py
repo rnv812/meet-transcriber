@@ -22,12 +22,20 @@ FAKE_CLAUDE_REJECT_IMAGES=1 — сообщение с блоком image отв�
 ошибкой, код 1 — сразу, до чтения stdin. С `--fork-session` — новый id сеанса.
 FAKE_CLAUDE_LOG — файл, куда пишутся argv, cwd, окружение (JSON), сообщения
 и uuid ответов модели (`{"assistant_uuid": …}`).
+`model` в init — как у настоящего CLI: псевдоним `--model` — полное имя
+(`MODELS`), без `--model` — модель CLI по умолчанию (самая новая, Fable);
+FAKE_CLAUDE_INIT_MODEL — подменить (CLI запустил не ту модель).
 """
 
 import json
 import os
 import sys
 import uuid
+
+# Псевдонимы claude 2.1.292 (`--help`: «an alias for the latest model»).
+MODELS = {"fable": "claude-fable-5-1", "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-4-5",
+          "haiku": "claude-haiku-4-5"}
+CLI_DEFAULT = MODELS["fable"]
 
 
 def _arg(argv: list[str], name: str) -> str | None:
@@ -124,7 +132,10 @@ def main() -> int:
         if mode == "hang":
             continue
         if n == 1:
-            emit({"type": "system", "subtype": "init", "session_id": session})
+            wanted = _arg(argv, "--model")
+            model = (os.environ.get("FAKE_CLAUDE_INIT_MODEL")
+                     or (MODELS.get(wanted, wanted) if wanted else CLI_DEFAULT))
+            emit({"type": "system", "subtype": "init", "session_id": session, "model": model})
         content = (msg.get("message") or {}).get("content")
         if reject_images and isinstance(content, list) and any(
                 isinstance(b, dict) and b.get("type") == "image" for b in content):

@@ -138,8 +138,10 @@ def test_tier_kwargs_fast_per_provider():
     assert tier_kwargs("claude-code", "fast") == {"model": "haiku", "thinking": "disabled"}
     assert tier_kwargs("codex", "fast") == {"effort": "low"}
     assert tier_kwargs("openai-compatible", "fast") == {}
-    for provider in ("claude-code", "codex", "openai-compatible", None):
+    for provider in ("codex", "openai-compatible", None):
         assert tier_kwargs(provider, "agent") == {}  # модель не задана — без добавок
+    # Claude Code — модель всегда явно: не задана — модель Meet по умолчанию, не CLI (v037 model-pick).
+    assert tier_kwargs("claude-code", "agent") == {"model": "sonnet"}
 
 
 def test_tier_kwargs_agent_takes_the_configured_model():

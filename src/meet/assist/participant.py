@@ -80,7 +80,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from meet.assist import participant_prompts as pp
-from meet.llm.base import CANCELLED_ERROR, AgentReply
+from meet.llm.base import CANCELLED_ERROR, AgentReply, claude_model, model_matches
 
 # --- ритм подачи ---
 PAUSE_S = 4.0            # лента молчит столько — пауза в разговоре: ход
@@ -344,7 +344,11 @@ class Participant:
         self._owner_speaker = owner_speaker or pp.OWNER_SPEAKER
         self._owner_names = {n for n in (owner_speaker, *owner_names) if n}
         self.frequency = pp.normalize_frequency(frequency)
-        self._model = model
+        # Claude Code — модель всегда явно (`--model`): пустая — модель по
+        # умолчанию Meet, не модель CLI по умолчанию.
+        self._model = claude_model(model) if provider == "claude-code" else model
+        # Какая модель на самом деле отвечает (`system/init` Claude Code).
+        self.model_actual: str | None = None
         self._proxy = proxy
         self._call_kwargs = dict(call_kwargs or {})
         self._glossary = glossary or ""
@@ -367,8 +371,7 @@ class Participant:
         self.vision = llm.vision(provider)
         self.resumable = llm.supports_resume(provider)
         self.deny_enforced = llm.deny_enforced(provider)
-        self.label = llm.LABELS.get(provider, provider or "модель") + (
-            f" ({model})" if model and provider == "claude-code" else "")
+        self._name = llm.LABELS.get(provider, provider or "модель")
 
         self._io_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="assist-chat")
         self._listeners: list = []
@@ -450,10 +453,40 @@ class Participant:
 
     # --- состояние для окна ---
 
+    @property
+    def label(self) -> str:
+        """«Claude Code (claude-opus-5-5)»: модель — та, что запустил CLI
+        (`system/init`), до первого хода — заданная."""
+        if self.provider != "claude-code":
+            return self._name
+        return f"{self._name} ({self.model_actual or self._model})"
+
+    @property
+    def model_mismatch(self) -> bool:
+        """CLI запустил не ту модель, что задана в настройках."""
+        return (self.provider == "claude-code" and self.model_actual is not None
+                and not model_matches(self._model, self.model_actual))
+
+    def _on_model(self, actual) -> None:
+        """Модель из `system/init`: показать окну (и предупредить, если не та)."""
+        actual = str(actual or "").strip() or None
+        if actual is None or actual == self.model_actual:
+            return
+        self.model_actual = actual
+        if self.model_mismatch:
+            self._log(f"агент: Claude Code запустил модель {actual}, а в настройках — {self._model}")
+        self._changed()
+
     def view(self) -> dict:
-        """`state.agent`: что с агентом и что он видит."""
+        """`state.agent`: что с агентом и что он видит. `model` — модель,
+        которую запустил CLI (None — ещё не известна), `model_configured` —
+        заданная в настройках, `model_mismatch` — они разные."""
+        claude = self.provider == "claude-code"
         return {"state": self.state, "error": self.error, "provider": self.provider,
                 "label": self.label, "vision": self.vision, "tools": self.tools,
+                "model": self.model_actual if claude else None,
+                "model_configured": self._model if claude else None,
+                "model_mismatch": self.model_mismatch,
                 "deny_enforced": self.deny_enforced,
                 "frequency": self.frequency, "session": self.session_state,
                 "writing": self._turn.reply_id if self._turn is not None else None,
@@ -615,7 +648,7 @@ class Participant:
             conv = self._conversation(
                 system_prompt=self.system_prompt(), model=self._model, proxy=self._proxy,
                 log=self._log, responder=True, add_dirs=dirs, deny_paths=self._deny_paths,
-                persist=True, resume=self._stored_sid)
+                persist=True, resume=self._stored_sid, on_model=self._on_model)
             self._session = _ConversationSession(conv)
         else:
             if self._runner is None:
@@ -1013,7 +1046,10 @@ class Participant:
         exc = task.exception()
         if exc is not None:
             return AgentReply(text="", error=f"{type(exc).__name__}: {exc}")
-        return task.result()
+        reply = task.result()
+        if self.provider == "claude-code" and getattr(reply, "model", None):
+            self._on_model(reply.model)
+        return reply
 
     def _on_text(self, turn: _Turn, piece) -> None:
         if piece is None:   # новое сообщение модели после инструмента

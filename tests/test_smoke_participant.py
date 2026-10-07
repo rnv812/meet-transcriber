@@ -167,6 +167,8 @@ def test_whole_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
     assert all(status == smoke.PASS for status, _d in statuses.values()), statuses
     # Перезапуск: второй процесс продолжает сохранённый сеанс, без затравки.
     assert len(made) == 2 and made[1].kwargs["resume"] == made[0].session_id
+    # Модель — явно, и после перезапуска (--resume) — та же (v037 model-pick).
+    assert [m.kwargs["model"] for m in made] == ["sonnet", "sonnet"]
     assert not made[1].sent[0].startswith(pp.SEED_NEW)
     assert made[0].kwargs["deny_paths"] and made[0].kwargs["persist"] is True
     assert scenario.calls <= smoke.MAX_CALLS

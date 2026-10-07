@@ -67,6 +67,41 @@ IMAGE_MAX_BASE64 = 5 * 1024 * 1024
 IMAGE_MAX_SIDE = 8000
 NO_VISION_NOTE = "Модель не видит изображения — ушёл только текст сообщения"
 
+# Модель Claude Code по умолчанию (`llm.model` пусто). Каждый вызов Claude Code
+# передаёт модель явно (`--model`): без флага CLI взял бы модель из
+# ~/.claude/settings.json или свою по умолчанию — самую новую, не ту, что в
+# настройках Meet (отчёт v037 model-pick).
+DEFAULT_CLAUDE_MODEL = "sonnet"
+# Псевдонимы моделей Claude Code (`claude --help` 2.1.292: «an alias for the
+# latest model (e.g. 'fable', 'opus', or 'sonnet')»): CLI сам выбирает
+# последнюю модель семейства, в `system/init` — её полное имя.
+CLAUDE_ALIASES = ("fable", "opus", "sonnet", "haiku")
+
+
+def claude_model(value) -> str:
+    """Модель для `--model`: заданная, пустая — DEFAULT_CLAUDE_MODEL (не модель CLI по умолчанию)."""
+    text = str(value or "").strip()
+    return text or DEFAULT_CLAUDE_MODEL
+
+
+def model_matches(configured: str | None, actual: str | None) -> bool:
+    """Та ли модель запустилась (`actual` — из `system/init` CLI), что задана
+    (`configured`: псевдоним или полное имя). Псевдоним — по семейству в имени
+    («opus» ↔ «claude-opus-5-5»); полное имя — с точностью до регистра,
+    суффикса `[1m]`, даты и приставки провайдера. `default` и неизвестное —
+    не с чем сравнить: совпадает."""
+    def norm(v):
+        return str(v or "").strip().lower().removesuffix("[1m]")
+
+    want, got = norm(configured), norm(actual)
+    if not want or not got or want == "default":
+        return True
+    if want == "opusplan":
+        return "opus" in got or "sonnet" in got
+    if want in CLAUDE_ALIASES:
+        return want in got
+    return want in got or got in want
+
 
 @dataclass
 class AgentReply:
@@ -86,6 +121,9 @@ class AgentReply:
     # «a.png» не отправлено: …»). Та же пометка ушла модели в тексте сообщения.
     dropped_images: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # Какая модель на самом деле отвечала (`model` из `system/init` Claude
+    # Code); None — неизвестно (другие провайдеры, CLI не начал ход).
+    model: str | None = None
 
 
 def resume_failure(detail: str | None) -> AgentReply:

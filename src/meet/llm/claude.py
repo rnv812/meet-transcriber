@@ -16,8 +16,8 @@ from pathlib import Path
 
 from meet import netproxy
 from meet.llm.base import (
-    TIMEOUT_ERROR, AgentReply, check_image, claude_deny_rules, drop_session_markers, image_note, is_uuid,
-    path_variants, resume_failure, split_images,
+    DEFAULT_CLAUDE_MODEL, TIMEOUT_ERROR, AgentReply, check_image, claude_deny_rules, claude_model,
+    drop_session_markers, image_note, is_uuid, model_matches, path_variants, resume_failure, split_images,
 )
 from meet.llm.detect import claude_not_found, find_claude
 
@@ -146,7 +146,7 @@ async def run(
     prompt: str,
     *,
     system_prompt: str,
-    model: str = "sonnet",
+    model: str | None = DEFAULT_CLAUDE_MODEL,
     resume: str | None = None,
     session_id: str | None = None,
     allowed_dirs: tuple[Path, ...] = (),
@@ -187,7 +187,11 @@ async def run(
     истёк, CLI отказал до начала хода), — ответ `resume_failed`.
     `images` — пути к изображениям: блоки base64 в сообщении (негодные не
     уходят — `dropped_images`/`notes`). `deny_paths` — папки, закрытые для
-    чтения (`kb_exclude`): правила `Read(//…/**)` и отказ в колбэке."""
+    чтения (`kb_exclude`): правила `Read(//…/**)` и отказ в колбэке.
+
+    `model` уходит в CLI всегда (`--model`, и при `resume`): пустая —
+    DEFAULT_CLAUDE_MODEL, не модель CLI по умолчанию. Какая модель отвечала
+    на самом деле (`model` из `system/init`) — `AgentReply.model`."""
     import claude_agent_sdk
     from claude_agent_sdk import (
         AssistantMessage, ClaudeAgentOptions, ResultMessage, StreamEvent, SystemMessage, TextBlock,
@@ -202,6 +206,7 @@ async def run(
     # Как и ключ — из окружения своего процесса (SDK переменные только добавляет).
     drop_session_markers(os.environ)
     persist = bool(resume or session_id)
+    model = claude_model(model)
     options = ClaudeAgentOptions(
         env=netproxy.prepare(proxy),
         system_prompt=system_prompt,
@@ -231,15 +236,21 @@ async def run(
     result_text: str | None = None
     reported: str | None = None
     error: str | None = None
+    actual: str | None = None   # модель из system/init
 
     streamed = False
     began = False  # было system/init: CLI начал ход (сеанс для resume найден)
 
     async def _consume() -> None:
-        nonlocal result_text, reported, error, streamed, began
+        nonlocal result_text, reported, error, streamed, began, actual
         async for msg in claude_agent_sdk.query(prompt=_single_message(), options=options):
             if isinstance(msg, SystemMessage) and getattr(msg, "subtype", None) == "init":
                 began = True
+                data = getattr(msg, "data", None)
+                data = data if isinstance(data, dict) else {}
+                actual = str(data.get("model") or "").strip() or None
+                if actual and not model_matches(model, actual):
+                    log.warning("Claude Code запустил модель %s, а задана %s", actual, model)
                 continue
             if on_text is not None and isinstance(msg, StreamEvent):
                 event = msg.event if isinstance(msg.event, dict) else {}
@@ -286,6 +297,7 @@ async def run(
         text=(result_text or "".join(text_parts)).strip(),
         session_id=(reported or resume or session_id) if persist else None,
         error=netproxy.with_hint(error),
+        model=actual,
         **dropped_fields(dropped),
     )
 

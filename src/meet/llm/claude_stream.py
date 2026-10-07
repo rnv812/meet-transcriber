@@ -69,8 +69,8 @@ from pathlib import Path
 from meet import netproxy, procjob
 from meet.llm import detect
 from meet.llm.base import (
-    CANCELLED_ERROR, TIMEOUT_ERROR, AgentReply, claude_deny_rules, drop_session_markers, is_uuid,
-    resume_failure,
+    CANCELLED_ERROR, TIMEOUT_ERROR, AgentReply, claude_deny_rules, claude_model, drop_session_markers, is_uuid,
+    model_matches, resume_failure,
 )
 from meet.llm.claude import dropped_fields, text_delta, user_content
 
@@ -127,7 +127,12 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
     Сеанс: без `session_id`/`resume` — не сохраняется; `session_id` — новый
     сохраняемый с этим UUID; `resume` — продолжить сохранённый; с `fork_at` —
     новый сеанс-ветка до записи `fork_at` без хода `drop_turn`. Значения —
-    через `=`: id не станет отдельным флагом (так же делает SDK)."""
+    через `=`: id не станет отдельным флагом (так же делает SDK).
+
+    `--model` — всегда, и при `--resume`: без него CLI взял бы модель по
+    умолчанию, а при `--resume` — модель прежнего сеанса (claude 2.1.292
+    восстанавливает её, только если модель не задана флагом или
+    ANTHROPIC_MODEL). Пустая `model` — DEFAULT_CLAUDE_MODEL."""
     cmd = [*cli, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
            "--verbose", "--include-partial-messages",
            "--system-prompt", system_prompt]
@@ -157,8 +162,7 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
         cmd.append("--no-session-persistence")
     turns = max_turns or (RESPONDER_MAX_TURNS if responder else 1)
     cmd += ["--disable-slash-commands", "--max-turns", str(turns)]
-    if model:
-        cmd += ["--model", model]
+    cmd += ["--model", claude_model(model)]
     if thinking:
         cmd += ["--thinking", thinking]
     if effort:
@@ -211,7 +215,10 @@ class Conversation:
     встречи, база знаний, библиотека), кроме `deny_paths` (`kb_exclude`).
     `persist` — сеанс сохраняется и продолжается нативно (`session_id`);
     `resume` — id сохранённого сеанса, с которого начать (из
-    `assistant/sessions.json`), подразумевает `persist`. `has_context` —
+    `assistant/sessions.json`), подразумевает `persist`. `model` — модель
+    для `--model` (пустая — DEFAULT_CLAUDE_MODEL); какая запустилась на
+    самом деле — `self.model` и `AgentReply.model` (из `system/init`),
+    `on_model(имя)` — когда она стала известна. `has_context` —
     следующий `send` продолжит прежний разговор (живой процесс с ходами или
     сохранённый сеанс): затравка не нужна."""
 
@@ -222,9 +229,14 @@ class Conversation:
                  proxy: str | None = None, cwd: str | Path | None = None,
                  cli: list[str] | None = None, popen=subprocess.Popen, log=None,
                  responder: bool = False, add_dirs=(), deny_paths=(), max_turns: int | None = None,
-                 persist: bool = False, resume: str | None = None) -> None:
+                 persist: bool = False, resume: str | None = None, on_model=None) -> None:
         self._system = system_prompt
-        self._model = model
+        self._model = claude_model(model)
+        # Модель, которую CLI на самом деле запустил (`model` из `system/init`);
+        # None — процесс ещё не начинал хода. `on_model(имя)` — узнали или
+        # сменилась (новый процесс).
+        self.model: str | None = None
+        self._on_model = on_model
         self._thinking = thinking
         self._effort = effort
         self._proxy = proxy
@@ -635,6 +647,7 @@ class Conversation:
             kind = msg.get("type")
             if kind == "system" and msg.get("subtype") == "init":
                 began = True
+                self._note_model(msg.get("model"))
                 self._resuming = False  # сеанс найден: дальше сбои этого процесса — обычные
                 if self._persist:
                     self.session_id = str(msg.get("session_id") or self.session_id)
@@ -679,7 +692,7 @@ class Conversation:
                     self._blank = False
                     if last_entry:
                         self._last_kept = last_entry
-                    return AgentReply(text=body)
+                    return AgentReply(text=body, model=self.model)
                 if self._cancel:
                     return self._cancelled(parts)
                 errors = [str(e) for e in msg.get("errors") or [] if e]
@@ -690,7 +703,18 @@ class Conversation:
                 if with_images and _IMAGE_REJECTED.search(detail):
                     await asyncio.to_thread(self._kill_if, proc)
                     raise _Rejected(detail)
-                return AgentReply(text=body, error=netproxy.with_hint(detail))
+                return AgentReply(text=body, error=netproxy.with_hint(detail), model=self.model)
+
+    def _note_model(self, value) -> None:
+        """Модель из `system/init`: запомнить, в журнал — если не та, что задана."""
+        actual = str(value or "").strip() or None
+        if actual is None or actual == self.model:
+            return
+        self.model = actual
+        if not model_matches(self._model, actual):
+            self._log(f"диалог: Claude Code запустил модель {actual}, а задана {self._model}")
+        if self._on_model is not None:
+            _safe_call(self._on_model, actual, self._log)
 
 
 def _safe_call(on_text, piece, log) -> None:

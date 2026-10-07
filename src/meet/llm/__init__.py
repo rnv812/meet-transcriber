@@ -7,7 +7,7 @@
 from functools import partial
 from typing import TYPE_CHECKING
 
-from meet.llm.base import NO_VISION_NOTE, AgentReply, Runner
+from meet.llm.base import DEFAULT_CLAUDE_MODEL, NO_VISION_NOTE, AgentReply, Runner, claude_model
 
 if TYPE_CHECKING:
     from meet.settings import Settings
@@ -19,8 +19,8 @@ PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
 # OpenCode, едва тот появился на машине.
 AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["AUTO_PROVIDERS", "LABELS", "NO_VISION_NOTE", "PROVIDERS", "AgentReply", "Runner", "agent_model",
-           "choice_error", "deny_enforced", "forget_session", "not_found", "describe", "is_local", "label",
+__all__ = ["AUTO_PROVIDERS", "DEFAULT_CLAUDE_MODEL", "LABELS", "NO_VISION_NOTE", "PROVIDERS", "AgentReply",
+           "Runner", "agent_model", "choice_error", "claude_model", "deny_enforced", "forget_session", "not_found", "describe", "is_local", "label",
            "models", "provider_ready", "resolve", "runner_for", "session_kwargs", "supports_resume",
            "tier_kwargs", "vision"]
 
@@ -62,15 +62,16 @@ def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> di
     (`model` — `llm.model`); Codex берёт модель из своего конфига, OpenCode —
     `llm.opencode_model` в самом runner (уровни моделей у его провайдеров
     разные — «Быстрее» ему ничего не меняет), локальная модель одна — им
-    добавлять нечего."""
+    добавлять нечего. Claude Code получает модель всегда: пустая `model` —
+    DEFAULT_CLAUDE_MODEL, а не модель CLI по умолчанию."""
     if tier == "fast":
         if provider == "claude-code":
             return {"model": FAST_CLAUDE_MODEL, "thinking": FAST_CLAUDE_THINKING}
         if provider == "codex":
             return {"effort": FAST_CODEX_EFFORT}
         return {}
-    if provider == "claude-code" and model:
-        return {"model": model}
+    if provider == "claude-code":
+        return {"model": claude_model(model)}
     return {}
 
 
@@ -90,7 +91,7 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
     # Ссылка на модуль, а не на функцию: тесты подменяют `claude.run`.
     if name == "claude-code":
         from meet.llm import claude
-        return partial(_call, claude, proxy=cfg.llm.proxy, model=cfg.llm.model)
+        return partial(_call, claude, proxy=cfg.llm.proxy, model=claude_model(cfg.llm.model))
     if name == "codex":
         from meet.llm import codex
         return partial(_call, codex, proxy=cfg.llm.proxy)
@@ -206,7 +207,7 @@ def describe(provider: str | None, cfg: "Settings") -> dict:
     сделала. `model` — имя из настроек (у Codex — из его конфига: None)."""
     model = None
     if provider == "claude-code":
-        model = cfg.llm.model
+        model = claude_model(cfg.llm.model)
     elif provider == "opencode":
         model = cfg.llm.opencode_model or None
     elif provider == "openai-compatible":

@@ -36,6 +36,7 @@ from meet.asr import DEVICES as ASR_DEVICES
 from meet.asr import MODEL_NAME as DEFAULT_WHISPER_MODEL
 from meet.gigaam_asr import MODEL_NAME as DEFAULT_GIGAAM_MODEL
 from meet.gigaam_asr import MODELS as GIGAAM_MODELS
+from meet.llm.base import DEFAULT_CLAUDE_MODEL
 
 # Порог узнавания голоса по умолчанию — тот же, что meet.voices.THRESHOLD
 # (там калибровка); здесь копия, чтобы настройки не тянули numpy.
@@ -885,7 +886,7 @@ class Llm:
     """
 
     provider: str = "auto"
-    model: str = "sonnet"
+    model: str = DEFAULT_CLAUDE_MODEL
     base_url: str = DEFAULT_LOCAL_BASE_URL
     local_model: str | None = None
     proxy: str = "system"
@@ -913,7 +914,7 @@ class Llm:
             enabled = LLM_AUTO_ORDER if provider == "auto" else (provider,)
         return cls(
             provider=provider,
-            model=str(raw.get("model") or "sonnet").strip() or "sonnet",
+            model=str(raw.get("model") or "").strip() or DEFAULT_CLAUDE_MODEL,
             base_url=str(base).strip() if base else DEFAULT_LOCAL_BASE_URL,
             local_model=str(local).strip() if local else None,
             proxy=netproxy.normalize(raw.get("proxy")),
