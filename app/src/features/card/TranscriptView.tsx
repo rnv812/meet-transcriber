@@ -63,7 +63,7 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools, seekTo = null, nowTurn = null,
-  textPhase = false, onFix,
+  textPhase = false, onFix, fixHint = null,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -84,6 +84,8 @@ export function TranscriptView({
   tools?: ReactNode;
   /** «Исправить…» на панели: то же окно, что Ctrl+E (по выделению в реплике); `anchor` — кнопка. */
   onFix?: (anchor: HTMLElement) => void;
+  /** id раскрытой подсказки «Как исправить» (нажали «Исправить…» без выделения); закрыта — null. */
+  fixHint?: string | null;
   find?: FindRequest | null;
   /** ✦ «Спросить агента» у реплик (номера реплик). */
   onAskAgent?: (turns: number[]) => void;
@@ -411,6 +413,7 @@ export function TranscriptView({
           // Нажатие не снимает выделение в реплике: по нему и откроется окно.
           <Button variant="ghost" size="md" icon={PenLine} aria-label="Исправить распознанное"
             title="Исправить выделенное в реплике (Ctrl+E)" aria-keyshortcuts="Control+E"
+            aria-expanded={fixHint !== null} aria-controls={fixHint ?? undefined}
             onMouseDown={(e) => e.preventDefault()} onClick={(e) => onFix(e.currentTarget)}>
             Исправить…
           </Button>

@@ -203,11 +203,11 @@ export const Turns = memo(function Turns({
       return (
         <div className="chapter-head" key={`c${row.c}`} data-chapter={row.c}>
           {/* «Глава N» — тихой подписью, название — жирным; « · » — только для чтения с экрана. */}
-          <h3 className="chapter-head__title">
+          <h2 className="chapter-head__title">
             <span className="chapter-head__n">Глава {c.n}</span>
             <span className="sr-only"> · </span>
             <span className="chapter-head__name">{c.title}</span>
-          </h3>
+          </h2>
           <span className="chapter-head__time num">{clock(c.start)}–{clock(c.end)}</span>
           {onAskChapter && (
             <AskAgentButton className="chapter-head__ask" label={`Обсудить главу «${c.title}» с агентом`}

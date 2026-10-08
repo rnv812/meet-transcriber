@@ -70,7 +70,7 @@ beforeEach(() => {
   try { window.localStorage.clear(); } catch { /* нет хранилища */ }
 });
 
-test("значок типа в начале реплики, с подписью; у утверждения значка нет", () => {
+test("бейдж типа реплики — изображение с подписью; у утверждения бейджа нет", () => {
   const { container } = view();
   const rows = turnRows(container);
   expect(within(rows[1]!).getByRole("img", { name: "Вопрос" })).toHaveAttribute("title", "Вопрос");
@@ -89,7 +89,10 @@ test("заголовки глав «Глава N · название» пере�
   const onAskChapter = vi.fn();
   const { container } = view({ onAskChapter });
   const heads = [...container.querySelectorAll(".chapter-head")];
-  expect(heads.map((h) => h.querySelector("h3")!.textContent)).toEqual(["Глава 1 · Бюджет на квартал", "Глава 2 · Найм в команду"]);
+  expect(heads.map((h) => h.querySelector("h2")!.textContent)).toEqual(["Глава 1 · Бюджет на квартал", "Глава 2 · Найм в команду"]);
+  // Под заголовком карточки (h1) — следующий уровень, без пропуска.
+  expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent))
+    .toEqual(["Глава 1 · Бюджет на квартал", "Глава 2 · Найм в команду"]);
   expect(heads[1]!.nextElementSibling).toHaveAttribute("data-turn", "5");
   expect(heads[0]).toHaveTextContent("00:00–00:44");
   await userEvent.click(within(heads[1] as HTMLElement).getByRole("button", { name: "Обсудить главу «Найм в команду» с агентом" }));
@@ -106,7 +109,7 @@ test("фильтры по типам: несколько сразу, остал�
   const more = [...container.querySelectorAll<HTMLElement>(".turns-more")];
   expect(more.map((m) => m.textContent)).toEqual(["… 1 реплика", "… 2 реплики"]);
   // Глава 2 («Найм») без подходящих реплик скрыта целиком, глава 1 остаётся «Глава 1».
-  expect([...container.querySelectorAll(".chapter-head h3")].map((h) => h.textContent)).toEqual(["Глава 1 · Бюджет на квартал"]);
+  expect([...container.querySelectorAll(".chapter-head h2")].map((h) => h.textContent)).toEqual(["Глава 1 · Бюджет на квартал"]);
   await userEvent.click(more[1]!);
   expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["1", "2", "3", "4"]);
   await userEvent.click(screen.getByRole("button", { name: "Показать все" }));
@@ -115,7 +118,7 @@ test("фильтры по типам: несколько сразу, остал�
 
 test("глава без реплик по фильтру скрыта целиком; номера глав не сдвигаются; без фильтра — всё как было", async () => {
   const { container } = view();
-  const heads = () => [...container.querySelectorAll(".chapter-head h3")].map((h) => h.textContent);
+  const heads = () => [...container.querySelectorAll(".chapter-head h2")].map((h) => h.textContent);
   expect(heads()).toEqual(["Глава 1 · Бюджет на квартал", "Глава 2 · Найм в команду"]);
   // Идея только в главе 2: глава 1 пропадает вместе со своими «… N реплик», «Глава 2» остаётся второй.
   await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));

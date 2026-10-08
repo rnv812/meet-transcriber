@@ -15,9 +15,13 @@ const W = 260;
  * `keepOpen` — нажатия, которые окно не закрывают, хоть они и снаружи: модальное
  * окно, открытое из поповера (переименовать группу), или строка, которую из-под
  * открытого окна перетаскивают в него.
+ *
+ * `takeFocus` — окно-подсказка, раскрытое кнопкой (`aria-expanded`/`aria-controls` у
+ * кнопки, `id` — у окна): при открытии фокус — в окно, уход фокуса из окна его
+ * закрывает, Esc закрывает и возвращает фокус на якорь.
  */
 export function Popover({
-  anchor, onClose, children, label, width = W, anchorToggles = false, align = "start", keepOpen,
+  anchor, onClose, children, label, width = W, anchorToggles = false, align = "start", keepOpen, id, takeFocus = false,
 }: {
   anchor: HTMLElement;
   onClose: () => void;
@@ -30,6 +34,10 @@ export function Popover({
   align?: Align;
   /** Нажатие на этот элемент окно не закрывает (хоть он и снаружи). */
   keepOpen?: (target: Element) => boolean;
+  /** id окна — для `aria-controls` кнопки, которая его раскрывает. */
+  id?: string;
+  /** Фокус — в окно при открытии; уход фокуса закрывает, Esc возвращает фокус на якорь. */
+  takeFocus?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   // Положение — общее правило (ui/floating): в пределах окна, с переворотом и пересчётом.
@@ -45,17 +53,29 @@ export function Popover({
       if (keepOpen && target instanceof Element && keepOpen(target)) return;
       if (box.current && !box.current.contains(target)) onClose();
     };
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      onClose();
+      if (takeFocus && anchor.isConnected) anchor.focus();
+    };
     document.addEventListener("mousedown", down);
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("mousedown", down);
       document.removeEventListener("keydown", key);
     };
-  }, [onClose, anchor, anchorToggles, inside, keepOpen]);
+  }, [onClose, anchor, anchorToggles, inside, keepOpen, takeFocus]);
+
+  useEffect(() => { if (takeFocus) box.current?.focus({ preventScroll: true }); }, [takeFocus]);
 
   return (
-    <div ref={box} className="popover glass glass--dense" role="dialog" aria-label={label}
+    <div ref={box} id={id} className="popover glass glass--dense" role="dialog" aria-label={label}
+      tabIndex={takeFocus ? -1 : undefined}
+      // Фокус ушёл из окна в другое место окна приложения — закрыть (уход из приложения — нет).
+      onBlur={takeFocus ? (e) => {
+        const to = e.relatedTarget;
+        if (to instanceof Node && !e.currentTarget.contains(to)) onClose();
+      } : undefined}
       style={{ ...floatingStyle(pos), width }} onMouseDownCapture={mark}>
       {children}
     </div>

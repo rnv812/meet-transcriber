@@ -82,10 +82,12 @@ test("без анализа — простая полоса: один отрез
   expect(screen.getByRole("button", { name: /Скорость воспроизведения/ })).toBeInTheDocument();
 });
 
-test("подвал плеера на Atlas Aurora: ▶ — главная кнопка-значок, «1×» и «Главы» — тихие, «Только важное» — фильтр", async () => {
+test("подвал плеера на Atlas Aurora: ▶ — сильная (deep) кнопка-значок, не акцент, «1×» и «Главы» — тихие, «Только важное» — фильтр", async () => {
   setup();
   const play = screen.getByRole("button", { name: "Воспроизвести" });
-  expect(play).toHaveClass("btn", "btn--primary", "btn--icon");
+  // Акцент окна — только ИИ и выбор: ▶ — тёмная «сильная» кнопка.
+  expect(play).toHaveClass("btn", "btn--deep", "btn--icon");
+  expect(play).not.toHaveClass("btn--primary");
   const speed = screen.getByRole("button", { name: /Скорость воспроизведения/ });
   expect(speed).toHaveTextContent("1×");
   expect(speed).toHaveClass("btn--ghost");

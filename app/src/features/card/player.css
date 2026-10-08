@@ -134,7 +134,7 @@
 /* Подписи глав под отрезками: пройденные и текущая — цветом текста, впереди — тише. */
 .pbar__labels { position: relative; height: 16px; margin-top: -2px; }
 .pbar__label {
-  position: absolute; top: 0; padding-right: 4px; color: var(--ink-3); font-size: 11px; line-height: 16px;
+  position: absolute; top: 0; padding-right: 4px; color: var(--ink-3); font-size: var(--text-xs); line-height: 16px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pbar__label[data-past] { color: var(--ink); }
@@ -183,4 +183,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .pbar__track, .pbar__knob, .pbar__curve, .pvol__slider { transition: none; }
+  .player__spinner { animation: none; }
 }
+/* Сияние на паузе (настройка «Движение», data-motion на <html>) — крутилка тоже стоит. */
+[data-motion="paused"] .player__spinner { animation: none; }

@@ -493,17 +493,16 @@ export function RecordingCard({
           toolbar={turnEdit.bar || textFix.bar || improve.bar
             ? <div className="tbars">{turnEdit.bar}{textFix.bar}{improve.bar && <div className="tfix-bar">{improve.bar}</div>}</div>
             : null}
-          onFix={textFix.openFromBar}
+          onFix={textFix.openFromBar} fixHint={textFix.hintId}
           tools={
-            // Недоступная кнопка не получает наведения: причину показывает обёртка.
-            <span className="find__improve" title={improve.blocked ?? undefined}>
-              <Button variant="aurora" size="md" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
-                title={improve.blocked ? undefined
-                  : "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}
-                onClick={() => void improve.start()}>
-                <AgentMark size={16} />Улучшить
-              </Button>
-            </span>
+            // Причина недоступности — подсказкой на самой кнопке: недоступная .btn наведение
+            // получает (ui/button.css).
+            <Button variant="aurora" size="md" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
+              title={improve.blocked
+                ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}
+              onClick={() => void improve.start()}>
+              <AgentMark size={16} />Улучшить
+            </Button>
           }
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn} />
       ) : <EmptyState title="В записи нет речи" />;

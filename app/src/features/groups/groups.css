@@ -97,10 +97,10 @@
 .nav-groups__close:hover { color: var(--ink); background: var(--surface-3); }
 
 /* Окно названия группы (поверх .confirm из primitives.css). */
-.group-dialog form { display: flex; flex-direction: column; gap: 8px; }
-.group-dialog__label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-2); font-size: var(--text-xs); }
+.group-dialog form { display: flex; flex-direction: column; gap: var(--s-3); }
+.group-dialog__label { display: flex; flex-direction: column; gap: var(--s-1); color: var(--ink-2); font-size: var(--text-xs); }
 .group-dialog__error { color: var(--danger); font-size: var(--text-xs); }
-.group-dialog__palette { display: flex; flex-wrap: wrap; gap: 6px; }
+.group-dialog__palette { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .group-dialog__color {
   width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer;
 }

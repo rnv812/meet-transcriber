@@ -226,6 +226,8 @@ test("итогов нет, запись шла с ассистентом — «�
   const draft = await screen.findByRole("region", { name: "Черновик из живого режима" });
   expect(draft).toHaveTextContent("выпуск в пятницу");
   expect(draft).toHaveTextContent("Итоги модель сверит с полной расшифровкой");
+  // Заголовок черновика — сразу под заголовком карточки (h1), без пропуска уровня.
+  expect(within(draft).getByRole("heading", { level: 2, name: "Черновик из живого режима" })).toBeInTheDocument();
   expect(api.getLiveDraft).toHaveBeenCalledWith(ep, "r1");
   await userEvent.click(screen.getByRole("button", { name: "Сделать итоги" }));
   expect(api.makeSummary).toHaveBeenCalledWith(ep, "r1");

@@ -21,7 +21,7 @@
 .agent__model { font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .agent__hint { font-size: var(--text-xs); color: var(--ink-3); }
 /* «Контекст: transcript.md · summary.md» — какие файлы встречи получит агент. */
-.agent__context { font-size: var(--text-xs); color: var(--ink-3); }
+.agent__context { font-family: var(--font-code); font-size: var(--text-xs); color: var(--ink-3); }
 
 /* Терминал — блок кода во всю оставшуюся высоту: шапка (папка встречи · агент), под ней xterm. */
 .agent__screen { flex: 1; min-height: 280px; display: flex; flex-direction: column; }

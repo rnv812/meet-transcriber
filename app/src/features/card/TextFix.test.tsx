@@ -188,6 +188,46 @@ test("«Исправить…» над лентой: с выделением —
   expect(within(box).getByText("кубер")).toHaveClass("tfix__find");
 });
 
+test("подсказка «Исправить…» без выделения: раскрытие, фокус в подсказку, Esc и уход фокуса закрывают", async () => {
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await turnText(/Поднимем кубер/);
+  const bar = screen.getByRole("search", { name: "Поиск по расшифровке" });
+  const fix = within(bar).getByRole("button", { name: "Исправить распознанное" });
+  window.getSelection()!.removeAllRanges();
+  expect(fix).toHaveAttribute("aria-expanded", "false");
+  expect(fix).not.toHaveAttribute("aria-controls");
+
+  // Открыли — кнопка раскрыта и указывает на подсказку, фокус — в подсказке.
+  fix.focus();
+  await userEvent.keyboard("{Enter}");
+  const hint = screen.getByRole("dialog", { name: "Как исправить распознанное" });
+  expect(fix).toHaveAttribute("aria-expanded", "true");
+  expect(fix).toHaveAttribute("aria-controls", hint.id);
+  expect(hint.id).not.toBe("");
+  expect(hint).toHaveFocus();
+
+  // Esc — закрыть и вернуть фокус на кнопку.
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "Как исправить распознанное" })).toBeNull();
+  expect(fix).toHaveAttribute("aria-expanded", "false");
+  expect(fix).toHaveFocus();
+
+  // Уход фокуса из подсказки (Tab дальше) — тоже закрывает.
+  await userEvent.click(fix);
+  const again = screen.getByRole("dialog", { name: "Как исправить распознанное" });
+  expect(again).toHaveFocus();
+  const search = within(bar).getByRole("searchbox", { name: "Найти в расшифровке" });
+  fireEvent.focusOut(again, { relatedTarget: search });
+  expect(screen.queryByRole("dialog", { name: "Как исправить распознанное" })).toBeNull();
+
+  // Повторное нажатие на кнопку закрывает подсказку и оставляет фокус на кнопке.
+  await userEvent.click(fix);
+  expect(screen.getByRole("dialog", { name: "Как исправить распознанное" })).toHaveFocus();
+  await userEvent.click(fix);
+  expect(screen.queryByRole("dialog", { name: "Как исправить распознанное" })).toBeNull();
+  expect(fix).toHaveFocus();
+});
+
 test("правый щелчок: выделение — «Исправить…», без него — «Исправить слово» в меню реплики", async () => {
   render(<RecordingCard id="r1" endpoint={ep} />);
   const p = await turnText(/Кубер нетис готов/);

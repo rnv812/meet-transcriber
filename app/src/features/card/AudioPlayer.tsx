@@ -623,7 +623,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         )}
       </div>
       <div className="player__left">
-        <button type="button" className="btn btn--primary btn--flat btn--icon player__play" onClick={toggle}
+        <button type="button" className="btn btn--deep btn--flat btn--icon player__play" onClick={toggle}
           aria-label={playing ? "Пауза" : "Воспроизвести"} title={playing ? "Пауза (K)" : "Воспроизвести (K)"}>
           <Icon as={playing ? Pause : Play} fill="currentColor" />
         </button>

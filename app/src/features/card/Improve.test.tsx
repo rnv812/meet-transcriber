@@ -216,6 +216,10 @@ test("карточка: «Ещё действия» и кнопка в стро�
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Апи сервиса отвечает медленно");
   await waitFor(() => expect(screen.getByRole("button", { name: "Улучшить расшифровку" })).toBeDisabled());
+  // Причина — подсказкой на самой кнопке (у недоступной .btn наведение есть: ui/button.css).
+  const inBar = screen.getByRole("button", { name: "Улучшить расшифровку" });
+  expect(inBar).toHaveAttribute("title", "Подключите Claude Code, Codex или OpenCode в настройках");
+  expect(inBar.parentElement).toHaveAttribute("role", "search");
   await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
   const menu = screen.getByRole("menu", { name: "Ещё действия с записью" });
   const item = within(menu).getByRole("menuitem", { name: "Улучшить расшифровку" });

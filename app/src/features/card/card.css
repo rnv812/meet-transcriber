@@ -184,18 +184,16 @@ button.turn__speaker:hover { text-decoration: underline; }
 
 /* Панель над лентой (TranscriptView, макет Atlas Aurora): поиск — Aurora .search с полем
    field--md и подсказкой «Ctrl F»; справа — «Исправить…» и ✦ «Улучшить». Прилипает к верху
-   прокрутки. Рамка фокуса поля — одна, у .field. */
+   прокрутки. Рамка фокуса поля — одна, у .field. Строка не переносится (в узкой карточке
+   сжимается поле поиска): высота у неё одна, и липкие панели .tbars (top: 52px) встают под ней. */
 .find {
-  position: sticky; top: -8px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  position: sticky; top: -8px; z-index: 2; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px;
   margin: -8px 0 6px; padding: 12px 0 8px; background: var(--canvas);
 }
-.find__search { flex: 1 1 240px; min-width: 200px; max-width: 420px; }
+.find__search { flex: 1 1 240px; min-width: 0; max-width: 420px; }
 .find__count { flex: none; color: var(--ink-2); font-size: var(--text-xs); white-space: nowrap; }
-.find__count:empty { display: none; }
 .find__count--none { color: var(--warning); }
 .find__gap { flex: 1 1 0; }
-/* Обёртка ✦ «Улучшить»: у недоступной кнопки нет наведения — подсказку с причиной держит она. */
-.find__improve { display: inline-flex; }
 /* Совпадения: все — мягкой подложкой цвета акцента, текущее — заливкой и рамкой. */
 mark.hit {
   padding: 0 1px; border-radius: 3px; color: inherit;

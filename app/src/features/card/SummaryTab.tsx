@@ -218,7 +218,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           </div>
         )}
         <section className="assist__draft" aria-label="Черновик из живого режима">
-          <h3 className="assist__draft-title">Черновик из живого режима</h3>
+          <h2 className="assist__draft-title">Черновик из живого режима</h2>
           <p className="muted assist__draft-note">
             Сводка, которую ассистент вёл во время встречи. Итоги модель сверит с полной расшифровкой.
           </p>

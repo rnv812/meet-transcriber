@@ -9,7 +9,7 @@
  */
 
 import { Play, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   applyTextFix, getSettings, patchSettings, previewTextFix, removeHotword, undoSpeakers, type Endpoint,
 } from "../../lib/api";
@@ -83,6 +83,8 @@ export type TextFix = {
   openWord: (turn: number, at: number, anchor: HTMLElement) => void;
   /** «Исправить…» на панели над лентой: выделение в реплике — окно, как по Ctrl+E; нет — подсказка у `anchor`. */
   openFromBar: (anchor: HTMLElement) => void;
+  /** id открытой подсказки «Как исправить» — для `aria-controls` кнопки панели; закрыта — null. */
+  hintId: string | null;
   /** Кнопка у выделения и окно исправления. */
   node: ReactNode;
   /** Итог над репликами: что исправлено и что добавлено в термины, с «Отменить». */
@@ -128,6 +130,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
   const opened = useRef(false);
   /** Подсказка «как исправить» у кнопки панели (нажали без выделения). */
   const [hint, setHint] = useState<HTMLElement | null>(null);
+  const hintId = useId();
   const close = useCallback(() => { opened.current = false; setOpen(false); setTarget(null); setError(null); }, []);
   const show = useCallback((t: Target) => {
     opened.current = true;
@@ -199,8 +202,12 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
   const openFromBar = useCallback((el: HTMLElement) => {
     const found = fromSelection(turns);
     if (found) show(found);
-    else setHint((cur) => (cur === el ? null : el));
-  }, [turns, show]);
+    else if (hint === el) {
+      // Повторное нажатие закрывает подсказку; фокус был в ней — возвращаем на кнопку.
+      setHint(null);
+      el.focus();
+    } else setHint(el);
+  }, [turns, show, hint]);
 
   const openWord = useCallback((t: number, at: number, el: HTMLElement) => {
     const turn = turns[t];
@@ -410,7 +417,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
       <>
         {node}
         <Popover anchor={hint} onClose={() => setHint(null)} label="Как исправить распознанное" width={POPOVER_W}
-          anchorToggles>
+          anchorToggles id={hintId} takeFocus>
           <p className="tfix__hint">
             Выделите в реплике неверно распознанное слово или фразу (слово — двойным щелчком) и нажмите
             «Исправить…» или Ctrl+E.
@@ -420,5 +427,5 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     );
   }
 
-  return { onContextMenu, openWord, openFromBar, node, bar };
+  return { onContextMenu, openWord, openFromBar, hintId: hint ? hintId : null, node, bar };
 }
