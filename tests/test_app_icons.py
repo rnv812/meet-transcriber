@@ -1,13 +1,14 @@
 """Иконки Meet (scripts/make_app_icons.py): все размеры, которые ждут Tauri,
 Windows и трей, на месте; растры в репозитории — ровно то, что рисует скрипт
-(правка цвета — перезапуск скрипта, а не ручная правка PNG); знак — диск
-фиолетового сияния с тёмной сердцевиной (0.4, вариант B); состояния трея
-различимы на 16 px."""
+(правка цвета — перезапуск скрипта, а не ручная правка PNG); значок Windows и
+PNG Tauri — тот же знак, что MeetMark в окне (фиолетовая палитра, без плитки),
+icon.icns — он же на плитке; состояния трея различимы на 16 px."""
 
 import colorsys
 import importlib.util
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -145,13 +146,14 @@ def test_mark_reaches_installer_windows_and_taskbar():
 
 
 def test_drawing_is_deterministic():
-    """Растры воспроизводимы: зерно крупных значков — с фиксированным seed."""
+    """Растры воспроизводимы: одинаковый вызов — одинаковые пиксели."""
     gen = _generator()
     for state in gen.TRAY_STATES:
         first = np.asarray(gen.draw_tray(state, 16))
         assert np.array_equal(first, np.asarray(gen.draw_tray(state, 16))), state
     for size in (32, 64, 128):
         assert np.array_equal(np.asarray(gen.draw_app(size)), np.asarray(gen.draw_app(size))), size
+        assert np.array_equal(np.asarray(gen.draw_macos(size)), np.asarray(gen.draw_macos(size))), size
 
 
 def test_oklch_matches_aurora_palette():
@@ -168,55 +170,140 @@ def test_oklch_matches_aurora_palette():
         assert back[2] == pytest.approx(h, abs=4), name
 
 
-def test_app_icon_is_violet_disc_with_dark_core():
-    """Значок приложения — диск фиолетового сияния с тёмной сердцевиной на
-    плитке Chaos Black; на 16 px сердцевина всё ещё видна."""
+def _mark_points(size: int) -> dict:
+    """Опорные точки знака MeetMark на картинке `size`: центр градиента (сверху
+    слева, там почти --wave-6) и точка снизу справа (ближе к --wave-2)."""
     gen = _generator()
-    big = np.asarray(gen.draw_app(256), dtype=int)
-    centre = big[127:129, 127:129]
-    assert (centre[..., 3] == 255).all()
-    assert np.abs(centre[..., :3] - 0x0F).max() <= 4, "сердцевина — цвет плитки #0f0f0f"
-    # Кольцо пикселей на радиусе 0.2 стороны — фиолетовое сияние.
-    samples = []
-    for k in range(72):
-        t = math.radians(k * 5)
-        x, y = 128 + 51.2 * math.cos(t), 128 - 51.2 * math.sin(t)
-        samples.append(big[int(y), int(x)])
-    samples = np.array(samples)
-    assert (samples[:, 3] == 255).all()
-    lightness, chroma, hue = _oklch(samples.mean(axis=0))
-    assert 270 <= hue <= 320, hue
-    assert chroma > 0.08, chroma
-    hues = [_oklch(s)[2] for s in samples]
-    assert sum(255 <= h <= 335 for h in hues) >= 0.9 * len(hues)
-    # Плитка вокруг диска — Chaos Black, угол за плиткой (поля) — прозрачный.
-    assert np.abs(big[128, 30, :3] - 0x0F).max() <= 6 and big[128, 30, 3] == 255
-    assert big[2, 2, 3] == 0
-    # Зерно у крупных — едва заметное: соседние пиксели сияния близки.
-    patch = big[70:90, 100:120, :3]
-    assert np.abs(np.diff(patch, axis=1)).mean() < 6
-    # 16 px: центр тёмный, вокруг — заметно светлее и фиолетовый.
+    c, r = size / 2, gen.MARK["disc"] * size
+    box = c - r
+    glow = gen.MARK_GLOW
+    up_left = (box + glow["cx"] * 2 * r, box + glow["cy"] * 2 * r)
+    low_right = (c + 0.42 * r, c + 0.42 * r)
+    return {"centre": c, "radius": r, "up_left": up_left, "low_right": low_right}
+
+
+def _at(a: np.ndarray, point) -> np.ndarray:
+    x, y = point
+    return a[int(y), int(x)]
+
+
+def _assert_window_mark(a: np.ndarray, name: str) -> None:
+    """Картинка — знак окна MeetMark: прозрачный фон без плитки и кромки,
+    прозрачная сердцевина в центре, сверху слева — светлый --wave-6
+    фиолетовой палитры, снизу справа — темнее."""
+    gen = _generator()
+    size = a.shape[0]
+    pts = _mark_points(size)
+    for corner in (a[0, 0], a[0, -1], a[-1, 0], a[-1, -1]):
+        assert corner[3] == 0, f"{name}: угол не прозрачный — плитка?"
+    h = size // 2
+    assert (a[h - 1 : h + 1, h - 1 : h + 1, 3] == 0).all(), f"{name}: сердцевина не прозрачна"
+    lit = _at(a, pts["up_left"])
+    assert lit[3] == 255, name
+    l_ice, _, h_ice = gen.VIOLET[gen.MARK_STOPS[0][1]]
+    lightness, _, hue = _oklch(lit)
+    assert lightness == pytest.approx(l_ice, abs=0.04), (name, lightness)
+    assert abs((hue - h_ice + 180) % 360 - 180) <= 25, (name, hue)
+    dark = _at(a, pts["low_right"])
+    assert dark[3] == 255, name
+    assert _oklch(dark)[0] < lightness - 0.15, name
+    assert 270 <= _oklch(dark)[2] <= 335, name
+    # Диск — 11/24 стороны: у края внутри непрозрачно, за краем — прозрачно.
+    assert a[h, int(pts["centre"] - 0.8 * pts["radius"]), 3] == 255, name
+    outside = int(pts["centre"] - pts["radius"]) - 1
+    if outside >= 0:
+        assert a[h, outside, 3] == 0, name
+
+
+def test_mark_constants_match_meet_mark_component():
+    """Генератор и MeetMark.tsx — один знак: те же радиусы (из viewBox 24),
+    геометрия градиента и стопы --wave-* фиолетовой палитры окна."""
+    gen = _generator()
+    tsx = (ROOT / "app" / "src" / "ui" / "MeetMark.tsx").read_text(encoding="utf-8")
+    assert 'viewBox="0 0 24 24"' in tsx
+    assert '<circle cx="12" cy="12" r="11"' in tsx
+    assert '<circle cx="12" cy="12" r="2.6"' in tsx
+    assert gen.MARK == {"disc": pytest.approx(11 / 24), "core": pytest.approx(2.6 / 24)}
+    m = re.search(r'radialGradient[^>]*cx="(\d+)%" cy="(\d+)%" r="(\d+)%"', tsx)
+    assert m and gen.MARK_GLOW == {
+        "cx": pytest.approx(int(m[1]) / 100),
+        "cy": pytest.approx(int(m[2]) / 100),
+        "r": pytest.approx(int(m[3]) / 100),
+    }
+    stops = re.findall(r'<stop offset="([\d.]+)" style=\{\{ stopColor: "var\(--wave-(\d)\)" \}\}', tsx)
+    css = (ROOT / "app" / "src" / "theme" / "aurora" / "palettes.css").read_text(encoding="utf-8")
+    block = css.split("[data-aurora='violet'] {", 1)[1].split("}", 1)[0]
+    waves = dict(re.findall(r"--wave-(\d): var\(--violet-(\w+)\)", block))
+    assert len(stops) == 4 and len(waves) == 6
+    assert [(float(o), waves[w]) for o, w in stops] == [
+        (pytest.approx(o), name) for o, name in gen.MARK_STOPS
+    ]
+    tokens = (ROOT / "app" / "src" / "theme" / "aurora" / "tokens.css").read_text(encoding="utf-8")
+    for _, name in gen.MARK_STOPS:
+        t = re.search(rf"--violet-{name}: oklch\(([\d.]+)% ([\d.]+) ([\d.]+)\)", tokens)
+        assert t, name
+        assert gen.VIOLET[name] == pytest.approx((float(t[1]) / 100, float(t[2]), float(t[3]))), name
+
+
+def test_windows_icons_are_the_window_mark(made):
+    """Значок Windows (каждый кадр icon.ico) и PNG Tauri — знак окна MeetMark
+    в фиолетовой палитре на любом размере: без плитки, сердцевина прозрачна."""
+    gen, out, _ = made
+    ico = out / "icons" / "icon.ico"
+    for size in gen.ICO_SIZES:
+        image = Image.open(ico)
+        image.size = (size, size)
+        a = np.asarray(image.convert("RGBA"), dtype=int)
+        assert a.shape[0] == size
+        _assert_window_mark(a, f"icon.ico {size}")
+    for name in gen.APP_PNG:
+        _assert_window_mark(_pixels(out / "icons" / name), name)
+    # На 16 px сердцевина — не меньше двух пикселей, по центру, вокруг — диск.
     small = np.asarray(gen.draw_app(16), dtype=int)
-    core = small[7:9, 7:9, :3].mean()
-    disc = np.concatenate([small[4, 6:10, :3], small[11, 6:10, :3], small[6:10, 4, :3],
-                           small[6:10, 11, :3]])
-    assert core < 45, core
-    assert disc.mean() > core + 50
-    assert 255 <= _oklch(disc.mean(axis=0))[2] <= 335
+    assert (small[7:9, 7:9, 3] == 0).all()
+    assert (small[[5, 10], 7:9, 3] > 200).all() and (small[7:9, [5, 10], 3] > 200).all()
+    # Крупные — тот же ровный градиент, без пятен и зерна: соседние пиксели близки.
+    big = np.asarray(gen.draw_app(256), dtype=int)
+    patch = big[70:90, 100:120, :3]
+    assert np.abs(np.diff(patch, axis=1)).max() <= 4
 
 
-def test_vector_master_is_the_disc_mark(made):
-    """meet.svg и favicon.svg — один и тот же вектор знака B: радиальный
-    градиент, размытые пятна сияния, клип по диску, без прежнего индиго."""
+def test_macos_icon_keeps_the_tile(made):
+    """icon.icns — плитка Chaos Black (так принято на macOS), на ней тот же
+    знак: градиент MeetMark, сердцевина 2.6/11 диска (сквозь неё видна плитка)."""
+    gen, out, _ = made
+    big = np.asarray(Image.open(out / "icons" / "icon.icns").convert("RGBA"), dtype=int)
+    assert big.shape[0] == 1024
+    assert big[4, 4, 3] == 0, "поля за плиткой прозрачны"
+    for y, x in ((512, 512), (512, 110), (110, 512)):  # сердцевина и плитка у края
+        assert big[y, x, 3] == 255 and np.abs(big[y, x, :3] - 0x0F).max() <= 6, (y, x)
+    for size in (16, 32, 256, 1024):
+        a = np.asarray(gen.draw_macos(size), dtype=int)
+        p = gen._macos_params(size)
+        assert p["core"] == pytest.approx(p["disc"] * 2.6 / 11)
+        c, r = size / 2, p["disc"] * size
+        h = size // 2
+        assert (a[h - 1 : h + 1, h - 1 : h + 1, 3] == 255).all(), size
+        assert a[h - 1 : h + 1, h - 1 : h + 1, :3].max() < 45, size
+        lit = a[int(c - r + gen.MARK_GLOW["cy"] * 2 * r), int(c - r + gen.MARK_GLOW["cx"] * 2 * r)]
+        assert _oklch(lit)[0] == pytest.approx(gen.VIOLET["ice"][0], abs=0.05), size
+
+
+def test_vector_master_is_the_window_mark(made):
+    """meet.svg и favicon.svg — один и тот же вектор знака окна MeetMark: viewBox
+    24, диск r=11 с прозрачной сердцевиной r=2.6, радиальный градиент
+    --wave-6/5/4/2 фиолетовой палитры; без плитки, пятен и прежнего индиго."""
     gen, out, _ = made
     master = (out / "icons" / "source" / "meet.svg").read_text(encoding="utf-8")
     favicon = (out / "public" / "favicon.svg").read_text(encoding="utf-8")
     assert master == favicon
-    assert "radialGradient" in master and "feGaussianBlur" in master
-    assert "clipPath" in master and master.count("<ellipse") >= 3
-    assert "#0f0f0f" in master
-    mid = "#%02x%02x%02x" % tuple(round(v * 255) for v in gen.oklch_to_srgb(*gen.VIOLET["mid"]))
-    assert mid in master
+    assert 'viewBox="0 0 24 24"' in master
+    assert 'cx="0.32" cy="0.26" r="0.78"' in master
+    stops = re.findall(r'<stop offset="([\d.]+)" stop-color="(#[0-9a-f]{6})"/>', master)
+    assert stops == [(f"{o:g}", gen._hex(name)) for o, name in gen.MARK_STOPS]
+    assert 'fill-rule="evenodd"' in master and "a11 11" in master and "a2.6 2.6" in master
+    for gone in ("#0f0f0f", "feGaussianBlur", "<ellipse", "<rect"):
+        assert gone not in master, gone
     for old in ("#5e6ad2", "#7c86f0", "#3f4bb8", "#a3abff"):
         assert old not in master.lower(), old
 
@@ -261,15 +348,25 @@ def test_tray_states_read_at_16px():
     assert px["busy"][2, 11, 3] == 0 and px["idle"][2, 11, 3] > 200
     assert px["busy"][3, 10, 3] == 0 and px["idle"][3, 10, 3] == 255
 
-    # Ожидание и «нет связи» — приглушённые: менее насыщены, чем яркий диск.
-    def saturation(a):
+    # Ожидание и «нет связи» — приглушённые: серее (меньше хрома OKLCh) и темнее
+    # яркого диска, у которого градиент знака MeetMark (светлый сверху слева).
+    def chroma_lightness(a):
         disc = a[:10, :, :].reshape(-1, 4)
         disc = disc[(disc[:, 3] > 200) & (disc[:, :3].max(axis=1) > 70)]
-        return float(np.mean([_hsv(p)[1] for p in disc]))
+        ok = [_oklch(p) for p in disc]
+        return float(np.mean([o[1] for o in ok])), float(np.mean([o[0] for o in ok]))
 
     for muted in ("idle", "offline"):
-        for bright in ("recording", "live"):
-            assert saturation(px[muted]) + 0.2 < saturation(px[bright]), (muted, bright)
+        for bright in ("recording", "live", "busy"):
+            (c_m, l_m), (c_b, l_b) = chroma_lightness(px[muted]), chroma_lightness(px[bright])
+            assert c_m + 0.04 < c_b, (muted, bright)
+            assert l_m + 0.1 < l_b, (muted, bright)
+    # Яркий диск — градиент знака окна: в центре градиента почти --wave-6 (ice).
+    r = gen.TRAY[32]["R"]
+    lit = np.asarray(gen.draw_tray("recording", 32), dtype=int)[
+        int(16 - r + gen.MARK_GLOW["cy"] * 2 * r), int(16 - r + gen.MARK_GLOW["cx"] * 2 * r)
+    ]
+    assert _oklch(lit)[0] == pytest.approx(gen.VIOLET["ice"][0], abs=0.04)
     # Знак не вылезает за край: по периметру 16 px почти прозрачно.
     for state, a in px.items():
         border = np.concatenate([a[0, :, 3], a[-1, :, 3], a[:, 0, 3], a[:, -1, 3]])
