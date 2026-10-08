@@ -4,7 +4,7 @@
  */
 
 import type { ComponentPropsWithoutRef } from "react";
-import { Sparkles } from "lucide-react";
+import { AgentMark } from "./AgentMark";
 import "./ask-agent.css";
 
 type Props = Omit<ComponentPropsWithoutRef<"button">, "aria-label" | "children"> & {
@@ -15,7 +15,7 @@ type Props = Omit<ComponentPropsWithoutRef<"button">, "aria-label" | "children">
 export function AskAgentButton({ label, title = label, className = "", ...rest }: Props) {
   return (
     <button type="button" className={`ask-agent ${className}`.trim()} aria-label={label} title={title} {...rest}>
-      <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />
+      <AgentMark size={16} />
     </button>
   );
 }

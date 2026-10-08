@@ -1,11 +1,13 @@
 /* Бейдж «ИИ» у названия от модели: тихий, не спорит с названием. */
 .ai-badge {
-  display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 5px; margin-left: 6px;
+  display: inline-flex; align-items: center; gap: 2px; flex: none; height: 18px; padding: 0 5px 0 3px; margin-left: 6px;
   font-size: 10px; font-weight: 600; letter-spacing: 0.04em; line-height: 1; vertical-align: middle;
-  color: var(--accent-hi); background: rgba(94, 106, 210, 0.12); border: 1px solid rgba(124, 134, 240, 0.35);
+  color: var(--ink-2); background: transparent; border: 1px solid var(--accent-line);
   border-radius: var(--r-sm); cursor: pointer; user-select: none;
+  transition: background var(--t), color var(--t);
 }
-.ai-badge:hover { background: rgba(94, 106, 210, 0.22); color: var(--text); }
+.ai-badge .agent-mark { color: inherit; }
+.ai-badge:hover { background: var(--accent-soft); color: var(--ink); }
 .ai-badge__sr {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }

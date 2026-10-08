@@ -1,6 +1,7 @@
 import { AudioLines, Settings, Users, type LucideIcon } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { Icon } from "../ui/Icon";
+import { MeetMark } from "../ui/MeetMark";
 
 export type Section = "recordings" | "voices" | "settings";
 
@@ -22,7 +23,7 @@ export function Nav({ section, onSelect, groups }: {
 }) {
   return (
     <nav className="nav" role="navigation">
-      <div className="nav__brand" title="Meet"><span className="nav__mark" aria-hidden="true" /><span className="nav__label">Meet</span></div>
+      <div className="nav__brand" title="Meet"><span className="nav__mark" aria-hidden="true"><MeetMark size={18} /></span><span className="nav__label">Meet</span></div>
       {ITEMS.map((it) => (
         <Fragment key={it.id}>
           <button

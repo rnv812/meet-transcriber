@@ -5,6 +5,7 @@
  */
 
 import type { MouseEvent } from "react";
+import { AgentMark } from "./AgentMark";
 import "./ai-badge.css";
 
 export const AI_BADGE_HINT = "Название предложено ИИ — нажмите, чтобы изменить";
@@ -25,6 +26,7 @@ export function AiBadge({ onClick, by }: { onClick?: () => void; by?: string | n
   // aria-label у span без роли экранные дикторы не читают — текст для них скрыт визуально.
   return (
     <span className="ai-badge" title={aiBadgeHint(by)} onClick={click}>
+      <AgentMark size={14} />
       <span aria-hidden="true">ИИ</span>
       <span className="ai-badge__sr">{aiBadgeHint(by)}</span>
     </span>

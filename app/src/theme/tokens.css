@@ -48,11 +48,7 @@ body { overflow: hidden; }
   color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; user-select: none;
 }
 .nav__mark {
-  width: 14px; height: 14px; flex: none; border-radius: 50%;
-  background:
-    radial-gradient(closest-side, var(--surface) 42%, transparent 45%),
-    linear-gradient(135deg, #a3abff, var(--accent) 50%, var(--violet));
-  box-shadow: 0 0 10px var(--accent-glow);
+  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none;
 }
 .nav__item {
   display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px;

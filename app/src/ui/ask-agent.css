@@ -1,9 +1,11 @@
-/* ✦ «Спросить агента»: тихая кнопка в цвет акцента. */
+/* ✦ «Спросить агента»: тихая кнопка со звездой агента. */
 .ask-agent {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 22px; height: 22px; padding: 0; vertical-align: middle;
-  background: transparent; color: var(--accent-hi);
+  width: 24px; height: 24px; padding: 0; vertical-align: middle;
+  background: transparent; color: var(--ink-2);
   border: 0; border-radius: var(--r-md); cursor: pointer;
   transition: background var(--t), color var(--t), opacity var(--t);
 }
-.ask-agent:hover { background: var(--surface-hover); color: var(--accent-hover); }
+.ask-agent .agent-mark { color: inherit; }
+.ask-agent:hover { background: var(--surface-hover); color: var(--ink); }
+.ask-agent:focus-visible { outline: 1px solid var(--accent-line); outline-offset: 1px; }
