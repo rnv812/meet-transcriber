@@ -799,6 +799,21 @@ impl Supervisor {
                 .unwrap_or("0.1.0 или раньше")
                 .to_string();
             let mut decision = upgrade::external_version(&state, jobs.as_ref(), app_version);
+            // Та же версия, но движок переставлен после запуска резидента (0.5):
+            // в памяти старый код — заменяем, как резидент другой версии.
+            if decision == upgrade::ExternalVersion::Keep {
+                let env = engine::env_dir(&crate::storage::home(&data_dir()), app_version);
+                if upgrade::stale_build(&state, engine::installed_secs(&env)) {
+                    shell_log!("резидент запущен до переустановки движка — заменю его новым");
+                    decision = if upgrade::resident_busy(&state)
+                        || upgrade::resident_working(&state, jobs.as_ref())
+                    {
+                        upgrade::ExternalVersion::WaitIdle
+                    } else {
+                        upgrade::ExternalVersion::Replace
+                    };
+                }
+            }
             // Резидент из движка другой папки (недобитый после прерванного
             // переноса) не подхватываем: его папку удаляют, а кэш моделей у
             // него — оттуда же. Как с чужой версией: занят — ждём, нет — выйти.

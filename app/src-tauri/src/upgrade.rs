@@ -193,6 +193,22 @@ pub fn external_version(state: &Value, jobs: Option<&Value>, app_version: &str) 
     }
 }
 
+/// Резидент той же версии запущен раньше, чем установлен движок (0.5): пакет
+/// переставлен (другое колесо той же версии), а в памяти резидента старый код —
+/// он, например, молча терял `ui.terms_accepted`. `started_at` — секунды эпохи
+/// из `/state` (его нет у резидентов до 0.5 — не судим); `engine_installed` —
+/// время файла-маркера движка. Запас на округление и часы — `STALE_SLACK_S`.
+pub fn stale_build(state: &Value, engine_installed: Option<u64>) -> bool {
+    let started = state.get("started_at").and_then(Value::as_u64);
+    match (started, engine_installed) {
+        (Some(started), Some(installed)) => started + STALE_SLACK_S < installed,
+        _ => false,
+    }
+}
+
+/// Запас для `stale_build`, секунд.
+pub const STALE_SLACK_S: u64 = 5;
+
 /// Идёт работа, которую выход резидента прервёт: задача стоит в очереди или
 /// идёт (расшифровка, объединение, итоги, установка движка), или GPU занят
 /// задачей. `jobs` — ответ GET /jobs (`None` — не узнали: судим по GPU).
@@ -234,6 +250,17 @@ mod tests {
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resident_started_before_the_engine_was_reinstalled_is_stale() {
+        let state = json!({"version": "0.5.0", "started_at": 1_000});
+        assert!(stale_build(&state, Some(1_000 + STALE_SLACK_S + 1)));
+        assert!(!stale_build(&state, Some(1_000 + STALE_SLACK_S)));
+        assert!(!stale_build(&state, Some(900)));
+        // Резидент до 0.5 (поля нет) и движок без маркера — не судим.
+        assert!(!stale_build(&json!({"version": "0.5.0"}), Some(5_000)));
+        assert!(!stale_build(&state, None));
     }
 
     #[test]

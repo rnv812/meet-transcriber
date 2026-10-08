@@ -61,6 +61,12 @@ KEEP_SHUTDOWN_S = 5.0
 PACKAGE = "meet-transcriber"
 
 
+# Когда запущен процесс резидента (0.5, `/state` → `started_at`): оболочка сверяет
+# с временем установки движка — движок той же версии переставлен после старта
+# (другое колесо), а в памяти старый код: такой резидент она заменяет.
+STARTED_AT = time.time()
+
+
 @functools.lru_cache(maxsize=1)
 def app_version() -> str | None:
     """Версия установленного пакета meet — она же версия приложения
@@ -1294,6 +1300,7 @@ class TrayControl:
             "forget_gaps": self._forget_gaps(recording),
             # Версия резидента: оболочка другой версии штатно его заменит.
             "version": app_version(),
+            "started_at": round(STARTED_AT),
             "source": tray.source,
             "folder": tray._current_folder() if recording else None,
             "elapsed_s": round(elapsed, 1),

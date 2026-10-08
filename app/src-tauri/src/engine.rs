@@ -480,6 +480,16 @@ pub fn file_sha256(path: &Path) -> io::Result<String> {
         .collect())
 }
 
+/// Когда установлен движок (время файла-маркера, секунды эпохи): резидент,
+/// запущенный раньше, выполняет код прежней установки (`upgrade::stale_build`).
+pub fn installed_secs(env_dir: &Path) -> Option<u64> {
+    let modified = fs::metadata(env_dir.join(MARKER)).ok()?.modified().ok()?;
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_secs())
+}
+
 fn read_marker(env_dir: &Path) -> Option<Marker> {
     serde_json::from_str(&fs::read_to_string(env_dir.join(MARKER)).ok()?).ok()
 }

@@ -56,6 +56,17 @@ def test_snapshot_reports_the_package_version(control_state):
     assert control_state.snapshot()["version"] == expected
 
 
+def test_snapshot_reports_when_the_resident_started(control_state):
+    """0.5: время запуска процесса резидента — оболочка видит, что движок
+    переустановлен после его старта (тот же номер версии, другой код), и
+    заменяет его: старый код в памяти терял `ui.terms_accepted`."""
+    from meet import tray_control
+
+    started = control_state.snapshot()["started_at"]
+    assert started == round(tray_control.STARTED_AT)
+    assert 0 < started <= time.time()
+
+
 def test_version_is_none_without_the_package(monkeypatch):
     import importlib.metadata
 
