@@ -1,16 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
 <title>Meet</title>
 <defs>
-<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1b21"/><stop offset="1" stop-color="#0f1012"/></linearGradient>
-<radialGradient id="spot" cx="0.5" cy="0.5" r="0.42"><stop offset="0" stop-color="#5e6ad2" stop-opacity="0.32"/><stop offset="1" stop-color="#5e6ad2" stop-opacity="0"/></radialGradient>
-<linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a3abff"/><stop offset="0.5" stop-color="#5e6ad2"/><stop offset="1" stop-color="#3f4bb8"/></linearGradient>
-<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="14.08"/></filter>
-<clipPath id="plate"><rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13"/></clipPath>
+<radialGradient id="glow" cx="0.36" cy="0.3" r="0.85"><stop offset="0" stop-color="#613ea6"/><stop offset="0.55" stop-color="#613ea6"/><stop offset="1" stop-color="#3b296b"/></radialGradient>
+<filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18"/></filter>
+<clipPath id="disc"><path fill-rule="evenodd" clip-rule="evenodd" d="M50 128a78 78 0 1 0 156 0a78 78 0 1 0 -156 0zM110 128a18 18 0 1 1 36 0a18 18 0 1 1 -36 0z"/></clipPath>
 </defs>
-<rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13" fill="url(#bg)"/>
-<g clip-path="url(#plate)">
-<rect x="17.92" y="17.92" width="220.16" height="220.16" fill="url(#spot)"/>
-<path d="M62.72 128a65.28 65.28 0 1 0 130.56 0a65.28 65.28 0 1 0 -130.56 0zM99.28 128a28.72 28.72 0 1 1 57.45 0a28.72 28.72 0 1 1 -57.45 0z" fill="#7c86f0" fill-rule="evenodd" opacity="0.75" filter="url(#glow)"/>
+<rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13" fill="#0f0f0f"/>
+<rect x="18.92" y="18.92" width="218.16" height="218.16" rx="44.13" fill="none" stroke="#ffffff" stroke-opacity="0.09" stroke-width="2"/>
+<g clip-path="url(#disc)">
+<rect x="50" y="50" width="156" height="156" fill="url(#glow)"/>
+<g filter="url(#soft)">
+<ellipse cx="70" cy="190" rx="70" ry="60" fill="#16102f"/>
+<ellipse cx="96" cy="78" rx="62" ry="44" fill="#ba9cef"/>
+<ellipse cx="176" cy="96" rx="48" ry="40" fill="#e2abe5"/>
+<ellipse cx="120" cy="58" rx="26" ry="16" fill="#f2e0fb"/>
 </g>
-<path d="M62.72 128a65.28 65.28 0 1 0 130.56 0a65.28 65.28 0 1 0 -130.56 0zM99.28 128a28.72 28.72 0 1 1 57.45 0a28.72 28.72 0 1 1 -57.45 0z" fill="url(#ring)" fill-rule="evenodd"/>
+</g>
 </svg>
