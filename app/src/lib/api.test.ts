@@ -296,3 +296,20 @@ test("счётчики панели «Фильтры»: запрос и филь
     "http://h/facets?q=%D0%BF%D0%BB%D0%B0%D0%BD&groups=g-1&has=summary&min_s=900",
   ]);
 });
+
+test("«Кто это»: PUT /voices/{имя}/role — сохранённый текст в ответе, пустая строка очищает", async () => {
+  const f = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ ok: true, role: "CTO" }), { status: 200 }));
+  globalThis.fetch = f;
+  await expect(api.setPersonRole(ep, "Анна Б", " CTO ")).resolves.toBe("CTO");
+  await api.setPersonRole(ep, "Анна Б", "");
+  const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method, (init as RequestInit).body]);
+  expect(calls).toEqual([
+    ["http://h/voices/%D0%90%D0%BD%D0%BD%D0%B0%20%D0%91/role", "PUT", JSON.stringify({ role: " CTO " })],
+    ["http://h/voices/%D0%90%D0%BD%D0%BD%D0%B0%20%D0%91/role", "PUT", JSON.stringify({ role: "" })],
+  ]);
+});
+
+test("«Кто это»: человека нет — ошибка текстом", async () => {
+  globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "человека нет" }), { status: 404 }));
+  await expect(api.setPersonRole(ep, "Нет", "x")).rejects.toEqual(new ApiError(404, "человека нет"));
+});

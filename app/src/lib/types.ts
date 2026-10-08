@@ -352,7 +352,12 @@ export type Person = {
   seconds: number;
   has_avatar: boolean;
   color: string;
+  /** «Кто это» (0.4): короткая строка до 160 символов; нет или "" — не задано. Старый резидент не присылает. */
+  role?: string;
 };
+
+/** «Кто это» (0.4): больше резидент не хранит. */
+export const ROLE_MAX = 160;
 
 export type PersonMeeting = {
   recording: string;
@@ -367,6 +372,7 @@ export type PersonCard = {
   has_avatar: boolean;
   samples: number;
   meetings: PersonMeeting[];
+  role?: string;
 };
 
 export type Sample = { recording: string; start: number; end: number; track: string };

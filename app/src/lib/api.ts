@@ -322,6 +322,9 @@ export const mergePerson = (ep: Endpoint, name: string, into: string) =>
   json<unknown>(ep, `/voices/${enc(name)}/merge`, body("POST", { into }));
 export const deletePerson = (ep: Endpoint, name: string) =>
   json<unknown>(ep, `/voices/${enc(name)}`, { method: "DELETE" });
+/** «Кто это» (роль человека): ответ — сохранённый текст (резидент убирает переводы строк и режет до 160); "" — очистить. */
+export const setPersonRole = async (ep: Endpoint, name: string, role: string): Promise<string> =>
+  (await json<{ ok: boolean; role: string }>(ep, `/voices/${enc(name)}/role`, body("PUT", { role }))).role ?? "";
 
 // Профили людей убраны в 0.3.2: строка об уборке в «Голосах» и «Понятно».
 export const getProfilesRemoved = (ep: Endpoint) =>

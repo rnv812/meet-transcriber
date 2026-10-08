@@ -6,13 +6,13 @@ import { inTauri, openFolder } from "../../lib/shell";
 import type { Person, ProfilesRemovedNotice } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
-import { EmptyState } from "../../ui/EmptyState";
 import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
 import { PaneResizer } from "../../ui/PaneResizer";
+import { Truncate } from "../../ui/Truncate";
 import { ItemMenu } from "../recordings/ItemMenu";
-import { OwnerVoiceRow } from "../settings/OwnerVoice";
 import { VoiceBaseTip } from "../settings/tips";
+import { MyVoice } from "./MyVoice";
 import { PersonCard, type PersonIntent } from "./PersonCard";
 import { plural } from "./plural";
 import "./voices.css";
@@ -32,6 +32,8 @@ type Props = {
   onAvatar: (name: string) => void;
   onChanged: () => void;
   onOpenRecording: (id: string) => void;
+  /** «Открыть настройки» у причины, по которой нельзя записать свой голос. */
+  onOpenSettings?: (part: string) => void;
 };
 
 /**
@@ -66,17 +68,15 @@ function ProfilesRemoved({ endpoint }: { endpoint: Endpoint }) {
   );
 }
 
-/** «Мой голос» над таблицей: тот же ряд, что в настройках «Спикеры». Без `device` резидент берёт сохранённый
- * `recording.mic_device` (микрофон из черновика настроек здесь неизвестен). */
-function MyVoice({ endpoint }: { endpoint: Endpoint }) {
-  return (
-    <div className="card voices__mine">
-      <OwnerVoiceRow endpoint={endpoint} device={null} />
-    </div>
-  );
+/** Ищет ли строка поиска этого человека: по имени и по «Кто это», без регистра. */
+export function personMatches(p: Person, needle: string): boolean {
+  if (!needle) return true;
+  return p.name.toLowerCase().includes(needle) || (p.role ?? "").toLowerCase().includes(needle);
 }
 
-export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChanged, onOpenRecording }: Props) {
+export function VoicesPane({
+  endpoint, people, avatarVersion, onAvatar, onChanged, onOpenRecording, onOpenSettings,
+}: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [intent, setIntent] = useState<PersonIntent | undefined>(undefined);
   const [query, setQuery] = useState("");
@@ -91,88 +91,97 @@ export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChange
     setIntent(kind ? { kind, n: ++turn.current } : undefined);
   };
 
-  if (people.length === 0) {
-    return (
-      <div className="voices__empty">
-        <ProfilesRemoved endpoint={endpoint} />
-        <MyVoice endpoint={endpoint} />
-        <EmptyState title="База голосов пуста"
-          hint="Назовите спикеров в карточке записи — их голоса сохранятся здесь и будут узнаваться автоматически." />
-      </div>
-    );
-  }
-
   const needle = query.trim().toLowerCase();
-  const shown = needle ? people.filter((p) => p.name.toLowerCase().includes(needle)) : people;
+  const shown = people.filter((p) => personMatches(p, needle));
+  const empty = people.length === 0;
 
   return (
     <div className="voices">
       <section className="voices__main">
-        <ProfilesRemoved endpoint={endpoint} />
-        <header className="voices__head">
-          <div className="voices__heading">
-            <h1 className="voices__title">Голоса</h1>
-            <p className="voices__sub">
-              {people.length} {plural(people.length, "человек", "человека", "человек")} · узнаются автоматически
-              <VoiceBaseTip />
-            </p>
-          </div>
-          <div className="search voices__search">
-            <Icon as={Search} />
-            <input className="field field--md" type="search" placeholder="Найти человека"
-              aria-label="Найти человека" value={query} onChange={(e) => setQuery(e.target.value)} />
-          </div>
-        </header>
-        <MyVoice endpoint={endpoint} />
-        {shown.length === 0 ? (
-          <p className="voices__none">Никого с таким именем нет</p>
-        ) : (
-          <div className="card voices__table">
-            <div className="scroll-x">
-              <table className="tbl" aria-label="Люди с голосом в базе">
-                <thead>
-                  <tr>
-                    <th scope="col"><span className="voices__th">Человек</span></th>
-                    <th scope="col"><span className="voices__th">Встреч</span></th>
-                    <th scope="col"><span className="voices__th">Речи</span></th>
-                    <th scope="col" className="w"><span className="sr-only">Действие</span></th>
-                    <th scope="col" className="w"><span className="sr-only">Ещё</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((p) => (
-                    // Строка открывает карточку мышью; с клавиатуры — кнопка с именем (её нажатие
-                    // всплывает сюда же), поэтому у самой кнопки своего обработчика нет.
-                    <tr key={p.name} className="voices__row" aria-selected={p.name === selected}
-                      onClick={() => open(p.name)}>
-                      <td>
-                        <button type="button" className="voices__person">
-                          <Avatar name={p.name} color={p.color} hasAvatar={p.has_avatar}
-                            version={avatarVersion[p.name]} size={32} endpoint={endpoint} />
-                          <span className="voices__name">{p.name}</span>
-                        </button>
-                      </td>
-                      <td>{p.meetings}</td>
-                      <td className="voices__time">{duration(p.seconds)}</td>
-                      <td className="w">
-                        <Button size="xs" variant="ghost"
-                          onClick={(e) => { e.stopPropagation(); open(p.name, "rename"); }}>Переименовать</Button>
-                      </td>
-                      <td className="w">
-                        <IconButton icon={Ellipsis} size="xs" label={`Ещё: ${p.name}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            menuButton.current = e.currentTarget;
-                            setMenu(menu === p.name ? null : p.name);
-                          }} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Одна колонка до 960 px по центру — и с людьми, и без них: шапка, «Мой голос», таблица. */}
+        <div className="voices__col">
+          <ProfilesRemoved endpoint={endpoint} />
+          <header className="voices__head">
+            <div className="voices__heading">
+              <h1 className="voices__title">Голоса</h1>
+              <p className="voices__sub">
+                {empty ? "Пока никого"
+                  : `${people.length} ${plural(people.length, "человек", "человека", "человек")} · узнаются автоматически`}
+                <VoiceBaseTip />
+              </p>
             </div>
-          </div>
-        )}
+            {!empty && (
+              <div className="search voices__search">
+                <Icon as={Search} />
+                <input className="field field--md" type="search" placeholder="Найти человека"
+                  aria-label="Найти человека" value={query} onChange={(e) => setQuery(e.target.value)} />
+              </div>
+            )}
+          </header>
+          <MyVoice endpoint={endpoint} onOpenSettings={onOpenSettings} />
+          {empty ? (
+            <div className="voices__empty">
+              <b className="voices__empty-title">База голосов пуста</b>
+              <p className="voices__empty-text">
+                Назовите спикеров в карточке записи — их голоса сохранятся здесь и будут узнаваться автоматически.
+              </p>
+            </div>
+          ) : shown.length === 0 ? (
+            <p className="voices__none">Никого не нашлось — ни по имени, ни по «Кто это»</p>
+          ) : (
+            <div className="card voices__table">
+              <div className="scroll-x">
+                <table className="tbl" aria-label="Люди с голосом в базе">
+                  <thead>
+                    <tr>
+                      <th scope="col"><span className="voices__th">Человек</span></th>
+                      <th scope="col" className="voices__role-col"><span className="voices__th">Кто это</span></th>
+                      <th scope="col"><span className="voices__th">Встреч</span></th>
+                      <th scope="col"><span className="voices__th">Речи</span></th>
+                      <th scope="col" className="w"><span className="sr-only">Действие</span></th>
+                      <th scope="col" className="w"><span className="sr-only">Ещё</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map((p) => (
+                      // Строка открывает карточку мышью; с клавиатуры — кнопка с именем (её нажатие
+                      // всплывает сюда же), поэтому у самой кнопки своего обработчика нет.
+                      <tr key={p.name} className="voices__row" aria-selected={p.name === selected}
+                        onClick={() => open(p.name)}>
+                        <td>
+                          <button type="button" className="voices__person">
+                            <Avatar name={p.name} color={p.color} hasAvatar={p.has_avatar}
+                              version={avatarVersion[p.name]} size={32} endpoint={endpoint} />
+                            <span className="voices__name">{p.name}</span>
+                          </button>
+                        </td>
+                        {p.role ? (
+                          <td className="voices__role"><Truncate>{p.role}</Truncate></td>
+                        ) : (
+                          <td className="voices__role voices__role--none" aria-label="не задано">—</td>
+                        )}
+                        <td>{p.meetings}</td>
+                        <td className="voices__time">{duration(p.seconds)}</td>
+                        <td className="w">
+                          <Button size="xs" variant="ghost"
+                            onClick={(e) => { e.stopPropagation(); open(p.name, "rename"); }}>Переименовать</Button>
+                        </td>
+                        <td className="w">
+                          <IconButton icon={Ellipsis} size="xs" label={`Ещё: ${p.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              menuButton.current = e.currentTarget;
+                              setMenu(menu === p.name ? null : p.name);
+                            }} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       </section>
       {menu && (
         <ItemMenu anchor={menuButton} align="end" label={`Действия с голосом «${menu}»`}
@@ -201,6 +210,7 @@ export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChange
             onAvatar={() => onAvatar(current.name)}
             onRenamed={(to) => { setSelected(to); onChanged(); }}
             onRemoved={(next) => { setSelected(next); onChanged(); }}
+            onRoleSaved={onChanged}
             onOpenRecording={onOpenRecording}
           />
         </aside>

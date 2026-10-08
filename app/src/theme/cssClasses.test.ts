@@ -113,9 +113,6 @@ test("ссылка-кнопка — шрифтом окружающего тек
  * нарушение. Пустой список — цель.
  */
 const NATIVE_ALLOWED = new Set<string>([
-  // Пакет B: голоса (перешли в пакет D).
-  "features/voices/PersonCard.tsx: <select>",
-
   // Пакет C: настройки.
   "features/settings/AsrChoice.tsx: <select>",
   "features/settings/JiraSettings.tsx: <select>",

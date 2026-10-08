@@ -19,19 +19,23 @@ vi.mock("../../lib/api", async (orig) => ({
   renamePerson: vi.fn(),
   mergePerson: vi.fn(),
   deletePerson: vi.fn(),
+  setPersonRole: vi.fn(),
+  deriveOwnerVoice: vi.fn(),
   getProfilesRemoved: vi.fn(async () => ({ notice: null })),
   dismissProfilesRemoved: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
 const people: Person[] = [
-  { name: "Демьян", samples: 3, meetings: 2, seconds: 1200, has_avatar: false, color: "#4b6bd6" },
+  { name: "Демьян", samples: 3, meetings: 2, seconds: 1200, has_avatar: false, color: "#4b6bd6", role: "CTO Acme" },
   { name: "Аркаша", samples: 1, meetings: 1, seconds: 240, has_avatar: false, color: "#3a9a6a" },
-  { name: "Аркадий", samples: 1, meetings: 1, seconds: 600, has_avatar: false, color: "#c0793a" },
+  { name: "Аркадий", samples: 1, meetings: 1, seconds: 600, has_avatar: false, color: "#c0793a", role: "заказчик" },
 ];
+const OWNER_EMPTY = { samples: [], take: null, ready: true, reason: null, recording: false, seconds: 25 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(OWNER_EMPTY);
   vi.mocked(api.getPerson).mockImplementation(async (_e, name) => ({
     name, color: "#000", has_avatar: false, samples: 1,
     meetings: [{ recording: "r1", title: "Планёрка", started_at: "2026-09-30T10:00:00", seconds: 600 }],
@@ -67,32 +71,129 @@ function Harness() {
   );
 }
 
-test("таблица людей: заголовок, колонки «Человек · Встреч · Речи», по строке на человека", () => {
+test("таблица людей: заголовок, колонки «Человек · Кто это · Встреч · Речи», по строке на человека", () => {
   setup(people.slice(0, 2));
   expect(screen.getByRole("heading", { name: "Голоса" })).toBeInTheDocument();
   expect(screen.getByText("2 человека · узнаются автоматически")).toBeInTheDocument();
   const table = screen.getByRole("table", { name: "Люди с голосом в базе" });
   expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
-    .toEqual(["Человек", "Встреч", "Речи", "Действие", "Ещё"]);
+    .toEqual(["Человек", "Кто это", "Встреч", "Речи", "Действие", "Ещё"]);
   const rows = within(table).getAllByRole("row").slice(1);
   expect(rows).toHaveLength(2);
   expect(within(rows[0]!).getByRole("button", { name: "Демьян" })).toBeInTheDocument();
+  expect(within(rows[0]!).getByRole("cell", { name: "CTO Acme" })).toBeInTheDocument();
   expect(within(rows[0]!).getByRole("cell", { name: "2" })).toBeInTheDocument();
   expect(within(rows[0]!).getByRole("cell", { name: "20 мин" })).toBeInTheDocument();
   expect(within(rows[1]!).getByRole("cell", { name: "4 мин" })).toBeInTheDocument();
+  // Роли нет — тихий прочерк, а не пустая ячейка; диктору — «не задано».
+  expect(within(rows[1]!).getByRole("cell", { name: "не задано" })).toHaveTextContent("—");
   // «Последний раз» нужен бэкенд — колонки нет.
   expect(screen.queryByText("Последний раз")).toBeNull();
 });
 
-test("сверху — карточка «Мой голос» из настроек, а не её копия", async () => {
+test("«Кто это» в таблице — в одну строку с многоточием; полный текст — подсказкой обрезанного", () => {
+  const long = "Руководитель направления интеграции Acme у заказчика, отвечает за сроки пилота";
+  setup([{ ...people[0]!, role: long }]);
+  const cell = screen.getByRole("cell", { name: long });
+  expect(cell.querySelector(".truncate")).toHaveTextContent(long);
+});
+
+test("сверху — карточка «Мой голос» по макету: «Вы», что записано, бейдж и кнопки справа", async () => {
   setup();
   const mine = screen.getByRole("group", { name: "Мой голос" });
-  expect(await within(mine).findByText("не записан")).toBeInTheDocument();
-  expect(within(mine).getByRole("button", { name: "Записать" })).toBeInTheDocument();
+  expect(await within(mine).findByText("Не записан")).toBeInTheDocument();
+  expect(within(mine).getByText("Вы")).toBeInTheDocument();
+  expect(within(mine).getByRole("button", { name: "Записать" })).toBeEnabled();
+  expect(within(mine).getByRole("button", { name: "Найти по прошлым встречам" })).toBeEnabled();
   expect(api.getOwnerVoice).toHaveBeenCalledWith(ep);
   // Выше таблицы.
   const table = screen.getByRole("table");
   expect(mine.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("«Мой голос»: записанный образец — «Записан», «Перезаписать»; «Записать» открывает окно записи", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue({
+    ...OWNER_EMPTY, samples: [{ id: "s1", source: "enroll", date: "2026-10-05", device: "USB-микрофон" }],
+  } as never);
+  setup();
+  const mine = screen.getByRole("group", { name: "Мой голос" });
+  expect(await within(mine).findByText("Записан")).toBeInTheDocument();
+  expect(within(mine).getByText(/записан 05\.10 · USB-микрофон/)).toBeInTheDocument();
+  await userEvent.click(within(mine).getByRole("button", { name: "Перезаписать" }));
+  expect(await screen.findByRole("dialog", { name: "Мой голос" })).toBeInTheDocument();
+});
+
+test("«Мой голос»: недоступная кнопка объясняет причину, рядом — ссылка в настройки", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue({
+    ...OWNER_EMPTY, ready: false, reason: "Сначала установите движок расшифровки — без него голос не разобрать",
+  });
+  const onOpenSettings = vi.fn();
+  setup(people, { onOpenSettings });
+  const mine = screen.getByRole("group", { name: "Мой голос" });
+  const derive = await within(mine).findByRole("button", { name: "Найти по прошлым встречам" });
+  await waitFor(() => expect(derive).toBeDisabled());
+  expect(derive).toHaveAccessibleDescription("Сначала установите движок расшифровки — без него голос не разобрать.");
+  await userEvent.click(within(mine).getByRole("button", { name: "Открыть настройки" }));
+  expect(onOpenSettings).toHaveBeenCalledWith("engine");
+});
+
+test("поиск «Найти человека» ищет и по «Кто это»", async () => {
+  setup();
+  const search = screen.getByRole("searchbox", { name: "Найти человека" });
+  await userEvent.type(search, "заказ");
+  const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(1);
+  expect(within(rows[0]!).getByRole("button", { name: "Аркадий" })).toBeInTheDocument();
+  await userEvent.clear(search);
+  await userEvent.type(search, "smart");
+  expect(within(screen.getByRole("table")).getByRole("button", { name: "Демьян" })).toBeInTheDocument();
+});
+
+test("карточка человека: «Кто это» под именем — Enter сохраняет, видно «Сохранено», список перечитывается", async () => {
+  vi.mocked(api.setPersonRole).mockResolvedValue("заказчик, отдел закупок");
+  const onChanged = vi.fn();
+  setup(people, { onChanged });
+  await userEvent.click(screen.getByRole("button", { name: "Аркаша" }));
+  const field = await screen.findByRole("textbox", { name: "Кто это" });
+  expect(field).toHaveValue("");
+  expect(field).toHaveAttribute("placeholder", "Например: CTO Acme, заказчик");
+  expect(field).toHaveAttribute("maxLength", "160");
+  await userEvent.type(field, "заказчик, отдел закупок{Enter}");
+  await waitFor(() => expect(api.setPersonRole).toHaveBeenCalledWith(ep, "Аркаша", "заказчик, отдел закупок"));
+  expect(await screen.findByText("Сохранено")).toBeInTheDocument();
+  expect(onChanged).toHaveBeenCalled();
+});
+
+test("карточка человека: «Кто это» — уход из поля сохраняет, Esc возвращает прежнее, без изменений — без запроса", async () => {
+  vi.mocked(api.setPersonRole).mockImplementation(async (_e, _n, role) => role.trim());
+  setup();
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
+  const field = await screen.findByRole("textbox", { name: "Кто это" });
+  expect(field).toHaveValue("CTO Acme");
+  // Без изменений — ни запроса, ни «Сохранено».
+  await userEvent.click(field);
+  await userEvent.tab();
+  expect(api.setPersonRole).not.toHaveBeenCalled();
+  // Esc — прежний текст.
+  await userEvent.clear(field);
+  await userEvent.type(field, "кто-то другой{Escape}");
+  expect(field).toHaveValue("CTO Acme");
+  expect(api.setPersonRole).not.toHaveBeenCalled();
+  // Очистить и уйти из поля — пустая строка (роль снята).
+  await userEvent.clear(field);
+  await userEvent.tab();
+  await waitFor(() => expect(api.setPersonRole).toHaveBeenCalledWith(ep, "Демьян", ""));
+});
+
+test("карточка человека: ошибка сохранения «Кто это» — текстом, поле не сбрасывается", async () => {
+  vi.mocked(api.setPersonRole).mockRejectedValue(new api.ApiError(404, "человека нет"));
+  setup();
+  await userEvent.click(screen.getByRole("button", { name: "Аркаша" }));
+  const field = await screen.findByRole("textbox", { name: "Кто это" });
+  await userEvent.type(field, "коллега{Enter}");
+  expect(await screen.findByText("человека нет")).toBeInTheDocument();
+  expect(field).toHaveValue("коллега");
+  expect(screen.queryByText("Сохранено")).toBeNull();
 });
 
 test("поиск «Найти человека» фильтрует по имени на клиенте", async () => {
@@ -109,7 +210,7 @@ test("поиск «Найти человека» фильтрует по име�
   await userEvent.clear(search);
   await userEvent.type(search, "никого");
   expect(screen.queryByRole("table")).toBeNull();
-  expect(screen.getByText("Никого с таким именем нет")).toBeInTheDocument();
+  expect(screen.getByText("Никого не нашлось — ни по имени, ни по «Кто это»")).toBeInTheDocument();
   expect(api.getPeople).not.toHaveBeenCalled();
 });
 
@@ -147,10 +248,16 @@ test("«Ещё»: объединить — к выбору человека, у�
   await waitFor(() => expect(api.deletePerson).toHaveBeenCalledWith(ep, "Демьян"));
 });
 
-test("пустое состояние", () => {
+test("пустое состояние: та же шапка «Голоса» и «Мой голос», пояснение — под ними, без поиска", () => {
   setup([]);
-  expect(screen.getByText("База голосов пуста"))
-    .toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Голоса" })).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Мой голос" })).toBeInTheDocument();
+  const empty = screen.getByText("База голосов пуста");
+  expect(screen.getByRole("group", { name: "Мой голос" }).compareDocumentPosition(empty)
+    & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByRole("searchbox")).toBeNull();
+  // Одна колонка с заполненной «Голосов»: шапка и карточки — в .voices__col.
+  expect(document.querySelector(".voices__col .voices__head")).not.toBeNull();
 });
 
 test("клик по человеку открывает карточку со встречами; встреча открывает запись", async () => {
@@ -246,7 +353,8 @@ test("объединение: выбор, подтверждение, mergePerso
   const onChanged = vi.fn();
   setup(people, { onChanged });
   await userEvent.click(screen.getByRole("button", { name: "Аркаша" }));
-  await userEvent.selectOptions(await screen.findByLabelText("Объединить с…"), "Аркадий");
+  await userEvent.click(await screen.findByRole("combobox", { name: "Объединить с…" }));
+  await userEvent.click(screen.getByRole("option", { name: "Аркадий" }));
   expect(screen.getByRole("alertdialog")).toHaveAccessibleName(/^Объединить «.+» с «Аркадий»\?$/);
   expect(api.mergePerson).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: /^(Объединить|Удалить)$/ }));

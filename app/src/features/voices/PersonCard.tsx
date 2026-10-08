@@ -1,14 +1,21 @@
 import { Play } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
-  audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson,
+  audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson, setPersonRole,
   type Endpoint,
 } from "../../lib/api";
 import { dayLabel, duration, errorText } from "../../lib/format";
-import type { Person, PersonCard as PersonData } from "../../lib/types";
+import { ROLE_MAX, type Person, type PersonCard as PersonData } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog, useConfirm } from "../../ui/ConfirmDialog";
+import { Select } from "../../ui/Select";
 import { AvatarEditor, pastedImage } from "./AvatarEditor";
+
+/** Пример в пустом поле «Кто это». */
+export const ROLE_PLACEHOLDER = "Например: CTO Acme, заказчик";
+
+/** «Кто это» как его сохранит резидент: переводы строк и лишние пробелы — один пробел, не длиннее 160. */
+export const cleanRole = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, ROLE_MAX);
 
 type Props = {
   endpoint: Endpoint;
@@ -18,6 +25,8 @@ type Props = {
   onAvatar: () => void;
   onRenamed: (to: string) => void;
   onRemoved: (next: string | null) => void;
+  /** «Кто это» сохранено — перечитать список людей (столбец таблицы, подсказки чипов). */
+  onRoleSaved?: () => void;
   onOpenRecording: (id: string) => void;
   /**
    * Зачем открыта карточка из строки таблицы: переименовать (курсор в имени),
@@ -33,7 +42,7 @@ export type PersonIntent = { kind: "rename" | "merge" | "delete"; n: number };
 const MAX_AVATAR = 10 * 1024 * 1024;
 
 export function PersonCard({
-  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording, intent,
+  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onRoleSaved, onOpenRecording, intent,
 }: Props) {
   const name = person.name;
   const [data, setData] = useState<PersonData | null>(null);
@@ -45,7 +54,21 @@ export function PersonCard({
   const root = useRef<HTMLDivElement>(null);
   const cancelled = useRef(false);
   const nameInput = useRef<HTMLInputElement>(null);
-  const mergeSelect = useRef<HTMLSelectElement>(null);
+  const mergeSelect = useRef<HTMLButtonElement>(null);
+  /** «Кто это»: черновик в поле, последнее сохранённое и «Сохранено» после удачной записи. */
+  const [role, setRole] = useState(person.role ?? "");
+  const savedRole = useRef(person.role ?? "");
+  const [roleSaved, setRoleSaved] = useState(false);
+  const roleCancelled = useRef(false);
+  const roleInput = useRef<HTMLInputElement>(null);
+  const roleId = useId();
+  // Список людей перечитан (роль поменяли в другом месте) — поле за ним, если его сейчас не правят.
+  const listedRole = person.role ?? "";
+  useEffect(() => {
+    if (document.activeElement === roleInput.current) return;
+    savedRole.current = listedRole;
+    setRole(listedRole);
+  }, [listedRole]);
 
   useEffect(() => {
     if (!intent) { root.current?.focus(); return; }
@@ -94,6 +117,19 @@ export function PersonCard({
       onRenamed(to);
     });
   };
+  /** Уход из поля «Кто это» (и Enter): сохранить, если изменилось; Esc — вернуть сохранённое. */
+  const saveRole = () => {
+    if (roleCancelled.current) { roleCancelled.current = false; setRole(savedRole.current); return; }
+    const next = cleanRole(role);
+    if (next === savedRole.current) { setRole(next); return; }
+    void run(async () => {
+      const saved = await setPersonRole(endpoint, name, next);
+      savedRole.current = saved;
+      setRole(saved);
+      setRoleSaved(true);
+      onRoleSaved?.();
+    });
+  };
   const play = () => run(async () => {
     const s = await getSample(endpoint, name);
     const a = audio.current;
@@ -138,24 +174,47 @@ export function PersonCard({
           onReset={() => void reset()}
           onError={setError}
         />
+        <div className="pcard__who">
+          <input
+            ref={nameInput}
+            className="pcard__name"
+            aria-label="Имя"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={rename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); }
+            }}
+          />
+          <Button variant="ghost" size="xs" icon={Play} className="pcard__play" onClick={() => void play()}>
+            Прослушать образец
+          </Button>
+        </div>
+      </div>
+
+      {/* «Кто это»: роль или короткая заметка; её видит и ассистент на встречах с этим человеком. */}
+      <div className="pcard__role">
+        <div className="pcard__role-head">
+          <label className="pcard__label" htmlFor={roleId}>Кто это</label>
+          <span className="pcard__saved" role="status">{roleSaved ? "Сохранено" : ""}</span>
+        </div>
         <input
-          ref={nameInput}
-          className="pcard__name"
-          aria-label="Имя"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={rename}
+          ref={roleInput}
+          id={roleId}
+          className="field field--md"
+          placeholder={ROLE_PLACEHOLDER}
+          maxLength={ROLE_MAX}
+          value={role}
+          onChange={(e) => { setRole(e.target.value); setRoleSaved(false); }}
+          onBlur={saveRole}
           onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-            if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); }
+            if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+            if (e.key === "Escape") { e.stopPropagation(); roleCancelled.current = true; e.currentTarget.blur(); }
           }}
         />
       </div>
-      {error && <div className="card__error" role="alert">{error}</div>}
-
-      <div className="pcard__row">
-        <Button icon={Play} onClick={() => void play()}>Прослушать образец</Button>
-      </div>
+      {error && <div className="pcard__error" role="alert">{error}</div>}
       <audio
         ref={audio}
         className="pcard__audio"
@@ -168,32 +227,36 @@ export function PersonCard({
         }}
       />
 
-      <h3 className="pcard__h">Встречи</h3>
-      <ul className="pcard__meetings">
-        {data?.meetings.map((m) => (
-          <li key={m.recording}>
-            <button type="button" className="pcard__meeting" onClick={() => onOpenRecording(m.recording)}>
-              <span>{m.title || m.recording}</span>
-              <span className="muted">
-                {m.started_at ? `${dayLabel(m.started_at)} · ` : ""}{duration(m.seconds)}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <section className="pcard__section" aria-label="Встречи">
+        <h3 className="pcard__h">
+          Встречи{data ? <span className="pcard__count num">{data.meetings.length}</span> : null}
+        </h3>
+        <ul className="pcard__meetings">
+          {data?.meetings.map((m) => (
+            <li key={m.recording}>
+              <button type="button" className="pcard__meeting" onClick={() => onOpenRecording(m.recording)}>
+                <span className="pcard__meeting-title">{m.title || m.recording}</span>
+                <span className="pcard__meeting-meta num">
+                  {m.started_at ? `${dayLabel(m.started_at)} · ` : ""}{duration(m.seconds)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
 
-      <div className="pcard__row">
+      <div className="pcard__actions">
         {others.length > 0 && (
-          <select
+          <Select<string>
             ref={mergeSelect}
             aria-label="Объединить с…"
-            className="pcard__select"
+            placeholder="Объединить с…"
+            size="sm"
+            width={184}
             value=""
-            onChange={(e) => e.target.value && setConfirm({ merge: e.target.value })}
-          >
-            <option value="">Объединить с…</option>
-            {others.map((o) => <option key={o.name} value={o.name}>{o.name}</option>)}
-          </select>
+            options={others.map((o) => ({ value: o.name, label: o.name }))}
+            onChange={(to) => setConfirm({ merge: to })}
+          />
         )}
         <Button variant="danger" onClick={() => setConfirm("delete")}>Удалить голос</Button>
       </div>
