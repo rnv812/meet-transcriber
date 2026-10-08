@@ -184,6 +184,13 @@ DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
 # Уровни уведомлений оболочки: всё; только важное (автозапись началась, ошибка
 # расшифровки, сервис записи не запускается); ничего.
 NOTIFICATION_LEVELS = ("all", "important", "off")
+# Оформление окна (0.4, Atlas Aurora): тема, палитра сияния, его вид.
+UI_THEMES = ("system", "dark", "light")
+AURORA_PALETTES = ("violet", "green", "blue", "red", "amber")
+AURORA_STYLES = ("glow", "waves")
+# До 0.4 окно было только тёмным: обновившийся остаётся на тёмной теме, пока
+# сам не сменит её в «Оформлении».
+LEGACY_THEME = "dark"
 # Живые подсказки (`assist`): активность и уровень модели для тиков.
 ASSIST_ACTIVITIES = ("calm", "active", "summary")
 # Папки базы знаний, которых ассистент не касается (`assist.kb_exclude`):
@@ -1642,24 +1649,39 @@ class Integrations:
 @dataclass(frozen=True)
 class Ui:
     """Настройки самого приложения, а не записи: их читает оболочка (уровень
-    уведомлений трея) и окно (пройден ли мастер первого запуска)."""
+    уведомлений трея, тема рамки окна) и окно (пройден ли мастер первого
+    запуска, оформление)."""
 
     notifications: str = NOTIFICATION_LEVELS[0]
     wizard_done: bool = False
+    theme: str = UI_THEMES[0]
+    aurora: str = AURORA_PALETTES[0]
+    aurora_style: str = AURORA_STYLES[0]
+    # Живое сияние: медленный дрейф пятен. prefers-reduced-motion выключает
+    # его в окне независимо от этого флага.
+    motion: bool = True
 
     @classmethod
-    def from_raw(cls, raw: dict) -> "Ui":
+    def from_raw(cls, raw: dict, *, default_theme: str = UI_THEMES[0]) -> "Ui":
         return cls(
             notifications=as_choice(
                 raw.get("notifications"), NOTIFICATION_LEVELS, NOTIFICATION_LEVELS[0]
             ),
             wizard_done=as_flag(raw.get("wizard_done"), False),
+            theme=as_choice(raw.get("theme"), UI_THEMES, default_theme),
+            aurora=as_choice(raw.get("aurora"), AURORA_PALETTES, AURORA_PALETTES[0]),
+            aurora_style=as_choice(raw.get("aurora_style"), AURORA_STYLES, AURORA_STYLES[0]),
+            motion=as_flag(raw.get("motion"), True),
         )
 
     def to_raw(self) -> dict:
         return {
             "notifications": self.notifications,
             "wizard_done": self.wizard_done,
+            "theme": self.theme,
+            "aurora": self.aurora,
+            "aurora_style": self.aurora_style,
+            "motion": self.motion,
         }
 
 
@@ -1719,7 +1741,8 @@ class Settings:
             assistant=assistant,
             export=Export.from_raw(_section(raw, "export"), legacy_dir=_legacy_notes(assistant)),
             integrations=Integrations.from_raw(_section(raw, "integrations")),
-            ui=Ui.from_raw(_section(raw, "ui")),
+            ui=Ui.from_raw(_section(raw, "ui"),
+                           default_theme=UI_THEMES[0] if is_new else LEGACY_THEME),
             # До 0.3.0 текст встреч без просьбы никуда не уходил: у обновившегося
             # авто-анализ выключен, пока он не ответит на предложение в карточке.
             analysis=(Analysis.from_raw(_section(raw, "analysis")) if is_new or "analysis" in raw

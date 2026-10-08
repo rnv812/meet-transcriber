@@ -384,7 +384,56 @@ def test_ui_defaults_notify_everything_and_wizard_not_done():
     cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
     assert cfg.ui.notifications == "all"
     assert cfg.ui.wizard_done is False
-    assert cfg.to_raw()["ui"] == {"notifications": "all", "wizard_done": False}
+    assert cfg.to_raw()["ui"] == {
+        "notifications": "all", "wizard_done": False,
+        # Конфиг с version — обновившийся пользователь: окно остаётся тёмным.
+        "theme": "dark", "aurora": "violet", "aurora_style": "glow", "motion": True,
+    }
+
+
+def test_new_install_follows_system_theme():
+    cfg = settings.Settings.from_raw({})
+    assert cfg.ui.theme == "system"
+    assert cfg.ui.aurora == "violet"
+    assert cfg.ui.aurora_style == "glow"
+    assert cfg.ui.motion is True
+
+
+def test_upgraded_user_stays_dark_until_he_changes_it(tmp_path):
+    f = tmp_path / "config.json"
+    f.write_text(json.dumps({"version": settings.SCHEMA_VERSION,
+                             "ui": {"notifications": "important"}}), encoding="utf-8")
+    assert settings.load(f).ui.theme == "dark"
+    # Любое сохранение не меняет решения, явный выбор — сохраняется.
+    assert settings.patch({"ui": {"notifications": "off"}}, f).ui.theme == "dark"
+    assert settings.patch({"ui": {"theme": "light"}}, f).ui.theme == "light"
+    assert settings.load(f).ui.theme == "light"
+
+
+def test_ui_appearance_roundtrip_through_file(tmp_path):
+    f = tmp_path / "config.json"
+    settings.save(settings.Settings(), f)
+    patched = settings.patch(
+        {"ui": {"theme": "system", "aurora": "amber", "aurora_style": "waves", "motion": False}}, f)
+    assert (patched.ui.theme, patched.ui.aurora, patched.ui.aurora_style, patched.ui.motion) == (
+        "system", "amber", "waves", False)
+    assert settings.load(f).ui == patched.ui
+
+
+def test_ui_appearance_invalid_values_fall_back_to_defaults():
+    cfg = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION,
+         "ui": {"theme": "розовая", "aurora": "pink", "aurora_style": 3, "motion": "false"}})
+    assert cfg.ui.theme == "dark"  # обновившийся: умолчание — тёмная
+    assert cfg.ui.aurora == "violet"
+    assert cfg.ui.aurora_style == "glow"
+    # as_flag: строка "false" из правленного руками файла — это False.
+    assert cfg.ui.motion is False
+    garbage = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION, "ui": {"motion": None}})
+    assert garbage.ui.motion is True
+    fresh = settings.Settings.from_raw({"ui": {"theme": "розовая"}})
+    assert fresh.ui.theme == "system"  # нет version и старых секций — новая установка
 
 
 def test_ui_roundtrip_through_file(tmp_path):
@@ -406,7 +455,8 @@ def test_ui_invalid_values_fall_back_to_defaults():
     assert cfg.ui.wizard_done is False
     garbage = settings.Settings.from_raw(
         {"version": settings.SCHEMA_VERSION, "ui": ["не", "словарь"]})
-    assert garbage.ui == settings.Ui()
+    # С version — обновившийся: умолчание темы «тёмная», не «системная».
+    assert garbage.ui == settings.Ui(theme="dark")
     padded = settings.Settings.from_raw(
         {"version": settings.SCHEMA_VERSION, "ui": {"notifications": " off "}})
     assert padded.ui.notifications == "off"
