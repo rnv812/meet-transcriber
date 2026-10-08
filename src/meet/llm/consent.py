@@ -1575,10 +1575,24 @@ def _env_file(path: str) -> bool:
 # --- описание вызова -------------------------------------------------------------------
 
 
+# Инструменты Meet для ассистента (0.5, `meet.assist.meet_mcp`): вид и что агент хотел.
+MEET_MCP = "mcp__meet__"
+_MEET_TOOLS = {
+    "open_file": ("meet-open", "открыть файл {path}"),
+    "show_in_folder": ("meet-open", "показать в папке {path}"),
+    "open_url": ("meet-open", "открыть ссылку {url}"),
+    "launch_app": ("meet-launch", "запустить программу {path}"),
+    "meet_settings": ("meet-read", "прочитать настройки Meet"),
+}
+
+
 def describe(tool: str, data: dict) -> tuple[str, str]:
     """(вид, «что агент хотел» по-русски) — для причины отказа, строки в чате
     и карточки."""
     data = data if isinstance(data, dict) else {}
+    if tool.startswith(MEET_MCP) and tool[len(MEET_MCP):] in _MEET_TOOLS:
+        kind, text = _MEET_TOOLS[tool[len(MEET_MCP):]]
+        return kind, text.format(path=str(data.get("path") or "")[:200], url=str(data.get("url") or "")[:200])
     target = (data.get("file_path") or data.get("notebook_path") or data.get("path")
               or data.get("pattern") or "")
     if tool in FILE_READ:
@@ -1875,6 +1889,7 @@ _WHY_LABELS = {
     DELETE: "удаление", SEND: "отправка наружу", "outside": "запись вне рабочих папок",
     "sandbox": "без песочницы", "mcp-write": "изменение через MCP", "mcp-address": "адрес в MCP",
     "recursive": "обход рядом с закрытым", UNPARSED: "непонятная команда",
+    "launch": "запуск программы",
 }
 
 
@@ -2321,6 +2336,8 @@ class ConsentGate:
                             kind, "hidden")
         if kind == "background" or (tool in SHELL and data.get("run_in_background")):
             return self._deny_why("background", what, kind)
+        if kind.startswith("meet-"):
+            return self._meet_tool(tool, data, kind, what, level)
         paths = self._paths(tool, data)
         for p in paths:
             why = self._protected(p)
@@ -2384,6 +2401,35 @@ class ConsentGate:
         if kind == "read":
             return Decision(ALLOW, what=what, kind=kind)
         return Decision(AUTO, what=what, kind=kind)
+
+    def _meet_tool(self, tool: str, data: dict, kind: str, what: str, level: str) -> Decision:
+        """Инструменты Meet (0.5): закрытые пути и локальные адреса — отказ всегда;
+        настройки — чтение (❓ и просьба); открыть, показать, ссылка — по просьбе
+        сразу (в режиме «Спрашивает каждое» — карточкой); программа — только
+        карточкой «Разрешить». Из реплик встречи — ничего."""
+        path = data.get("path")
+        if isinstance(path, str) and path.strip():
+            why = self._protected(self._resolve(path.strip()))
+            if why:
+                return self._deny_why(why, what, kind)
+        url = data.get("url")
+        if isinstance(url, str) and url.strip():
+            host = urlsplit(url.strip()).hostname or ""
+            if not url.strip().lower().startswith(("http://", "https://")) or not host or is_local_host(host):
+                return self._deny_why("local", what, kind)
+        if kind == "meet-read":
+            if level in (READ, USER):
+                return Decision(ALLOW, what=what, kind=kind)
+            return self._deny_why("ask", what, kind)
+        if level != USER:
+            return self._deny_why("ask", what, kind, level)
+        if kind == "meet-launch":
+            if self._granted(tool, data):
+                return Decision(ALLOW, what=what, kind=kind, why="granted")
+            return self._ask(tool, data, what, kind, "launch")
+        if self._mode == MODE_CONFIRM and not self._granted(tool, data):
+            return self._ask(tool, data, what, kind)
+        return Decision(ALLOW, what=what, kind=kind)
 
     def _grant_offer(self, tool: str, data: dict):
         try:

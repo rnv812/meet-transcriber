@@ -276,6 +276,45 @@ def test_a_newdoc_like_skill_runs_with_its_template(dirs):
     assert gate.decide("Bash", {"command": sneaky}).outcome == DENY
 
 
+def test_meet_tools_open_show_and_link_run_at_once_on_request(dirs):
+    """0.5: инструменты Meet — открыть файл, показать в папке, открыть ссылку — по просьбе
+    пользователя сразу (без карточки, без классификатора CLI); из реплик встречи — нет."""
+    doc = str(dirs["downloads"] / "План.pdf")
+    gate = _gate(dirs, USER)
+    for tool, data in [("mcp__meet__open_file", {"path": doc}), ("mcp__meet__show_in_folder", {"path": doc}),
+                       ("mcp__meet__open_url", {"url": "https://example.com/doc"})]:
+        d = gate.decide(tool, data)
+        assert d.outcome == ALLOW and d.kind == "meet-open", (tool, d)
+    assert "открыть файл" in gate.decide("mcp__meet__open_file", {"path": doc}).what
+    for level in (NONE, READ):
+        g = _gate(dirs, level)
+        assert g.decide("mcp__meet__open_file", {"path": doc}).outcome == DENY, level
+        assert g.decide("mcp__meet__open_url", {"url": "https://example.com"}).outcome == DENY, level
+
+
+def test_meet_launch_app_always_asks_and_settings_are_reading(dirs):
+    exe = str(dirs["downloads"] / "Telegram.exe")
+    d = _gate(dirs, USER).decide("mcp__meet__launch_app", {"path": exe})
+    assert d.outcome == ASK and d.why == "launch", d
+    assert _gate(dirs, NONE).decide("mcp__meet__launch_app", {"path": exe}).outcome == DENY
+    for level in (READ, USER):
+        assert _out(_gate(dirs, level), "mcp__meet__meet_settings", {"section": "ui"}) == ALLOW
+    assert _out(_gate(dirs, NONE), "mcp__meet__meet_settings", {}) == DENY
+
+
+def test_meet_tools_respect_closed_paths_and_local_addresses(dirs):
+    gate = _gate(dirs, USER)
+    secret = str(dirs["kb"] / "Личное" / "secret.txt")
+    assert gate.decide("mcp__meet__open_file", {"path": secret}).why == "excluded"
+    assert gate.decide("mcp__meet__show_in_folder", {"path": str(dirs["home"] / ".ssh" / "id_rsa")}).why == "sensitive"
+    assert gate.decide("mcp__meet__open_url", {"url": "http://127.0.0.1:8766/live"}).why == "local"
+
+
+def test_meet_open_in_confirm_mode_is_a_card(dirs):
+    d = _gate(dirs, CONFIRM).decide("mcp__meet__open_file", {"path": str(dirs["downloads"] / "a.pdf")})
+    assert d.outcome == ASK
+
+
 def test_env_example_and_env_inside_the_meeting_are_fine(dirs):
     gate = _gate(dirs, CONFIRM)
     assert _out(gate, "Read", {"file_path": str(dirs["downloads"] / ".env.example")}) == ALLOW

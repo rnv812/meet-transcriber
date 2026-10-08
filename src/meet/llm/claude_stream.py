@@ -195,6 +195,19 @@ def workdir(name: str = WORKDIR) -> Path:
     return path
 
 
+def meet_mcp_config() -> dict:
+    """`--mcp-config` для сервера Meet (`meet.assist.meet_mcp`): тот же интерпретатор,
+    но консольный — stdio-серверу под pythonw негде взять потоки ввода-вывода."""
+    import sys
+
+    from meet.assist import meet_mcp
+
+    python = Path(sys.executable)
+    if python.name.lower() == "pythonw.exe":
+        python = python.with_name("python.exe")
+    return meet_mcp.mcp_config(str(python))
+
+
 def default_cli() -> list[str] | None:
     """Команда запуска найденного Claude Code CLI; не найден — None."""
     exe = detect.find_claude()
@@ -248,6 +261,9 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
         cmd += ["--disallowedTools", *FREE_DISALLOWED, *claude_deny_rules(deny_paths)]
         if settings_file:
             cmd += ["--settings", str(settings_file)]
+        # Инструменты Meet (0.5): открыть файл, показать в папке, ссылка, программа,
+        # настройки — свой MCP-сервер рядом с серверами пользователя; что можно — решают ворота.
+        cmd += ["--mcp-config", json.dumps(meet_mcp_config(), ensure_ascii=False)]
     elif responder:
         cmd += ["--restricted", "--tools", RESPONDER_TOOLS, "--allowedTools", RESPONDER_TOOLS,
                 "--permission-mode", "dontAsk"]

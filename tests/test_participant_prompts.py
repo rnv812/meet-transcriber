@@ -623,6 +623,13 @@ def test_freedom_prompts_require_an_explicit_result_at_the_end():
     assert "всегда заверши явным итогом" not in pp._FREEDOM_FILES   # только чтение — итог не нужен
 
 
+def test_claude_prompts_name_the_meet_tools_and_runners_do_not():
+    for mode in ("auto", "confirm"):
+        text = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, mode=mode)
+        assert "Инструменты Meet (сервер meet): open_file" in text and "meet_settings" in text, mode
+    assert "сервер meet" not in pp._FREEDOM_RUNNER     # у Codex/OpenCode MCP нет
+
+
 def test_freedom_prompt_in_confirm_mode_is_a_card_for_every_action():
     text = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, mode="confirm")
     assert "Meet показывает пользователю карточкой с точным вызовом" in text

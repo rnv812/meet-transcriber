@@ -82,6 +82,21 @@ def test_responder_command_has_read_tools_dirs_and_twelve_turns(tmp_path):
         assert flag in cmd
 
 
+def test_free_assistant_gets_the_meet_mcp_server_and_others_do_not():
+    """0.5: свой MCP-сервер Meet (открыть файл, показать в папке, ссылка, программа,
+    настройки) — только у ассистента со свободой (решают ворота Meet)."""
+    import json
+
+    free = claude_stream.build_command(["claude"], system_prompt="s", responder=True, freedom=True)
+    cfg = json.loads(free[free.index("--mcp-config") + 1])
+    server = cfg["mcpServers"]["meet"]
+    assert server["args"] == ["-m", "meet.assist.meet_mcp"] and server["type"] == "stdio"
+    assert not server["command"].lower().endswith("pythonw.exe")    # stdio-серверу нужна консольная сборка
+    for cmd in (claude_stream.build_command(["claude"], system_prompt="s", responder=True),
+                claude_stream.build_command(["claude"], system_prompt="s")):
+        assert "--mcp-config" not in cmd
+
+
 def test_listener_command_is_unchanged():
     cmd = claude_stream.build_command(["claude"], system_prompt="s")
     assert cmd[cmd.index("--tools") + 1] == ""
