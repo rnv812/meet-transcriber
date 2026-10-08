@@ -70,6 +70,13 @@ test("кнопка-значок: имя, подсказка, нажатая, п�
   expect(b()).toHaveClass("btn--ghost-danger");
 });
 
+test("недоступная кнопка-значок сохраняет подсказку с причиной", () => {
+  render(<IconButton icon={X} label="Закрыть" tooltip="Причина" disabled />);
+  const b = screen.getByRole("button", { name: "Закрыть" });
+  expect(b).toBeDisabled();
+  expect(b).toHaveAttribute("title", "Причина");
+});
+
 test("icon button: label is the accessible name and the tooltip", () => {
   render(<IconButton icon={Trash2} label="Удалить категорию" variant="danger" size="xs" />);
   const button = screen.getByRole("button", { name: "Удалить категорию" });

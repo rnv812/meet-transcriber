@@ -5,6 +5,9 @@
 button.btn { position: relative; }
 /* Плотная кнопка (xs, 28) — значок 14 px: «.btn svg» дизайн-системы ставит 16 при любой плотности. */
 .btn[data-density="compact"] svg { width: var(--icon-sm); height: var(--icon-sm); }
+/* «.btn:disabled» Aurora — pointer-events: none: подсказка (title с причиной недоступности)
+   не всплывала, нажатие проваливалось к родителю. Кнопка и так неактивна — она disabled. */
+button.btn:disabled { pointer-events: auto; cursor: default; }
 button.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
 .btn__label { display: inline-flex; align-items: center; gap: inherit; min-width: 0; }
 .btn--busy { cursor: progress; }
@@ -17,7 +20,7 @@ button.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: transl
 .btn__spinner--static { position: static; margin: 0; flex: none; }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
 .btn--link {
-  height: auto; padding: 0; border: 0; background: none; color: var(--link); font-weight: 400;
+  height: auto; padding: 0; border: 0; background: none; color: var(--link); font: inherit;
   text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px;
 }
 .btn--link:hover { background: none; text-decoration-color: var(--ink-3); }

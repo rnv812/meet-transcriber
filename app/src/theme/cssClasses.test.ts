@@ -84,3 +84,19 @@ test("плотная кнопка (xs) — значок 14 px: правило о
   const css = readFileSync(join(process.cwd(), "src", "ui", "button.css"), "utf8");
   expect(css).toMatch(/\.btn\[data-density="compact"\] svg \{[^}]*width: var\(--icon-sm\);[^}]*height: var\(--icon-sm\)/);
 });
+
+test("недоступная кнопка показывает подсказку: pointer-events возвращены сильнее «.btn:disabled» Aurora", () => {
+  // controls.css: `.btn:disabled { pointer-events: none }` — title с причиной недоступности не всплывал,
+  // а нажатие проваливалось к родителю. button.btn:disabled (0,2,1) сильнее при любом порядке файлов.
+  const css = readFileSync(join(process.cwd(), "src", "ui", "button.css"), "utf8");
+  expect(css).toMatch(/(?:^|\n)button\.btn:disabled \{[^}]*pointer-events: auto;[^}]*cursor: default;/);
+});
+
+test("ссылка-кнопка — шрифтом окружающего текста, а не 14 px «.btn» Aurora", () => {
+  const css = readFileSync(join(process.cwd(), "src", "ui", "button.css"), "utf8");
+  const link = /(?:^|\n)\.btn--link \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(link).toMatch(/font: inherit;/);
+  // Обход прежнего размера в настройках больше не нужен.
+  const settings = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
+  expect(settings).not.toMatch(/\.asr-fallback \.btn--link/);
+});

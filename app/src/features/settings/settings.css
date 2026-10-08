@@ -226,7 +226,7 @@
 .catedit__item { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .catedit__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .catedit__move { display: inline-flex; flex: none; }
-.catedit__move .btn:disabled { opacity: 0.3; }
+.catedit__move .btn:disabled { opacity: 0.3; background: none; }
 .catedit__swatch {
   flex: none; width: 22px; height: 22px; padding: 0; border: 2px solid var(--surface-2); border-radius: 50%;
   box-shadow: 0 0 0 1px var(--line-2); cursor: pointer;
@@ -284,7 +284,6 @@
 .asr-model select { width: 100%; }
 .asr-fallback { margin: 0; padding: 10px 0 12px; font-size: 12px; color: var(--text-3); }
 .asr-fallback__model { color: var(--text-2); }
-.asr-fallback .btn--link { font-size: 12px; }
 .engine-choice-link { margin: 4px 0 8px; }
 
 /* «Где хранить движок и модели»: папка, проверка перед переносом, ход, вопрос об остатках. */
