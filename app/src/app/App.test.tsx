@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
@@ -136,6 +137,16 @@ test("уход из настроек с несохранённым: «Остат
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Не сохранять" }));
   expect(screen.queryByTestId("settings")).toBeNull();
   expect(settingsSave).toHaveBeenCalledTimes(1);
+});
+
+test("StrictMode (dev): «Сохранить» при уходе из настроек уводит, когда сохранилось", async () => {
+  residentState.current = online();
+  render(<StrictMode><App /></StrictMode>);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.getByTestId("voices")).toBeInTheDocument());
 });
 
 test("«Запустить мастер» из настроек с правками — сначала вопрос, мастер — после «Не сохранять»", async () => {

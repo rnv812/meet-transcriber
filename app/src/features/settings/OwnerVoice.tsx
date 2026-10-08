@@ -84,7 +84,12 @@ export function useOwnerVoice(endpoint: Endpoint, {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const live = useRef(true);
-  useEffect(() => () => { live.current = false; }, []);
+  // StrictMode (dev) снимает и снова ставит эффекты: без `true` при монтаже ответы
+  // резидента молча отбрасывались бы и статус так и остался бы «Проверяю образец голоса…».
+  useEffect(() => {
+    live.current = true;
+    return () => { live.current = false; };
+  }, []);
 
   /** Растёт при неудачном опросе: статус не изменился, а таймер нужно завести снова. */
   const [failures, setFailures] = useState(0);

@@ -324,7 +324,11 @@ function LeaveSettings({ guard, onStay, onLeave }: {
   const canSave = guard?.canSave ?? false;
   // «Остаться», пока идёт сохранение, — и после сохранения никуда не уходим.
   const open = useRef(true);
-  useEffect(() => () => { open.current = false; }, []);
+  // Под StrictMode (dev) эффект снимается и ставится снова — отметку «открыт» вернуть.
+  useEffect(() => {
+    open.current = true;
+    return () => { open.current = false; };
+  }, []);
   return (
     <ConfirmDialog title="Сохранить изменения в настройках?" cancelLabel="Остаться" danger={false}
       message={canSave ? `Есть несохранённые изменения в ${where}.`

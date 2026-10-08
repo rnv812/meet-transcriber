@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
@@ -323,4 +324,11 @@ test("поиск по встречам: примеров не осталось �
   render(<OwnerVoiceRow endpoint={ep} device={null} />);
   const card = await screen.findByRole("group", { name: "Найденный голос" });
   expect(card).toHaveTextContent("Похоже, это ваш голос, но записи с примерами уже удалены.");
+});
+
+test("StrictMode (dev): эффекты сняты и поставлены снова — статус образца всё равно приходит", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ samples: [sample()] }));
+  render(<StrictMode><OwnerVoiceRow endpoint={ep} device="Onboard MIC" /></StrictMode>);
+  const group = screen.getByRole("group", { name: "Мой голос" });
+  expect(await within(group).findByText("записан 05.10 · Onboard MIC")).toBeInTheDocument();
 });
