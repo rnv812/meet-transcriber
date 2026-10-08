@@ -195,12 +195,13 @@ test("вкладка «Расшифровка» скрыта: прокрутка
   await waitFor(() => expect(scrolled.map((s) => s.turn)).toEqual(["4"]));
 });
 
-test("важная реплика: полоса отделена от ▷ отступом, колонка текста не сдвигается; «играет» — не вторая полоса", () => {
+test("важная реплика: подложка строки, колонка текста не сдвигается; «играет» — время акцентом, не рамка", () => {
   const css = readFileSync(resolve(__dirname, "markup.css"), "utf-8");
-  // Полоса — отдельный слой у внешнего края (до ▷ 14 px), а не поле и отступ строки, которые
-  // перебивал `.turn { padding }` из card.css (он подключается позже) — тогда полоса липла к ▷.
-  expect(css).toMatch(/\.turn--key::before \{\s*content: ""; position: absolute; left: -16px;/);
+  // Важность (Atlas Aurora) — подложка всей строки и слово «важное» в строке имени, а не поле
+  // и отступ строки: их перебивал бы `.turn { padding }` из card.css (он подключается позже).
+  expect(css).toMatch(/\.turn--key \{[^}]*background: var\(--surface-2\)/);
   expect(css).not.toMatch(/\.turn--key[^{]*\{[^}]*(margin|padding)/);
-  expect(css).toMatch(/\.turn\[data-now\] \.turn__time \{ color: var\(--accent\)/);
+  // Текст цвета акцента — текстовый токен Aurora `--accent-line`.
+  expect(css).toMatch(/\.turn\[data-now\] \.turn__time \{ color: var\(--accent-line\)/);
   expect(css).not.toMatch(/\.turn\[data-now\][^{]*\{[^}]*box-shadow/);
 });

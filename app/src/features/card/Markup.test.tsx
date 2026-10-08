@@ -79,7 +79,7 @@ test("значок типа в начале реплики, с подписью;
   expect(rows[0]!.querySelector(".turn__type")).toBeNull();
 });
 
-test("полоса слева — у самых важных реплик (верхние ~15 %)", () => {
+test("отметка «важное» — у самых важных реплик (верхние ~15 %)", () => {
   const { container } = view();
   const key = turnRows(container).map((r) => r.classList.contains("turn--key"));
   expect(key).toEqual([false, false, true, false, false, false, false]);
@@ -187,6 +187,42 @@ test("без анализа — обычная лента: ни значков, 
   const { container } = view({ view: null });
   expect(container.querySelector(".turn__type, .chapter-head, .tfilters, .insights, .turn--key")).toBeNull();
   expect(turnRows(container)).toHaveLength(7);
+});
+
+test("Atlas Aurora: фильтры — .filter с aria-pressed и счётчиком; «Наблюдения» — карточка aurora-wash со счётчиком", async () => {
+  view();
+  const chips = screen.getByRole("group", { name: "Показать только реплики этих типов" });
+  const questions = within(chips).getByRole("button", { name: /Вопросы/ });
+  expect(questions).toHaveClass("filter");
+  expect(questions).toHaveAttribute("aria-pressed", "false");
+  expect(questions).toHaveTextContent(/^Вопросы1$/);
+  await userEvent.click(questions);
+  expect(questions).toHaveAttribute("aria-pressed", "true");
+  const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
+  expect(block).toHaveClass("card", "aurora-wash");
+  const head = within(block).getByRole("button", { name: /Наблюдения/ });
+  expect(within(head).getByText("2")).toHaveClass("badge");
+});
+
+test("заголовок главы: «Глава N», название, время, ✦; строка реплики: точка цвета спикера, бейдж типа, «важное»", () => {
+  const { container } = view({ colors: new Map([["Анна", "var(--data-2)"]]) });
+  const head = container.querySelector<HTMLElement>(".chapter-head")!;
+  expect(within(head).getByText("Глава 1")).toBeInTheDocument();
+  expect(within(head).getByText("Бюджет на квартал")).toBeInTheDocument();
+  expect(head).toHaveTextContent("00:00–00:44");
+  const rows = turnRows(container);
+  // Имя — первым в строке, точка цвета спикера — его же (переменная --person).
+  const anna = rows[0]!.querySelector<HTMLElement>(".turn__head > .turn__speaker")!;
+  expect(anna).toHaveTextContent("Анна");
+  expect(anna.style.getPropertyValue("--person")).toBe("var(--data-2)");
+  // Бейдж типа — после имени, в строке имени; подпись видна.
+  const type = within(rows[2]!).getByRole("img", { name: "Решение" });
+  expect(type).toHaveClass("badge");
+  expect(type).toHaveTextContent("Решение");
+  expect(type.parentElement).toHaveClass("turn__head");
+  // Важная реплика — отметка «важное» словом, у остальных её нет.
+  expect(within(rows[2]!).getByText("важное")).toBeInTheDocument();
+  expect(rows.filter((r) => within(r).queryByText("важное")).map((r) => r.dataset.turn)).toEqual(["2"]);
 });
 
 // --- карточка целиком: настройки и ✦ у главы ---------------------------------------------------

@@ -89,88 +89,44 @@
 }
 .card__textfirst-text { flex: 0 1 auto; }
 .card__textfirst-note { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Плеер записи (AudioPlayer): одна строка внизу карточки. */
-.player {
-  flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 16px;
-  border-top: 1px solid var(--hairline); background: var(--surface-1); min-width: 0;
-}
-.player--off { min-height: 40px; font-size: var(--text-xs); }
-.player audio { display: none; }
-.player__play, .player__mute, .player__speed {
-  flex: none; display: inline-flex; align-items: center; justify-content: center;
-  height: 28px; border: 0; border-radius: var(--r-md); background: none; color: var(--ink-2);
-  font: inherit; cursor: pointer; transition: background var(--d), color var(--d);
-}
-.player__play { width: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
-.player__play:hover { background: var(--accent-hover); }
-.player__mute { width: 28px; }
-.player__speed { min-width: 44px; padding: 0 6px; font-size: var(--text-xs); }
-.player__mute:hover, .player__speed:hover { background: var(--surface-3); color: var(--ink); }
-.player__mute[aria-pressed="true"] { color: var(--accent-line); }
-.player__time { flex: none; min-width: 40px; color: var(--ink-2); font-size: var(--text-xs); text-align: center; }
-.player__status { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--text-xs); white-space: nowrap; }
-.player__spinner {
-  width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--hairline-strong); border-top-color: var(--accent);
-  animation: player-spin 0.8s linear infinite;
-}
-@keyframes player-spin { to { transform: rotate(360deg); } }
-.player__seek {
-  --progress: 0%;
-  flex: 1; min-width: 60px; height: 16px; margin: 0; background: none; cursor: pointer;
-  -webkit-appearance: none; appearance: none;
-}
-.player__seek::-webkit-slider-runnable-track {
-  height: 4px; border-radius: 2px;
-  background: linear-gradient(to right, var(--accent) var(--progress), var(--hairline-strong) var(--progress));
-}
-.player__seek::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4px;
-  border-radius: 50%; background: var(--ink); border: 0; box-shadow: 0 0 0 2px var(--accent);
-}
-.player__seek:focus-visible { outline: none; }
-.player__seek:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-hover); }
-/* Реплика — сетка: [▷ время] [значок типа] [имя и пометки / текст]. Первая строка (время,
-   значок, имя) одной высоты --turn-line: ▷ и время всегда на строке имени. Значок типа — в своей
-   колонке у всех реплик (у .turns--marked), поэтому имя и текст у всех реплик начинаются ровно. */
+/* Реплика (макет Atlas Aurora) — сетка [время 64 px] [имя и пометки / текст]. Первая строка
+   (время, имя) одной высоты --turn-line: время всегда на строке имени, имя и текст у всех реплик
+   начинаются ровно. Строка выходит в поля карточки на 8 px: подложка (важная, выбранная,
+   «сейчас играет») — со скруглением, текст на месте. */
 .turn {
-  --turn-line: 20px;
-  position: relative; display: grid; grid-template-columns: 84px var(--turn-mark, 0px) minmax(0, 1fr);
-  align-items: start; padding: 8px 0;
+  --turn-line: 24px;
+  position: relative; display: grid; grid-template-columns: 64px minmax(0, 1fr); column-gap: 6px;
+  align-items: start; margin: 0 -8px; padding: 6px 8px; border-radius: var(--r-md);
 }
-.turns--marked { --turn-mark: 20px; }
 /* Перерыв между частями объединённой встречи: разделитель, а не реплика. */
 .turn-break { display: flex; align-items: center; gap: 12px; padding: 10px 0; color: var(--ink-3); font-size: var(--text-xs); }
 .turn-break::before, .turn-break::after { content: ""; flex: 1; border-top: 1px dashed var(--hairline-strong); }
 .turn-break__text { flex: none; }
+/* Время — тихая кнопка Geist Mono (щелчок — слушать с этого места). */
 .turn__time {
-  grid-column: 1; width: 72px; height: var(--turn-line); padding: 0; text-align: left;
-  border: 0; background: none; color: var(--ink-3); font: inherit; font-size: var(--text-xs); line-height: var(--turn-line); cursor: pointer;
+  grid-column: 1; justify-self: start; max-width: 100%; height: var(--turn-line); padding: 0 6px; text-align: left;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); font: inherit;
+  font-family: var(--font-code); font-size: var(--text-xs); line-height: var(--turn-line); white-space: nowrap; cursor: pointer;
 }
-.turn__time:hover { color: var(--accent-line); }
-/* Значок «слушать» — тот же lucide Play (14 px, штрих 1.75), но маской: в длинной
-   расшифровке тысячи строк, и SVG-элемент в каждой утяжеляет отрисовку. */
-button.turn__time { display: inline-flex; align-items: center; gap: 4px; }
-button.turn__time::before {
-  content: ""; flex: none; width: 14px; height: 14px; background: currentColor;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E") center / contain no-repeat;
-}
-.turn__mark { grid-column: 2; display: flex; align-items: center; height: var(--turn-line); }
-/* Имя и пометки («в комнате», «(голос под вопросом)», ✦): в узкой карточке пометки переносятся целиком. */
+button.turn__time:hover { background: var(--surface-3); color: var(--ink); }
+span.turn__time { cursor: default; }
+/* Имя (с точкой цвета спикера) и пометки («в комнате», «(голос под вопросом)», бейдж типа,
+   «важное», ✦): в узкой карточке пометки переносятся целиком. */
 .turn__head {
-  grid-column: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px;
+  grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px;
   min-width: 0; min-height: var(--turn-line); line-height: var(--turn-line);
 }
-.turn__speaker { font-weight: 600; font-size: var(--text-xs); color: var(--ink); }
+.turn__speaker { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--text-sm); color: var(--ink); }
+.turn__speaker::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: var(--r-full); background: var(--person, var(--ink-3)); }
 button.turn__speaker { padding: 0; border: 0; background: none; font-family: inherit; line-height: inherit; cursor: pointer; }
 .turn__speaker--unnamed { color: var(--ink-2); }
 button.turn__speaker:hover { text-decoration: underline; }
 .turn__speaker--unnamed:hover { color: var(--accent-line); }
-.turn__flag { color: var(--warning); font-size: 11px; }
+.turn__flag { color: var(--warning); font-size: var(--text-xs); }
 /* Человек рядом с владельцем в комнате: голос с микрофона (meet.mic_split). */
 .turn__room {
-  padding: 0 5px; border: 1px solid var(--hairline-strong); border-radius: 8px;
-  color: var(--ink-2); font-size: 11px; line-height: 15px;
+  padding: 0 6px; border: 1px solid var(--hairline-strong); border-radius: var(--r-xs);
+  color: var(--ink-2); font-size: var(--text-xs); line-height: 18px;
 }
 .mic-note { display: flex; flex-direction: column; gap: 2px; }
 .mic-note__line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
@@ -178,13 +134,14 @@ button.turn__speaker:hover { text-decoration: underline; }
 .turn__ask { align-self: center; margin: -3px 0; opacity: 0; }
 .turn:hover .turn__ask, .turn:focus-within .turn__ask, .turn:focus .turn__ask, .turn__ask:focus-visible { opacity: 1; }
 @media (hover: none) { .turn__ask { opacity: 0.7; } }
-.turn__text { grid-column: 3; margin: 0; color: var(--ink); line-height: 1.55; }
-/* Без строки имени (текст до спикеров) текст — на строке времени. */
-.turn__mark + .turn__text { margin-top: 0; }
+/* Без строки имени (текст до спикеров) текст встаёт на строку времени: ячейка не занята. */
+.turn__text { grid-column: 2; margin: 0; color: var(--ink); line-height: 1.6; }
+.turn__head + .turn__text { margin-top: 2px; }
 
 /* Правка спикера в расшифровке: выбранные реплики, полоса выбора, меню «Кому отдать». */
-.turn--selected { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent); }
+.turn--selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+/* Своя тень вытесняет рамку фокуса Aurora — у выбранной в фокусе обе. */
+.turn--selected:focus-visible { box-shadow: var(--focus-ring), inset 3px 0 0 var(--accent); }
 .tsel {
   position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   margin: 4px 0; padding: 6px 10px; border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
@@ -226,27 +183,20 @@ button.turn__speaker:hover { text-decoration: underline; }
 .btn.live-card__quiet[aria-pressed="true"] { color: var(--accent-line); }
 .live-card__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
-/* Поиск по расшифровке (TranscriptView): поле прилипает к верху прокрутки. */
+/* Панель над лентой (TranscriptView, макет Atlas Aurora): поиск — Aurora .search с полем
+   field--md и подсказкой «Ctrl F»; справа — «Исправить…» и ✦ «Улучшить». Прилипает к верху
+   прокрутки. Рамка фокуса поля — одна, у .field. */
 .find {
   position: sticky; top: -8px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  margin: -8px 0 4px; padding: 8px 0; background: var(--canvas);
+  margin: -8px 0 6px; padding: 12px 0 8px; background: var(--canvas);
 }
-.find__input {
-  flex: 1; min-width: 160px; height: 28px; padding: 0 10px;
-  background: var(--surface-1); color: var(--ink);
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-md); font: inherit;
-}
-.find__input::placeholder { color: var(--ink-3); }
-.find__input:focus { outline: none; border-color: var(--accent); }
-.find__count { flex: none; min-width: 64px; color: var(--ink-2); font-size: var(--text-xs); text-align: right; white-space: nowrap; }
+.find__search { flex: 1 1 240px; min-width: 200px; max-width: 420px; }
+.find__count { flex: none; color: var(--ink-2); font-size: var(--text-xs); white-space: nowrap; }
+.find__count:empty { display: none; }
 .find__count--none { color: var(--warning); }
-.find__nav {
-  flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; width: 28px; height: 28px; border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
-  background: var(--surface-2); color: var(--ink); font: inherit; cursor: pointer;
-  transition: background var(--d);
-}
-.find__nav:hover:not(:disabled) { background: var(--surface-3); }
-.find__nav:disabled { opacity: 0.4; cursor: default; }
+.find__gap { flex: 1 1 0; }
+/* Обёртка ✦ «Улучшить»: у недоступной кнопки нет наведения — подсказку с причиной держит она. */
+.find__improve { display: inline-flex; }
 /* Совпадения: все — мягкой подложкой цвета акцента, текущее — заливкой и рамкой. */
 mark.hit {
   padding: 0 1px; border-radius: 3px; color: inherit;
@@ -291,13 +241,12 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
 .redia__actions { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .tmenu__links .spk-link { text-align: left; }
 .turn:focus { outline: none; }
-.turn:focus-visible { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); box-shadow: 0 0 0 1px var(--accent); }
 
 /* «Исправить…» (TextFix): кнопка у выделения, окно исправления, итог над репликами. */
 .tfix-float {
-  position: fixed; z-index: 40; height: 24px; padding: 0 10px;
-  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-hover); border-radius: var(--r-md);
-  box-shadow: var(--elev-2); font: inherit; font-size: var(--text-xs); cursor: pointer;
+  position: fixed; z-index: 40; height: 28px; padding: 0 12px;
+  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-hover); border-radius: var(--r-control-sm);
+  box-shadow: var(--elev-2); font: 500 var(--text-xs)/1 var(--font-body); cursor: pointer;
 }
 .tfix-float:hover { background: var(--accent-hover); }
 /* Своя тень вытесняет рамку фокуса Aurora — при фокусе с клавиатуры обе. */
@@ -306,21 +255,18 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
 .tfix { gap: 8px; }
 .tfix__heard { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--ink); }
 .tfix__find { font-weight: 600; }
+/* Поле «Как правильно» — Aurora .field field--sm, флажки — .cb: рамка фокуса у них своя. */
 .tfix__field { display: flex; flex-direction: column; gap: 4px; color: var(--ink); }
-.tfix__field input {
-  height: 28px; padding: 0 8px; background: var(--surface-2); color: var(--ink);
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); font: inherit; font-size: var(--text-sm);
-}
-.tfix__field input:focus { outline: none; border-color: var(--accent); }
-.tfix__check { display: flex; align-items: center; gap: 6px; color: var(--ink); cursor: pointer; }
-.tfix__check input { margin: 0; accent-color: var(--accent); }
-.tfix__check input:disabled + span { color: var(--ink-3); }
+.tfix__check { display: flex; align-items: center; gap: 8px; color: var(--ink); cursor: pointer; }
+.tfix__check .cb:disabled { cursor: default; opacity: 0.5; }
+.tfix__check .cb:disabled + span { color: var(--ink-3); }
+.tfix__hint { margin: 0; color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
 .tfix__samples {
   display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; margin: 0; padding: 6px 8px;
   list-style: none; border-radius: var(--r-sm); background: var(--surface-1); line-height: 1.45; overflow-wrap: anywhere;
 }
 .tfix__actions { display: flex; justify-content: flex-end; gap: 6px; padding-top: 2px; }
 /* Полосы итогов над репликами (правка спикеров, «Исправить…») прилипают вместе под
-   полем поиска (оно прилипает с top: -8px и высотой 8 + 28 + 8 px). */
-.tbars { position: sticky; top: 36px; z-index: 3; }
+   панелью поиска (она прилипает с top: -8px и высотой 12 + 40 + 8 px). */
+.tbars { position: sticky; top: 52px; z-index: 3; }
 .tbars .tsel { position: static; }

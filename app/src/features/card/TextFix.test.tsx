@@ -170,6 +170,24 @@ test("Ctrl+E при выделении открывает окно сразу; �
   expect(api.previewTextFix).toHaveBeenCalledWith(ep, "r1", { find: "Кубер", segment: 2, offset: 0 });
 });
 
+test("«Исправить…» над лентой: с выделением — то же окно, что Ctrl+E; без выделения — подсказка", async () => {
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  const p = await turnText(/Поднимем кубер/);
+  const bar = screen.getByRole("search", { name: "Поиск по расшифровке" });
+  const fix = within(bar).getByRole("button", { name: "Исправить распознанное" });
+  window.getSelection()!.removeAllRanges();
+  await userEvent.click(fix);
+  const hint = screen.getByRole("dialog", { name: "Как исправить распознанное" });
+  expect(hint).toHaveTextContent("Выделите в реплике");
+  expect(screen.queryByRole("dialog", { name: "Исправить распознанное" })).toBeNull();
+  await userEvent.click(fix); // повторное нажатие закрывает подсказку
+  expect(screen.queryByRole("dialog", { name: "Как исправить распознанное" })).toBeNull();
+  select(p, 9, 14); // «кубер»
+  await userEvent.click(fix);
+  const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
+  expect(within(box).getByText("кубер")).toHaveClass("tfix__find");
+});
+
 test("правый щелчок: выделение — «Исправить…», без него — «Исправить слово» в меню реплики", async () => {
   render(<RecordingCard id="r1" endpoint={ep} />);
   const p = await turnText(/Кубер нетис готов/);

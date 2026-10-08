@@ -1,7 +1,8 @@
 /**
  * «Исправить…»: неверно распознанное слово или фразу выделяют в реплике
  * (мышью или двойным щелчком по слову) — рядом появляется «Исправить…»; то же
- * по Ctrl+E и в меню правого щелчка по тексту. В окне — что распознано (его
+ * по Ctrl+E, кнопкой «Исправить…» на панели над лентой (без выделения — подсказка,
+ * как им пользоваться) и в меню правого щелчка по тексту. В окне — что распознано (его
  * можно прослушать), как правильно, добавить ли исправление в термины
  * распознавания и заменить ли во всей встрече. Замена — шаг истории встречи:
  * её отменяет «Отменить» здесь же, в панели «Спикеры» и Ctrl+Z там.
@@ -80,6 +81,8 @@ export type TextFix = {
   onContextMenu: (turn: number, event: MouseEvent<HTMLElement>) => boolean;
   /** «Исправить слово» из меню правого щелчка: слово в месте `at` текста реплики. */
   openWord: (turn: number, at: number, anchor: HTMLElement) => void;
+  /** «Исправить…» на панели над лентой: выделение в реплике — окно, как по Ctrl+E; нет — подсказка у `anchor`. */
+  openFromBar: (anchor: HTMLElement) => void;
   /** Кнопка у выделения и окно исправления. */
   node: ReactNode;
   /** Итог над репликами: что исправлено и что добавлено в термины, с «Отменить». */
@@ -123,9 +126,12 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
   // Окно открыто — кнопку у выделения не трогаем (отложенный разбор выделения после
   // щелчка, который это окно и открыл, иначе закрыл бы его).
   const opened = useRef(false);
+  /** Подсказка «как исправить» у кнопки панели (нажали без выделения). */
+  const [hint, setHint] = useState<HTMLElement | null>(null);
   const close = useCallback(() => { opened.current = false; setOpen(false); setTarget(null); setError(null); }, []);
   const show = useCallback((t: Target) => {
     opened.current = true;
+    setHint(null);
     setTarget(t);
     setReplace(t.find);
     setHotword(null);
@@ -188,6 +194,12 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     e.preventDefault();
     show(found);
     return true;
+  }, [turns, show]);
+
+  const openFromBar = useCallback((el: HTMLElement) => {
+    const found = fromSelection(turns);
+    if (found) show(found);
+    else setHint((cur) => (cur === el ? null : el));
   }, [turns, show]);
 
   const openWord = useCallback((t: number, at: number, el: HTMLElement) => {
@@ -314,11 +326,12 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
                 <>
                   <label className="tfix__field">
                     <span>Как правильно</span>
-                    <input type="text" value={replace} autoFocus maxLength={200} aria-label="Как правильно"
+                    <input type="text" className="field field--sm" value={replace} autoFocus maxLength={200}
+                      aria-label="Как правильно"
                       onFocus={(e) => e.currentTarget.select()} onChange={(e) => setReplace(e.target.value)} />
                   </label>
                   <label className="tfix__check">
-                    <input type="checkbox" checked={hotword} disabled={!right}
+                    <input type="checkbox" className="cb" checked={hotword} disabled={!right}
                       onChange={(e) => setHotword(e.target.checked)} />
                     <span>Добавить в термины распознавания</span>
                     <HelpTip label="Что такое термины распознавания" title="Термины распознавания">
@@ -331,7 +344,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
                     <div className="muted tmenu__hint tfix__term">Будет добавлено: {terms || right}</div>
                   )}
                   <label className="tfix__check">
-                    <input type="checkbox" checked={all} disabled={count === null || count < 2}
+                    <input type="checkbox" className="cb" checked={all} disabled={count === null || count < 2}
                       onChange={(e) => setAll(e.target.checked)} />
                     <span>
                       Заменить во всей встрече
@@ -353,7 +366,8 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
                   )}
                   {!all && <div className="muted tmenu__hint">Будет исправлено только это место.</div>}
                   <label className="tfix__check">
-                    <input type="checkbox" checked={rule} disabled={same} onChange={(e) => setRule(e.target.checked)} />
+                    <input type="checkbox" className="cb" checked={rule} disabled={same}
+                      onChange={(e) => setRule(e.target.checked)} />
                     <span>Исправлять так же в будущих встречах</span>
                     <HelpTip label="Как работает исправление в будущих встречах" title="Исправлять в будущих встречах">
                       <TipLine>Каждая новая расшифровка сразу после распознавания заменит «{target.find}» на
@@ -391,5 +405,20 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     </div>
   ) : null;
 
-  return { onContextMenu, openWord, node, bar };
+  if (hint) {
+    node = (
+      <>
+        {node}
+        <Popover anchor={hint} onClose={() => setHint(null)} label="Как исправить распознанное" width={POPOVER_W}
+          anchorToggles>
+          <p className="tfix__hint">
+            Выделите в реплике неверно распознанное слово или фразу (слово — двойным щелчком) и нажмите
+            «Исправить…» или Ctrl+E.
+          </p>
+        </Popover>
+      </>
+    );
+  }
+
+  return { onContextMenu, openWord, openFromBar, node, bar };
 }

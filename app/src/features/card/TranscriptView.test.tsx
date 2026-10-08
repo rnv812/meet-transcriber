@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Turn } from "../../lib/speakers";
 import { CardTabs } from "./CardTabs";
@@ -38,6 +38,33 @@ test("находит слова в любой форме, считает сов�
   const marks = container.querySelectorAll("mark.hit");
   expect([...marks].map((m) => m.textContent)).toEqual(["бюджета", "Бюджет", "бюджет"]);
   expect(current(container)).toHaveTextContent("бюджета");
+});
+
+test("панель над лентой: поиск — поле Aurora с подсказкой «Ctrl F», видимые «Исправить…» и инструменты справа", async () => {
+  const onFix = vi.fn();
+  setup({ onFix, tools: <button type="button">Улучшить расшифровку</button> });
+  const bar = screen.getByRole("search", { name: "Поиск по расшифровке" });
+  expect(field()).toHaveClass("field", "field--md");
+  expect(field().closest(".search")).not.toBeNull();
+  expect(within(bar).getByText("Ctrl F")).toHaveClass("kbd");
+  // Пока поле пустое, ↑/↓ не нужны; подсказка не наезжает на введённый текст.
+  expect(within(bar).queryByRole("button", { name: "Следующее совпадение" })).toBeNull();
+  await userEvent.type(field(), "бюджет");
+  expect(within(bar).queryByText("Ctrl F")).toBeNull();
+  expect(await within(bar).findByRole("button", { name: "Следующее совпадение" })).toBeInTheDocument();
+  // «Исправить…» — то же окно, что Ctrl+E (выделение не сбрасывается нажатием).
+  const fix = within(bar).getByRole("button", { name: "Исправить распознанное" });
+  expect(fix).toHaveTextContent("Исправить…");
+  expect(fix).toHaveAttribute("aria-keyshortcuts", "Control+E");
+  expect(fireEvent.mouseDown(fix)).toBe(false);
+  await userEvent.click(fix);
+  expect(onFix).toHaveBeenCalledWith(fix);
+  expect(within(bar).getByRole("button", { name: "Улучшить расшифровку" })).toBeInTheDocument();
+});
+
+test("без правки текста (текст до спикеров) «Исправить…» нет", () => {
+  setup();
+  expect(screen.queryByRole("button", { name: "Исправить распознанное" })).toBeNull();
 });
 
 test("Enter и Shift+Enter, кнопки ↑/↓ — по кругу", async () => {

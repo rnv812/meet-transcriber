@@ -28,10 +28,12 @@
  */
 
 import {
-  forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState,
+  forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ChevronRight, ListVideo, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
+import {
+  ChevronRight, ListVideo, Maximize2, Minimize2, Pause, Play, Sparkles, Volume1, Volume2, VolumeX, X,
+} from "lucide-react";
 import {
   BAR_GAP_PX, barLayout, chapterAt, chapterJump, curvePath, curveValues, importantSpans, skipTarget, turnAt, turnJump,
   type ChapterView, type Span,
@@ -41,6 +43,8 @@ import { clock, plural } from "../../lib/format";
 import type { CurveMode } from "../../lib/markupPrefs";
 import type { Turn } from "../../lib/speakers";
 import { Avatar } from "../../ui/Avatar";
+import { Icon } from "../../ui/Icon";
+import { IconButton } from "../../ui/IconButton";
 import { Popover } from "../../ui/Popover";
 import type { PersonColor } from "./Turns";
 import { PlayerKeysTip } from "./PlayerKeysTip";
@@ -61,32 +65,8 @@ export const BUBBLE_TEXT_MAX = 60;
 
 const speedText = (rate: number) => `${String(rate).replace(".", ",")}×`;
 
-function PlayIcon() {
-  return <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor" /></svg>;
-}
-function PauseIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <rect x="3.5" y="2.5" width="3" height="11" rx="1" fill="currentColor" />
-      <rect x="9.5" y="2.5" width="3" height="11" rx="1" fill="currentColor" />
-    </svg>
-  );
-}
-function VolumeIcon({ muted, level }: { muted: boolean; level: number }) {
-  return (
-    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-      <path d="M2.5 6h2.5l3.5-3v10l-3.5-3H2.5z" fill="currentColor" />
-      {muted || level === 0
-        ? <path d="M11 6l4 4M15 6l-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-        : (
-          <>
-            <path d="M11 5.5a3.5 3.5 0 0 1 0 5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-            {level > 0.5 && <path d="M12.8 3.8a6 6 0 0 1 0 8.4" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />}
-          </>
-        )}
-    </svg>
-  );
-}
+/** Значок звука по громкости: выключен, тише половины, громче. */
+const volumeIcon = (muted: boolean, level: number) => (muted || level === 0 ? VolumeX : level > 0.5 ? Volume2 : Volume1);
 
 /** Где клавиши плеера не работают: поля ввода, терминал агента, окна и меню, список вкладок. */
 const KEYS_IGNORED = [
@@ -258,7 +238,6 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const onlySpans = onlyImportant && spans?.length ? spans : null;
   const only = useRef<Span[] | null>(onlySpans);
   only.current = onlySpans;
-  const gradient = useId();
 
   const totalRef = useRef(total);
   totalRef.current = total;
@@ -604,15 +583,10 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           onPointerEnter={onPointerEnter} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}
           onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
         >
+          {/* Цвет кривой — токенами в player.css (заливка --accent-soft, как в макете). */}
           {curveOn && (
             <svg className="pbar__curve" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
-              <defs>
-                <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stopColor="#fff" stopOpacity="0.42" />
-                  <stop offset="1" stopColor="#fff" stopOpacity="0.06" />
-                </linearGradient>
-              </defs>
-              <path d={path} fill={`url(#${gradient})`} />
+              <path d={path} />
             </svg>
           )}
           <div className="pbar__track">
@@ -640,22 +614,24 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         </div>
         {labels && (
           <div className="pbar__labels" aria-hidden="true">
+            {/* Подписи под отрезками глав; пройденные и текущая — цветом текста, впереди — тише. */}
             {pieces.map((p) => (
-              <span key={p.n} className="pbar__label" title={p.title}
+              <span key={p.n} className="pbar__label" title={p.title} data-past={p.a * total <= current || undefined}
                 style={{ left: `${p.a * 100}%`, width: `${(p.b - p.a) * 100}%` }}>{p.label}</span>
             ))}
           </div>
         )}
       </div>
       <div className="player__left">
-        <button type="button" className="player__play" onClick={toggle} aria-label={playing ? "Пауза" : "Воспроизвести"}
-          title={playing ? "Пауза (K)" : "Воспроизвести (K)"}>
-          {playing ? <PauseIcon /> : <PlayIcon />}
+        <button type="button" className="btn btn--primary btn--flat btn--icon player__play" onClick={toggle}
+          aria-label={playing ? "Пауза" : "Воспроизвести"} title={playing ? "Пауза (K)" : "Воспроизвести (K)"}>
+          <Icon as={playing ? Pause : Play} fill="currentColor" />
         </button>
         <span className="pvol">
-          <button type="button" className="player__mute" onClick={toggleMute} aria-pressed={muted}
-            aria-label={muted ? "Включить звук" : "Выключить звук"} title={muted ? "Включить звук (M)" : "Выключить звук (M)"}>
-            <VolumeIcon muted={muted} level={volume} />
+          <button type="button" className="btn btn--ghost btn--sm btn--icon player__mute" onClick={toggleMute}
+            aria-pressed={muted} aria-label={muted ? "Включить звук" : "Выключить звук"}
+            title={muted ? "Включить звук (M)" : "Выключить звук (M)"}>
+            <Icon as={volumeIcon(muted, volume)} />
           </button>
           <input type="range" className="pvol__slider" aria-label="Громкость" min={0} max={1} step={0.05}
             value={muted ? 0 : volume} aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
@@ -674,7 +650,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           </span>
         )}
         {here && (
-          <button type="button" className="player__chapter" aria-haspopup="dialog"
+          <button type="button" className="btn btn--ghost btn--sm player__chapter" aria-haspopup="dialog"
             aria-expanded={chaptersAnchor?.classList.contains("player__chapter") ?? false}
             aria-label={`Глава ${here.n}: ${here.title}. Список глав`} title="Главы встречи" onMouseDown={keepChapters} onClick={openChapters}>
             <span className="player__chapter-title" title={here.title}>{here.title}</span>
@@ -688,37 +664,36 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
             </span>
             <button type="button" className="player__only-off" aria-label="Выключить «Только важное»"
               title="Выключить «Только важное»" onClick={() => setOnlyImportant(false)}>
-              <X size={12} strokeWidth={2.2} aria-hidden="true" />
+              <X size={12} strokeWidth={1.75} aria-hidden="true" />
             </button>
           </span>
         )}
       </div>
       <div className="player__right">
-        <button type="button" className="player__speed num" onClick={nextSpeed}
+        <button type="button" className="btn btn--ghost btn--sm player__speed" onClick={nextSpeed}
           aria-label={`Скорость воспроизведения: ${speedText(rate)}`}>
           {speedText(rate)}
         </button>
         {hasChapters && (
-          <button type="button" className="player__btn player__btn--chapters" aria-haspopup="dialog"
+          <button type="button" className="btn btn--ghost btn--sm player__btn player__btn--chapters" aria-haspopup="dialog"
             aria-expanded={chaptersAnchor?.classList.contains("player__btn--chapters") ?? false}
             aria-label="Главы" title="Главы встречи" onMouseDown={keepChapters} onClick={openChapters}>
-            <ListVideo size={15} strokeWidth={1.9} aria-hidden="true" />
+            <Icon as={ListVideo} />
             <span className="player__btn-text">Главы</span>
           </button>
         )}
         {spans && spans.length > 0 && (
-          <button type="button" className="player__btn" aria-pressed={onlyImportant} aria-label="Только важное"
-            title="Играть только важные фрагменты встречи" onClick={() => setOnlyImportant((v) => !v)}>
-            <Sparkles size={14} strokeWidth={1.9} aria-hidden="true" />
+          <button type="button" className="filter player__important" aria-pressed={onlyImportant}
+            aria-label="Только важное" title="Играть только важные фрагменты встречи"
+            onClick={() => setOnlyImportant((v) => !v)}>
+            {/* Значок — только в узкой карточке, вместо подписи. */}
+            <Icon as={Sparkles} size="sm" className="player__important-icon" />
             <span className="player__btn-text">Только важное</span>
           </button>
         )}
         <span className="player__keys"><PlayerKeysTip /></span>
-        <button type="button" className="player__btn player__btn--icon" onClick={toggleCompact}
-          aria-label={compact ? "Развернуть плеер" : "Компактный плеер"} title={compact ? "Развернуть плеер" : "Компактный плеер"}>
-          {compact ? <Maximize2 size={14} strokeWidth={1.9} aria-hidden="true" />
-            : <Minimize2 size={14} strokeWidth={1.9} aria-hidden="true" />}
-        </button>
+        <IconButton icon={compact ? Maximize2 : Minimize2} label={compact ? "Развернуть плеер" : "Компактный плеер"}
+          onClick={toggleCompact} />
       </div>
       {chaptersAnchor && (
         <Popover anchor={chaptersAnchor} onClose={() => setChaptersAnchor(null)} label="Главы встречи" width={300}>

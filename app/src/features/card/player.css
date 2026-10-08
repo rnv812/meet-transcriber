@@ -1,74 +1,117 @@
 /*
- * Плеер как у YouTube (AudioPlayer): полоса с главами, кривая важности над ней,
- * пузырь при наведении, строка кнопок. Положение, наведение и загруженное —
- * CSS-переменные --pos, --hover, --buf (доли 0..1) на .pbar; у отрезка главы —
- * его границы --a и --b: заливка отрезка считается здесь же, без JS.
+ * Плеер записи (AudioPlayer) — подвал карточки по макету Atlas Aurora: полоса с
+ * главами и подписями под отрезками, кривая важности над ней, пузырь при наведении,
+ * строка кнопок (▶ — главная кнопка-значок, время Geist Mono, «1×», «Главы»,
+ * «Только важное» — фильтр). Положение, наведение и загруженное — CSS-переменные
+ * --pos, --hover, --buf (доли 0..1) на .pbar; у отрезка главы — его границы --a и
+ * --b: заливка отрезка считается здесь же, без JS. Только токены Aurora.
  */
-/* .player.… — сильнее общего .player из card.css (тот подключается позже). */
+.player {
+  flex: none; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 24px 10px;
+  border-top: 1px solid var(--hairline); background: var(--surface-1);
+}
+/* Дорожка не загрузилась или её нет: одна тихая строка. */
+.player--off { min-height: 40px; color: var(--ink-3); font-size: var(--text-sm); }
+.player audio { display: none; }
+
 .player.player--yt {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "bar bar" "left right";
-  align-items: center; gap: 0 10px; padding: 2px 14px 6px;
+  align-items: center; gap: 6px 10px; padding: 8px 24px 10px;
 }
 .player__bar { grid-area: bar; position: relative; min-width: 0; }
-.player__left { grid-area: left; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.player__right { grid-area: right; display: flex; align-items: center; gap: 2px; }
+.player__left { grid-area: left; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.player__right { grid-area: right; display: flex; align-items: center; gap: 4px; }
 
 /* Компактный: одна строка, полоса посередине, без подписей. */
 .player.player--compact {
-  grid-template-columns: auto minmax(80px, 1fr) auto; grid-template-areas: "left bar right"; padding: 4px 14px;
+  grid-template-columns: auto minmax(80px, 1fr) auto; grid-template-areas: "left bar right"; padding: 6px 24px;
 }
 .player--compact .player__chapter, .player--compact .player__only-text, .player--compact .player__btn-text { display: none; }
+.player--compact .player__important-icon { display: inline-block; }
+
+/* Кнопки строки — Aurora .btn; свои здесь только размеры и шрифт. */
+.player__play svg { width: var(--icon-sm); height: var(--icon-sm); }
+.player__speed { min-width: 52px; padding: 0 8px; font-family: var(--font-code); font-size: var(--text-xs); }
+.player__clock {
+  flex: none; display: inline-flex; align-items: baseline; gap: 4px;
+  color: var(--ink-2); font-family: var(--font-code); font-size: var(--text-sm);
+}
+.player__slash { color: var(--ink-3); }
+.player__status { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--text-sm); white-space: nowrap; }
+.player__spinner {
+  width: 12px; height: 12px; border-radius: var(--r-full); border: 2px solid var(--hairline-strong); border-top-color: var(--accent);
+  animation: player-spin 0.8s linear infinite;
+}
+@keyframes player-spin { to { transform: rotate(360deg); } }
+.btn.player__chapter { min-width: 0; padding: 0 6px; gap: 2px; color: var(--ink); font-weight: 400; }
+.player__chapter-title { min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.player__chapter svg { width: var(--icon-sm); height: var(--icon-sm); color: var(--ink-3); }
+/* «Только важное» — фильтр Aurora: включённый — точка и контур; значок — только в узкой карточке. */
+.player__important { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.player__important-icon { display: none; flex: none; }
+.player__only {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px 0 10px;
+  border-radius: var(--r-xs); background: var(--warning-soft); color: var(--warning); font-size: var(--text-xs); white-space: nowrap;
+}
+.player__only-off {
+  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;
+  border: 0; border-radius: var(--r-full); background: none; color: inherit; cursor: pointer;
+}
+.player__only-off:hover { background: var(--surface-3); }
 
 /* Полоса: зона наведения выше самой полосы. */
 .pbar {
   --pos: 0; --hover: 0; --buf: 0;
   position: relative; height: 20px; cursor: pointer; touch-action: none; outline: none;
 }
-.pbar__track { position: absolute; left: 0; right: 0; bottom: 7px; height: 3px; transition: height var(--t), bottom var(--t); }
-.pbar.is-hover .pbar__track, .pbar:focus-visible .pbar__track { height: 5px; bottom: 6px; }
-.pbar:focus-visible .pbar__track { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--accent); border-radius: 2px; }
-.pbar__seg { position: absolute; top: 0; bottom: 0; overflow: hidden; border-radius: 1px; background: rgba(255, 255, 255, 0.14); }
+.pbar__track { position: absolute; left: 0; right: 0; bottom: 6px; height: 4px; transition: height var(--d), bottom var(--d); }
+.pbar.is-hover .pbar__track, .pbar:focus-visible .pbar__track { height: 6px; bottom: 5px; }
+/* Фокус с клавиатуры — рамка Aurora вокруг полосы (у самой .pbar её нет: она шире полосы). */
+.pbar:focus-visible { box-shadow: none; }
+.pbar:focus-visible .pbar__track { border-radius: var(--r-xs); box-shadow: var(--focus-ring); }
+.pbar__seg { position: absolute; top: 0; bottom: 0; overflow: hidden; border-radius: 2px; background: var(--data-empty); }
 .pbar__buf, .pbar__hov, .pbar__fill { position: absolute; inset: 0; transform-origin: left center; }
 .pbar__buf {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--hairline-strong);
   transform: scaleX(clamp(0, calc((var(--buf) - var(--a)) / (var(--b) - var(--a))), 1));
 }
 .pbar__hov {
-  background: rgba(255, 255, 255, 0.22); opacity: 0;
+  background: var(--ink-3); opacity: 0;
   transform: scaleX(clamp(0, calc((var(--hover) - var(--a)) / (var(--b) - var(--a))), 1));
 }
-.pbar.is-hover .pbar__hov { opacity: 1; }
+.pbar.is-hover .pbar__hov { opacity: 0.45; }
 .pbar__fill {
-  background: var(--accent-hi);
+  background: var(--data-1);
   transform: scaleX(clamp(0, calc((var(--pos) - var(--a)) / (var(--b) - var(--a))), 1));
 }
 /* Фрагменты «Только важного» — тонкие отметки над полосой. */
-.pbar__span { position: absolute; top: -4px; height: 2px; border-radius: 1px; background: var(--amber); opacity: 0.85; }
+.pbar__span { position: absolute; top: -4px; height: 2px; border-radius: 1px; background: var(--warning); }
 
 /* Бегунок: маленький круг, растёт при наведении. */
 .pbar__knob {
-  position: absolute; bottom: 8.5px; left: calc(var(--pos) * 100%); width: 12px; height: 12px;
-  margin: 0 0 -6px -6px; border-radius: 50%; background: var(--accent-hi); pointer-events: none;
-  transform: scale(0.6); transition: transform var(--t);
+  position: absolute; bottom: 8px; left: calc(var(--pos) * 100%); width: 12px; height: 12px;
+  margin: 0 0 -6px -6px; border-radius: var(--r-full); background: var(--data-1); pointer-events: none;
+  transform: scale(0.6); transition: transform var(--d);
 }
 .pbar.is-hover .pbar__knob, .pbar:focus-visible .pbar__knob { transform: scale(1.1); }
 .pbar.is-drag .pbar__knob { transform: scale(1.25); }
 
-/* Кривая важности над полосой («самые пересматриваемые»). */
+/* Кривая важности над полосой («самые пересматриваемые»): заливка --accent-soft, как в макете. */
 .pbar__curve {
-  position: absolute; left: 0; bottom: 9px; width: 100%; height: 34px; pointer-events: none;
-  opacity: 0; transition: opacity 160ms;
+  position: absolute; left: 0; bottom: 10px; width: 100%; height: 34px; pointer-events: none;
+  opacity: 0; transition: opacity var(--d-slow);
 }
+.pbar__curve path { fill: var(--accent-soft); }
 .pbar.is-hover .pbar__curve { opacity: 1; }
 /* Под кривой — мягкая подложка цвета плеера: строка расшифровки под ней не сливается с кривой. */
 .pbar::before {
-  content: ""; position: absolute; left: -14px; right: -14px; bottom: 9px; height: 40px; pointer-events: none;
-  background: linear-gradient(to top, var(--surface) 35%, transparent); opacity: 0; transition: opacity 160ms;
+  content: ""; position: absolute; left: -24px; right: -24px; bottom: 10px; height: 40px; pointer-events: none;
+  background: linear-gradient(to top, var(--surface-1) 35%, transparent); opacity: 0; transition: opacity var(--d-slow);
 }
 .player--curve-hover .pbar.is-hover::before { opacity: 1; }
 /* «Всегда»: место под кривую отведено, раскладка не прыгает. */
-.player--curve-always .player__bar { padding-top: 22px; }
-.player--curve-always .pbar__curve { opacity: 0.5; }
+.player--curve-always .player__bar { padding-top: 18px; }
+.player--curve-always .pbar__curve { height: 28px; opacity: 0.7; }
 .player--curve-always .pbar.is-hover .pbar__curve { opacity: 1; }
 .player--compact.player--curve-always .player__bar { padding-top: 0; }
 .player--compact .pbar__curve { height: 22px; }
@@ -77,85 +120,60 @@
 .pbar__bubble {
   position: absolute; bottom: calc(100% + 26px); left: clamp(120px, calc(var(--hover) * 100%), calc(100% - 120px));
   z-index: 6; width: max-content; max-width: 260px; padding: 6px 8px; transform: translateX(-50%);
-  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 6px 18px #0009;
-  color: var(--text); font-size: 12px; line-height: 1.35; pointer-events: none; opacity: 0; transition: opacity 100ms;
+  background: var(--surface-2); border: 1px solid var(--hairline-strong); border-radius: var(--r-md); box-shadow: var(--elev-2);
+  color: var(--ink); font-size: var(--text-xs); line-height: 1.35; pointer-events: none; opacity: 0; transition: opacity var(--d-fast);
 }
 .pbar.is-hover .pbar__bubble { opacity: 1; }
 .pbar__bubble-head { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pbar__bubble-chapter { color: var(--text-2); font-weight: 500; }
-.pbar__bubble-turn { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; color: var(--text-2); }
+.pbar__bubble-head .num { font-family: var(--font-code); }
+.pbar__bubble-chapter { color: var(--ink-2); font-weight: 500; }
+.pbar__bubble-turn { display: flex; gap: 6px; align-items: flex-start; margin-top: 4px; color: var(--ink-2); }
 .pbar__bubble-turn .avatar { flex: none; margin-top: 1px; }
-.pbar__bubble-text b { color: var(--text); font-weight: 600; }
+.pbar__bubble-text b { color: var(--ink); font-weight: 600; }
 
-/* Подписи глав под полосой. */
-.pbar__labels { position: relative; height: 15px; margin-top: -3px; }
+/* Подписи глав под отрезками: пройденные и текущая — цветом текста, впереди — тише. */
+.pbar__labels { position: relative; height: 16px; margin-top: -2px; }
 .pbar__label {
-  position: absolute; top: 0; padding-right: 4px; color: var(--text-3); font-size: 11px; line-height: 15px;
+  position: absolute; top: 0; padding-right: 4px; color: var(--ink-3); font-size: 11px; line-height: 16px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
-/* Строка кнопок. */
-.player__clock { flex: none; display: inline-flex; align-items: baseline; gap: 4px; color: var(--text-2); font-size: 12px; }
-.player__clock .player__time { min-width: 0; }
-.player__slash { color: var(--text-3); }
-.player__chapter {
-  display: inline-flex; align-items: center; gap: 2px; min-width: 0; height: 26px; padding: 0 4px 0 6px;
-  border: 0; border-radius: var(--r-md); background: none; color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
-}
-.player__chapter:hover, .player__chapter[aria-expanded="true"] { background: var(--surface-hover); }
-.player__chapter-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
-.player__chapter svg { flex: none; color: var(--text-3); }
-.player__btn {
-  flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px;
-  border: 0; border-radius: var(--r-md); background: none; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer;
-  transition: background var(--t), color var(--t);
-}
-.player__btn:hover, .player__btn[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
-.player__btn[aria-pressed="true"] { color: var(--amber); background: rgba(245, 165, 36, 0.1); }
-.player__btn--icon { width: 28px; padding: 0; justify-content: center; }
-.player__only {
-  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 3px 0 8px;
-  border-radius: 11px; background: rgba(245, 165, 36, 0.12); color: var(--amber); font-size: 11px; white-space: nowrap;
-}
-.player__only-off {
-  display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0;
-  border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer;
-}
-.player__only-off:hover { background: rgba(245, 165, 36, 0.2); }
+.pbar__label[data-past] { color: var(--ink); }
 
 /* Громкость: ползунок выезжает при наведении и фокусе. */
 .pvol { flex: none; display: inline-flex; align-items: center; }
 .pvol__slider {
   --vol: 100%;
   width: 0; height: 16px; margin: 0; opacity: 0; cursor: pointer; background: none;
-  -webkit-appearance: none; appearance: none; transition: width 150ms, opacity 150ms, margin 150ms;
+  -webkit-appearance: none; appearance: none; transition: width var(--d), opacity var(--d), margin var(--d);
 }
 .pvol:hover .pvol__slider, .pvol:focus-within .pvol__slider { width: 64px; margin: 0 4px 0 2px; opacity: 1; }
 .pvol__slider::-webkit-slider-runnable-track {
-  height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--text) var(--vol), var(--line-2) var(--vol));
+  height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--ink) var(--vol), var(--hairline-strong) var(--vol));
 }
 .pvol__slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: 50%; background: var(--ink);
+  -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: var(--r-full); background: var(--ink);
 }
-.pvol__slider:focus-visible { outline: none; }
-.pvol__slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent); }
+.pvol__slider:focus-visible { box-shadow: none; }
+.pvol__slider:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus-ring); }
 
 /* Список глав. */
 .pchapters { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
 .pchapters__item {
   display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 8px; text-align: left;
-  border: 0; border-radius: var(--r-md); background: none; color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--ink); font: inherit; font-size: var(--text-sm); cursor: pointer;
 }
-.pchapters__item:hover { background: var(--surface-hover); }
-.pchapters__item[aria-current="true"] { background: rgba(94, 106, 210, 0.16); }
-.pchapters__n { flex: none; width: 18px; color: var(--text-3); font-size: 12px; }
+.pchapters__item:hover { background: var(--surface-3); }
+.pchapters__item[aria-current="true"] { background: var(--accent-soft); }
+.pchapters__n { flex: none; width: 18px; color: var(--ink-3); font-size: var(--text-xs); }
 .pchapters__title { flex: 1; min-width: 0; }
-.pchapters__time { flex: none; color: var(--text-3); font-size: 12px; }
+.pchapters__time { flex: none; color: var(--ink-3); font-family: var(--font-code); font-size: var(--text-xs); }
 
 /* Узкая карточка: подписи кнопок — только значки, название главы короче. */
 @container (max-width: 620px) {
   .player__btn-text { display: none; }
-  .player__btn { width: 28px; padding: 0; justify-content: center; }
+  .btn.player__btn { width: var(--control-sm); padding: 0; }
+  .player__important { padding: 0 10px; }
+  .player__important-icon { display: inline-block; }
   .player__chapter-title { max-width: 140px; }
   .player__only-text { display: none; }
 }

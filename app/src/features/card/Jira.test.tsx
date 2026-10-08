@@ -176,20 +176,23 @@ test("текст поправили после ответа резидента �
   expect(links.get(1)!.map((m) => m.key)).toEqual(["SPR-131", "ORION-2122"]);
 });
 
-test("«Задачи»: уникальные ключи с репликами; ключ открывает Jira, реплика — переход", async () => {
+test("«Задачи Jira»: уникальные ключи с репликами в строке над лентой; ключ открывает Jira, реплика — переход", async () => {
   spoken();
-  const block = screen.getByRole("region", { name: "Задачи Jira" });
-  expect(within(block).getByRole("button", { name: /Задачи/ })).toHaveAttribute("aria-expanded", "true");
-  const list = within(block).getByRole("group", { name: "Задачи Jira, названные во встрече" });
+  // Без анализа — та же строка, только с задачами (ни блока «Наблюдения», ни фильтров).
+  expect(screen.queryByRole("region")).toBeNull();
+  const list = screen.getByRole("group", { name: "Задачи Jira, названные во встрече" });
+  expect(list).toHaveTextContent(/^Задачи Jira:/);
   const items = within(list).getAllByRole("listitem");
   expect(items.map((li) => within(li).getByRole("link").textContent)).toEqual(["ORION-2122", "KDEV-4452", "SPR-131"]);
-  // ORION-2122 звучит в двух репликах — у неё две.
-  expect(within(items[0]!).getAllByRole("button").map((b) => b.textContent)).toEqual(["00:00 · Анна", "00:10 · Борис"]);
+  // ORION-2122 звучит в двух репликах — у неё две: время на виду, спикер — в имени кнопки.
+  expect(within(items[0]!).getAllByRole("button").map((b) => b.textContent)).toEqual(["00:00", "00:10"]);
+  expect(within(items[0]!).getAllByRole("button").map((b) => b.getAttribute("aria-label")))
+    .toEqual(["00:00 · Анна", "00:10 · Борис"]);
   await userEvent.click(within(items[0]!).getByRole("link", { name: "ORION-2122" }));
   expect(shell.openUrl).toHaveBeenCalledWith("https://jira.example.com/browse/ORION-2122");
 });
 
-test("«Задачи» под «Наблюдениями» в том же блоке", () => {
+test("«Задачи Jira» — в строке фильтров, не в блоке «Наблюдения»", () => {
   const analysis: Analysis = {
     version: 1, model: "t", created_at: 1, fingerprint: "f", segments: 3, features: ["insights"],
     insights: [{ id: "i1", kind: "followup", text: "Проверить кей дев сорок четыре.", refs: [1], why: "" }],
@@ -197,7 +200,8 @@ test("«Задачи» под «Наблюдениями» в том же бло
   const view = buildView(SPOKEN_TURNS, analysis, 3, { types: false, importance: false, chapters: false, insights: true });
   spoken({ view });
   const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
-  expect(within(block).getByRole("group", { name: "Задачи Jira, названные во встрече" })).toBeInTheDocument();
+  expect(within(block).queryByRole("group", { name: "Задачи Jira, названные во встрече" })).toBeNull();
+  expect(screen.getByRole("group", { name: "Задачи Jira, названные во встрече" })).toBeInTheDocument();
   // Наблюдение: фраза от резидента — значок с ключом.
   const link = within(block).getByRole("link", { name: "KDEV-44" });
   expect(link).toHaveClass("jira-ref");

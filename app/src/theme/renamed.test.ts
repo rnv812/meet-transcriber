@@ -116,6 +116,9 @@ const AURORA_IN_MARKUP = new Map<string, string[]>([
   [join("features", "settings", "SettingsSearch.tsx"), ["search"]],
   // Вкладки карточки записи — `.tabs` Aurora (controls.css), этап 3.
   [join("features", "card", "CardTabs.tsx"), ["tabs"]],
+  // Поиск над лентой «Расшифровки» — `.search` Aurora; «Наблюдения» — `.card aurora-wash`, этап 3.
+  [join("features", "card", "TranscriptView.tsx"), ["search"]],
+  [join("features", "card", "markup.tsx"), ["card"]],
   // «Мой голос» и таблица людей — `.card`, «Найти человека» — `.search` Aurora, этап 3.
   [join("features", "voices", "VoicesPane.tsx"), ["card", "search"]],
   // Живая панель: вкладки узкой области и сегменты частоты и профиля — `.tabs` Aurora, этап 5.

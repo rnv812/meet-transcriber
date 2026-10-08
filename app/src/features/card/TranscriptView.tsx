@@ -1,5 +1,6 @@
 /**
- * Вкладка «Расшифровка»: поиск по тексту встречи над репликами.
+ * Вкладка «Расшифровка»: панель над лентой (поиск, «Исправить…», ✦ «Улучшить»),
+ * «Наблюдения», фильтры по типам с «Задачами Jira», реплики.
  *
  * Правила поиска — lib/search.ts (те же у поиска по всем записям). Текст
  * разбирается один раз на транскрипт, запрос — с задержкой 150 мс. Текущее
@@ -14,15 +15,17 @@ import {
   useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, PenLine, Search } from "lucide-react";
 import { layoutRows, turnAt, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
 import { JiraLinks, jiraTasks } from "../../lib/jira";
 import { placeOf, restorePlace, scrollParent, type Place } from "../../lib/keepPlace";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
+import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { InsightsBlock, TypeFilters } from "./markup";
+import { IconButton } from "../../ui/IconButton";
+import { InsightsBlock, JiraTasks, TypeFilters, hasTypeFilters } from "./markup";
 import { TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
@@ -38,7 +41,6 @@ export type RevealRequest = { turn: number; n: number };
 export type SeekRequest = { t: number; n: number };
 
 const NO_FILTER: ReadonlySet<PhraseType> = new Set();
-const NO_INSIGHTS: InsightView[] = [];
 /** Сколько длится подсветка реплики, к которой перешли. */
 const FLASH_MS = 1700;
 
@@ -61,7 +63,7 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools, seekTo = null, nowTurn = null,
-  textPhase = false,
+  textPhase = false, onFix,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -80,6 +82,8 @@ export function TranscriptView({
   toolbar?: ReactNode;
   /** Кнопки в строке поиска справа (✦ «Улучшить расшифровку»). */
   tools?: ReactNode;
+  /** «Исправить…» на панели: то же окно, что Ctrl+E (по выделению в реплике); `anchor` — кнопка. */
+  onFix?: (anchor: HTMLElement) => void;
   find?: FindRequest | null;
   /** ✦ «Спросить агента» у реплик (номера реплик). */
   onAskAgent?: (turns: number[]) => void;
@@ -360,42 +364,70 @@ export function TranscriptView({
   };
 
   const counter = !active ? "" : hits.length ? `${current + 1} из ${hits.length}` : "Ничего не найдено";
+  const filters = types && hasTypeFilters(counts)
+    ? <TypeFilters counts={counts} value={filter} onChange={setFilter} /> : null;
+  const jiraRow = tasks.length > 0 ? <JiraTasks tasks={tasks} turns={turns} onJump={jumpTo} /> : null;
 
   return (
     <div className="transcript" ref={box}>
+      {/* Панель над лентой (макет Atlas Aurora): поиск слева, «Исправить…» и ✦ «Улучшить» — справа. */}
       <div className="find" role="search" aria-label="Поиск по расшифровке">
-        <input
-          ref={input}
-          type="search"
-          className="find__input"
-          data-transcript-search=""
-          placeholder="Найти в расшифровке"
-          aria-label="Найти в расшифровке"
-          aria-keyshortcuts="Control+F"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onFocus={(e) => { returnTo.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null; }}
-          onKeyDown={onKeyDown}
-        />
+        <div className="search find__search">
+          <Search size={18} strokeWidth={1.75} aria-hidden="true" />
+          <input
+            ref={input}
+            type="search"
+            className="field field--md find__input"
+            data-transcript-search=""
+            placeholder="Найти в расшифровке"
+            aria-label="Найти в расшифровке"
+            aria-keyshortcuts="Control+F"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onFocus={(e) => { returnTo.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null; }}
+            onKeyDown={onKeyDown}
+          />
+          {/* Подсказка клавиши — пока поле пустое: не наезжает на текст и крестик очистки. */}
+          {!text && <span className="kbd" aria-hidden="true">Ctrl F</span>}
+        </div>
         <span className={`find__count num${active && !hits.length ? " find__count--none" : ""}`}
           aria-live="polite" aria-atomic="true">{counter}</span>
-        <button type="button" className="find__nav" aria-label="Предыдущее совпадение" title="Предыдущее (Shift+Enter)"
-          disabled={hits.length < 2} onClick={() => step(-1)}><ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" /></button>
-        <button type="button" className="find__nav" aria-label="Следующее совпадение" title="Следующее (Enter)"
-          disabled={hits.length < 2} onClick={() => step(1)}><ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" /></button>
+        {active && (
+          <>
+            <IconButton icon={ChevronUp} label="Предыдущее совпадение" tooltip="Предыдущее (Shift+Enter)"
+              disabled={hits.length < 2} onClick={() => step(-1)} />
+            <IconButton icon={ChevronDown} label="Следующее совпадение" tooltip="Следующее (Enter)"
+              disabled={hits.length < 2} onClick={() => step(1)} />
+          </>
+        )}
         <HelpTip label="Как искать в расшифровке" title="Поиск по расшифровке">
           <TipLine>Слова без кавычек находят реплики, где есть все эти слова в любой форме: «задача» найдёт и «задачи».</TipLine>
           <TipLine>Фраза в кавычках, например <code>"план работ"</code>, ищется точно, слово в слово.</TipLine>
           <TipLine><code>спикер:Анна</code> — только реплики этого спикера.</TipLine>
           <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить.</TipLine>
         </HelpTip>
+        <span className="find__gap" />
+        {onFix && (
+          // Нажатие не снимает выделение в реплике: по нему и откроется окно.
+          <Button variant="ghost" size="md" icon={PenLine} aria-label="Исправить распознанное"
+            title="Исправить выделенное в реплике (Ctrl+E)" aria-keyshortcuts="Control+E"
+            onMouseDown={(e) => e.preventDefault()} onClick={(e) => onFix(e.currentTarget)}>
+            Исправить…
+          </Button>
+        )}
         {tools}
       </div>
-      {((view && view.insights.length > 0) || tasks.length > 0) && (
-        <InsightsBlock insights={view?.insights ?? NO_INSIGHTS} tasks={tasks} turns={turns} onJump={jumpTo}
-          onAsk={onAskInsight} />
+      {view && view.insights.length > 0 && (
+        <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
       )}
-      {types && <TypeFilters counts={counts} value={filter} onChange={setFilter} />}
+      {/* Фильтры по типам и «Задачи Jira» — одной строкой. */}
+      {(filters || jiraRow) && (
+        <div className="feed-filters">
+          {filters}
+          {filters && jiraRow && <span className="feed-filters__sep" aria-hidden="true" />}
+          {jiraRow}
+        </div>
+      )}
       {toolbar}
       {noMatches ? (
         <div className="turns-empty" role="status">

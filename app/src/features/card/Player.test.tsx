@@ -3,6 +3,8 @@
  * пузырь при наведении, клавиши, «Только важное», список глав. Данные выдуманные.
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, createRef } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -78,6 +80,26 @@ test("без анализа — простая полоса: один отрез
     expect(screen.getByRole("button", { name })).toBeInTheDocument();
   }
   expect(screen.getByRole("button", { name: /Скорость воспроизведения/ })).toBeInTheDocument();
+});
+
+test("подвал плеера на Atlas Aurora: ▶ — главная кнопка-значок, «1×» и «Главы» — тихие, «Только важное» — фильтр", async () => {
+  setup();
+  const play = screen.getByRole("button", { name: "Воспроизвести" });
+  expect(play).toHaveClass("btn", "btn--primary", "btn--icon");
+  const speed = screen.getByRole("button", { name: /Скорость воспроизведения/ });
+  expect(speed).toHaveTextContent("1×");
+  expect(speed).toHaveClass("btn--ghost");
+  expect(screen.getByRole("button", { name: "Главы" })).toHaveClass("btn--ghost");
+  const only = screen.getByRole("button", { name: "Только важное" });
+  expect(only).toHaveClass("filter");
+  expect(only).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(only);
+  expect(only).toHaveAttribute("aria-pressed", "true");
+  const css = readFileSync(resolve(__dirname, "player.css"), "utf-8");
+  // Подвал — на --surface-1, поля 8px 24px 10px; время — моноширинным Geist Mono.
+  expect(css).toMatch(/\.player \{[^}]*background: var\(--surface-1\)/);
+  expect(css).toMatch(/\.player\.player--yt \{[^}]*padding: 8px 24px 10px/);
+  expect(css).toMatch(/\.player__clock \{[^}]*font-family: var\(--font-code\)/);
 });
 
 test("полоса делится на главы с зазорами; подписи «N. название» помещаются по ширине", () => {

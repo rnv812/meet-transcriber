@@ -1,4 +1,5 @@
-import { memo, useContext, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useContext, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
+import { Sparkle } from "lucide-react";
 import type { ChapterView, TurnRow } from "../../lib/analysisView";
 import { clock, plural } from "../../lib/format";
 import { JiraLinks, type JiraMatch } from "../../lib/jira";
@@ -8,7 +9,7 @@ import type { PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
 import { LinkedText } from "../../ui/LinkedText";
-import { TypeIcon, hasTypeIcon } from "./markup";
+import { TypeIcon } from "./markup";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
 
@@ -19,7 +20,7 @@ export type TurnMarks = Map<number, { ranges: Range[]; first: number }>;
 
 export type { TurnRow };
 
-/** Разметка анализа у реплик: тип (значок), важная ли (полоса слева), главы. */
+/** Разметка анализа у реплик: тип (бейдж после имени), важная ли (подложка и «важное»), главы. */
 export type TurnAnnotations = {
   types?: (PhraseType | null)[] | null;
   key?: boolean[] | null;
@@ -118,6 +119,7 @@ export const Turns = memo(function Turns({
         const mark = marks?.get(i);
         const on = selected?.has(i) ?? false;
         const headless = textPhase && t.speaker === NO_SPEAKER;
+        const person = !unnamed && color ? ({ "--person": color } as CSSProperties) : undefined;
         return (
           <div className={`turn${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}${key?.[i] ? " turn--key" : ""}`}
             key={`t${i}`}
@@ -141,17 +143,16 @@ export const Turns = memo(function Turns({
             )}
             {/* Строки имени нет: текст встаёт на одну строку со временем. */}
             {headless && <span className="sr-only">Спикер ещё не определён</span>}
-            {/* Значок типа — в своей колонке у каждой реплики (пустой, если значка нет): имя и текст не сдвигаются. */}
-            <span className="turn__mark">{types?.[i] && <TypeIcon type={types[i]!} />}</span>
             {!headless && (
               <div className="turn__head">
+                {/* Точка перед именем — цвет спикера (--person); имя — цветом текста. */}
                 {textPhase ? (
-                  <span className="turn__speaker">{t.speaker}</span>
+                  <span className="turn__speaker" style={person}>{t.speaker}</span>
                 ) : t.speaker === NO_SPEAKER ? (
                   <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
                 ) : (
                   <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}
-                    style={!unnamed && color ? { color } : undefined} aria-haspopup={onSpeaker ? "dialog" : undefined}
+                    style={person} aria-haspopup={onSpeaker ? "dialog" : undefined}
                     title={onSpeaker ? "Исправить спикера реплики" : undefined}
                     onClick={(e) => {
                       if (onSelect && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
@@ -167,6 +168,13 @@ export const Turns = memo(function Turns({
                   <span className="turn__flag"
                     title="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
                     (голос под вопросом)
+                  </span>
+                )}
+                {/* Тип реплики — бейдж после имени (у утверждения бейджа нет). */}
+                {types?.[i] && <TypeIcon type={types[i]!} />}
+                {key?.[i] && (
+                  <span className="turn__key">
+                    <Sparkle size={12} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />важное
                   </span>
                 )}
                 {onAskAgent && (
@@ -194,10 +202,11 @@ export const Turns = memo(function Turns({
       if (!c) return null;
       return (
         <div className="chapter-head" key={`c${row.c}`} data-chapter={row.c}>
+          {/* «Глава N» — тихой подписью, название — жирным; « · » — только для чтения с экрана. */}
           <h3 className="chapter-head__title">
             <span className="chapter-head__n">Глава {c.n}</span>
-            <span className="chapter-head__sep"> · </span>
-            {c.title}
+            <span className="sr-only"> · </span>
+            <span className="chapter-head__name">{c.title}</span>
           </h3>
           <span className="chapter-head__time num">{clock(c.start)}–{clock(c.end)}</span>
           {onAskChapter && (
@@ -214,10 +223,8 @@ export const Turns = memo(function Turns({
       </button>
     );
   };
-  // Колонка значков типа есть у всех реплик, если значок есть хоть у одной; нет значков — нет и колонки.
-  const marked = types?.some((x) => !!x && hasTypeIcon(x)) ?? false;
   return (
-    <div className={`turns${marked ? " turns--marked" : ""}`}>
+    <div className="turns">
       {rows ? rows.map(renderRow) : turns.map((_, i) => renderTurn(i))}
     </div>
   );

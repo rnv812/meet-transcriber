@@ -1,7 +1,7 @@
 /**
- * Строка реплики — сетка [▷ время] [значок типа] [имя / текст]: у каждой реплики
- * та же колонка значка (пустая, если значка нет), время и имя — соседние ячейки
- * первой строки, значок и пометки не стоят внутри строки имени перед именем.
+ * Строка реплики (Atlas Aurora) — сетка [время 64 px] [имя / текст]: время и имя —
+ * соседние ячейки первой строки, имя у всех реплик начинается ровно, бейдж типа и
+ * пометки — после имени в его строке, не перед ним.
  * Геометрию не проверяем (jsdom её не считает) — только устройство разметки и
  * правила CSS, на которых держится выравнивание. Данные выдуманные.
  */
@@ -45,24 +45,23 @@ function checkRows(c: HTMLElement) {
   const all = rows(c);
   expect(all.length).toBeGreaterThan(0);
   for (const row of all) {
-    // Время, колонка значка, строка имени, текст — прямые ячейки сетки строки, в этом порядке.
-    expect(cells(row)).toEqual(["turn__time", "turn__mark", "turn__head", "turn__text"]);
+    // Время, строка имени, текст — прямые ячейки сетки строки, в этом порядке.
+    expect(cells(row)).toEqual(["turn__time", "turn__head", "turn__text"]);
     const head = row.querySelector(":scope > .turn__head")!;
-    // Имя — первое в своей строке: перед ним ни значка, ни пометок.
+    // Имя — первое в своей строке: перед ним ни бейджа типа, ни пометок.
     expect(head.firstElementChild).toHaveClass("turn__speaker");
-    expect(head.querySelector(".turn__type")).toBeNull();
+    const type = head.querySelector(".turn__type");
+    if (type) expect(type.previousElementSibling).not.toBeNull();
   }
 }
 
-test("с разметкой: у всех реплик одна колонка значка, значок — только в ней, имя первое в строке", () => {
+test("с разметкой: бейдж типа — в строке имени после имени, имя первое в строке", () => {
   const { container } = render(
     <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={VIEW}
       selected={new Set([1])} onSelect={() => {}} onSpeaker={() => {}} onAskAgent={() => {}} nowTurn={2}
       find={{ q: "задачу", t: null, n: 1 }} />);
-  expect(container.querySelector(".turns")).toHaveClass("turns--marked");
   checkRows(container);
-  const marks = rows(container).map((r) => r.querySelector(":scope > .turn__mark")!);
-  expect(marks.map((m) => m.querySelector(".turn__type")?.getAttribute("aria-label") ?? null))
+  expect(rows(container).map((r) => r.querySelector(".turn__head > .turn__type")?.getAttribute("aria-label") ?? null))
     .toEqual([null, "Задача", "Решение", null, null, "Риск"]);
   // «в комнате» и «(голос под вопросом)» — после имени, в той же строке.
   const room = container.querySelector(".turn__room")!;
@@ -73,11 +72,10 @@ test("с разметкой: у всех реплик одна колонка з
   expect(unsure.previousElementSibling).toHaveClass("turn__speaker");
 });
 
-test("без разметки и без плеера — та же сетка; колонка значка пустая и нулевой ширины", () => {
+test("без разметки и без плеера — та же сетка, без бейджей типа", () => {
   const { container } = render(<Turns turns={TURNS} colors={new Map()} playable={false} onPlay={() => {}} />);
-  expect(container.querySelector(".turns")).not.toHaveClass("turns--marked");
   checkRows(container);
-  for (const m of container.querySelectorAll(".turn__mark")) expect(m).toBeEmptyDOMElement();
+  expect(container.querySelector(".turn__type")).toBeNull();
 });
 
 test("текст до спикеров без подписи: текст — на строке времени (строки имени нет)", () => {
@@ -85,18 +83,16 @@ test("текст до спикеров без подписи: текст — н�
   expect(turns[0]!.speaker).toBe(NO_SPEAKER);
   const { container } = render(<Turns turns={turns} colors={new Map()} playable onPlay={() => {}} textPhase />);
   const [first, second] = rows(container);
-  expect(cells(first!)).toEqual(["turn__time", "turn__mark", "turn__text"]);
+  expect(cells(first!)).toEqual(["turn__time", "turn__text"]);
   expect(first!.querySelector(".sr-only")).toHaveTextContent("Спикер ещё не определён");
-  expect(cells(second!)).toEqual(["turn__time", "turn__mark", "turn__head", "turn__text"]);
+  expect(cells(second!)).toEqual(["turn__time", "turn__head", "turn__text"]);
 });
 
-test("CSS: сетка с общей высотой первой строки у времени, значка и имени; колонка значка у всех реплик", () => {
+test("CSS: сетка [время 64 px | имя и текст] с общей высотой первой строки у времени и имени", () => {
   const css = readFileSync(resolve(__dirname, "card.css"), "utf-8");
-  expect(css).toMatch(/\.turn \{[^}]*display: grid; grid-template-columns: 84px var\(--turn-mark, 0px\) minmax\(0, 1fr\)/);
-  expect(css).toMatch(/\.turns--marked \{ --turn-mark: 20px; \}/);
+  expect(css).toMatch(/\.turn \{[^}]*display: grid; grid-template-columns: 64px minmax\(0, 1fr\)/);
   // Высота строки — после `font: inherit` (иначе шорткат её сбрасывает).
   expect(css).toMatch(/\.turn__time \{[^}]*height: var\(--turn-line\);[^}]*font: inherit;[^}]*line-height: var\(--turn-line\)/);
-  expect(css).toMatch(/\.turn__mark \{[^}]*height: var\(--turn-line\)/);
   expect(css).toMatch(/\.turn__head \{[^}]*min-height: var\(--turn-line\); line-height: var\(--turn-line\)/);
   expect(css).toMatch(/button\.turn__speaker \{[^}]*line-height: inherit/);
   // Текущее совпадение поиска не сдвигает текст.

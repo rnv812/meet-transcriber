@@ -1,6 +1,7 @@
 /**
- * Разметка встречи в «Расшифровке» (M3): значок типа реплики, чипы фильтра по
- * типам, блок «Наблюдения» под поиском. Сама разметка — lib/analysisView.ts.
+ * Разметка встречи в «Расшифровке» (M3, Atlas Aurora): бейдж типа реплики,
+ * фильтры по типам и «Задачи Jira» в одной строке, карточка «Наблюдения» под
+ * поиском. Сама разметка — lib/analysisView.ts.
  */
 
 import { useContext, useState } from "react";
@@ -35,28 +36,29 @@ const INSIGHT_ICON: Record<InsightKind, LucideIcon> = {
   followup: CircleArrowRight,
 };
 
-/** Есть ли у типа значок (у утверждения — нет). */
-export const hasTypeIcon = (type: PhraseType) => !!TYPE_ICON[type];
-
-/** Значок типа реплики — в колонке перед именем: приглушённый, подпись — в подсказке. */
+/** Бейдж типа реплики — после имени: значок и подпись (у утверждения бейджа нет). */
 export function TypeIcon({ type }: { type: PhraseType }) {
   const Icon = TYPE_ICON[type];
   if (!Icon) return null;
   return (
-    <span className={`turn__type turn__type--${type}`} role="img" aria-label={TYPE_LABEL[type]} title={TYPE_LABEL[type]}>
-      <Icon size={13} strokeWidth={1.9} aria-hidden="true" />
+    <span className={`badge badge--plain turn__type turn__type--${type}`} role="img" aria-label={TYPE_LABEL[type]}
+      title={TYPE_LABEL[type]}>
+      <Icon size={12} strokeWidth={1.75} aria-hidden="true" />{TYPE_LABEL[type]}
     </span>
   );
 }
 
-/** Чипы «Вопросы · Решения · Задачи · Риски · Идеи»: можно выбрать несколько. */
+/** Есть ли что фильтровать: хоть одна реплика одного из типов фильтра. */
+export const hasTypeFilters = (counts: Map<PhraseType, number>) =>
+  TYPE_FILTERS.some((f) => (counts.get(f.type) ?? 0) > 0);
+
+/** Фильтры «Вопросы · Решения · Задачи · Риски · Идеи» (Aurora .filter): можно выбрать несколько. */
 export function TypeFilters({ counts, value, onChange }: {
   counts: Map<PhraseType, number>;
   value: ReadonlySet<PhraseType>;
   onChange: (next: Set<PhraseType>) => void;
 }) {
-  const any = TYPE_FILTERS.some((f) => (counts.get(f.type) ?? 0) > 0);
-  if (!any) return null;
+  if (!hasTypeFilters(counts)) return null;
   const toggle = (type: PhraseType) => {
     const next = new Set(value);
     if (next.has(type)) next.delete(type);
@@ -67,12 +69,10 @@ export function TypeFilters({ counts, value, onChange }: {
     <div className="tfilters" role="group" aria-label="Показать только реплики этих типов">
       {TYPE_FILTERS.map((f) => {
         const n = counts.get(f.type) ?? 0;
-        const Icon = TYPE_ICON[f.type]!;
         const on = value.has(f.type);
         return (
-          <button key={f.type} type="button" className="tfilter" aria-pressed={on} disabled={!n && !on}
+          <button key={f.type} type="button" className="filter tfilter" aria-pressed={on} disabled={!n && !on}
             onClick={() => toggle(f.type)}>
-            <Icon size={13} strokeWidth={1.9} aria-hidden="true" />
             {f.label}
             <span className="tfilter__n num">{n}</span>
           </button>
@@ -102,29 +102,33 @@ function writeCollapsed(v: boolean) {
 /** Сколько реплик показывать у задачи в «Задачах» (остальные — «ещё N»). */
 const TASK_TURNS = 4;
 
-/** «Задачи»: задачи Jira, названные во встрече, — ключ (ссылка) и реплики, где о ней говорили. */
-function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: Turn[]; onJump: (turn: number) => void }) {
+/**
+ * «Задачи Jira:» в строке фильтров: задачи, названные во встрече, — ключ (ссылка) и
+ * время реплик, где о ней говорили (спикер — в имени и подсказке кнопки).
+ */
+export function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: Turn[]; onJump: (turn: number) => void }) {
   const jira = useContext(JiraLinks);
   if (!jira || !tasks.length) return null;
   return (
     <div className="jtasks" role="group" aria-label="Задачи Jira, названные во встрече">
-      <span className="jtasks__head">Задачи</span>
+      <span className="jtasks__head">Задачи Jira:</span>
       <ul className="jtasks__list">
         {tasks.map((task) => (
-          <li key={task.key} className="jtask">
+          <li key={task.key} className="badge badge--plain jtask">
             <JiraLink linker={jira} keyText={task.key}>{task.key}</JiraLink>
             {task.turns.slice(0, TASK_TURNS).map((r) => {
               const t = turns[r];
               if (!t) return null;
+              const at = `${clock(t.start)} · ${t.speaker}`;
               return (
-                <button key={r} type="button" className="insight__ref num" onClick={() => onJump(r)}
-                  title={`${clock(t.start)} · ${t.speaker} — перейти к реплике`}>
-                  {clock(t.start)} · {t.speaker}
+                <button key={r} type="button" className="jtask__ref num" onClick={() => onJump(r)}
+                  aria-label={at} title={`${at} — перейти к реплике`}>
+                  {clock(t.start)}
                 </button>
               );
             })}
             {task.turns.length > TASK_TURNS && (
-              <span className="muted jtask__more">ещё {task.turns.length - TASK_TURNS}</span>
+              <span className="jtask__more">ещё {task.turns.length - TASK_TURNS}</span>
             )}
           </li>
         ))}
@@ -133,11 +137,9 @@ function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: Turn[];
   );
 }
 
-/** Блок «Наблюдения» под поиском: вид, текст, «почему», ссылки на реплики, ✦; ниже — «Задачи». */
-export function InsightsBlock({ insights, tasks = [], turns, onJump, onAsk }: {
+/** Карточка «Наблюдения» под поиском (aurora-wash — вывод ИИ): вид, текст, «почему», ссылки на реплики, ✦. */
+export function InsightsBlock({ insights, turns, onJump, onAsk }: {
   insights: InsightView[];
-  /** Задачи Jira, названные во встрече (без анализа — блок только из них). */
-  tasks?: JiraTask[];
   turns: Turn[];
   /** Перейти к реплике (номер реплики карточки). */
   onJump: (turn: number) => void;
@@ -146,17 +148,17 @@ export function InsightsBlock({ insights, tasks = [], turns, onJump, onAsk }: {
   const jira = useContext(JiraLinks);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [why, setWhy] = useState<ReadonlySet<string>>(() => new Set());
-  if (!insights.length && !tasks.length) return null;
+  if (!insights.length) return null;
   const toggle = () => { setCollapsed((c) => { writeCollapsed(!c); return !c; }); };
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
-    <section className="insights" aria-label={insights.length ? "Наблюдения анализа встречи" : "Задачи Jira"}>
+    <section className="card aurora-wash insights" aria-label="Наблюдения анализа встречи">
       <button type="button" className="insights__head" aria-expanded={!collapsed} onClick={toggle}>
-        <Chevron size={14} strokeWidth={1.9} aria-hidden="true" />
-        <span>{insights.length ? "Наблюдения" : "Задачи"}</span>
-        <span className="insights__n num">{insights.length || tasks.length}</span>
+        <Chevron size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span className="insights__title">Наблюдения</span>
+        <span className="badge badge--plain insights__n num">{insights.length}</span>
       </button>
-      {!collapsed && insights.length > 0 && (
+      {!collapsed && (
         <ul className="insights__list">
           {insights.map((x) => {
             const Icon = INSIGHT_ICON[x.kind] ?? Eye;
@@ -164,7 +166,7 @@ export function InsightsBlock({ insights, tasks = [], turns, onJump, onAsk }: {
             return (
               <li key={x.id} className={`insight insight--${x.kind}`}>
                 <span className="insight__icon" role="img" aria-label={INSIGHT_LABEL[x.kind]} title={INSIGHT_LABEL[x.kind]}>
-                  <Icon size={14} strokeWidth={1.9} aria-hidden="true" />
+                  <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
                 </span>
                 <div className="insight__body">
                   <p className="insight__text"><LinkedText text={x.text} linker={jira} /></p>
@@ -202,7 +204,6 @@ export function InsightsBlock({ insights, tasks = [], turns, onJump, onAsk }: {
           })}
         </ul>
       )}
-      {!collapsed && <JiraTasks tasks={tasks} turns={turns} onJump={onJump} />}
     </section>
   );
 }

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
   buildView, INSIGHT_LABEL, turnAt, usableAnalysis, type InsightView,
@@ -17,6 +16,7 @@ import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, statusOf } from "../../lib/status";
 import type { Category, ChatUpdatedEvent, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { KIND_LABEL } from "../../live/liveModel";
+import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
@@ -480,11 +480,17 @@ export function RecordingCard({
           toolbar={turnEdit.bar || textFix.bar || improve.bar
             ? <div className="tbars">{turnEdit.bar}{textFix.bar}{improve.bar && <div className="tfix-bar">{improve.bar}</div>}</div>
             : null}
+          onFix={textFix.openFromBar}
           tools={
-            <button type="button" className="find__tool" aria-label="Улучшить расшифровку" onClick={() => void improve.start()} disabled={!!improve.blocked}
-              title={improve.blocked ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}>
-              <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Улучшить
-            </button>
+            // Недоступная кнопка не получает наведения: причину показывает обёртка.
+            <span className="find__improve" title={improve.blocked ?? undefined}>
+              <Button variant="aurora" size="md" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
+                title={improve.blocked ? undefined
+                  : "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}
+                onClick={() => void improve.start()}>
+                <AgentMark size={16} />Улучшить
+              </Button>
+            </span>
           }
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn} />
       ) : <EmptyState title="В записи нет речи" />;
