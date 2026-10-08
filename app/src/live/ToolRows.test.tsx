@@ -3,7 +3,7 @@
  * своего хода, состояние, раскрытие вывода, решение ворот, карточка согласия в строке;
  * ответы слэш-команд и однократная строка об автомоде.
  */
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../lib/api", async (orig) => ({
@@ -38,7 +38,7 @@ const row = (o: Partial<ChatMessage> = {}): ChatMessage => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-test("строки вызовов — под ответом своего хода: вид, суть, ✓ и время, решение ворот", () => {
+test("строки вызовов — под ответом своего хода: вид, суть, ✓ и время, решение ворот", async () => {
   render(<Host />);
   load([userMsg("m1", { text: "что в git?" }), agentMsg("m2", { mode: "reply", text: "Изменён один файл" }),
     row({ status: "done" }),
@@ -51,7 +51,11 @@ test("строки вызовов — под ответом своего ход�
   // «Разрешено автоматически» — не строкой под вызовом, а подсказкой и для диктора.
   expect(bash).toHaveTextContent("разрешено автоматически");
   expect(bash!.querySelector(".chat-tool__gate")).toBeNull();
-  expect(bash!.querySelector(".chat-tool__line")).toHaveAttribute("title", "git status --short — разрешено автоматически");
+  // Суть и решение — подсказкой Aurora (ui/Tip) при наведении, не системным title.
+  const line = bash!.querySelector<HTMLElement>(".chat-tool__line")!;
+  expect(line).not.toHaveAttribute("title");
+  fireEvent.mouseEnter(line);
+  expect(await screen.findByText("git status --short — разрешено автоматически")).toHaveClass("tooltip");
   expect(edit).toHaveTextContent("Правка");
   expect(within(edit!).getByText("+3")).toBeInTheDocument();
   expect(within(edit!).getByText("−1")).toBeInTheDocument();

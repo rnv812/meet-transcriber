@@ -286,13 +286,16 @@ export function ChatComposer({
             const status = d.status === "uploading" ? (d.kind === "doc" ? "разбирается…" : "загружается…")
               : d.status === "failed" ? `не приложено: ${d.error}` : !vision && d.kind === "image" ? "модель не видит изображения" : null;
             return (
-              <li key={d.key} className={`${BADGE_CLASS.plain} chat-draft chat-draft--${d.status}`} title={status ? `${d.name} — ${status}` : d.name}>
-                {d.preview ? <img className="chat-draft__thumb" src={d.preview} alt={d.name} />
-                  : <Icon as={d.kind === "image" ? ImageIcon : FileText} size="sm" />}
-                <span className="chat-draft__name">{d.name}</span>
-                {status && <span className="chat-draft__status">{status}</span>}
-                <IconButton icon={X} size="xs" label={`Убрать вложение ${d.name}`} onClick={() => remove(d.key)} />
-              </li>
+              // Имя и состояние целиком — в подсказке Aurora (на чипе имя обрезается).
+              <Tip key={d.key} content={status ? `${d.name} — ${status}` : d.name} describe={false}>
+                <li className={`${BADGE_CLASS.plain} chat-draft chat-draft--${d.status}`}>
+                  {d.preview ? <img className="chat-draft__thumb" src={d.preview} alt={d.name} />
+                    : <Icon as={d.kind === "image" ? ImageIcon : FileText} size="sm" />}
+                  <span className="chat-draft__name">{d.name}</span>
+                  {status && <span className="chat-draft__status">{status}</span>}
+                  <IconButton icon={X} size="xs" label={`Убрать вложение ${d.name}`} onClick={() => remove(d.key)} />
+                </li>
+              </Tip>
             );
           })}
         </ul>

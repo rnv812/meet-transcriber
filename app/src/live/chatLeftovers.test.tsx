@@ -88,9 +88,11 @@ test("M7: узкая панель — время в подсказке, влож
     userMsg("m2", { text: "Смотри", attachments: ["a1", "a2"], t: 70 }),
   ]);
   const [agent, user] = rows();
-  expect(agent).toHaveAttribute("title", "01:05");
+  // Время — подсказкой Aurora (ui/Tip) и описанием для диктора, не системным title.
+  expect(agent).toHaveAttribute("aria-description", "01:05");
+  expect(agent).not.toHaveAttribute("title");
   expect(within(agent!).queryByText("01:05")).toBeNull();
-  expect(user).toHaveAttribute("title", "01:10");
+  expect(user).toHaveAttribute("aria-description", "01:10");
   // Счётчик — значок скрепки Lucide и число (без эмодзи).
   const count = within(user!).getByLabelText("Вложения: Скриншот.png, План.pptx");
   expect(count).toHaveTextContent(/^2$/);

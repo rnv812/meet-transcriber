@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HelpTip } from "../../ui/HelpTip";
 import { FolderRow, Radio, Row, SeeAlso, SeeAlsoSlot, Segmented, Switch } from "./Section";
@@ -39,7 +39,10 @@ test("папка: путь в одну строку с полным путём �
   const path = within(group).getByText(long);
   const code = path.closest("code")!;
   expect(code).toHaveClass("path--clip");
-  expect(code).toHaveAttribute("title", long);
+  // Путь целиком — подсказкой Aurora (ui/Tip) при наведении, не системным title.
+  expect(code).not.toHaveAttribute("title");
+  fireEvent.mouseEnter(code);
+  expect(await screen.findByText(long, { selector: ".tooltip" })).toBeInTheDocument();
   const folder = code.parentElement!;
   expect(folder).toHaveClass("folder");
   expect(within(folder).getByRole("button", { name: "Выбрать папку…" })).toBeInTheDocument();

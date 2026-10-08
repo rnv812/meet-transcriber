@@ -617,9 +617,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         {labels && (
           <div className="pbar__labels" aria-hidden="true">
             {/* Подписи под отрезками глав; пройденные и текущая — цветом текста, впереди — тише. */}
+            {/* Полное название главы — в подсказке Aurora; для диктора глава — в кнопке «Глава N: …». */}
             {pieces.map((p) => (
-              <span key={p.n} className="pbar__label" title={p.title} data-past={p.a * total <= current || undefined}
-                style={{ left: `${p.a * 100}%`, width: `${(p.b - p.a) * 100}%` }}>{p.label}</span>
+              <Tip key={p.n} content={p.title} describe={false}>
+                <span className="pbar__label" data-past={p.a * total <= current || undefined}
+                  style={{ left: `${p.a * 100}%`, width: `${(p.b - p.a) * 100}%` }}>{p.label}</span>
+              </Tip>
             ))}
           </div>
         )}

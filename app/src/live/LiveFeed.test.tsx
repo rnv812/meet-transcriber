@@ -119,7 +119,9 @@ test("нумерованные подписи собеседников — с п
   expect(screen.queryByText(LABELS_HINT)).toBeNull();
   rerender(<LiveFeed lines={[line(0, "Собеседник 1"), line(1, "Собеседник 2"), line(2)]} />);
   expect(screen.getByText(LABELS_HINT)).toBeInTheDocument();
-  expect(screen.getByText("Собеседник 2")).toHaveAttribute("title", LABELS_HINT);
-  expect(screen.getByText("Демьян")).not.toHaveAttribute("title");
+  // Пояснение — подсказкой Aurora (ui/Tip) и описанием для диктора, не системным title.
+  expect(screen.getByText("Собеседник 2")).toHaveAttribute("aria-description", LABELS_HINT);
+  expect(screen.getByText("Собеседник 2")).not.toHaveAttribute("title");
+  expect(screen.getByText("Демьян")).not.toHaveAttribute("aria-description");
   expect(screen.getAllByRole("listitem")).toHaveLength(3); // подсказка — не строка ленты
 });

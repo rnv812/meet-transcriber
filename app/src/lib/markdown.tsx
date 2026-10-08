@@ -18,6 +18,7 @@
 
 import { Fragment, useMemo, type ReactNode } from "react";
 import { LinkedText } from "../ui/LinkedText";
+import { Tip } from "../ui/Tip";
 import { plainMarkdown } from "./agentRef";
 import type { JiraLinker } from "./jira";
 
@@ -225,13 +226,14 @@ function inline(text: string, ctx: Ctx = {}): ReactNode[] {
       const seconds = Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
       const onTime = ctx.onTime;
       push(
-        <button key={out.length} type="button" className="md-time" title="Перейти к реплике в ленте"
-          onClick={() => onTime(seconds)}>
-          {m[0].slice(1, -1)}
-        </button>,
+        <Tip key={out.length} content="Перейти к реплике в ленте">
+          <button type="button" className="md-time" onClick={() => onTime(seconds)}>
+            {m[0].slice(1, -1)}
+          </button>
+        </Tip>,
       );
     } else if (c === "[" && (m = LINK.exec(rest))) {
-      push(<span key={out.length} className="md-link" title={m[2]}>{inline(m[1]!, ctx)}</span>);
+      push(<Tip key={out.length} content={m[2]}><span className="md-link">{inline(m[1]!, ctx)}</span></Tip>);
     } else if (c === "*" && (m = STRONG_STAR.exec(rest) ?? EM_STAR.exec(rest))) {
       const Tag = m[0].startsWith("**") ? "strong" : "em";
       push(<Tag key={out.length}>{inline(m[1]!, ctx)}</Tag>);

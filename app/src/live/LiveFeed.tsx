@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { clock } from "../lib/format";
+import { Tip } from "../ui/Tip";
 import "./live.css";
 import type { FeedLine } from "./useLive";
 
@@ -98,8 +99,9 @@ export function LiveFeed({ lines, className = "", focus = null }: {
           <span className="live-feed__t num">{clock(l.t)}</span>
           <span className="live-feed__text">
             {l.speaker && (
-              <span className="live-feed__who"
-                title={PROVISIONAL.test(l.speaker) ? LABELS_HINT : undefined}>{l.speaker}</span>
+              <Tip content={PROVISIONAL.test(l.speaker) ? LABELS_HINT : ""}>
+                <span className="live-feed__who">{l.speaker}</span>
+              </Tip>
             )}
             {l.text}
           </span>

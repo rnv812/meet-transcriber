@@ -104,7 +104,7 @@ test("подвал плеера на Atlas Aurora: ▶ — сильная (deep)
   expect(css).toMatch(/\.player__clock \{[^}]*font-family: var\(--font-code\)/);
 });
 
-test("полоса делится на главы с зазорами; подписи «N. название» помещаются по ширине", () => {
+test("полоса делится на главы с зазорами; подписи «N. название» помещаются по ширине", async () => {
   const { container } = setup();
   const segs = [...container.querySelectorAll<HTMLElement>(".pbar__seg")];
   expect(segs).toHaveLength(3);
@@ -113,7 +113,10 @@ test("полоса делится на главы с зазорами; подп�
   expect(segs[2]!.style.width).toBe("40%"); // у последней зазора нет
   const labels = [...container.querySelectorAll<HTMLElement>(".pbar__label")];
   expect(labels.map((l) => l.textContent)).toEqual(["1. Вступление", "2. Бюджет", "3. Итоги"]);
-  expect(labels[1]).toHaveAttribute("title", "Бюджет на квартал");
+  // Полное название — подсказкой Aurora (ui/Tip) при наведении, не системным title.
+  expect(labels[1]).not.toHaveAttribute("title");
+  fireEvent.mouseEnter(labels[1]!);
+  expect(await screen.findByText("Бюджет на квартал", { selector: ".tooltip" })).toBeInTheDocument();
 });
 
 test("узкий плеер — подписи глав только номерами; выключенные подписи не рисуются", () => {

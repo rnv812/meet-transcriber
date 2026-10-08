@@ -61,7 +61,9 @@ test("ссылки — текст с адресом в подсказке, бе�
   const { container } = render(
     <Markdown source={"См. [протокол](https://wiki/x) и [клик](javascript:alert(1))"} />);
   expect(container.querySelector("a")).toBeNull();
-  expect(screen.getByText("протокол")).toHaveAttribute("title", "https://wiki/x");
+  // Адрес — в подсказке Aurora (ui/Tip) и в описании для диктора, не в системном title.
+  expect(screen.getByText("протокол")).toHaveAttribute("aria-description", "https://wiki/x");
+  expect(screen.getByText("протокол")).not.toHaveAttribute("title");
   expect(container.querySelector("p")).toHaveTextContent("См. протокол и клик");
 });
 

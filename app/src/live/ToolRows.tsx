@@ -24,6 +24,7 @@ import { useId, useState } from "react";
 import { AgentMark } from "../ui/AgentMark";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { Tip } from "../ui/Tip";
 import { ConfirmCard } from "./ConfirmCard";
 import type { ToolItem } from "./chatModel";
 import type { Chat } from "./useChat";
@@ -77,7 +78,8 @@ function ToolRow({ row, card, chat, disabled }: ToolItem & { chat: Chat; disable
   const quietGate = !!row.gate && typeof row.gate === "object" && QUIET_GATES.has(row.gate.decision);
   const cardOpen = !!card && chat.cards.some((c) => c.id === card.id);
   const shown = all ? { head: output, hidden: 0 } : headLines(output);
-  const tip = [summary, gate].filter(Boolean).join(" — ") || undefined;
+  // Суть целиком и решение ворот — подсказкой Aurora (строка обрезается; решение диктору — sr-only).
+  const tip = [summary, gate].filter(Boolean).join(" — ");
   const line = (
     <>
       <span className="chat-tool__status" aria-hidden="true"><StatusMark status={status} /></span>
@@ -96,12 +98,16 @@ function ToolRow({ row, card, chat, disabled }: ToolItem & { chat: Chat; disable
   return (
     <li className={`chat-tool chat-tool--${status}${open ? " is-open" : ""}`} data-tool={row.tool_use_id}>
       {expandable ? (
-        <button type="button" className="chat-tool__line" aria-expanded={open} aria-controls={`${id}-out`}
-          title={tip} onClick={() => setOpen(!open)}>
-          {line}{quietGate && <span className="sr-only"> · {gate}</span>}
-        </button>
+        <Tip content={tip} describe={false}>
+          <button type="button" className="chat-tool__line" aria-expanded={open} aria-controls={`${id}-out`}
+            onClick={() => setOpen(!open)}>
+            {line}{quietGate && <span className="sr-only"> · {gate}</span>}
+          </button>
+        </Tip>
       ) : (
-        <div className="chat-tool__line" title={tip}>{line}{quietGate && <span className="sr-only"> · {gate}</span>}</div>
+        <Tip content={tip} describe={false}>
+          <div className="chat-tool__line">{line}{quietGate && <span className="sr-only"> · {gate}</span>}</div>
+        </Tip>
       )}
       {status === "error" && typeof row.error === "string" && row.error && (
         <div className="chat-tool__error">{row.error}</div>

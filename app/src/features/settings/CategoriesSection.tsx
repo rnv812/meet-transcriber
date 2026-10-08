@@ -216,10 +216,12 @@ export function CategoriesSection({ value, onChange, endpoint }: {
                   <input type="text" className="field field--sm catedit__name" aria-label="Название категории" maxLength={NAME_MAX}
                     placeholder="Название" value={c.name} onChange={(e) => update(i, { name: e.target.value })}
                     onBlur={() => setTouched(true)} />
-                  <input type="text" className="field field--sm catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
-                    maxLength={DESCRIPTION_MAX} placeholder="Описание для ИИ: какие встречи сюда относятся"
-                    title={c.description || undefined}
-                    value={c.description} onChange={(e) => update(i, { description: e.target.value })} />
+                  {/* Длинное описание в поле не помещается — целиком в подсказке Aurora (значение поля диктор и так читает). */}
+                  <Tip content={c.description} describe={false}>
+                    <input type="text" className="field field--sm catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
+                      maxLength={DESCRIPTION_MAX} placeholder="Описание для ИИ: какие встречи сюда относятся"
+                      value={c.description} onChange={(e) => update(i, { description: e.target.value })} />
+                  </Tip>
                   <IconButton icon={Trash2} label={`Удалить «${shown}»`} tooltip="Удалить" variant="danger"
                     className="catedit__remove" aria-expanded={confirm === k}
                     onClick={() => setConfirm(confirm === k ? null : k)} />

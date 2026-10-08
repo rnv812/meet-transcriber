@@ -22,6 +22,7 @@ import { clock } from "../lib/format";
 import type { LiveCatchup, LiveHint, LiveQuick } from "../lib/types";
 import { Button } from "../ui/Button";
 import { PaneResizer } from "../ui/PaneResizer";
+import { Tip } from "../ui/Tip";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { LiveAsk } from "./LiveAsk";
 import { type FeedFocus, LiveFeed } from "./LiveFeed";
@@ -225,6 +226,10 @@ export function urgentQuestion(hint: LiveHint): string {
  * (Aurora `.progress`) над рабочей областью, а в свёрнутой панели (`mini`) —
  * под шапкой. Строки начала встречи встают в ленту выше живых.
  */
+/** Подсказка у «Догоняю начало встречи…»: зачем это. */
+export const CATCHUP_TIP = "Ассистента включили посреди записи: он распознаёт уже записанное, чтобы сводка и "
+  + "подсказки знали начало встречи";
+
 export function CatchupNote({ catchup, mini = false, lead }: {
   catchup: LiveCatchup; mini?: boolean;
   /** Метка перед пояснением (временная встреча в свёрнутой панели). */
@@ -233,8 +238,8 @@ export function CatchupNote({ catchup, mini = false, lead }: {
   const from = catchup.capped && catchup.from_t != null ? clock(catchup.from_t) : null;
   const percent = Math.round(Math.max(0, Math.min(100, catchup.percent)));
   return (
-    <div className={`live-catchup${mini ? " live-catchup--mini" : ""}`} role="status"
-      title="Ассистента включили посреди записи: он распознаёт уже записанное, чтобы сводка и подсказки знали начало встречи">
+    <Tip content={CATCHUP_TIP}>
+    <div className={`live-catchup${mini ? " live-catchup--mini" : ""}`} role="status">
       <span className="live-catchup__text">
         Догоняю начало встречи… <span className="live-catchup__percent">{catchup.percent} %</span>
       </span>
@@ -249,6 +254,7 @@ export function CatchupNote({ catchup, mini = false, lead }: {
         </span>
       </span>
     </div>
+    </Tip>
   );
 }
 

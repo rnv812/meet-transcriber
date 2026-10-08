@@ -272,8 +272,10 @@ function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }
   const hasText = !!text.trim();
   return (
     // Карточка Aurora с отсветом сияния (вывод ИИ) и знаком агента; пока пишет — знак «пишет».
+    // В узкой ленте время — в подсказке Aurora (ui/Tip).
+    <Tip content={compact && time ? time : ""}>
     <li className={`chat-msg chat-msg--agent card aurora-wash${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
-      data-id={m.id} data-key={m.id} aria-busy={writing || undefined} title={compact && time ? time : undefined}>
+      data-id={m.id} data-key={m.id} aria-busy={writing || undefined}>
       <div className="chat-msg__head">
         <AgentMark state={writing ? "write" : "rest"} size={14} />
         <span className="chat-msg__who">Ассистент</span>
@@ -318,6 +320,7 @@ function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }
         </div>
       )}
     </li>
+    </Tip>
   );
 }
 
@@ -328,13 +331,15 @@ function AttachmentChip({ id, chat }: { id: string; chat: Chat }) {
   const failed = a?.status === "failed";
   const note = failed ? `не разобрано${a?.error ? `: ${a.error}` : ""}` : a?.note;
   return (
-    <span className={`${BADGE_CLASS.plain} chat-att${failed ? " is-failed" : ""}`} title={note || name}>
-      {preview && a?.type === "image"
-        ? <img className="chat-att__thumb" src={preview} alt={name} />
-        : <Icon as={a?.type === "image" ? ImageIcon : FileText} size="sm" />}
-      <span className="chat-att__name">{name}</span>
-      {note && <span className="chat-att__note">{note}</span>}
-    </span>
+    <Tip content={note || name} describe={false}>
+      <span className={`${BADGE_CLASS.plain} chat-att${failed ? " is-failed" : ""}`}>
+        {preview && a?.type === "image"
+          ? <img className="chat-att__thumb" src={preview} alt={name} />
+          : <Icon as={a?.type === "image" ? ImageIcon : FileText} size="sm" />}
+        <span className="chat-att__name">{name}</span>
+        {note && <span className="chat-att__note">{note}</span>}
+      </span>
+    </Tip>
   );
 }
 
@@ -344,16 +349,19 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
   const time = typeof m?.t === "number" ? clock(m.t) : null;
   const names = atts.map((id) => chat.attachment(id)?.name || "вложение").join(", ");
   return (
+    <Tip content={compact && time ? time : ""}>
     <li className={`chat-msg chat-msg--user${out ? ` is-${out.state}` : ""}`} data-id={m?.id}
-      data-key={m?.id ?? `out:${out?.client_id}`} title={compact && time ? time : undefined}>
+      data-key={m?.id ?? `out:${out?.client_id}`}>
       {m?.via === "button" && <div className="chat-msg__via">кнопка</div>}
       {m?.via === "reaction" && <div className="chat-msg__via">реакция</div>}
       {m?.via === "command" && <div className="chat-msg__via">команда</div>}
       {text && <div className="chat-msg__text chat-msg__text--plain">{text}</div>}
       {atts.length > 0 && (compact ? (
-        <span className="chat-msg__att-count" title={names} aria-label={`Вложения: ${names}`}>
-          <Icon as={Paperclip} size="sm" />{atts.length}
-        </span>
+        <Tip content={names} describe={false}>
+          <span className="chat-msg__att-count" aria-label={`Вложения: ${names}`}>
+            <Icon as={Paperclip} size="sm" />{atts.length}
+          </span>
+        </Tip>
       ) : (
         <div className="chat-msg__atts">{atts.map((id) => <AttachmentChip key={id} id={id} chat={chat} />)}</div>
       ))}
@@ -366,6 +374,7 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
         </div>
       )}
     </li>
+    </Tip>
   );
 }
 
@@ -409,7 +418,7 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
   }
   if (m.gate) {
     // Ворота согласия заблокировали вызов агента (0.3.7): та же тихая строка, с пояснением.
-    return <li className="chat-sys chat-sys--gate" data-id={m.id} data-key={m.id} title={GATE_TITLE}>{m.text}</li>;
+    return <Tip content={GATE_TITLE}><li className="chat-sys chat-sys--gate" data-id={m.id} data-key={m.id}>{m.text}</li></Tip>;
   }
   return <li className="chat-sys" data-id={m.id} data-key={m.id}>{m.text}</li>;
 }

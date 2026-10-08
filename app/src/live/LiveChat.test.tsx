@@ -171,7 +171,8 @@ test("строка ворот согласия — та же тихая сист
   load([{ ...agentMsg("s2"), kind: "system", text, gate: true }]);
   const line = within(log()).getByText(text);
   expect(line).toHaveClass("chat-sys", "chat-sys--gate");
-  expect(line).toHaveAttribute("title", GATE_TITLE);
+  expect(line).toHaveAttribute("aria-description", GATE_TITLE);
+  expect(line).not.toHaveAttribute("title");
 });
 
 /** Прокрутка ленты: jsdom не считает размеры — задаём их сами. */

@@ -410,12 +410,16 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   );
   // Прежний режим: «Вам вопрос» важнее хода «Догоняю» — как раньше.
   const urgentHint = !participant && !!shown && isUrgent(shown);
+  // Строка состояния шапки (одна, по важности) и подсказка шапки: есть строка — её полный
+  // текст (в шапке обрезается), иначе — что с ассистентом. Одна подсказка Aurora на всю шапку.
+  const headStatus = stopError || hintNote || live.error || (!stopping && live.status) || "";
+  const headTip = headStatus || (failed ? status?.error ?? state : stopping || warming ? state : "Ассистент слушает встречу");
   return (
     <div ref={root} className={`live-panel glass glass--dense${mods}${quiet ? " live-panel--quiet" : ""}`}
       onMouseDown={dragAnywhere}>
       <header className="live-head" onMouseDown={(e) => headPress(e, startDrag, () => setMaximized(!view.maximized))}>
-        <span className="live-head__title"
-          title={failed ? status?.error ?? state : stopping || warming ? state : "Ассистент слушает встречу"}>
+        <Tip content={headTip}>
+        <span className="live-head__title">
           <span className="live-head__rec" aria-hidden="true" />
           <span className="live-head__clock">{elapsed === null ? "—" : clock(elapsed)}</span>{" "}
           <span className="live-head__sep" aria-hidden="true" />
@@ -426,27 +430,28 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           {/* Ошибки и связь — в той же строке состояния шапки (одна, по важности):
               не закрывают поле вопроса и действия и не сдвигают содержимое. */}
           {stopError ? (
-            <span className="live-status live-status--error" role="alert" title={stopError}>
+            <span className="live-status live-status--error" role="alert">
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{stopError}</span>
             </span>
           ) : hintNote ? (
-            <span className="live-status live-status--error" role="alert" title={hintNote}>
+            <span className="live-status live-status--error" role="alert">
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{hintNote}</span>
             </span>
           ) : live.error ? (
-            <span className="live-status" role="status" title={live.error}>
+            <span className="live-status" role="status">
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{live.error}</span>
             </span>
           ) : live.status && !stopping && (
-            <span className="live-status" role="status" title={live.status}>
+            <span className="live-status" role="status">
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{live.status}</span>
             </span>
           )}
         </span>
+        </Tip>
         {!open && newHints > 0 && (
           <span className={`${BADGE_CLASS.run} badge--plain live-head__count`}>
             <span className="sr-only">{participant ? "новых сообщений" : "новых подсказок"}: </span>{newHints}
@@ -611,10 +616,13 @@ function StartFailed({ error, retryError, onRetry, onSettings, compact, lead }: 
   const reason = retryError ? `Повтор не удался: ${retryError}` : error;
   return (
     <div className={`live-mini live-fail${compact ? " live-fail--compact" : ""}`} role="alert">
-      <p className="live-fail__head" title={reason}>
-        <b className="live-fail__title">Не удалось запустить ассистента</b>
-        <span className="live-fail__reason">{reason}</span>
-      </p>
+      {/* Причина обрезается в одну строку — целиком в подсказке Aurora. */}
+      <Tip content={reason} describe={false}>
+        <p className="live-fail__head">
+          <b className="live-fail__title">Не удалось запустить ассистента</b>
+          <span className="live-fail__reason">{reason}</span>
+        </p>
+      </Tip>
       <div className="live-mini__actions">
         {lead}
         <Button size="xs" icon={RefreshCw} onClick={onRetry}>Повторить</Button>

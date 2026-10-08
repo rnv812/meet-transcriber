@@ -212,7 +212,10 @@ test("Esc в поле вопроса не возвращает обычный р
 test("шапка: нажатие тащит окно, двойной щелчок — на весь экран и обратно", async () => {
   render(<LivePanel endpoint={ep} />);
   await act(async () => {});
-  const title = screen.getByTitle("Ассистент слушает встречу");
+  // Подсказка шапки — облачко Aurora (ui/Tip) и описание для диктора, не системный title.
+  const title = head().querySelector<HTMLElement>(".live-head__title")!;
+  expect(title).toHaveAttribute("aria-description", "Ассистент слушает встречу");
+  expect(title).not.toHaveAttribute("title");
   fireEvent.mouseDown(title, { button: 0, detail: 1 });
   expect(invoke).toHaveBeenLastCalledWith("live_start_drag");
   await act(async () => { fireEvent.mouseDown(title, { button: 0, detail: 2 }); });
@@ -424,7 +427,9 @@ test("модель недоступна — тихий статус в шапк�
   render(<LivePanel endpoint={ep} />);
   await act(async () => {});
   act(() => liveStream().emit("state", state([], { status: "Подсказки временно недоступны" })));
-  expect(within(head()).getByRole("status")).toHaveAttribute("title", "Подсказки временно недоступны");
+  expect(within(head()).getByRole("status")).toHaveTextContent("Подсказки временно недоступны");
+  // Полный текст строки — подсказкой шапки (в строке он обрезается).
+  expect(head().querySelector(".live-head__title")).toHaveAttribute("aria-description", "Подсказки временно недоступны");
   expect(screen.queryByRole("alert")).toBeNull();
   act(() => liveStream().emit("state", state([])));
   expect(within(head()).queryByRole("status")).toBeNull();

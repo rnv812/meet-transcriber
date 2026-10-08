@@ -4,6 +4,7 @@ import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Disclosure } from "../../ui/Disclosure";
 import { radioKeys, Segmented as SegmentedControl } from "../../ui/Segmented";
+import { Tip } from "../../ui/Tip";
 
 /**
  * Строка настроек: слева подпись с пояснением (переносится, сжимается),
@@ -115,13 +116,15 @@ export function Segmented<T extends string>({ label, hint, help, value, options,
 
 /**
  * Путь в строке настроек: в одну строку, длинный обрезается многоточием в
- * начале (видна сама папка), целиком — во всплывающей подсказке.
+ * начале (видна сама папка), целиком — в подсказке Aurora (ui/Tip).
  */
 export function PathText({ path }: { path: string }) {
   return (
-    <code className="path path--clip" title={path} dir="rtl">
-      <bdi dir="ltr">{path}</bdi>
-    </code>
+    <Tip content={path} describe={false}>
+      <code className="path path--clip" dir="rtl">
+        <bdi dir="ltr">{path}</bdi>
+      </code>
+    </Tip>
   );
 }
 

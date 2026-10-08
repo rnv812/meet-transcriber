@@ -516,7 +516,8 @@ export function AgentTab({
       {unsentNote}
       <div className="codeblock agent__screen">
         <div className="code-head agent__head">
-          <b className="agent__path" title={folder}>{folder ?? ""}</b>
+          {/* Длинный путь обрезан многоточием — целиком в подсказке Aurora (имя — сам текст). */}
+          <Tip content={folder ?? ""} describe={false}><b className="agent__path">{folder ?? ""}</b></Tip>
           <span>{listed.find((p) => p.id === provider)?.label ?? ""}</span>
         </div>
         <div className="agent__body" onContextMenu={onContextMenu}>
