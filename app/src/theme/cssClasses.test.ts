@@ -113,11 +113,6 @@ test("ссылка-кнопка — шрифтом окружающего тек
  * нарушение. Пустой список — цель.
  */
 const NATIVE_ALLOWED = new Set<string>([
-  // Пакет D: главное окно, список записей.
-  "features/recordings/DateSections.tsx: checkbox без .cb",
-  "features/recordings/FilterPanel.tsx: checkbox без .cb",
-  "features/recordings/RecordingItem.tsx: checkbox без .cb",
-  "features/recordings/RecordingsList.tsx: checkbox без .cb",
 ]);
 
 /** Сами компоненты: им родной элемент можно (внутри — со своим видом). */
