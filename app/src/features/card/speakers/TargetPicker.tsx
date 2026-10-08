@@ -4,10 +4,12 @@
  * стрелки и Enter в поле или щелчок по варианту.
  */
 
+import { CircleHelp, Plus, UserRound, type LucideIcon } from "lucide-react";
 import { useId, useState, type KeyboardEvent } from "react";
 import type { Endpoint } from "../../../lib/api";
 import { isUnnamed } from "../../../lib/speakers";
 import { Avatar } from "../../../ui/Avatar";
+import { Icon } from "../../../ui/Icon";
 import type { PersonColor } from "../Turns";
 
 /** Сколько людей базы показывать без поиска. */
@@ -17,7 +19,7 @@ const fold = (s: string) => s.trim().toLowerCase().replace(/ё/g, "е");
 const hits = (name: string, q: string) =>
   !q || fold(name).startsWith(q) || fold(name).split(/\s+/).some((w) => w.startsWith(q));
 
-type Option = { key: string; text: string; hint?: string; to: string | null; icon?: string; avatar?: string };
+type Option = { key: string; text: string; hint?: string; to: string | null; icon?: LucideIcon; avatar?: string };
 
 /** `null` — новый безымянный «Спикер N» (номер выберет резидент). */
 export type Target = string | null;
@@ -59,13 +61,13 @@ export function TargetPicker({
   }
   const exact = [...speakers, ...people.map((p) => p.name), owner].some((n) => fold(n) === q);
   if (typed && !exact && !isUnnamed(typed)) {
-    options.push({ key: "new", text: `Новый человек «${typed}»`, to: typed, icon: "＋" });
+    options.push({ key: "new", text: `Новый человек «${typed}»`, to: typed, icon: Plus });
   }
   if (owner !== current && !seen.has(owner) && (!q || hits(owner, q) || "это я".startsWith(q))) {
-    options.push({ key: "me", text: `Это я — ${owner}`, to: owner, icon: "●" });
+    options.push({ key: "me", text: `Это я — ${owner}`, to: owner, icon: UserRound });
   }
   if (!q || "новый спикер без имени".startsWith(q) || "неизвестный".startsWith(q)) {
-    options.push({ key: "unnamed", text: "Новый спикер без имени", hint: "«Спикер N»", to: null, icon: "?" });
+    options.push({ key: "unnamed", text: "Новый спикер без имени", hint: "«Спикер N»", to: null, icon: CircleHelp });
   }
   const at = Math.min(active, Math.max(0, options.length - 1));
 
@@ -83,7 +85,7 @@ export function TargetPicker({
 
   return (
     <div className="spk-pick tpick">
-      <input className="spk-pick__input" role="combobox" aria-label={label} autoFocus
+      <input className="field field--sm spk-pick__input" role="combobox" aria-label={label} autoFocus
         aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
         aria-activedescendant={options[at] ? `${listId}-${at}` : undefined}
         placeholder={placeholder} value={text}
@@ -98,7 +100,7 @@ export function TargetPicker({
               {o.avatar ? (
                 <Avatar name={o.avatar} color={person?.color} hasAvatar={person?.has_avatar}
                   version={avatarVersion?.[o.avatar]} size={18} endpoint={endpoint} />
-              ) : <span className="spk-opt__icon" aria-hidden="true">{o.icon}</span>}
+              ) : <span className="spk-opt__icon" aria-hidden="true">{o.icon && <Icon as={o.icon} size="sm" />}</span>}
               <span>{o.text}</span>
               {o.hint && <span className="muted spk-opt__hint">{o.hint}</span>}
             </li>

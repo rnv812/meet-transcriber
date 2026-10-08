@@ -12,7 +12,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Pencil, Play, Sparkles, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ChevronDown, ChevronRight, Pencil, Play, X } from "lucide-react";
 import {
   ApiError, applyImprove, dismissImproveHint, getImprove, runImprove, undoSpeakers, type Endpoint,
 } from "../../lib/api";
@@ -20,8 +21,10 @@ import { clock, errorText, plural } from "../../lib/format";
 import type { ImproveGroup, ImproveState, Job, ModelChoice } from "../../lib/types";
 import { llmLabel, modelReady, originOf, retryText } from "../../lib/llm";
 import { isModelProgress } from "../../lib/progress";
+import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { IconButton } from "../../ui/IconButton";
 import { JobProgress } from "../../ui/JobProgress";
 import { improvedText } from "./speakers/staging";
 import { Callout } from "./Callout";
@@ -415,7 +418,7 @@ function Target({ group, value, onChange, onInvalid }: {
   if (editing) {
     return (
       <span className="improve__to improve__to--edit">
-        <input ref={input} className="improve__input" aria-label={`Как правильно: ${group.find}`} autoFocus value={draft}
+        <input ref={input} className="field field--sm improve__input" aria-label={`Как правильно: ${group.find}`} autoFocus value={draft}
           aria-invalid={problem ? true : undefined} aria-describedby={problem ? errorId : undefined}
           onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => setDraft(e.target.value)}
@@ -525,12 +528,12 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
     <button type="button" className="improve__exp" aria-expanded={expanded.has(key)}
       aria-label={`${expanded.has(key) ? "Скрыть" : "Показать"} места: ${label}`}
       onClick={() => setExpanded((x) => toggle(x, key))}>
-      {expanded.has(key) ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+      <Icon as={expanded.has(key) ? ChevronDown : ChevronRight} size="sm" />
     </button>
   );
 
   const failure = state?.state === "failed" ? (
-    <div className="card__error" role="alert" title={state.error || undefined}>
+    <div className="improve__error" role="alert" title={state.error || undefined}>
       Улучшение расшифровки не удалось{state.error ? `: ${state.error}` : ""}
       {groups.length > 0 && <span className="muted"> · ниже — прежний список</span>}
     </div>
@@ -560,9 +563,11 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
       <>
         <fieldset className="improve__scope">
           <legend className="sr-only">Что исправлять</legend>
-          <label><input type="radio" name="improve-scope" checked={scope === "terms"} onChange={() => setScope("terms")} />
+          <label className="check-row">
+            <input type="radio" className="rd" name="improve-scope" checked={scope === "terms"} onChange={() => setScope("terms")} />
             Только термины</label>
-          <label><input type="radio" name="improve-scope" checked={scope === "all"} onChange={() => setScope("all")} />
+          <label className="check-row">
+            <input type="radio" className="rd" name="improve-scope" checked={scope === "all"} onChange={() => setScope("all")} />
             Термины и явные ошибки распознавания</label>
         </fieldset>
         {!termGroups.length && scope === "terms" && (
@@ -580,7 +585,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                   {expander(g.id, g.find)}
                   {/* Флажок с «как распознано»; «как правильно» — рядом, своими кнопками (не внутри label). */}
                   <label className="improve__check improve__check--pair">
-                    <input type="checkbox" aria-label={`${g.find} → ${targetOf(g)}`} checked={!off.has(g.id)}
+                    <input type="checkbox" className="cb" aria-label={`${g.find} → ${targetOf(g)}`} checked={!off.has(g.id)}
                       onChange={() => setOff((x) => toggle(x, g.id))} />
                     <span className="improve__from">{g.find}</span>{" → "}
                   </label>
@@ -604,7 +609,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                         <ul className="improve__places" aria-label={`Ещё места: ${g.find}`}>
                           {more.map((x, k) => (
                             <li key={`${x.segment}:${x.offset}`}>
-                              <input type="checkbox" aria-label={`Заменить и здесь: ${clock(x.start)}`}
+                              <input type="checkbox" className="cb" aria-label={`Заменить и здесь: ${clock(x.start)}`}
                                 checked={extraOn.has(extraKey(g.id, k))}
                                 onChange={() => setExtraOn((on) => toggle(on, extraKey(g.id, k)))} />
                               {playable ? (
@@ -628,7 +633,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
               <div className="improve__row">
                 {expander("fix", "Прочие исправления")}
                 <label className="improve__check">
-                  <input type="checkbox" checked={fixChosen.length === fixGroups.length}
+                  <input type="checkbox" className="cb" checked={fixChosen.length === fixGroups.length}
                     ref={(el) => { if (el) el.indeterminate = fixChosen.length > 0 && fixChosen.length < fixGroups.length; }}
                     onChange={(e) => setFixesOn(e.target.checked ? new Set(fixGroups.map((g) => g.id)) : new Set())} />
                   <span className="improve__pair">Прочие исправления</span>
@@ -641,7 +646,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                     <li key={g.id}>
                       <div className="improve__row">
                         <label className="improve__check improve__check--pair">
-                          <input type="checkbox" aria-label={`${g.find} → ${targetOf(g)}`} checked={fixesOn.has(g.id)}
+                          <input type="checkbox" className="cb" aria-label={`${g.find} → ${targetOf(g)}`} checked={fixesOn.has(g.id)}
                             onChange={() => setFixesOn((x) => toggle(x, g.id))} />
                           <span className="improve__from">{g.find}</span>{" → "}
                         </label>
@@ -657,8 +662,8 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
           )}
         </ul>
         <div className="improve__opts">
-          <label className="tfix__check">
-            <input type="checkbox" checked={rules} onChange={(e) => setRules(e.target.checked)} />
+          <label className="check-row improve__opt">
+            <input type="checkbox" className="cb" checked={rules} onChange={(e) => setRules(e.target.checked)} />
             <span>Запомнить как правила для будущих встреч</span>
             <HelpTip label="Как работают правила для будущих встреч" title="Правила для будущих встреч">
               <TipLine>Каждая новая расшифровка сразу после распознавания заменит выбранные термины так же: целые
@@ -667,8 +672,8 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
               <TipLine>Список правил — «Настройки → Словарь», там их можно удалить.</TipLine>
             </HelpTip>
           </label>
-          <label className="tfix__check">
-            <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} />
+          <label className="check-row improve__opt">
+            <input type="checkbox" className="cb" checked={terms} onChange={(e) => setTerms(e.target.checked)} />
             <span>Добавить в термины</span>
             <HelpTip label="Что такое термины распознавания" title="Термины распознавания">
               <TipLine>Правильные написания выбранных терминов (не исправлений обычных слов) попадут в список терминов распознавания («Настройки → Словарь»):
@@ -681,34 +686,36 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   }
 
   const ready = (state?.state === "ready" || state?.state === "failed") && groups.length > 0;
-  return (
-    <div className="modal" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal__box improve" role="dialog" aria-modal="true" aria-labelledby="improve-title">
-        <div className="redia__head">
-          <h3 id="improve-title" tabIndex={-1} ref={title}>
-            <Sparkles size={15} strokeWidth={1.75} aria-hidden="true" className="improve__star" />Улучшить расшифровку
-          </h3>
-          <button type="button" className="spk__close" aria-label="Закрыть" onClick={onClose}><Icon as={X} size="sm" /></button>
+  // Лист Aurora 560 по центру на затемнении — поверх всего окна (в body): у предков
+  // карточки может быть свой слой, а тосты остаются выше (--z-toast > --z-overlay).
+  return createPortal(
+    <div className="backdrop backdrop--modal confirm-layer" role="presentation"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="sheet improve" role="dialog" aria-modal="true" aria-labelledby="improve-title">
+        <div className="improve__head">
+          <AgentMark size={18} />
+          <h3 id="improve-title" tabIndex={-1} ref={title}>Улучшить расшифровку</h3>
+          <IconButton icon={X} label="Закрыть" onClick={onClose} />
         </div>
-        <p className="muted redia__lead">
+        <p className="improve__lead">
           ИИ ищет неверно распознанные термины и предлагает замены. Меняются только эти слова: фразы не
           переписываются, спикеры не меняются. Применённое можно отменить в истории изменений.
         </p>
-        {error && <div className="card__error" role="alert">{error}</div>}
+        {error && <div className="improve__error" role="alert">{error}</div>}
         {state?.state === "failed" && groups.length > 0 && failure}
         {content}
         <div className="improve__foot">
           {(state?.state === "ready" || state?.state === "failed" || (state?.state === "none" && !busy)) && onRerun ? (
-            <button type="button" className="link-btn" onClick={onRerun} disabled={busy}>Проверить заново</button>
+            <Button variant="link" className="improve__rerun" onClick={onRerun} disabled={busy}>Проверить заново</Button>
           ) : <span />}
           <span className="improve__btns">
             {ready && invalid.size > 0 && <span id="improve-apply-why" className="improve__why">{APPLY_WAITS}</span>}
             {ready && total > 0 && invalid.size === 0 && (
               <span className="muted improve__total">Будет заменено: {total} {placesWord(total)}</span>
             )}
-            <Button onClick={onClose}>{ready ? "Отмена" : "Закрыть"}</Button>
+            <Button variant="ghost" size="md" onClick={onClose}>{ready ? "Отмена" : "Закрыть"}</Button>
             {ready && (
-              <Button variant="primary" disabled={busy || !total || invalid.size > 0}
+              <Button variant="primary" size="md" disabled={busy || !total || invalid.size > 0}
                 aria-describedby={invalid.size > 0 ? "improve-apply-why" : undefined}
                 onClick={() => (Object.keys(sent).length
                   ? onApply(chosen.map((g) => g.id), extra, rules, terms, sent)
@@ -717,6 +724,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
           </span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

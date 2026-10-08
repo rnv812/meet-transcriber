@@ -11,6 +11,7 @@ import type { SpeakerStep } from "../../../lib/types";
 import { describeStep, stepTime } from "./staging";
 import { Icon } from "../../../ui/Icon";
 import { ConfirmDialog } from "../../../ui/ConfirmDialog";
+import { IconButton } from "../../../ui/IconButton";
 
 /** Сколько шагов хранит резидент (meet/speakers.py, HISTORY_MAX). */
 export const HISTORY_MAX = 50;
@@ -42,10 +43,10 @@ export function HistoryTools({ canUndo, canRedo, onUndo, onRedo }: {
 }) {
   return (
     <>
-      <button type="button" className="spk__tool" onClick={onUndo} disabled={!canUndo}
-        aria-keyshortcuts="Control+Z" title="Отменить (Ctrl+Z)"><Icon as={Undo2} size="sm" />Отменить</button>
-      <button type="button" className="spk__tool" onClick={onRedo} disabled={!canRedo}
-        aria-keyshortcuts="Control+Shift+Z" title="Повторить (Ctrl+Shift+Z)"><Icon as={Redo2} size="sm" />Повторить</button>
+      <IconButton icon={Undo2} label="Отменить" tooltip="Отменить (Ctrl+Z)" onClick={onUndo} disabled={!canUndo}
+        aria-keyshortcuts="Control+Z" />
+      <IconButton icon={Redo2} label="Повторить" tooltip="Повторить (Ctrl+Shift+Z)" onClick={onRedo} disabled={!canRedo}
+        aria-keyshortcuts="Control+Shift+Z" />
     </>
   );
 }

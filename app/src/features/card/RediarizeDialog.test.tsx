@@ -113,3 +113,20 @@ test("устаревший результат применить нельзя; �
   rerender({ jobs: [job("failed")] });
   expect(await screen.findByRole("alert")).toHaveTextContent("нет доступа к модели");
 });
+
+test("окно — лист Aurora по центру на затемнении: поверх окна (в body), щелчок по затемнению и ✕ закрывают", async () => {
+  const { onClose } = setup();
+  const sheet = screen.getByRole("dialog", { name: "Переразделить на спикеров" });
+  expect(sheet).toHaveClass("sheet");
+  expect(sheet).toHaveAttribute("aria-modal", "true");
+  const layer = sheet.parentElement!;
+  expect(layer).toHaveClass("backdrop", "backdrop--modal");
+  expect(layer.parentElement).toBe(document.body);
+  expect(screen.getByRole("heading", { name: "Переразделить на спикеров" })).toHaveFocus();
+  fireEvent.mouseDown(sheet);
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.mouseDown(layer);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await userEvent.click(within(sheet).getByRole("button", { name: "Закрыть" }));
+  expect(onClose).toHaveBeenCalledTimes(2);
+});

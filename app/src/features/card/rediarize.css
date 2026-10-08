@@ -1,0 +1,25 @@
+/* «Переразделить на спикеров»: лист Aurora 560 по центру на затемнении (как «Улучшить расшифровку»). */
+.sheet.redia {
+  width: min(560px, 100%); max-height: calc(100vh - 2 * var(--s-4)); overflow-y: auto;
+  padding: var(--s-6); gap: 14px; font-size: var(--text-sm); color: var(--ink);
+}
+.redia__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.redia__head h3 { flex: 1; min-width: 0; }
+.redia__head h3:focus { outline: none; } /* фокус ставится программно при открытии */
+.sheet .redia__lead { font-size: var(--text-sm); line-height: 1.45; }
+.sheet .redia__hint { font-size: var(--text-xs); line-height: 1.45; }
+.redia__error { color: var(--danger); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
+.redia__warn { color: var(--warning); font-size: var(--text-sm); line-height: 1.45; }
+.redia__form, .redia__work, .redia__preview { display: flex; flex-direction: column; gap: 12px; }
+.redia__count { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; border: 0; }
+.redia__count legend { margin-bottom: 6px; padding: 0; color: var(--ink); font-weight: 500; }
+.redia__count .check-row { gap: 8px; font-size: var(--text-sm); }
+.field.redia__n { width: 64px; padding-right: 4px; }
+.redia__sens { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.redia__sens > label { color: var(--ink); font-weight: 500; }
+.redia__slider { display: flex; flex-basis: 100%; align-items: center; gap: 8px; font-size: var(--text-xs); }
+.redia__slider input { flex: 1; accent-color: var(--accent); }
+.sheet .redia__summary { color: var(--ink); line-height: 1.5; }
+.redia__list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.redia__list .spk-row { margin-top: 0; gap: 4px; }
+.redia__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }

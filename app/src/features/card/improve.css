@@ -1,85 +1,83 @@
-/* «Улучшить расшифровку»: подсказка в карточке и окно со списком замен. */
-.improve-hint__icon { flex: none; color: var(--accent-hi); }
-
-.improve { width: min(600px, 100%); }
-.improve__star { margin-right: 6px; vertical-align: -2px; color: var(--accent-hi); }
+/* «Улучшить расшифровку»: лист Aurora 560 по центру (макет «Диалог „Улучшить“») — список замен. */
+.sheet.improve {
+  width: min(560px, 100%); max-height: calc(100vh - 2 * var(--s-4)); overflow-y: auto;
+  padding: var(--s-6); gap: 14px; font-size: var(--text-sm); color: var(--ink);
+}
+.improve__head { display: flex; align-items: center; gap: 8px; }
+.improve__head .agent-mark { color: var(--ink); }
+.improve__head h3 { flex: 1; min-width: 0; }
+.improve__head h3:focus { outline: none; } /* фокус ставится программно при открытии */
+.sheet .improve__lead { font-size: var(--text-sm); line-height: 1.45; }
+.improve__error { color: var(--danger); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 .improve__work { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.improve__hint, .improve__empty { margin: 0; font-size: 12px; line-height: 1.45; }
-.improve__empty { font-size: 13px; }
+.sheet .improve__hint { font-size: var(--text-xs); line-height: 1.45; }
+.sheet .improve__empty { color: var(--ink); font-size: var(--text-sm); line-height: 1.45; }
 
-.improve__scope { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; border: 0; }
-.improve__scope label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.improve__scope { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 0; border: 0; }
+.improve__scope .check-row { gap: 8px; font-size: var(--text-sm); }
 
 .improve__groups, .improve__fixes, .improve__places { list-style: none; margin: 0; padding: 0; }
 .improve__groups {
   display: flex; flex-direction: column; max-height: 44vh; overflow-y: auto;
-  border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--bg);
+  border: 1px solid var(--hairline); border-radius: var(--r-md);
 }
-.improve__group { padding: 6px 8px; }
-.improve__group + .improve__group { border-top: 1px solid var(--line); }
-.improve__row { display: flex; align-items: center; gap: 4px; }
+.improve__group { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.improve__group + .improve__group { border-top: 1px solid var(--hairline); }
+/* Строка группы: флажок с «как распознано», рядом — «как правильно» своими кнопками. */
+.improve__row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font-size: var(--text-ui); }
 .improve__exp {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
-  padding: 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-2); cursor: pointer;
+  padding: 0; border: 0; border-radius: var(--r-xs); background: none; color: var(--ink-3); cursor: pointer;
+  transition: background var(--d), color var(--d);
 }
-.improve__exp:hover { background: var(--surface-hover); color: var(--text); }
-.improve__check { display: flex; flex: 1; min-width: 0; align-items: baseline; gap: 6px; cursor: pointer; }
-.improve__check input { align-self: center; }
-.improve__pair { min-width: 0; overflow-wrap: anywhere; }
-.improve__from { color: var(--text-2); }
-/* Строка группы: флажок с «как распознано», рядом — «как правильно» своими кнопками. */
-.improve__row { flex-wrap: wrap; row-gap: 2px; }
+.improve__exp:hover { background: var(--surface-2); color: var(--ink); }
+.improve__check { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; cursor: pointer; }
 .improve__check--pair { flex: 0 1 auto; }
+.improve__pair { min-width: 0; overflow-wrap: anywhere; }
+.improve__from { color: var(--ink-2); }
 .improve__to { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; min-width: 0; }
 .improve__target {
-  min-width: 0; padding: 0 2px; margin: 0 -2px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--text); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: text;
+  min-width: 0; padding: 0 2px; margin: 0 -2px; border: 0; border-radius: var(--r-xs); background: none;
+  color: var(--ink); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: text;
 }
-.improve__target:hover { background: var(--surface-hover); }
+.improve__target strong { font-weight: 600; }
+.improve__target:hover { background: var(--surface-2); }
 .improve__pen {
-  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
-  align-self: center; padding: 0; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--text-3); cursor: pointer; opacity: 0.6; transition: opacity var(--t), background var(--t);
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  align-self: center; padding: 0; border: 0; border-radius: var(--r-xs); background: none;
+  color: var(--ink-3); cursor: pointer; opacity: 0.6; transition: opacity var(--d), background var(--d);
 }
 .improve__row:hover .improve__pen, .improve__pen:focus-visible { opacity: 1; }
-.improve__pen:hover { background: var(--surface-hover); color: var(--text); }
+.improve__pen:hover { background: var(--surface-2); color: var(--ink); }
 .improve__edited {
-  padding: 0 5px; border: 1px solid var(--line-2); border-radius: 8px; color: var(--text-2);
-  font-size: 11px; line-height: 16px;
+  padding: 0 6px; border-radius: var(--r-xs); background: var(--surface-3); color: var(--ink-2);
+  font-size: 11px; line-height: 18px;
 }
 .improve__revert { align-self: baseline; }
-.improve__same { font-size: 12px; }
+.improve__same { font-size: var(--text-xs); }
 .improve__to--edit { flex: 1 1 160px; flex-direction: column; align-items: stretch; gap: 2px; }
-.improve__input {
-  height: 24px; padding: 0 6px; min-width: 0; background: var(--surface); color: var(--text);
-  border: 1px solid var(--accent); border-radius: var(--r-sm); font: inherit; font-weight: 600;
-}
-.improve__input:focus { outline: none; }
-.improve__input[aria-invalid="true"] { border-color: var(--err); }
-.improve__err { color: var(--err); font-size: 11px; }
+.field.improve__input { width: auto; min-width: 0; font-weight: 600; }
+.improve__err { color: var(--danger); font-size: var(--text-xs); }
 
-.improve__places { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 2px 26px; font-size: 12px; }
+.improve__places { display: flex; flex-direction: column; gap: 4px; margin: 0 0 2px 30px; font-size: var(--text-sm); }
 .improve__places li { display: flex; align-items: baseline; gap: 8px; line-height: 1.45; }
-.improve__play { flex: none; }
-.improve__ctx { min-width: 0; overflow-wrap: anywhere; color: var(--text-2); }
-.improve__fixes { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 2px 26px; }
+.improve__play { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+.improve__ctx { min-width: 0; overflow-wrap: anywhere; color: var(--ink-2); }
+.improve__ctx mark.hit { color: var(--ink); }
+.improve__fixes { display: flex; flex-direction: column; gap: 8px; margin: 0 0 2px 30px; }
 .improve__fixes .improve__places { margin-left: 0; }
-
-.improve__opts { display: flex; flex-direction: column; gap: 4px; }
-.improve__foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
-.improve__btns { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
-.improve__total { font-size: 12px; }
-.improve__why { color: var(--err); font-size: 12px; }
-
-.find__tool {
-  flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px;
-  border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface-2); color: var(--text);
-  font: inherit; font-size: 12px; cursor: pointer; transition: background var(--t);
-}
-.find__tool:hover:not(:disabled) { background: var(--surface-hover); }
-.find__tool:disabled { opacity: 0.45; cursor: default; }
-.find__tool svg { color: var(--accent-hi); }
-.improve__more { margin: 6px 0 2px 26px; padding-top: 6px; border-top: 1px dashed var(--line); }
-.improve__more-head { font-size: 12px; margin-bottom: 4px; }
+.improve__more { margin: 2px 0 2px 30px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
+.improve__more-head { font-size: var(--text-xs); margin-bottom: 4px; }
 .improve__more .improve__places { margin-left: 0; }
-.improve__more .improve__places input { align-self: center; margin: 0; accent-color: var(--accent); }
+.improve__more .improve__places .cb { align-self: center; }
+
+.improve__opts { display: flex; flex-direction: column; gap: 2px; }
+.improve__opt { gap: 8px; font-size: var(--text-sm); }
+/* Подвал: «Проверить заново» слева, кнопки справа; итог («Будет заменено…») или причина,
+   почему применить нельзя, — строкой над кнопками: в 560 всё в одну строку не помещается. */
+.improve__foot { display: flex; align-items: flex-end; gap: 8px; }
+.improve__rerun { flex: none; margin-bottom: 10px; font-size: var(--text-sm); }
+.improve__btns { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 8px; }
+.improve__total, .improve__why { flex-basis: 100%; text-align: right; font-size: var(--text-xs); }
+.improve__total { color: var(--ink-3); }
+.improve__why { color: var(--danger); }

@@ -311,3 +311,32 @@ test("без отпечатка вашего голоса у встречи фл
   await userEvent.click(screen.getByRole("button", { name: "Применить" }));
   expect(api.applySpeakers).toHaveBeenCalledWith(ep, "r1", [{ type: "rename", label: "Спикер 3", to: "Вы" }], {}, false);
 });
+
+test("панель — правая выдвижная панель Aurora: заголовок с «Отменить»/«Повторить»/«Закрыть», подвал «Сбросить / Применить»", async () => {
+  const { onClose } = setup();
+  const panel = screen.getByRole("dialog", { name: "Спикеры встречи" });
+  expect(panel).toHaveClass("drawer");
+  // Не модальная: расшифровка рядом остаётся доступной.
+  expect(panel).toHaveAttribute("aria-modal", "false");
+  expect(within(panel).getByRole("heading", { level: 3, name: "Спикеры встречи" })).toBeInTheDocument();
+  const undo = within(panel).getByRole("button", { name: "Отменить" });
+  expect(undo).toHaveAttribute("title", "Отменить (Ctrl+Z)");
+  expect(undo).toHaveAttribute("aria-keyshortcuts", "Control+Z");
+  expect(undo).toBeDisabled();
+  const redo = within(panel).getByRole("button", { name: "Повторить" });
+  expect(redo).toHaveAttribute("title", "Повторить (Ctrl+Shift+Z)");
+  expect(redo).toBeDisabled();
+  const close = within(panel).getByRole("button", { name: "Закрыть панель спикеров" });
+  expect(close).toHaveAttribute("title", "Закрыть (Esc)");
+
+  // Карточки спикеров; подвал — только когда есть наметки.
+  await screen.findByRole("region", { name: /^Спикер 2/ });
+  expect(within(panel).queryByRole("button", { name: "Сбросить" })).toBeNull();
+  await userEvent.click(within(rowOf("Спикер 2")).getByRole("button", { name: "Это Анна Смирнова, сходство 87%" }));
+  expect(within(panel).getByRole("button", { name: "Применить" })).toHaveClass("btn--primary");
+  await userEvent.click(within(panel).getByRole("button", { name: "Сбросить" }));
+  expect(within(panel).queryByRole("button", { name: "Применить" })).toBeNull();
+
+  await userEvent.click(close);
+  expect(onClose).toHaveBeenCalled();
+});

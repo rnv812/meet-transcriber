@@ -78,7 +78,7 @@ export function ThresholdBox({ endpoint, recordingId, own, fallback, busy, onApp
               <TipLine>Здесь порог меняется только для этой встречи; общий порог — в настройках, раздел «Спикеры». Спикеров, названных вручную, он не меняет.</TipLine>
             </HelpTip>
           </div>
-          {error && <div className="card__error" role="alert">{error}</div>}
+          {error && <div className="spk__err" role="alert">{error}</div>}
           {changes && (
             <div className="spk-thr__plan" aria-live="polite">
               {changes.length === 0 ? (
@@ -97,7 +97,7 @@ export function ThresholdBox({ endpoint, recordingId, own, fallback, busy, onApp
           )}
           <div className="spk__actions">
             {value !== fallback && (
-              <Button onClick={() => setValue(fallback)} disabled={busy || working}>Как в настройках</Button>
+              <Button variant="ghost" onClick={() => setValue(fallback)} disabled={busy || working}>Как в настройках</Button>
             )}
             <Button variant="primary" onClick={() => void apply()} disabled={busy || working || value === current && !changes?.length}>
               Применить

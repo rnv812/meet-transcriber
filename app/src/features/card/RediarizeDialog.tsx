@@ -10,6 +10,7 @@
 
 import { Play, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   applyRediarized, cancelJob, discardRediarized, getRediarized, rediarize, type Endpoint,
 } from "../../lib/api";
@@ -21,6 +22,9 @@ import { JobProgress } from "../../ui/JobProgress";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Icon } from "../../ui/Icon";
+import { IconButton } from "../../ui/IconButton";
+import "./speakers/speakers.css";
+import "./rediarize.css";
 
 const PHRASE_S = 6;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -164,17 +168,20 @@ export function RediarizeDialog({
   }, [onClose]);
   const who = twoTrack ? "собеседников" : "участников";
 
-  return (
-    <div className="modal" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal__box redia" role="dialog" aria-modal="true" aria-labelledby="redia-title" ref={box}>
+  // Лист Aurora по центру на затемнении — поверх всего окна (в body): у предков
+  // карточки может быть свой слой, а тосты остаются выше (--z-toast > --z-overlay).
+  return createPortal(
+    <div className="backdrop backdrop--modal confirm-layer" role="presentation"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="sheet redia" role="dialog" aria-modal="true" aria-labelledby="redia-title" ref={box}>
         <div className="redia__head">
           <h3 id="redia-title" tabIndex={-1}>Переразделить на спикеров</h3>
-          <button type="button" className="spk__close" aria-label="Закрыть" onClick={onClose}><Icon as={X} size="sm" /></button>
+          <IconButton icon={X} label="Закрыть" onClick={onClose} />
         </div>
-        <p className="muted redia__lead">
+        <p className="redia__lead">
           Заново определяется, кто говорит, — по звуку записи. Текст расшифровки не меняется и повторно не распознаётся.
         </p>
-        {error && <div className="card__error" role="alert">{error}</div>}
+        {error && <div className="redia__error" role="alert">{error}</div>}
 
         {phase.kind === "form" && (
           <div className="redia__form">
@@ -182,24 +189,25 @@ export function RediarizeDialog({
               <legend>
                 {twoTrack ? "Сколько собеседников было на звонке (без вас)" : "Сколько человек говорило"}
               </legend>
-              <label><input type="radio" name="redia-count" checked={count === "auto"} onChange={() => setCount("auto")} />
+              <label className="check-row">
+                <input type="radio" className="rd" name="redia-count" checked={count === "auto"} onChange={() => setCount("auto")} />
                 Определить автоматически</label>
-              <label>
-                <input type="radio" name="redia-count" checked={count === "exact"} onChange={() => setCount("exact")} />
+              <label className="check-row">
+                <input type="radio" className="rd" name="redia-count" checked={count === "exact"} onChange={() => setCount("exact")} />
                 Точно:
-                <input type="number" min={1} max={20} className="num redia__n" aria-label={`Число ${who}`} value={exact}
+                <input type="number" min={1} max={20} className="field field--sm num redia__n" aria-label={`Число ${who}`} value={exact}
                   disabled={count !== "exact"} onChange={(e) => setExact(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
               </label>
-              <label>
-                <input type="radio" name="redia-count" checked={count === "range"} onChange={() => setCount("range")} />
+              <label className="check-row">
+                <input type="radio" className="rd" name="redia-count" checked={count === "range"} onChange={() => setCount("range")} />
                 От
-                <input type="number" min={1} max={20} className="num redia__n" aria-label={`Наименьшее число ${who}`} value={low}
+                <input type="number" min={1} max={20} className="field field--sm num redia__n" aria-label={`Наименьшее число ${who}`} value={low}
                   disabled={count !== "range"} onChange={(e) => setLow(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
                 до
-                <input type="number" min={1} max={20} className="num redia__n" aria-label={`Наибольшее число ${who}`} value={high}
+                <input type="number" min={1} max={20} className="field field--sm num redia__n" aria-label={`Наибольшее число ${who}`} value={high}
                   disabled={count !== "range"} onChange={(e) => setHigh(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
               </label>
-              {invalid && <span className="card__error">Наименьшее число больше наибольшего</span>}
+              {invalid && <span className="redia__error">Наименьшее число больше наибольшего</span>}
             </fieldset>
             <div className="redia__sens">
               <label htmlFor="redia-sens">Чувствительность разделения</label>
@@ -219,8 +227,8 @@ export function RediarizeDialog({
             </div>
             <p className="muted redia__hint">Займёт несколько минут на час записи. Окно можно закрыть: результат сохранится до вашего решения.</p>
             <div className="redia__actions">
-              <Button onClick={onClose}>Отмена</Button>
-              <Button variant="primary" disabled={busy || invalid} onClick={() => void start()}>Запустить</Button>
+              <Button variant="ghost" size="md" onClick={onClose}>Отмена</Button>
+              <Button variant="primary" size="md" disabled={busy || invalid} onClick={() => void start()}>Запустить</Button>
             </div>
           </div>
         )}
@@ -230,8 +238,8 @@ export function RediarizeDialog({
             {job && job.state === "running" ? <JobProgress job={job} />
               : <ProgressBar value={null} label="В очереди" />}
             <div className="redia__actions">
-              <Button onClick={onClose}>Скрыть</Button>
-              <Button onClick={() => void cancel()}>Отменить</Button>
+              <Button variant="ghost" size="md" onClick={onClose}>Скрыть</Button>
+              <Button size="md" onClick={() => void cancel()}>Отменить</Button>
             </div>
           </div>
         )}
@@ -239,7 +247,7 @@ export function RediarizeDialog({
         {phase.kind === "preview" && (
           <div className="redia__preview">
             {phase.preview.stale ? (
-              <div className="spk__warn" role="status">
+              <div className="redia__warn" role="status">
                 Расшифровку изменили после расчёта — запустите переразделение заново.
               </div>
             ) : (
@@ -285,14 +293,15 @@ export function RediarizeDialog({
             )}
             {/* Кнопки остаются на месте: после «Отмена» фокус вернётся на них. */}
             <div className="redia__actions">
-              <Button onClick={() => setAskDiscard("again")} disabled={busy}>Другие параметры…</Button>
-              <Button onClick={() => setAskDiscard("close")} disabled={busy}>Отказаться…</Button>
-              <Button variant="primary" onClick={() => void apply()}
+              <Button variant="ghost" size="md" onClick={() => setAskDiscard("again")} disabled={busy}>Другие параметры…</Button>
+              <Button size="md" onClick={() => setAskDiscard("close")} disabled={busy}>Отказаться…</Button>
+              <Button variant="primary" size="md" onClick={() => void apply()}
                 disabled={busy || phase.preview.stale}>Применить</Button>
             </div>
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

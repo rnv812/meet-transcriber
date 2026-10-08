@@ -19,13 +19,14 @@ import {
 import {
   applySpeakers, getSpeakers, redoSpeakers, revertSpeakers, undoSpeakers, type Endpoint,
 } from "../../../lib/api";
-import { Play, X } from "lucide-react";
+import { CircleHelp, Play, Plus, UserRound, X } from "lucide-react";
 import { clock, errorText, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
 import type { Job, SpeakerRow, SpeakersView } from "../../../lib/types";
 import { Avatar } from "../../../ui/Avatar";
 import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
+import { IconButton } from "../../../ui/IconButton";
 import type { PersonColor } from "../Turns";
 import { HistoryList, HistoryTools, useUndoKeys } from "./SpeakerHistory";
 import { MicRemoved } from "./MicRemoved";
@@ -36,6 +37,7 @@ import {
 } from "./staging";
 import "./speakers.css";
 import { Icon } from "../../../ui/Icon";
+import { BADGE_CLASS } from "../../../ui/badge";
 
 /** Сколько секунд играет фраза по ▶. */
 export const PHRASE_S = 6;
@@ -262,19 +264,18 @@ export function SpeakersPanel({
   };
 
   return (
-    <aside className="spk" role="dialog" aria-modal="false" aria-label="Спикеры встречи" hidden={!open}
+    // Правая выдвижная панель Aurora (стекло) поверх карточки; не модальная: на
+    // широкой карточке расшифровка остаётся видна и доступна рядом.
+    <aside className="drawer spk" role="dialog" aria-modal="false" aria-label="Спикеры встречи" hidden={!open}
       ref={aside} onKeyDown={onPanelKey}>
       <div className="spk__head">
         <h3 className="spk__title" ref={heading} tabIndex={-1}>Спикеры встречи</h3>
-        <div className="spk__tools">
-          <HistoryTools canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
-          <button type="button" className="spk__close" onClick={onClose} aria-label="Закрыть панель спикеров"
-            title="Закрыть (Esc)"><Icon as={X} size="sm" /></button>
-        </div>
+        <HistoryTools canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
+        <IconButton icon={X} label="Закрыть панель спикеров" tooltip="Закрыть (Esc)" onClick={onClose} />
       </div>
-      {error && <div className="card__error spk__msg" role="alert">{error}</div>}
+      {error && <div className="spk__msg spk__err" role="alert">{error}</div>}
       {warning && <div className="spk__msg spk__warn" role="status">{warning}</div>}
-      {notice && <div className="spk__msg spk__ok muted" role="status">{notice}</div>}
+      {notice && <div className="spk__msg muted" role="status">{notice}</div>}
       <div className="spk__body">
         {split && view && (
           <SplitView key={split} endpoint={endpoint} recordingId={recordingId} label={split}
@@ -315,8 +316,8 @@ export function SpeakersPanel({
           </div>
           <div className="spk__note muted">Итоги не пересчитываются автоматически</div>
           <div className="spk__actions">
-            <Button onClick={discard} disabled={busy}>Сбросить</Button>
-            <Button variant="primary" onClick={apply} disabled={busy}>Применить</Button>
+            <Button variant="ghost" size="md" onClick={discard} disabled={busy}>Сбросить</Button>
+            <Button variant="primary" size="md" onClick={apply} disabled={busy}>Применить</Button>
           </div>
         </div>
       )}
@@ -363,7 +364,7 @@ function SpeakerRowView({
       className={`spk-row${focused ? " spk-row--focus" : ""}${change ? " spk-row--staged" : ""}`}>
       <div className="spk-row__head">
         <Avatar name={row.label} color={person?.color} hasAvatar={person?.has_avatar}
-          version={avatarVersion?.[row.label]} size={32} endpoint={endpoint} />
+          version={avatarVersion?.[row.label]} size={28} endpoint={endpoint} />
         <div className="spk-row__who">
           <div className="spk-row__name" id={titleId}>
             <span className={isUnnamed(row.label) ? "spk-row__label--unnamed" : ""}>{row.label}</span>
@@ -373,8 +374,11 @@ function SpeakerRowView({
           <div className="spk-row__stats muted num">
             {pct(row.share)} времени · {row.turns} {plural(row.turns, "реплика", "реплики", "реплик")}
           </div>
-          <div className="spk-row__bar" aria-hidden="true"><span style={{ width: pct(row.share) }} /></div>
         </div>
+        <Button size="sm" aria-expanded={pick === "assign"} onClick={() => onPick("assign")}>Назначить…</Button>
+      </div>
+      <div className="spk-row__bar" aria-hidden="true">
+        <span style={{ width: pct(row.share), background: person?.color }} />
       </div>
 
       {row.samples.length > 0 && (
@@ -399,35 +403,34 @@ function SpeakerRowView({
             const p = people.find((x) => x.name === s.name);
             const same = finalOf(row.label, staged) === s.name;
             return (
-              <button key={s.name} type="button" className={`spk-sug${same ? " spk-sug--on" : ""}`}
+              <Button key={s.name} variant="tonal" size="sm" className="spk-sug"
                 aria-pressed={same} aria-label={`Это ${s.name}, сходство ${pct(s.score)}`}
                 onClick={() => onStage(same ? null : { kind: "rename", to: s.name })}>
                 <Avatar name={s.name} color={p?.color} hasAvatar={p?.has_avatar} version={avatarVersion?.[s.name]}
                   size={18} endpoint={endpoint} />
                 <span>{s.name}</span>
                 <span className="spk-sug__score num">{pct(s.score)}</span>
-              </button>
+              </Button>
             );
           })}
         </div>
       )}
 
-      <div className="spk-row__actions">
-        <button type="button" className="spk-btn" aria-expanded={pick === "assign"} onClick={() => onPick("assign")}>
-          Назначить…
-        </button>
-        {rows.length > 1 && (
-          <button type="button" className="spk-btn" aria-expanded={pick === "merge"} onClick={() => onPick("merge")}>
-            Объединить с…
-          </button>
-        )}
-        {row.turns > 1 && !change && (
-          <button type="button" className="spk-btn" onClick={onSplit} title="Под этим спикером оказались разные люди">
-            Разделить…
-          </button>
-        )}
-        {change && <button type="button" className="spk-link" onClick={() => onStage(null)}>Убрать правку</button>}
-      </div>
+      {(rows.length > 1 || row.turns > 1 || change) && (
+        <div className="spk-row__actions">
+          {rows.length > 1 && (
+            <Button variant="ghost" size="xs" aria-expanded={pick === "merge"} onClick={() => onPick("merge")}>
+              Объединить с…
+            </Button>
+          )}
+          {row.turns > 1 && !change && (
+            <Button variant="ghost" size="xs" onClick={onSplit} title="Под этим спикером оказались разные люди">
+              Разделить…
+            </Button>
+          )}
+          {change && <button type="button" className="spk-link" onClick={() => onStage(null)}>Убрать правку</button>}
+        </div>
+      )}
 
       {pick === "assign" && (
         <AssignPicker row={row} owner={owner} people={people} suggestions={row.suggestions.map((s) => s.name)}
@@ -455,7 +458,7 @@ function SpeakerRowView({
 
       {remember !== null && (
         <label className="spk-row__remember">
-          <input type="checkbox" checked={remember} onChange={(e) => onRemember(e.target.checked)} />
+          <input type="checkbox" className="cb" checked={remember} onChange={(e) => onRemember(e.target.checked)} />
           Запомнить голос
           <HelpTip label="Что значит «Запомнить голос»" title="Запомнить голос">
             <TipLine>Голос этого спикера будет записан под новым именем и убран у прежнего.</TipLine>
@@ -469,7 +472,8 @@ function SpeakerRowView({
       )}
       {rememberOwner !== null && (
         <label className="spk-row__remember">
-          <input type="checkbox" checked={rememberOwner} onChange={(e) => onRememberOwner(e.target.checked)} />
+          <input type="checkbox" className="cb" checked={rememberOwner}
+            onChange={(e) => onRememberOwner(e.target.checked)} />
           Запомнить мой голос
           <HelpTip label="Что значит «Запомнить мой голос»" title="Запомнить мой голос">
             <TipLine>Отпечаток вашего голоса из этой встречи поможет отличать вас от людей рядом, которых слышит ваш микрофон.</TipLine>
@@ -485,10 +489,12 @@ function SpeakerRowView({
 /** Где звучит спикер записи звонка: у микрофона, но не владелец, — человек рядом с ним в комнате. */
 function trackBadge(track: SpeakerRow["track"]) {
   if (track === "mic") {
-    return <span className="spk-badge" title="Говорил в ваш микрофон: человек рядом с вами">в комнате</span>;
+    return <span className={`${BADGE_CLASS.plain} spk-badge`} title="Говорил в ваш микрофон: человек рядом с вами">в комнате</span>;
   }
   if (track === "mixed") {
-    return <span className="spk-badge" title="Слышен и в звонке, и в вашем микрофоне">в звонке и в комнате</span>;
+    return (
+      <span className={`${BADGE_CLASS.plain} spk-badge`} title="Слышен и в звонке, и в вашем микрофоне">в звонке и в комнате</span>
+    );
   }
   return null;
 }
@@ -543,7 +549,7 @@ function AssignPicker({ row, owner, people, suggestions, avatarVersion, endpoint
 
   return (
     <div className="spk-pick">
-      <input className="spk-pick__input" role="combobox" aria-label={`Кто это: ${row.label}`} autoFocus
+      <input className="field field--sm spk-pick__input" role="combobox" aria-label={`Кто это: ${row.label}`} autoFocus
         aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
         aria-activedescendant={options[at] ? `${listId}-${at}` : undefined}
         placeholder="Имя или поиск по базе голосов" value={text}
@@ -557,7 +563,11 @@ function AssignPicker({ row, owner, people, suggestions, avatarVersion, endpoint
             {o.person ? (
               <Avatar name={o.person.name} color={o.person.color} hasAvatar={o.person.has_avatar}
                 version={avatarVersion?.[o.person.name]} size={18} endpoint={endpoint} />
-            ) : <span className="spk-opt__icon" aria-hidden="true">{o.key === "new" ? "＋" : o.key === "me" ? "●" : "?"}</span>}
+            ) : (
+              <span className="spk-opt__icon" aria-hidden="true">
+                <Icon as={o.key === "new" ? Plus : o.key === "me" ? UserRound : CircleHelp} size="sm" />
+              </span>
+            )}
             <span>{o.text}</span>
             {o.hint && <span className="muted spk-opt__hint">{o.hint}</span>}
           </li>

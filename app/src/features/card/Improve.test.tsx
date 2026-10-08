@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
 import {
@@ -518,4 +518,23 @@ test("targetProblem: пусто, невидимое, управляющее, д�
   expect(targetProblem(cleanTarget("MS\nSP"))).toBeNull();
   expect(targetProblem("M".repeat(201))).toMatch(/^Слишком длинно/);
   expect(targetProblem("Сбер API-шлюз")).toBeNull();
+});
+
+test("окно — лист Aurora по центру на затемнении: поверх окна (в body), щелчок по затемнению, ✕ и Esc закрывают", async () => {
+  const props = dialog();
+  const sheet = screen.getByRole("dialog", { name: "Улучшить расшифровку" });
+  expect(sheet).toHaveClass("sheet");
+  expect(sheet).toHaveAttribute("aria-modal", "true");
+  const layer = sheet.parentElement!;
+  expect(layer).toHaveClass("backdrop", "backdrop--modal");
+  expect(layer.parentElement).toBe(document.body);
+  expect(screen.getByRole("heading", { name: "Улучшить расшифровку" })).toHaveFocus();
+  fireEvent.mouseDown(sheet);
+  expect(props.onClose).not.toHaveBeenCalled();
+  fireEvent.mouseDown(layer);
+  expect(props.onClose).toHaveBeenCalledTimes(1);
+  await userEvent.click(within(sheet).getByRole("button", { name: "Закрыть" }));
+  expect(props.onClose).toHaveBeenCalledTimes(2);
+  await userEvent.keyboard("{Escape}");
+  expect(props.onClose).toHaveBeenCalledTimes(3);
 });
