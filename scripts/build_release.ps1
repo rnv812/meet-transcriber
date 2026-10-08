@@ -320,7 +320,21 @@ try {
     Write-Step 'npm ci'
     Invoke-Native 'npm ci' { npm ci --no-audit --no-fund }
     Write-Step 'tauri build (релизный конфиг с ресурсами)'
-    Invoke-Native 'tauri build' { npx --no-install tauri build --config src-tauri/tauri.release.conf.json }
+    # Подпись Authenticode (0.5): есть секреты сертификата — tauri подписывает exe и
+    # установщик скриптом sign_windows.ps1 (пароль — из окружения, не из конфига).
+    # Нет — сборка без подписи, как раньше (форк, пробный прогон).
+    $signArgs = @()
+    if ($env:WINDOWS_SIGN_PFX -and $env:WINDOWS_SIGN_PASSWORD) {
+        $signer = (Join-Path $PSScriptRoot 'sign_windows.ps1') -replace '\\', '/'
+        $signConf = Join-Path $env:TEMP 'meet-sign.conf.json'
+        $command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$signer`" `"%1`""
+        Write-Text $signConf (ConvertTo-Json @{ bundle = @{ windows = @{ signCommand = $command } } } -Depth 4)
+        $signArgs = @('--config', $signConf)
+        Write-Host '  подпись Authenticode: включена (сертификат из секретов)'
+    } else {
+        Write-Host '  подпись Authenticode: пропущена — нет WINDOWS_SIGN_PFX / WINDOWS_SIGN_PASSWORD'
+    }
+    Invoke-Native 'tauri build' { npx --no-install tauri build --config src-tauri/tauri.release.conf.json @signArgs }
 } finally {
     Pop-Location
 }
@@ -346,6 +360,14 @@ $installerName = "meet_${Version}_x64-setup.exe"
 $installer = Join-Path $bundleDir $installerName
 if (-not (Test-Path $installer)) {
     throw "tauri build не оставил $installerName в $bundleDir"
+}
+if ($signArgs.Count) {
+    # Подписывали — проверяем и установщик, и приложение в нём: без подписи не выпускаем.
+    foreach ($file in @($installer, (Join-Path $TauriDir 'target\release\meet-desktop.exe'))) {
+        $sig = Get-AuthenticodeSignature $file
+        if ($sig.Status -ne 'Valid') { throw "Подпись $(Split-Path $file -Leaf): $($sig.Status)" }
+        Write-Host ("  подпись в порядке: {0}" -f (Split-Path $file -Leaf))
+    }
 }
 $hash = Get-Sha256 $installer
 $sums = Join-Path $bundleDir 'SHA256SUMS.txt'

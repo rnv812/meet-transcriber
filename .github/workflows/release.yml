@@ -120,10 +120,15 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test
 
+      # Подпись Authenticode (0.5): секреты WINDOWS_SIGN_PFX (.pfx в base64) и
+      # WINDOWS_SIGN_PASSWORD заводит владелец репозитория (docs/signing-windows.md).
+      # Нет секретов — установщик собирается без подписи, как раньше.
       - name: Build installer
         id: build
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+          WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
         run: ./scripts/build_release.ps1 -Version $env:VERSION
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
