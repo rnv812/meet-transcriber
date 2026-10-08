@@ -198,6 +198,14 @@ Python (из корня, venv с установленным пакетом):
 
     cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check
 
+«Прокликивание» окна (0.5; резидент с временной папкой данных, Vite и
+системный Edge — снимки всех экранов в двух темах, ошибки консоли и ответы
+резидента в `.superpowers/clickthrough/<время>/report.md`, код 1 — есть
+замечания; штатные «нет данных» — списком `EXPECTED` в
+`app/scripts/clickthrough.mjs`):
+
+    .venv/Scripts/python scripts/clickthrough.py
+
 ## Запуск для разработки
 
     py -3.12 -m venv .venv

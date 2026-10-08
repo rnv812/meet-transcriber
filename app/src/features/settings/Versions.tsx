@@ -123,12 +123,12 @@ export function VersionsRow({ endpoint, current }: { endpoint: Endpoint; current
   const asking = install.kind === "asking" ? install.row : null;
 
   return (
-    <Row label="Другие версии" hint="Выпуски на GitHub — по кнопке; любую можно установить" stack>
+    <Row label="Другие версии" hint="Выпуски на GitHub — по кнопке; любую можно установить" stack={list.kind === "loaded"}>
       {list.kind !== "loaded" && (
-        <span className="update">
-          {list.kind === "failed" && <span className="update__error">{list.error}</span>}
+        <>
           <Button onClick={() => void load()} busy={list.kind === "loading"}>Показать выпуски</Button>
-        </span>
+          {list.kind === "failed" && <span className="update" role="status"><span className="update__error">{list.error}</span></span>}
+        </>
       )}
       {list.kind === "loaded" && list.rows.length === 0 && <span className="muted">Выпусков пока нет</span>}
       {list.kind === "loaded" && list.rows.length > 0 && (
