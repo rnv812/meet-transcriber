@@ -32,6 +32,7 @@ import {
   PASTE_WAIT_MS, POLL_MS, coldReadiness, dialogShown, ownTitle, promptVisible, screenOutput, screenRows,
   quietNeeded, screenText,
 } from "./agentReady";
+import { terminalTheme, watchAppearance } from "./terminalTheme";
 
 /** Как часто смотреть, не стал ли готов сеанс, когда ссылки, ждущей вставки, нет. */
 const WATCH_MS = 250;
@@ -67,24 +68,18 @@ export type AgentView = {
   model: string | null;
 };
 
-/** Цвета и шрифт терминала — как у приложения. */
+/**
+ * Шрифт и поведение терминала. Цвета — не здесь: из токенов темы окна
+ * (terminalTheme) при создании терминала и при смене темы или палитры.
+ * Полоса прокрутки xterm 6 (своя, не нативная) — по умолчанию xterm: цвет
+ * текста с прозрачностью, то есть тоже от темы.
+ */
 export const TERMINAL_OPTIONS: ITerminalOptions = {
   fontFamily: '"Cascadia Mono", Consolas, monospace',
   fontSize: 13,
   lineHeight: 1.15,
   cursorBlink: true,
   scrollback: 5000,
-  theme: {
-    background: "#0f1012",
-    foreground: "#d6d7dc",
-    cursor: "#5e6ad2",
-    cursorAccent: "#0f1012",
-    selectionBackground: "#5e6ad266",
-    // xterm 6 рисует свою полосу прокрутки (не нативную): цвета — как --sb-thumb* в theme/legacy-aliases.css.
-    scrollbarSliderBackground: "rgba(138, 140, 150, 0.28)",
-    scrollbarSliderHoverBackground: "rgba(138, 140, 150, 0.62)",
-    scrollbarSliderActiveBackground: "rgba(138, 140, 150, 0.8)",
-  },
 };
 
 const EXIT_LINE = "\r\n\x1b[90m— агент завершил работу —\x1b[0m\r\n";
@@ -242,7 +237,8 @@ export class AgentSession {
     this.creating ??= (async () => {
       const [{ Terminal }, { FitAddon }] = await loadXterm();
       if (sessions.get(this.id) !== this) return;
-      const t = new Terminal(TERMINAL_OPTIONS);
+      const t = new Terminal({ ...TERMINAL_OPTIONS, theme: terminalTheme() });
+      followAppearance();
       const f = new FitAddon();
       t.loadAddon(f);
       t.attachCustomKeyEventHandler(clipboardKeys(t));
@@ -617,6 +613,15 @@ function makeRoom(starting: AgentSession) {
     .forEach((s) => s.evict());
 }
 
+/** Сменились тема или палитра окна — перекрасить все терминалы (и скрытые). */
+let stopFollowing: (() => void) | null = null;
+function followAppearance() {
+  stopFollowing ??= watchAppearance(() => {
+    const theme = terminalTheme();
+    sessions.forEach((s) => { if (s.term) s.term.options.theme = theme; });
+  });
+}
+
 /** Вывод оболочки — один раз на окно; каждому сеансу его события. */
 let listening: Promise<void> | null = null;
 let unlisten: Array<() => void> = [];
@@ -639,6 +644,8 @@ export function resetAgentSessions() {
   unlisten.forEach((off) => off());
   unlisten = [];
   listening = null;
+  stopFollowing?.();
+  stopFollowing = null;
 }
 if (import.meta.env?.MODE === "test") {
   (globalThis as { __resetAgentSessions?: () => void }).__resetAgentSessions = resetAgentSessions;

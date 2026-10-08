@@ -128,7 +128,7 @@ test("готовые итоги подписаны моделью", async () => 
     markdown: "# Итоги", created_at: 1000, llm: { provider: "claude-code", model: "sonnet" },
   });
   render(<SummaryTab endpoint={ep} id="r1" folder="C:\\rec\\r1" jobs={[]} assistant={info([LOCAL])} />);
-  expect(await screen.findByText("Итоги: Claude Code (sonnet)")).toBeInTheDocument();
+  expect(await screen.findByText(/^Итоги собрал Claude Code \(sonnet\) · /)).toBeInTheDocument();
   // Включена одна модель — обычная кнопка, без стрелки.
   expect(screen.queryByRole("button", { name: /выбрать модель/ })).toBeNull();
 });

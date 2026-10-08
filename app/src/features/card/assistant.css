@@ -15,8 +15,13 @@
 .assist > .empty-state { flex: 1; height: auto; }
 .assist__error { color: var(--danger); font-size: 12px; white-space: pre-wrap; }
 .assist__failed { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.assist__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.assist__when { margin-left: auto; font-size: 12px; }
+.assist__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* «Итоги собрал Claude Code · 14 сен 11:41» — слева, действия справа (макет «Итоги»). */
+.assist__when { flex: 1; min-width: 0; color: var(--ink-3); font-size: var(--text-sm); }
+/* «Итоги»: колонка с воздухом между строкой действий и текстом; абзацы — по ширине чтения. */
+.assist--summary { gap: 18px; padding-top: 8px; }
+.assist--summary .assist__md { font-size: var(--text-ui); }
+.assist--summary .assist__md > p { max-width: 72ch; }
 /* Черновик из живого режима: пока итогов нет. Рамка — чтобы не спутать с итогами. */
 .assist__draft { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--hairline-strong); border-radius: var(--r-lg); }
 .assist__draft-title { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 500; }
@@ -79,22 +84,25 @@
 .md li:hover > .md-act .ask-agent, .md tr:hover .md-act-col .ask-agent, .md .ask-agent:focus-visible { opacity: 1; }
 .md th.md-act-col, .md td.md-act-col { width: 30px; padding: 2px 4px; text-align: center; }
 
-/* Вкладка «Ассистент»: чат с агентом после встречи (лента и строка ввода — из live/chat.css). */
-.assist-chat { min-height: 0; }
-.assist-chat__main { flex: 1; min-height: 360px; max-width: 860px; }
+/* Вкладка «Ассистент»: чат с агентом после встречи (лента и строка ввода — из live/chat.css).
+   Колонка 760 по центру (макет «Ассистент после встречи»). */
+.assist-chat { min-height: 0; width: 100%; max-width: 760px; margin: 0 auto; padding-top: 8px; }
+.assist-chat__main { flex: 1; min-height: 360px; }
+/* «Встреча закончилась в 11:38 · переписка сохранена в папке встречи». */
+.assist-chat__saved { align-self: center; margin: 0 0 4px; color: var(--ink-3); font-size: var(--text-xs); text-align: center; }
 .assist-chat__main .chat__scroll { max-height: none; }
 .assist-chat__loading { margin: 8px 0; font-size: 12px; }
 .assist-chat__profile { margin: 0 0 4px; color: var(--ink-2); font-size: 11.5px; }
 .assist-chat__continue { display: flex; flex-direction: column; gap: 4px; }
-.assist-chat__label { color: var(--ink-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.assist-chat__label { color: var(--ink-3); font-size: var(--text-xs); font-weight: 500; }
 .assist-chat > .empty-state { flex: 1; height: auto; min-height: 220px; }
 
 /* Прежний ассистент (до 0.3.6): подсказки и вопросы — только чтение. */
-.assist-legacy { display: flex; flex-direction: column; gap: 6px; max-width: 860px; padding: 10px 12px;
+.assist-legacy { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   border: 1px dashed var(--hairline-strong); border-radius: var(--r-lg); }
 .assist-legacy__title { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 500; }
 .assist-legacy__note { margin: 0; font-size: 11.5px; }
-.assist-legacy__sub { margin: 6px 0 0; color: var(--ink-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.assist-legacy__sub { margin: 6px 0 0; color: var(--ink-3); font-size: var(--text-xs); font-weight: 500; }
 .assist-legacy__hints { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .assist-legacy__hint { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; }
 .assist-legacy__kind { color: var(--kind, var(--ink-2)); font-size: 11px; font-weight: 500; }

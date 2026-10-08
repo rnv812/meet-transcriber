@@ -252,6 +252,33 @@ test("✦ у пунктов итогов: спросить агента о пу�
   });
 });
 
+test("строка над итогами: кто и когда собрал", async () => {
+  const at = new Date(2025, 8, 14, 11, 41).getTime() / 1000;
+  vi.mocked(api.getSummary).mockResolvedValue({ markdown: MD, created_at: at, llm: { provider: "claude-code", model: null } });
+  show();
+  expect(await screen.findByText("Итоги собрал Claude Code · 14 сен 11:41")).toBeInTheDocument();
+});
+
+test("строка над итогами без модели (итоги прежних версий) — только когда", async () => {
+  const at = new Date(2025, 8, 14, 11, 41).getTime() / 1000;
+  vi.mocked(api.getSummary).mockResolvedValue({ markdown: MD, created_at: at });
+  show();
+  expect(await screen.findByText("Итоги собраны · 14 сен 11:41")).toBeInTheDocument();
+});
+
+test("«Спросить агента» об итогах — вкладка «Агент» с вопросом об итогах целиком", async () => {
+  hasSummary();
+  const onAskAgent = vi.fn();
+  show({ onAskAgent });
+  const ask = await screen.findByRole("button", { name: "Спросить агента" });
+  expect(ask).toHaveClass("btn--aurora");
+  await userEvent.click(ask);
+  expect(onAskAgent).toHaveBeenCalledWith({ kind: "meeting-summary", refs: [], about: "summary.md в папке встречи" });
+  // Рядом — прежние «Копировать» и «Переделать…».
+  expect(screen.getByRole("button", { name: "Копировать" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Переделать…" })).toBeInTheDocument();
+});
+
 test("без onAskAgent кнопок ✦ нет", async () => {
   hasSummary();
   show();

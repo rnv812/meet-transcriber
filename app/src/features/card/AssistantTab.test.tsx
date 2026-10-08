@@ -152,6 +152,22 @@ test("старая встреча: прежние подсказки — тол�
   expect(screen.getByRole("button", { name: "Спросить ассистента о встрече" })).toBeEnabled();
 });
 
+test("над журналом — когда кончилась встреча и что переписка сохранена; без времени конца — только второе", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
+  const view = render(<Tab />);
+  await within(await ready()).findByText("15 ноября");
+  expect(screen.getByText("Переписка сохранена в папке встречи")).toBeInTheDocument();
+  view.rerender(<AssistantTab endpoint={ep} id={ID} folder={FOLDER} jobs={[]} endedAt={new Date(2026, 9, 7, 11, 38)} />);
+  expect(await screen.findByText("Встреча закончилась в 11:38 · переписка сохранена в папке встречи")).toBeInTheDocument();
+});
+
+test("чата нет — и строки о сохранённой переписке нет", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer());
+  render(<AssistantTab endpoint={ep} id={ID} folder={FOLDER} jobs={[]} endedAt={new Date(2026, 9, 7, 11, 38)} />);
+  await screen.findByRole("button", { name: "Спросить ассистента о встрече" });
+  expect(screen.queryByText(/переписка сохранена/i)).toBeNull();
+});
+
 test("чата нет: «Спросить ассистента о встрече» открывает строку ввода с фокусом", async () => {
   vi.mocked(getRecordingChat).mockResolvedValue(answer());
   vi.mocked(continueChat).mockResolvedValue({ message: userMsg("m1", { client_id: "c1" }), job: chatJob("queued") });

@@ -21,6 +21,7 @@ https://claude.ai/artifact/SL1gaPxP1Xz9FwYQyU6Wj3, версия `1791414872-aea2
 | `controls.css` | Кнопки, Поле, Флажки и радио, Табы и фильтры, Переключатель, Поиск, Размеры полей, Ряд контролов, Свечение в тесных местах | да (этап 2) |
 | `feedback.css` | Бейдж, Карточка, Состояния, Выноска и цитата | да (этап 2) |
 | `overlays.css` | Выпадающий список и меню, Подсказка, Модалка, Тост, Слои | да (этап 2) |
+| `data.css` | Таблица, Блок кода | да (этап 3: «Голоса», терминал вкладки «Агент») |
 
 Запасные значения для WebKit без `color-mix()` (macOS 13) — не здесь, а в
 файле окна `app/src/theme/aurora-fallbacks.css` (подключается последним в
@@ -28,12 +29,12 @@ https://claude.ai/artifact/SL1gaPxP1Xz9FwYQyU6Wj3, версия `1791414872-aea2
 
 Команда (из корня репозитория, `--only` — какие файлы писать; без него — все):
 
-    .venv/Scripts/python scripts/vendor_aurora.py <путь к bundle.css> app/src/theme/aurora --only base,aurora,controls,feedback,overlays
+    .venv/Scripts/python scripts/vendor_aurora.py <путь к bundle.css> app/src/theme/aurora --only base,aurora,controls,feedback,overlays,data
 
 Новые разделы переносятся только скриптом и вместе с переводом примитивов
 окна, чьи классы они объявляют: класс объявлен ровно в одном файле
 (`theme/cssClasses.test.ts`). Не переносятся пока: «Крошки», «Дерево»,
-«Пагинация», «Таблица», «Блок кода», «Шапка», «Редактор», «Тоны ячеек»,
+«Пагинация», «Шапка», «Редактор», «Тоны ячеек»,
 UI-кит Atlas AI.
 
 Файлы по месту не правятся: отличия Meet — в стилях окна поверх. Обновление —

@@ -25,17 +25,25 @@
  * сдвигается: после него — «Вставить ссылку». «Отменить», неудачный запуск,
  * выход агента, отсутствие агента — ссылку показывает уведомление, её можно
  * скопировать.
+ *
+ * Вид — макет Atlas Aurora: строка «Агент [список] · действия · статус со
+ * знаком агента», под ней — что получит агент, ниже — терминал в оформлении
+ * «Блока кода» (`codeblock`, в шапке — папка встречи и агент). Цвета xterm —
+ * из токенов темы (terminalTheme), меняются вместе с темой и палитрой.
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
+import { ChevronDown } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { getAgentContext, type Endpoint } from "../../lib/api";
 import { inTauri } from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
+import { AgentMark, type AgentState } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Icon } from "../../ui/Icon";
 import {
   STOP_CONFIRM_MS, agentSession, pasteInto, type PendView, type Phase, type UnsentReason,
 } from "./agentSessions";
@@ -125,6 +133,13 @@ function phaseText(phase: Phase, code: number | null): string {
   }
 }
 
+/** Знак агента в статусе: работает — пишет, запускается или останавливается — ждёт, иначе — покой. */
+function phaseMark(phase: Phase): AgentState {
+  if (phase === "running") return "write";
+  if (phase === "starting" || phase === "stopping") return "wait";
+  return "rest";
+}
+
 type Context = { files: string[]; live: boolean; sessions?: string[] };
 
 function contextText(ctx: Context): string {
@@ -210,9 +225,11 @@ function EvictedNote({ canResume, onResume, onClose }: { canResume: boolean; onR
 }
 
 export function AgentTab({
-  id, assistant, onOpenSettings, endpoint, insert = null, onTaken, contextVersion, textPhase = false,
+  id, folder, assistant, onOpenSettings, endpoint, insert = null, onTaken, contextVersion, textPhase = false,
 }: {
   id: string;
+  /** Папка встречи — в шапке терминала (там агент и работает). */
+  folder?: string;
   assistant: AssistantInfo | null;
   onOpenSettings?: (section: string) => void;
   /** Резидент: строка «Контекст» и «Прошлые вопросы». Нет — их нет. */
@@ -390,10 +407,14 @@ export function AgentTab({
     <div className="agent" ref={root} tabIndex={-1}>
       <div className="agent__bar">
         <label className="agent__label" htmlFor={`agent-provider-${id}`}>Агент</label>
-        <select id={`agent-provider-${id}`} className="agent__select" value={provider ?? ""}
-          disabled={!providers.length || phase === "starting"} onChange={(e) => setChoice(e.target.value)}>
-          {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-        </select>
+        {/* Список — родной <select> (клавиатура и диктор как у системы) в виде Aurora select-btn. */}
+        <span className="agent__pick">
+          <select id={`agent-provider-${id}`} className="select-btn select-btn--sm agent__select" value={provider ?? ""}
+            disabled={!providers.length || phase === "starting"} onChange={(e) => setChoice(e.target.value)}>
+            {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+          <Icon as={ChevronDown} size="sm" className="agent__pick-chevron" />
+        </span>
         <HelpTip label="Что такое вкладка «Агент»" title="Агент в папке встречи">
           <TipLine>
             Здесь работает Claude Code, Codex или OpenCode — тот же, что в обычном терминале: можно задавать вопросы по встрече,
@@ -430,7 +451,7 @@ export function AgentTab({
         {active ? (
           <>
             <Button onClick={restart} disabled={!ready || !provider || phase === "starting"}>Перезапустить</Button>
-            <Button onClick={stop} disabled={phase !== "running"}>Остановить</Button>
+            <Button variant="ghost" onClick={stop} disabled={phase !== "running"}>Остановить</Button>
           </>
         ) : (
           <>
@@ -443,7 +464,7 @@ export function AgentTab({
           </>
         )}
         <span className="agent__phase" role="status">
-          <span className={`agent__dot${phase === "running" ? " agent__dot--run" : ""}`} aria-hidden="true" />
+          <AgentMark state={phaseMark(phase)} size={14} />
           {phaseText(phase, code)}
         </span>
         {model && (
@@ -466,15 +487,21 @@ export function AgentTab({
       )}
       {waiting}
       {unsentNote}
-      <div className="agent__screen" onContextMenu={onContextMenu}>
-        <div className="agent__xterm" ref={screen} data-agent-terminal />
-        {phase === "idle" && (
-          <div className="agent__idle">
-            {nothing ? (textPhase ? "Текст уже виден — агент станет доступен, когда определятся спикеры."
-              : "Агент станет доступен, когда появится расшифровка.")
-              : "Нажмите «Запустить» — агент откроется в папке этой встречи."}
-          </div>
-        )}
+      <div className="codeblock agent__screen">
+        <div className="code-head agent__head">
+          <b className="agent__path" title={folder}>{folder ?? ""}</b>
+          <span>{providers.find((p) => p.id === provider)?.label ?? ""}</span>
+        </div>
+        <div className="agent__body" onContextMenu={onContextMenu}>
+          <div className="agent__xterm" ref={screen} data-agent-terminal />
+          {phase === "idle" && (
+            <div className="agent__idle">
+              {nothing ? (textPhase ? "Текст уже виден — агент станет доступен, когда определятся спикеры."
+                : "Агент станет доступен, когда появится расшифровка.")
+                : "Нажмите «Запустить» — агент откроется в папке этой встречи."}
+            </div>
+          )}
+        </div>
       </div>
       {!active && past}
       {asking && (

@@ -1,4 +1,4 @@
-/* Atlas Aurora v2.6 — data: Таблица (components/bundle.css без правок; scripts/vendor_aurora.py) */
+/* Atlas Aurora v2.6 — data: Таблица, Блок кода (components/bundle.css без правок; scripts/vendor_aurora.py) */
 /* ── Таблица ── */
 .table-tools { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--hairline); flex-wrap: wrap; }
 .table-tools b { font-weight: 600; }
@@ -19,3 +19,14 @@
 .tbl a:hover { text-decoration: underline; }
 .tbl .muted { font-size: var(--text-sm); }
 .scroll-x { overflow-x: auto; }
+
+/* ── Блок кода ── */
+.codeblock { border-radius: var(--r-lg); background: var(--code-bg); border: 1px solid var(--hairline); overflow: hidden; }
+.code-head { display: flex; align-items: center; justify-content: space-between; height: var(--control-lg); padding: 0 8px 0 18px; border-bottom: 1px solid var(--hairline); font-size: var(--text-sm); color: var(--ink-3); }
+.code-head b { color: var(--ink-2); font-weight: 500; font-family: var(--font-code); font-size: var(--text-xs); }
+.codeblock pre { margin: 0; padding: var(--s-4) 0; overflow-x: auto; font: 400 14px/1.7 var(--font-code); color: var(--code-ink); counter-reset: ln; }
+.codeblock pre .l { display: block; padding: 0 var(--s-5) 0 0; }
+.codeblock pre .l::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 44px; padding-right: 16px; text-align: right; color: var(--code-comment); opacity: 0.6; }
+.codeblock pre .hl { background: var(--code-line-hl); box-shadow: inset 2px 0 0 var(--data-1); }
+.codeblock .k { color: var(--code-keyword); } .codeblock .s { color: var(--code-string); } .codeblock .n { color: var(--code-number); }
+.codeblock .c { color: var(--code-comment); font-style: italic; } .codeblock .f { color: var(--code-function); } .codeblock .p { color: var(--code-property); } .codeblock .u { color: var(--code-punct); }

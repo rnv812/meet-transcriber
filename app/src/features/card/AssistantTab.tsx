@@ -18,6 +18,10 @@
  *   Личный»); «Продолжить разговор» идёт с ним же (резидент берёт его из
  *   журнала встречи). В «Личном» — свои быстрые вопросы, без рабочих.
  *
+ * Вид — макет Atlas Aurora: колонка 760 по центру; над журналом — «Встреча
+ * закончилась в 11:38 · переписка сохранена в папке встречи» (время — если
+ * карточка его знает, `endedAt`). Сама лента и строка ввода — из `live/*`.
+ *
  * Писать нельзя, как и у резидента: агент-участник выключен в настройках
  * (`assist.participant`), идёт живой режим этой записи или модель не
  * подключена — лента видна, строка ввода недоступна с причиной.
@@ -110,7 +114,16 @@ function LegacyView({ legacy }: { legacy: LegacyAssistant }) {
   );
 }
 
-export function AssistantTab({ endpoint, id, folder, jobs, event = null, assistant = null, onOpenSettings }: {
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** «Встреча закончилась в 11:38 · переписка сохранена в папке встречи»; без времени — только второе. */
+export function savedNote(endedAt: Date | null | undefined): string {
+  if (!endedAt || Number.isNaN(endedAt.getTime())) return "Переписка сохранена в папке встречи";
+  const at = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;
+  return `Встреча закончилась в ${at} · переписка сохранена в папке встречи`;
+}
+
+export function AssistantTab({ endpoint, id, folder, jobs, event = null, assistant = null, onOpenSettings, endedAt = null }: {
   endpoint: Endpoint;
   /** Id записи (имя папки) — как `id` у события `chat.updated`. */
   id: string;
@@ -120,6 +133,8 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
   event?: ChatUpdatedEvent | null;
   assistant?: AssistantInfo | null;
   onOpenSettings?: (section: string) => void;
+  /** Когда кончилась встреча (начало записи + длительность); нет — строка без времени. */
+  endedAt?: Date | null;
 }) {
   const [info, setInfo] = useState<RecordingChat | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +216,7 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
       {!info && !error && <p className="muted assist-chat__loading">Загружаю чат ассистента…</p>}
       {info && (hasChat || asking || thinking) ? (
         <div className="chat-ws__main assist-chat__main">
+          {hasChat && <p className="assist-chat__saved">{savedNote(endedAt)}</p>}
           {profile && (
             <p className="assist-chat__profile" title={PROFILE_NOTES[profile]}>
               <span className="muted">Профиль:</span> {profileLabel(profile)}

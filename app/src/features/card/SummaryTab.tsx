@@ -11,11 +11,16 @@
  * получает её же и сверяет с полной расшифровкой.
  *
  * У каждого пункта и строки таблицы — ✦ «Спросить агента об этом пункте»
- * (`onAskAgent`): ссылка на пункт уходит в поле ввода вкладки «Агент».
+ * (`onAskAgent`): ссылка на пункт уходит в поле ввода вкладки «Агент». Над
+ * итогами — «Спросить агента» об итогах целиком (тот же путь, без пунктов).
+ *
+ * Вид — макет Atlas Aurora: строка «Итоги собрал <модель> · <когда>», справа
+ * «Копировать», «Переделать…» и ✦ «Спросить агента» (`btn--aurora`).
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRequest } from "../../lib/agentRef";
+import { Copy } from "lucide-react";
 import { ApiError, getLiveDraft, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
 import { JiraLinks } from "../../lib/jira";
@@ -23,6 +28,7 @@ import { anyModelReady, llmLabel, modelChoices, modelReady, retryText } from "..
 import { Markdown, type ItemAction } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
+import { AgentMark } from "../../ui/AgentMark";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
@@ -31,6 +37,17 @@ import { ProviderHint, ThinkingStage, noModelText, noProvider, useLostJobs } fro
 import { ModelSplitButton } from "./modelPick";
 
 const COPIED_MS = 2000;
+
+/** «Итоги собрал Claude Code · 14 сен 11:41»; модель неизвестна — «Итоги собраны · …»; ничего — null. */
+export function summaryByline(summary: Summary): string | null {
+  const who = llmLabel(summary.llm);
+  const at = typeof summary.created_at === "number" && summary.created_at > 0
+    // «Сегодня 11:41» в середине строки — со строчной.
+    ? dayLabel(new Date(summary.created_at * 1000).toISOString()).replace(/^(Сегодня|Вчера)/, (w) => w.toLowerCase())
+    : "";
+  if (!who && !at) return null;
+  return [who ? `Итоги собрал ${who}` : "Итоги собраны", at].filter(Boolean).join(" · ");
+}
 
 export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettings, onAskAgent }: {
   endpoint: Endpoint;
@@ -167,18 +184,24 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
 
   let main;
   if (summary) {
+    const byline = summaryByline(summary);
     main = (
       <>
         <div className="assist__toolbar">
+          <span className="assist__when" title={summary.llm ? "Какая модель и когда сделала итоги" : undefined}>
+            {byline}
+          </span>
+          <Button variant="ghost" icon={Copy} onClick={() => copy(summary.markdown)} disabled={busy}>
+            {copied ? "Скопировано" : "Копировать"}
+          </Button>
           <ModelSplitButton label="Переделать…" choices={choices} disabled={!canMake} pickDisabled={!canPick}
             reason={reason} onRun={(p) => void remake(p)} />
           {confirmNode}
-          <Button onClick={() => copy(summary.markdown)} disabled={busy}>{copied ? "Скопировано" : "Копировать"}</Button>
-          {summary.llm && (
-            <span className="muted assist__when" title="Какая модель сделала итоги">Итоги: {llmLabel(summary.llm)}</span>
-          )}
-          {typeof summary.created_at === "number" && (
-            <span className="muted assist__when">{dayLabel(new Date(summary.created_at * 1000).toISOString())}</span>
+          {onAskAgent && (
+            <Button variant="aurora" title="Спросить агента об итогах: откроется вкладка «Агент»"
+              onClick={() => onAskAgent({ kind: "meeting-summary", refs: [], about: "summary.md в папке встречи" })}>
+              <AgentMark size={16} />Спросить агента
+            </Button>
           )}
         </div>
         {hint}
@@ -219,7 +242,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   }
 
   return (
-    <div className="assist">
+    <div className="assist assist--summary">
       {loadError && <div className="assist__error" role="alert">{loadError}</div>}
       {error && <div className="assist__error" role="alert">{error}</div>}
       {thinking && <ThinkingStage job={latest} />}

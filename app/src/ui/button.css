@@ -10,6 +10,9 @@ button.btn { position: relative; }
 button.btn:disabled { pointer-events: auto; cursor: default; }
 button.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
 .btn__label { display: inline-flex; align-items: center; gap: inherit; min-width: 0; }
+/* Знак агента в кнопке («Спросить агента», «Улучшить» на сиянии) — цвета подписи: свой
+   --ink-2 (.agent-mark) на светлой заливке btn--aurora не читался. */
+.btn .agent-mark { color: inherit; }
 .btn--busy { cursor: progress; }
 .btn--busy .btn__label { visibility: hidden; }
 .btn__spinner {

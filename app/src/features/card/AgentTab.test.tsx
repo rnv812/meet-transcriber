@@ -107,7 +107,7 @@ const data = (id: string, text: string) => act(() => h.listeners.data.forEach((c
 const exit = (id: string, code: number | null) => act(() => h.listeners.exit.forEach((cb) => cb({ id, code })));
 
 type More = Partial<Pick<Parameters<typeof AgentTab>[0],
-  "onOpenSettings" | "endpoint" | "insert" | "onTaken" | "contextVersion" | "textPhase">>;
+  "onOpenSettings" | "endpoint" | "insert" | "onTaken" | "contextVersion" | "textPhase" | "folder">>;
 
 async function show(info: AssistantInfo | null = assistant(), more: More = {}) {
   const view = render(<AgentTab id="r1" assistant={info} {...more} />);
@@ -237,6 +237,51 @@ test("шапка: модель, с которой запущен агент (--m
   expect(screen.queryByText(/модель:/)).toBeNull();
   await userEvent.click(startButton());
   expect(await screen.findByText("модель: opus")).toBeInTheDocument();
+});
+
+test("строка управления: выбор агента, «Запустить»; статус — со знаком агента (покой → работа)", async () => {
+  await show(assistant());
+  const status = screen.getByText("Не запущен");
+  expect(status.querySelector(".agent-mark")).toHaveAttribute("data-state", "rest");
+  expect(screen.getByRole("combobox", { name: "Агент" })).toHaveValue("claude-code");
+  await userEvent.click(startButton());
+  const working = await screen.findByText("Работает");
+  expect(working.querySelector(".agent-mark")).toHaveAttribute("data-state", "write");
+  expect(screen.getByRole("button", { name: "Остановить" })).toBeEnabled();
+});
+
+test("терминал — блок кода: в шапке папка встречи и агент", async () => {
+  await show(assistant({ provider: "codex" }), { folder: "C:\\rec\\2026-09-14_11-00" });
+  const block = document.querySelector("[data-agent-terminal]")!.closest(".codeblock") as HTMLElement;
+  expect(block).not.toBeNull();
+  const head = block.querySelector(".code-head") as HTMLElement;
+  expect(head).toHaveTextContent("C:\\rec\\2026-09-14_11-00");
+  expect(head).toHaveTextContent("Codex");
+  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Агент" }), "claude-code");
+  expect(head).toHaveTextContent("Claude Code");
+});
+
+test("цвета терминала — из токенов темы; сменилась тема или палитра — терминал перекрашен", async () => {
+  const root = document.documentElement;
+  root.style.setProperty("--code-bg", "rgb(1, 2, 3)");
+  root.style.setProperty("--code-ink", "rgb(200, 200, 200)");
+  try {
+    await show(assistant());
+    const theme = () => (term().options as { theme?: Record<string, string> }).theme ?? {};
+    expect(theme().background).toBe("rgb(1, 2, 3)");
+    expect(theme().foreground).toBe("rgb(200, 200, 200)");
+    root.style.setProperty("--code-bg", "rgb(250, 250, 250)");
+    root.setAttribute("data-theme", "light");
+    await waitFor(() => expect(theme().background).toBe("rgb(250, 250, 250)"));
+    root.style.setProperty("--code-bg", "rgb(5, 5, 5)");
+    root.setAttribute("data-aurora", "green");
+    await waitFor(() => expect(theme().background).toBe("rgb(5, 5, 5)"));
+  } finally {
+    root.style.removeProperty("--code-bg");
+    root.style.removeProperty("--code-ink");
+    root.removeAttribute("data-theme");
+    root.removeAttribute("data-aurora");
+  }
 });
 
 test("вывод своего сеанса — в терминал, в том числе пришедший до ответа на запуск; чужой — нет", async () => {

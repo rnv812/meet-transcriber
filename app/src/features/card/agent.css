@@ -1,61 +1,72 @@
-/* Вкладка «Агент»: строка управления, подсказка и терминал во всю высоту. */
+/* Вкладка «Агент» (макет Atlas Aurora): строка управления, что получит агент и терминал
+   во всю высоту — в оформлении «Блока кода» (.codeblock/.code-head из theme/aurora/data.css). */
 
-.agent { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.agent { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; padding-top: 4px; }
 .agent--empty > .empty-state { flex: 1; height: auto; }
-.agent__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.agent__label { color: var(--text-2); font-size: 12px; }
-.agent__select {
-  height: 28px; padding: 0 6px; background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--line-2); border-radius: var(--r-md); font: inherit;
+.agent__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agent__label { color: var(--ink-3); font-size: var(--text-sm); }
+/* Родной список в виде Aurora select-btn: своя стрелка поверх, системная скрыта. */
+.agent__pick { position: relative; display: inline-flex; width: 170px; }
+/* Три класса: сильнее размеров `.select-btn.select-btn--sm` (theme/aurora-fixes.css) при любом порядке файлов. */
+.agent__pick > .select-btn.agent__select { appearance: none; padding-right: 28px; }
+.agent__select:disabled { opacity: 0.5; cursor: default; }
+.agent__select option { background: var(--surface-1); color: var(--ink); }
+.agent__pick-chevron {
+  position: absolute; top: 50%; right: 8px; transform: translateY(-50%); color: var(--ink-3); pointer-events: none;
 }
-.agent__bar .helptip { margin-right: 6px; }
-.agent__phase { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--text-2); }
-.agent__model { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.agent__dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-3); }
-.agent__dot--run { background: var(--ok); }
-.agent__hint { font-size: 12px; color: var(--text-3); }
-/* Терминал занимает остаток вкладки; xterm подгоняется под .agent__xterm. */
-.agent__screen {
-  position: relative; flex: 1; min-height: 280px; overflow: hidden;
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg);
+.agent__bar .helptip { margin-right: 4px; }
+.agent__phase {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: var(--text-sm); color: var(--ink-2);
 }
-.agent__xterm { position: absolute; inset: 6px 4px 6px 10px; }
+.agent__model { font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.agent__hint { font-size: var(--text-xs); color: var(--ink-3); }
+/* «Контекст: transcript.md · summary.md» — какие файлы встречи получит агент. */
+.agent__context { font-size: var(--text-xs); color: var(--ink-3); }
+
+/* Терминал — блок кода во всю оставшуюся высоту: шапка (папка встречи · агент), под ней xterm. */
+.agent__screen { flex: 1; min-height: 280px; display: flex; flex-direction: column; }
+.agent__head { flex: none; gap: 12px; }
+.agent__path { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agent__head > span { flex: none; }
+.agent__body { position: relative; flex: 1; min-height: 0; }
+.agent__xterm { position: absolute; inset: 10px 8px 10px 18px; }
 /* Элемент терминала сеанса (agentSessions): переходит из карточки в карточку вместе с прокруткой. */
 .agent__term { width: 100%; height: 100%; }
-/* Полоса .xterm-viewport — общая, из theme/tokens.css. */
+/* Полоса .xterm-viewport — общая, из theme/tokens.css. Фон под терминалом — фон блока кода:
+   чёрный #000 из xterm.css проступал рамкой вокруг экрана (видно в светлой теме). */
+.agent__term .xterm .xterm-viewport { background-color: transparent; }
 .agent__idle {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  padding: 16px; color: var(--text-3); font-size: 13px; text-align: center; pointer-events: none;
+  padding: 16px; color: var(--code-comment); font-size: var(--text-sm); text-align: center; pointer-events: none;
 }
-/* «Контекст: transcript.md · summary.md» — какие файлы встречи получит агент. */
-.agent__context { font-size: 12px; color: var(--text-2); font-family: "Cascadia Mono", Consolas, monospace; }
+
 /* Агента нет: ссылка, которую не удалось вставить, — её можно скопировать. */
 .agent__unsent {
-  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: 12px; color: var(--text-2);
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: var(--text-xs); color: var(--ink-2);
+  background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md);
 }
 .agent__ref {
   margin: 0; padding: 8px 10px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
-  color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
-  font: 12px/1.45 "Cascadia Mono", Consolas, monospace;
+  color: var(--code-ink); background: var(--code-bg); border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font: 12px/1.45 var(--font-code);
 }
 .agent__unsent-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* «Прошлые вопросы» (qa.jsonl): свёрнутый список под терминалом, только чтение. */
-.agent__past { flex: none; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 6px; }
+.agent__past { flex: none; max-height: 45%; overflow-y: auto; }
 .agent__past-title {
-  display: flex; align-items: center; gap: 4px; list-style: none;
-  cursor: pointer; color: var(--text-2); font-size: 12px; padding: 2px 0;
+  display: inline-flex; align-items: center; gap: 6px; list-style: none;
+  cursor: pointer; color: var(--ink-3); font-size: var(--text-sm); padding: 2px 0;
 }
 .agent__past-title::-webkit-details-marker { display: none; }
-.agent__past-chevron { transition: transform var(--t); }
+.agent__past-chevron { transition: transform var(--d) var(--ease-out); }
 .agent__past[open] .agent__past-chevron { transform: rotate(90deg); }
-.agent__past-title:hover { color: var(--text); }
+.agent__past-title:hover { color: var(--ink); }
 .agent__past[open] .agent__past-title { margin-bottom: 6px; }
-.agent__past-note { margin: 0 0 10px; font-size: 12px; }
-/* Ссылка ждёт вставки: чего ждём, «Вставить реплику», если признаков готовности нет. */
+.agent__past-note { margin: 0 0 10px; font-size: var(--text-xs); }
+/* Ссылка ждёт вставки: чего ждём, «Вставить ссылку», если признаков готовности нет. */
 .agent__pending {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; font-size: 12px;
-  color: var(--text-2); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; font-size: var(--text-xs);
+  color: var(--ink-2); background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md);
 }
 .agent__pending > span { flex: 1; min-width: 200px; }
 /* Фокус на саму вкладку — после «Спросить агента», пока терминал не готов: без рамки.

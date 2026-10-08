@@ -87,6 +87,14 @@ test("компоненты Aurora: base, aurora, controls, feedback, overlays и
   expect([...order].sort((a, b) => a - b)).toEqual(order);
 });
 
+test("«Блок кода» (терминал вкладки «Агент») перенесён скриптом в data.css вместе с «Таблицей»", () => {
+  const css = read("aurora", "data.css");
+  expect(css.split("\n")[0]).toContain("data: Таблица, Блок кода");
+  expect(css).toContain("/* ── Блок кода ── */");
+  expect(css).toMatch(/\.codeblock \{[^}]*background: var\(--code-bg\)/);
+  expect(css).toMatch(/\.code-head \{/);
+});
+
 test("правки каскада Aurora: размеры select-btn--md/--sm сильнее «.select-btn» из overlays.css", () => {
   const css = read("aurora-fixes.css");
   expect(css).toMatch(/\.select-btn\.select-btn--md \{[^}]*height: var\(--control\);/);

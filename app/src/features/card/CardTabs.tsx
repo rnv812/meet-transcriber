@@ -68,7 +68,7 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
 
 export function CardTabs({
   endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript, stage = "ready", agentRequest = null,
-  onAskAgent, onAgentTaken, agentContext, chatEvent = null,
+  onAskAgent, onAgentTaken, agentContext, chatEvent = null, meetingEnd = null,
 }: {
   endpoint: Endpoint;
   id: string;
@@ -90,6 +90,8 @@ export function CardTabs({
   agentContext?: string;
   /** Последнее `chat.updated` этой записи (вкладка «Ассистент»). */
   chatEvent?: ChatUpdatedEvent | null;
+  /** Когда кончилась встреча: «Встреча закончилась в …» над журналом ассистента. */
+  meetingEnd?: Date | null;
 }) {
   const tabs = TABS[stage];
   const [chosen, setTab] = useState<Tab>("transcript");
@@ -170,10 +172,10 @@ export function CardTabs({
     summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent} />,
     assistant: () => (
       <AssistantTab endpoint={endpoint} id={id} folder={folder} jobs={jobs} event={chatEvent} assistant={assistant}
-        onOpenSettings={onOpenSettings} />
+        onOpenSettings={onOpenSettings} endedAt={meetingEnd} />
     ),
     agent: () => (
-      <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} endpoint={endpoint} insert={agentRequest}
+      <AgentTab id={id} folder={folder} assistant={assistant} onOpenSettings={onOpenSettings} endpoint={endpoint} insert={agentRequest}
         onTaken={onAgentTaken} contextVersion={agentContext} textPhase={stage === "text"} />
     ),
   };

@@ -35,3 +35,7 @@ test("включённый «Не отвлекать» — акцентного 
   // Текст цвета акцента — текстовый токен Aurora `--accent-line` (читается и в светлой теме).
   expect(card).toMatch(/\.btn\.live-card__quiet\[aria-pressed="true"\]\s*\{[^}]*color:\s*var\(--accent-line\)/);
 });
+
+test("знак агента в кнопке — цвета подписи (на сиянии btn--aurora свой --ink-2 не читается)", () => {
+  expect(button).toMatch(/\.btn \.agent-mark \{ color: inherit; \}/);
+});

@@ -21,7 +21,8 @@ export type AgentRef = {
   section?: string | null;
 };
 
-export type AgentRefKind = "turns" | "summary" | "hint" | "chapter" | "insight";
+/** `meeting-summary` — итоги целиком (кнопка «Спросить агента» над итогами): без пунктов, только «о чём». */
+export type AgentRefKind = "turns" | "summary" | "meeting-summary" | "hint" | "chapter" | "insight";
 
 export type AgentRequest = {
   refs: AgentRef[];
@@ -46,6 +47,7 @@ const NAME_MAX = 60;
 const HEADINGS: Record<AgentRefKind, [string, string]> = {
   turns: ["Про реплику:", "Про реплики:"],
   summary: ["Про пункт итогов:", "Про пункты итогов:"],
+  "meeting-summary": ["Про итоги встречи:", "Про итоги встречи:"],
   hint: ["Про подсказку ассистента:", "Про подсказки ассистента:"],
   chapter: ["Про главу встречи:", "Про главу встречи:"],
   insight: ["Про наблюдение анализа встречи:", "Про наблюдение анализа встречи:"],
