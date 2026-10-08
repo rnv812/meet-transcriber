@@ -19,21 +19,30 @@
   с `--settings` (disableAllHooks) они не должны запуститься, а хук Meet —
   работать; обходы из ревью (перевод строки, `&`, `env`, шаблон в закрытую
   папку, токен Meet, локальный API, фоновая команда, подагент);
-* профиль сессии «Личный» (0.3.7): отдельный процесс с воротами
-  `blocked_roots` и без MCP пользователя — база знаний и другие записи
-  библиотеки закрыты и после «Да, глянь» (уровень `read`), в том числе
-  через «..», Glob, Grep и `cat`; своя запись и «Загрузки» читаются.
+* 0.4 (`_probe_cli`, «ассистент как CLI»): автомод вместе с
+  `--permission-prompt-tool stdio`, режим в `initialize` и `system/init`,
+  `commands`/`models` в `initialize`, control-запросы `mcp_status`,
+  `mcp_reconnect`, `mcp_toggle`, `set_model`, перезапуск с `--resume`,
+  `/compact` и `compact_boundary`, `allow` хука без `can_use_tool` и правила
+  deny сильнее него, `disableAutoMode` → default, хук на вызовы подагента,
+  `` !`…` `` своей команды. Ворота там — сценарий исходов (`_ScriptGate`),
+  а не таблица `consent.py`. Строки FACT — наблюдения для решений.
+
+Случаи `_cases` — таблица ворот (`consent.py`) по уровням хода; меняется
+таблица — меняются и они.
 
 Настройки и вход человека не трогаются: своя пустая CLAUDE_CONFIG_DIR, ключ —
 выдуманный, адрес API — локальный, остальная сеть — через мёртвый прокси.
 
     python scripts/probe_claude_gate.py            # из корня репозитория, PYTHONPATH=src
+    python scripts/probe_claude_gate.py --cli      # только договор 0.4 с CLI
 
 Код выхода 1, если хоть один исход не совпал с ожидаемым.
 """
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -75,8 +84,34 @@ def _sse(name, data) -> bytes:
     return f"event: {name}\ndata: {json.dumps(data)}\n\n".encode()
 
 
+def _sub_reply(body):
+    """Подагент (0.4): «модель» подагента вызывает команду из «SUBTOOL <команда>»
+    и, получив результат, отвечает текстом. Не подагент — None."""
+    texts, result = [], None
+    for m in body.get("messages") or []:
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        for b in ([{"type": "text", "text": content}] if isinstance(content, str) else content or []):
+            if b.get("type") == "tool_result":
+                result = b
+            elif b.get("type") == "text":
+                texts.append(b.get("text") or "")
+    found = next((m for m in (re.search(r"SUBTOOL ([^\n\"]+)", t) for t in texts) if m), None)
+    if found is None:
+        return None
+    first = "SUBTOOL " + found.group(1)
+    if result is not None:
+        c = result.get("content")
+        c = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
+        return {"type": "text", "text": f"SUBRESULT {c[:200]}"}, "end_turn"
+    return ({"type": "tool_use", "id": "toolu_sub001", "name": "Bash", "input": {},
+             "_input": {"command": first[len("SUBTOOL "):].strip(), "description": "x"}}, "tool_use")
+
+
 class _Api(BaseHTTPRequestHandler):
     served = 0
+    bodies: list = []
 
     def log_message(self, *_a):
         pass
@@ -95,8 +130,12 @@ class _Api(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"input_tokens": 10}')
             return
+        _Api.bodies = (_Api.bodies + [json.dumps(body.get("messages"), ensure_ascii=False)])[-30:]
         block, stop = {"type": "text", "text": "ok"}, "end_turn"
-        if MARK in json.dumps(body.get("system")):
+        sub = _sub_reply(body) if MARK not in json.dumps(body.get("system")) else None
+        if sub is not None:
+            block, stop = sub
+        elif MARK in json.dumps(body.get("system")):
             calls, last_result = [], None
             for m in body.get("messages") or []:
                 if m.get("role") != "user":
@@ -296,7 +335,7 @@ async def _probe(work: Path, port: int, out=print) -> int:
 
     gate = consent.ConsentGate(own_dirs=[meeting], deny_paths=[private], cwd=work / "cwd", confirmer=confirmer)
     conv = Conversation(system_prompt=f"{MARK} agent", cli=[exe], popen=popen, cwd=work / "cwd", responder=True,
-                        add_dirs=[meeting], deny_paths=[private], gate=gate)
+                        add_dirs=[meeting], deny_paths=[private], gate=gate, mode="confirm")
     failed = 0
     try:
         for n, (level, title, call, answer, want) in enumerate(
@@ -332,67 +371,247 @@ async def _probe(work: Path, port: int, out=print) -> int:
             out(f"{'PASS' if ok else 'FAIL'}  {title}")
     finally:
         conv.close()
-    failed += await _probe_personal(work, exe, popen, kb, downloads, out)
     return 1 if failed else 0
 
 
-async def _probe_personal(work: Path, exe: str, popen, kb: Path, downloads: Path, out=print) -> int:
-    """Профиль сессии «Личный» (0.3.7): ворота с `blocked_roots` (база знаний,
-    библиотека встреч кроме своей записи), без MCP пользователя. Всё — на
-    уровне `read`, то есть после «Да, глянь»: база и другие записи всё равно
-    закрыты, а «Загрузки» по просьбе читаются."""
-    from meet.llm import consent
-    from meet.llm.claude_stream import Conversation
+class _ScriptGate:
+    """Ворота с заданными исходами (0.4: allow / auto / deny) — проверяется
+    договор с CLI, а не таблица `consent.py`. Записывает вызовы (инструмент,
+    путь: hook / can_use_tool)."""
 
-    _Api.served = 0                  # новый сеанс CLI — свой счёт вызовов «модели»
-    library = work / "library"
-    rec, other = library / "2026-10-07_10-00", library / "2026-10-06_18-00"
-    for d in (rec, other):
-        d.mkdir(parents=True, exist_ok=True)
-    (rec / "transcript.md").write_text("OWN-RECORDING", encoding="utf-8")
-    (other / "transcript.md").write_text("OTHER-RECORDING", encoding="utf-8")
-    (kb / "plan.md").write_text("KB-DOC", encoding="utf-8")
-    gate = consent.ConsentGate(own_dirs=[rec], cwd=work / "cwd", confirmer=lambda _card: "allow",
-                               blocked_roots=[kb, library])
-    # Как у агента-участника: корень базы — ещё и правилом CLI; MCP пользователя нет.
-    conv = Conversation(system_prompt=f"{MARK} personal", cli=[exe], popen=popen, cwd=work / "cwd",
-                        responder=True, add_dirs=[rec], deny_paths=[kb], gate=gate, mcp=False)
-    bash = lambda c: {"name": "Bash", "input": {"command": c, "description": "x"}}  # noqa: E731
-    cases = [
-        ("своя запись", {"name": "Read", "input": {"file_path": str(rec / "transcript.md")}}, "ok"),
-        ("«Загрузки» по просьбе", {"name": "Read", "input": {"file_path": str(downloads / "spec.txt")}}, "ok"),
-        ("другая запись в библиотеке", {"name": "Read", "input": {"file_path": str(other / "transcript.md")}},
-         "gate"),
-        ("другая запись через «..» от своей", {"name": "Read", "input": {
-            "file_path": str(rec / ".." / other.name / "transcript.md")}}, "gate"),
-        ("база знаний (Read)", {"name": "Read", "input": {"file_path": str(kb / "plan.md")}}, "rule|gate"),
-        ("база знаний командой cat", bash(f"cat {str(kb / 'plan.md').replace(chr(92), '/')}"), "gate"),
-        ("Glob по библиотеке", {"name": "Glob", "input": {"pattern": "**/*.md", "path": str(library)}}, "gate"),
-        ("Grep по библиотеке", {"name": "Grep", "input": {"pattern": "RECORDING", "path": str(library)}},
-         "gate"),
-        ("MCP пользователя недоступен", {"name": "mcp__fakejira__get_issue", "input": {"key": "A-1"}}, "err"),
-    ]
+    def __init__(self, rules=None, default="auto"):
+        self.rules, self.default = dict(rules or {}), default
+        self.calls: list[tuple[str, str]] = []
+        self._seen: set[str] = set()
+
+    def begin(self, _level):
+        self._seen = set()
+
+    def end(self):
+        pass
+
+    def unseen(self, ids):
+        return [t for t in ids or () if t and t not in self._seen]
+
+    def check(self, tool, data=None, *, tool_use_id=None, via="hook"):
+        from meet.llm import consent
+
+        self.calls.append((tool, via))
+        if via == "hook" and tool_use_id:
+            self._seen.add(tool_use_id)
+        outcome = self.rules.get(tool, self.default) if via == "hook" else "allow"
+        return consent.Decision(outcome, reason="Meet заблокировал (проба)" if outcome == "deny" else "", what=tool)
+
+
+def _popen_for(cfg: Path, port: int):
+    def popen(cmd, **kw):
+        env = {k: v for k, v in kw.pop("env").items() if not k.startswith(("CLAUDE", "ANTHROPIC"))}
+        env.update({"CLAUDE_CONFIG_DIR": str(cfg), "ANTHROPIC_API_KEY": "sk-ant-fake-probe",
+                    "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}", "HTTPS_PROXY": "http://127.0.0.1:9",
+                    "HTTP_PROXY": "http://127.0.0.1:9", "NO_PROXY": "127.0.0.1,localhost",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
+        return subprocess.Popen(cmd, env=env, **kw)
+    return popen
+
+
+def _cli_config(cfg: Path, mcp: Path, settings: dict | None = None) -> None:
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "mcpServers": {
+        "fakejira": {"type": "stdio", "command": sys.executable, "args": [str(mcp)]},
+        "deadsrv": {"type": "stdio", "command": "meet-probe-no-such-exe", "args": []}}}), encoding="utf-8")
+    (cfg / "settings.json").write_text(json.dumps(settings or {}), encoding="utf-8")
+
+
+async def _probe_cli(work: Path, port: int, exe: str, out=print) -> int:
+    """Договор 0.4 с CLI (спецификация §3, §6, «Пробник»): автомод вместе с
+    `--permission-prompt-tool stdio`; `permissionMode` в init и
+    `current_permission_mode`, `commands`, `models` в `initialize`; подтипы
+    `mcp_status` / `mcp_reconnect` / `mcp_toggle` / `set_model`; перезапуск с
+    `--resume`; `/compact` и `compact_boundary`; `allow` хука без
+    `can_use_tool`, правила deny сильнее; автомод без карточки для записи в
+    рабочей папке; хук на вызовы подагента; `` !`…` `` своей команды.
+    PASS/FAIL — проверка; FACT — наблюдение для решения (не ошибка)."""
+    from meet.llm import claude_stream
+    from meet.llm.claude_stream import ControlError, Conversation
+
     failed = 0
-    try:
-        for n, (title, call, want) in enumerate(cases, 1):
-            gate.begin(consent.READ)          # «Да, глянь»: ход по просьбе
-            try:
-                reply = await conv.send(f"личный {n}: CALL " + json.dumps(call, ensure_ascii=False),
-                                        timeout_s=120)
-            finally:
-                gate.end()
-            got = _outcome(reply.text or "")
-            leaked = any(m in (reply.text or "") for m in ("OTHER-RECORDING", "KB-DOC"))
-            ok = got in want.split("|") and not reply.error and not leaked
-            failed += not ok
-            out(f"{'PASS' if ok else 'FAIL'}  личный  {title:<44} ждали {want:<9} получили {got}"
-                + ("  УТЕЧКА" if leaked else "") + (f"  ошибка: {reply.error}" if reply.error else ""))
-        servers = [s.get("name") for s in conv.mcp_servers or []]
-        ok = servers == []
+
+    def check(title: str, ok: bool, detail: str = "") -> None:
+        nonlocal failed
         failed += not ok
-        out(f"{'PASS' if ok else 'FAIL'}  личный: MCP-серверов пользователя нет (init: {servers})")
+        out(f"{'PASS' if ok else 'FAIL'}  0.4  {title}" + (f"  ({detail})" if detail else ""))
+
+    def fact(title: str, detail) -> None:
+        out(f"FACT  0.4  {title}: {detail}")
+
+    mcp = work / "fake_mcp_cli.py"
+    mcp.write_text(FAKE_MCP, encoding="utf-8")
+    cfg, cwd = work / "cfg-cli", work / "cwd-cli"
+    _cli_config(cfg, mcp)
+    commands = cwd / ".claude" / "commands"
+    commands.mkdir(parents=True, exist_ok=True)
+    (commands / "hello.md").write_text("---\ndescription: say hello\nargument-hint: [name]\n---\nSay hello $ARGUMENTS\n",
+                                       encoding="utf-8")
+    (commands / "bangok.md").write_text("---\ndescription: bang allowed\nallowed-tools: Bash(echo:*)\n---\n"
+                                        "Out: !`echo BANG-ALLOWED-RAN`\n", encoding="utf-8")
+    (commands / "bangask.md").write_text("---\ndescription: bang needs approval\n---\n"
+                                         "Out: !`echo x > bang-marker.txt`\n", encoding="utf-8")
+    popen = _popen_for(cfg, port)
+    gate = _ScriptGate()
+    events: list[dict] = []
+    conv = Conversation(system_prompt=f"{MARK} cli", cli=[exe], popen=popen, cwd=cwd, responder=True,
+                        add_dirs=[cwd], gate=gate, mode="auto", persist=True, model="sonnet")
+
+    async def turn(text: str, level="user"):
+        gate.begin(level)
+        try:
+            return await conv.send(text, timeout_s=120, on_event=events.append)
+        finally:
+            gate.end()
+
+    try:
+        # initialize — до первого хода, модель не зовётся.
+        await conv.control("mcp_status")
+        check("автомод вместе с --permission-prompt-tool stdio: initialize → current_permission_mode",
+              conv.permission_mode == "auto", str(conv.permission_mode))
+        check("initialize → commands (name, description, argumentHint)",
+              any(c["name"] == "hello" and c["hint"] == "name" for c in conv.commands),
+              f"{len(conv.commands)} команд")
+        check("initialize → models", bool(conv.models), ", ".join(m.get("value", "") for m in conv.models))
+        reply = await turn("hello")
+        check("system/init → permissionMode, slash_commands, mcp_servers",
+              conv.permission_mode == "auto" and "compact" in (conv.slash_commands or [])
+              and {s["name"] for s in conv.mcp_servers or []} == {"fakejira", "deadsrv"},
+              f"{conv.permission_mode}; {conv.mcp_servers}")
+        servers = await conv.mcp_status(settle_s=claude_stream.MCP_SETTLE_S)
+        state = {s["name"]: s for s in servers}
+        check("mcp_status: fakejira connected, deadsrv failed с ошибкой",
+              state.get("fakejira", {}).get("status") == "connected"
+              and state.get("deadsrv", {}).get("status") == "failed" and bool(state["deadsrv"].get("error")),
+              str(servers))
+        res = await conv.mcp_reconnect("fakejira")
+        check("mcp_reconnect живого сервера — успех без перезапуска",
+              res["results"] == {"fakejira": None} and not res["restarted"], str(res["results"]))
+        try:
+            await conv.control("mcp_reconnect", {"serverName": "nope"})
+            check("mcp_reconnect неизвестного сервера — ошибка", False)
+        except ControlError as e:
+            check("mcp_reconnect неизвестного сервера — ошибка", not e.unsupported, e.message)
+        pid, spawns = conv.pid, conv.spawns
+        res = await conv.mcp_reconnect("deadsrv")
+        check("mcp_reconnect сбойного — ошибка → перезапуск с --resume, разговор тот же",
+              res["restarted"] and res["context"] and conv.spawns == spawns + 1 and conv.pid != pid
+              and res["results"]["deadsrv"] is not None, str(res["results"]))
+        reply = await turn("after restart")
+        check("ход после перезапуска — без ошибки «сеанс не продолжить»", reply.error is None, reply.error or "")
+        await conv.mcp_toggle("fakejira", False)
+        off = {s["name"]: s["status"] for s in await conv.mcp_status()}
+        await conv.mcp_toggle("fakejira", True)
+        on = {s["name"]: s["status"] for s in await conv.mcp_status(settle_s=claude_stream.MCP_SETTLE_S)}
+        check("mcp_toggle: disabled и обратно connected",
+              off.get("fakejira") == "disabled" and on.get("fakejira") == "connected", f"{off} → {on}")
+        resolved = await conv.set_model("opus")
+        check("set_model opus — полное имя из initialize.models", resolved.startswith("claude-opus"), resolved)
+        try:
+            await conv.control("compact")
+            fact("control-запрос compact", "есть")
+        except ControlError as e:
+            fact("control-запрос compact", f"нет ({e.message}) — /compact уходит сообщением")
+        reply = await conv.compact()
+        check("/compact → system/compact_boundary (pre_tokens/post_tokens)",
+              bool(reply.compacted) and isinstance(reply.compacted.get("pre_tokens"), int), str(reply.compacted))
+        # Своя команда с !`…`: разрешённая allowed-tools выполняется CLI сама — мимо хука?
+        gate.calls.clear()
+        await turn("/bangok")
+        ran = any("BANG-ALLOWED-RAN" in b and "echo BANG-ALLOWED-RAN" not in b for b in _Api.bodies[-3:])
+        hooked = ("Bash", "hook") in gate.calls
+        fact("!`…` своей команды при allowed-tools", f"выполнено={ran}, хук PreToolUse={hooked}")
+        gate.calls.clear()
+        await turn("/bangask")
+        deferred = any("run this first" in b and "bang-marker" in b for b in _Api.bodies[-3:])
+        fact("!`…` без разрешения в автомоде", f"не выполнено (маркер {(cwd / 'bang-marker.txt').exists()}), "
+             f"отдано модели текстом={deferred}, хук={('Bash', 'hook') in gate.calls}")
+        # Запись в рабочей папке в автомоде: хук отвечает {} — без can_use_tool.
+        gate.calls.clear()
+        events.clear()
+        reply = await turn("auto CALL " + json.dumps({"name": "Bash", "input": {
+            "command": "echo hi > auto-out.txt", "description": "x"}}))
+        cli = next((e.get("cli_decision") for e in events if e["type"] == "tool_result"), None)
+        check("автомод: запись в рабочей папке после {} хука — без can_use_tool",
+              (cwd / "auto-out.txt").exists() and ("Bash", "can_use_tool") not in gate.calls, str(cli))
     finally:
         conv.close()
+
+    # confirm (default): allow хука — без can_use_tool; правила deny CLI сильнее allow.
+    _Api.served = 0
+    cfg2, cwd2 = work / "cfg-confirm", work / "cwd-confirm"
+    cwd2.mkdir(parents=True, exist_ok=True)
+    _cli_config(cfg2, mcp)
+    private = work / "private-cli"
+    private.mkdir(exist_ok=True)
+    (private / "s.txt").write_text("PRIVATE", encoding="utf-8")
+    gate2 = _ScriptGate(default="allow")
+    conv2 = Conversation(system_prompt=f"{MARK} confirm", cli=[exe], popen=_popen_for(cfg2, port), cwd=cwd2,
+                         responder=True, add_dirs=[cwd2], deny_paths=[private], gate=gate2, mode="confirm")
+    try:
+        outside = work / "outside-cli.txt"
+        gate2.begin("user")
+        reply = await conv2.send("c1 CALL " + json.dumps({"name": "Bash", "input": {
+            "command": f"echo hi > \"{outside}\"", "description": "x"}}), timeout_s=120)
+        gate2.end()
+        check("confirm: allow хука — запись вне рабочих папок без can_use_tool",
+              outside.exists() and ("Bash", "can_use_tool") not in gate2.calls,
+              f"{conv2.permission_mode}; {reply.text[:80]}")
+        gate2.begin("user")
+        reply = await conv2.send("c2 CALL " + json.dumps({"name": "Read", "input": {
+            "file_path": str(private / "s.txt")}}), timeout_s=120)
+        gate2.end()
+        check("правило deny CLI сильнее allow хука", _outcome(reply.text or "") == "rule" and
+              "PRIVATE" not in (reply.text or ""), reply.text[:100])
+    finally:
+        conv2.close()
+
+    # Автомод выключен настройкой — CLI молча в default.
+    cfg3, cwd3 = work / "cfg-noauto", work / "cwd-noauto"
+    cwd3.mkdir(parents=True, exist_ok=True)
+    _cli_config(cfg3, mcp, {"permissions": {"disableAutoMode": "disable"}})
+    conv3 = Conversation(system_prompt=f"{MARK} noauto", cli=[exe], popen=_popen_for(cfg3, port), cwd=cwd3,
+                         responder=True, add_dirs=[cwd3], gate=_ScriptGate(), mode="auto")
+    try:
+        await conv3.control("mcp_status")
+        check("disableAutoMode — CLI стартует в default, auto_unavailable",
+              conv3.permission_mode == "default" and conv3.auto_unavailable, str(conv3.permission_mode))
+    finally:
+        conv3.close()
+
+    # Подагент: хук PreToolUse на его вызовы; запускается ли он в фоне.
+    cfg4, cwd4 = work / "cfg-sub", work / "cwd-sub"
+    cwd4.mkdir(parents=True, exist_ok=True)
+    _cli_config(cfg4, mcp)
+    _Api.served = 0
+    saved = claude_stream.FREE_DISALLOWED
+    claude_stream.FREE_DISALLOWED = tuple(t for t in saved if t not in ("Agent", "Task"))
+    gate4 = _ScriptGate(default="allow")
+    events4: list[dict] = []
+    conv4 = Conversation(system_prompt=f"{MARK} sub", cli=[exe], popen=_popen_for(cfg4, port), cwd=cwd4,
+                         responder=True, add_dirs=[cwd4], gate=gate4, mode="confirm")
+    try:
+        gate4.begin("user")
+        await conv4.send("s1 CALL " + json.dumps({"name": "Agent", "input": {
+            "description": "probe", "prompt": "SUBTOOL echo SUBRAN", "subagent_type": "general-purpose"}}),
+            timeout_s=120, on_event=events4.append)
+        for _ in range(40):                       # подагент мог уйти в фон — подождать его вызов
+            if ("Bash", "hook") in gate4.calls:
+                break
+            await asyncio.sleep(0.25)
+        gate4.end()
+        agent_out = next((e["output"] for e in events4 if e["type"] == "tool_result"), "")
+        fact("Agent без run_in_background", "в фоне (Async agent launched)" if "Async agent" in agent_out
+             else "на переднем плане")
+        fact("хук PreToolUse на вызов подагента", ("Bash", "hook") in gate4.calls)
+    finally:
+        conv4.close()
+        claude_stream.FREE_DISALLOWED = saved
     return failed
 
 
@@ -411,8 +630,15 @@ def main() -> int:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Api)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     work = Path(tempfile.mkdtemp(prefix="meet-probe-gate-"))
+    exe = shutil.which("claude")
     try:
-        return asyncio.run(_probe(work, server.server_address[1]))
+        failed = 0
+        if exe:
+            failed += asyncio.run(_probe_cli(work, server.server_address[1], exe))
+        if "--cli" not in sys.argv[1:]:
+            _Api.served = 0
+            failed += asyncio.run(_probe(work, server.server_address[1]))
+        return 1 if failed or not exe else 0
     finally:
         server.shutdown()
         shutil.rmtree(work, ignore_errors=True)

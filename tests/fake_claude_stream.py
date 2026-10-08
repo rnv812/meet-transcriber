@@ -21,7 +21,20 @@
            (`hook_callback`), а если хук не отказал и `ask` — ещё
            `can_use_tool`; ответ модели — JSON-список исходов
            (`{"name","result":"allowed"|"denied","reason"}`). В init —
-           `mcp_servers` из FAKE_CLAUDE_MCP (имена через запятую).
+           `mcp_servers` из FAKE_CLAUDE_MCP (имена через запятую, у имени
+           может быть `:статус`), `permissionMode`, `slash_commands`.
+           0.4 (как claude 2.1.293, сверено пробником): ответ `initialize` —
+           `commands`, `models`, `current_permission_mode` (режим из
+           `--permission-mode`; FAKE_CLAUDE_PERMISSION_MODE — подменить: автомод
+           недоступен); control-запросы `mcp_status` (`mcpServers`),
+           `mcp_reconnect` `{serverName}` (FAKE_CLAUDE_NO_RECONNECT=1 —
+           «Unsupported control request subtype»), `mcp_toggle`, `set_model`
+           (`haiku` в автомоде — `system/status` с `permissionMode: default`),
+           `set_permission_mode`; неизвестный подтип — ошибка, как у CLI.
+           Сообщение «/compact» — `system/status`, `system/compact_boundary`
+           (`pre_tokens` 12345, `post_tokens` 900), повтор
+           `<local-command-stdout>` и result без текста модели. Сообщение
+           «/fail» — `<local-command-stderr>` и пустой result.
 FAKE_CLAUDE_REJECT_IMAGES=1 — сообщение с блоком image отвергается, как API
 (result с ошибкой «…image… Could not process image»).
 `--resume=<id>`: id из FAKE_CLAUDE_KNOWN (через запятую) продолжается, иначе —
@@ -115,9 +128,13 @@ def main() -> int:
         nonlocal asked
         asked += 1
         emit({"type": "control_request", "request_id": f"cli_{asked}", "request": request})
-        reply = json.loads(sys.stdin.readline())
-        note({"message": reply})
-        return ((reply.get("response") or {}).get("response")) or {}
+        while True:
+            reply = json.loads(sys.stdin.readline())
+            note({"message": reply})
+            # Пока ждём ответа, хозяин может слать свои control-запросы (0.4: /mcp во время хода).
+            if reply.get("type") == "control_request" and control(reply):
+                continue
+            return ((reply.get("response") or {}).get("response")) or {}
 
     def gate_turn(content) -> list:
         text = content if isinstance(content, str) else "\n".join(
@@ -154,15 +171,75 @@ def main() -> int:
                 out.append({"name": call["name"], "result": "denied", "by": "hook",
                             "reason": spec.get("permissionDecisionReason")})
                 return
-            if call.get("ask"):
+            # Как CLI: «allow» хука — без вопроса `can_use_tool` (проверено на 2.1.293).
+            if call.get("ask") and spec.get("permissionDecision") != "allow":
                 perm = ask_host({"subtype": "can_use_tool", "tool_name": call["name"], "tool_use_id": tid,
                                  "input": call.get("input") or {}})
                 if perm.get("behavior") != "allow":
                     out.append({"name": call["name"], "result": "denied", "by": "can_use_tool",
                                 "reason": perm.get("message")})
                     return
-            out.append({"name": call["name"], "result": "allowed"})
+            out.append({"name": call["name"], "result": "allowed", "hook": spec.get("permissionDecision") or "{}"})
 
+
+    permission_mode = os.environ.get("FAKE_CLAUDE_PERMISSION_MODE") or _arg(argv, "--permission-mode") or "default"
+    mcp_state = {}
+    for item in os.environ.get("FAKE_CLAUDE_MCP", "").split(","):
+        if item:
+            name, _, status = item.partition(":")
+            mcp_state[name] = status or "connected"
+
+    def server_list() -> list:
+        return [{"name": k, "status": v, **({"error": "Connection closed"} if v == "failed" else {}),
+                 "scope": "user", "source": "user"} for k, v in mcp_state.items()]
+
+    def answer(msg, body=None, error=None) -> None:
+        if error:
+            emit({"type": "control_response", "response": {
+                "subtype": "error", "request_id": msg.get("request_id"), "error": error}})
+        else:
+            emit({"type": "control_response", "response": {
+                "subtype": "success", "request_id": msg.get("request_id"), **({"response": body} if body is not None
+                                                                              else {})}})
+
+    def control(msg) -> bool:
+        """Control-запросы 0.4 (режим gate); False — не наш подтип."""
+        nonlocal permission_mode
+        req = msg.get("request") or {}
+        sub = req.get("subtype")
+        if sub == "mcp_status":
+            answer(msg, {"mcpServers": server_list()})
+        elif sub == "mcp_reconnect":
+            name = req.get("serverName")
+            if os.environ.get("FAKE_CLAUDE_NO_RECONNECT") == "1":
+                answer(msg, error="Unsupported control request subtype: mcp_reconnect")
+            elif name not in mcp_state:
+                answer(msg, error=f"Server not found: {name}")
+            elif os.environ.get("FAKE_CLAUDE_RECONNECT_FAILS") == "1":
+                answer(msg, error="Connection closed")
+            else:
+                mcp_state[name] = "connected"
+                answer(msg)
+        elif sub == "mcp_toggle":
+            if req.get("serverName") not in mcp_state:
+                answer(msg, error=f"Server not found: {req.get('serverName')}")
+            else:
+                mcp_state[req["serverName"]] = "connected" if req.get("enabled") else "disabled"
+                answer(msg)
+        elif sub == "set_model":
+            answer(msg)
+            if req.get("model") == "haiku" and permission_mode == "auto":
+                permission_mode = "default"
+                emit({"type": "system", "subtype": "status", "status": None, "permissionMode": permission_mode,
+                      "session_id": session})
+        elif sub == "set_permission_mode":
+            permission_mode = req.get("mode")
+            answer(msg, {"mode": permission_mode})
+        elif sub == "interrupt":
+            return False
+        else:
+            answer(msg, error=f"Unsupported control request subtype: {sub}")
+        return True
 
     for raw in sys.stdin:
         msg = json.loads(raw)
@@ -173,7 +250,14 @@ def main() -> int:
             if os.environ.get("FAKE_CLAUDE_NO_INIT") == "1":
                 continue
             emit({"type": "control_response", "response": {
-                "subtype": "success", "request_id": msg.get("request_id"), "response": {"commands": []}}})
+                "subtype": "success", "request_id": msg.get("request_id"), "response": {
+                    "commands": [{"name": "review", "description": "Review a PR", "argumentHint": "[pr]"},
+                                 {"name": "context", "description": "Context usage", "argumentHint": ""}],
+                    "models": [{"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus"},
+                               {"value": "haiku", "resolvedModel": "claude-haiku-4-5", "displayName": "Haiku"}],
+                    "current_permission_mode": permission_mode}}})
+            continue
+        if msg.get("type") == "control_request" and mode == "gate" and control(msg):
             continue
         if msg.get("type") == "control_request":
             if mode == "deaf":
@@ -207,10 +291,10 @@ def main() -> int:
             wanted = _arg(argv, "--model")
             model = (os.environ.get("FAKE_CLAUDE_INIT_MODEL")
                      or (MODELS.get(wanted, wanted) if wanted else CLI_DEFAULT))
-            servers = [{"name": x, "status": "connected"}
-                       for x in os.environ.get("FAKE_CLAUDE_MCP", "").split(",") if x]
+            servers = [{"name": x["name"], "status": x["status"]} for x in server_list()]
             emit({"type": "system", "subtype": "init", "session_id": session, "model": model,
-                  **({"mcp_servers": servers} if mode == "gate" else {})})
+                  **({"mcp_servers": servers, "permissionMode": permission_mode,
+                      "slash_commands": ["review", "context", "compact", "mcp"]} if mode == "gate" else {})})
         content = (msg.get("message") or {}).get("content")
         if reject_images and isinstance(content, list) and any(
                 isinstance(b, dict) and b.get("type") == "image" for b in content):
@@ -220,6 +304,24 @@ def main() -> int:
         if mode in ("slow", "deaf", "finish"):
             delta("начало ответа")
             pending = True
+            continue
+        if mode == "gate" and content == "/compact":
+            emit({"type": "system", "subtype": "status", "status": "compacting", "session_id": session})
+            emit({"type": "system", "subtype": "compact_boundary", "session_id": session, "compact_metadata": {
+                "trigger": "manual", "pre_tokens": 12345, "post_tokens": 900, "duration_ms": 5}})
+            emit({"type": "user", "message": {"role": "user", "content": "summary"}, "session_id": session,
+                  "isSynthetic": True})
+            emit({"type": "user", "message": {"role": "user", "content":
+                  "<local-command-stdout>Compacted </local-command-stdout>"}, "session_id": session, "isReplay": True})
+            emit({"type": "result", "subtype": "success", "is_error": False, "result": "", "num_turns": 0,
+                  "session_id": session, "usage": {"input_tokens": 0, "output_tokens": 0}})
+            continue
+        if mode == "gate" and content == "/fail":
+            emit({"type": "user", "message": {"role": "user", "content":
+                  "<local-command-stderr>Shell command permission check failed</local-command-stderr>"},
+                  "session_id": session})
+            emit({"type": "result", "subtype": "success", "is_error": False, "result": "", "num_turns": 0,
+                  "session_id": session, "usage": {"input_tokens": 0, "output_tokens": 0}})
             continue
         if mode == "gate":
             text = json.dumps(gate_turn(content), ensure_ascii=False)

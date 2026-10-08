@@ -127,6 +127,9 @@ class AgentReply:
     # Какая модель на самом деле отвечала (`model` из `system/init` Claude
     # Code); None — неизвестно (другие провайдеры, CLI не начал ход).
     model: str | None = None
+    # Контекст сжат в этом ходе (`/compact` или авто-сжатие Claude Code,
+    # `system/compact_boundary`): `{"trigger", "pre_tokens", "post_tokens"}`.
+    compacted: dict | None = None
 
 
 def resume_failure(detail: str | None) -> AgentReply:

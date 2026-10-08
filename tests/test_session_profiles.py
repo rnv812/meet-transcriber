@@ -1010,13 +1010,14 @@ def test_gate_ask_text_in_personal_has_no_meeting_wording(tmp_path):
         [gate.decide("Read", {"file_path": str(kb / "a.md")})])
 
 
-def test_claude_command_without_user_mcp(tmp_path):
+def test_claude_command_has_user_mcp_in_every_profile(tmp_path):
+    """0.4: «Личный» — только промпт; выключателя MCP у командной строки нет."""
     from meet.llm.claude_stream import build_command
 
-    free = build_command(["claude"], system_prompt="s", responder=True, freedom=True, mcp=False)
-    assert "--strict-mcp-config" in free and "--setting-sources" not in free
+    with pytest.raises(TypeError):
+        build_command(["claude"], system_prompt="s", responder=True, freedom=True, mcp=False)
     work = build_command(["claude"], system_prompt="s", responder=True, freedom=True)
-    assert "--strict-mcp-config" not in work
+    assert "--strict-mcp-config" not in work and "--setting-sources" not in work
 
 
 def test_personal_free_claude_session_gets_the_profile_gate_and_no_mcp(tmp_path):
