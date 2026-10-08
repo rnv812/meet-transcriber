@@ -87,10 +87,10 @@ export function HelpTip({ label, title, children }: {
   }, [shown, close, place]);
 
   return (
-    <span ref={root} className="help"
+    <span ref={root} className="helptip"
       onMouseEnter={() => { clearTimeout(timer.current); setHover(true); }}
       onMouseLeave={() => { clearTimeout(timer.current); timer.current = setTimeout(() => setHover(false), CLOSE_DELAY_MS); }}>
-      <button ref={button} type="button" className="help__button" aria-label={label}
+      <button ref={button} type="button" className="helptip__button" aria-label={label}
         aria-expanded={shown} aria-describedby={shown ? id : undefined}
         onClick={() => setPinned((v) => !v)}
         onFocus={() => setFocus(true)}
@@ -98,9 +98,9 @@ export function HelpTip({ label, title, children }: {
         ?
       </button>
       {shown && (
-        <span ref={tip} role="tooltip" id={id} className="help__tip"
+        <span ref={tip} role="tooltip" id={id} className="helptip__tip"
           style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden", left: 0, top: 0 }}>
-          {title && <span className="help__title">{title}</span>}
+          {title && <span className="helptip__title">{title}</span>}
           {children}
         </span>
       )}
@@ -110,5 +110,5 @@ export function HelpTip({ label, title, children }: {
 
 /** Абзац внутри подсказки. */
 export function TipLine({ children }: { children: ReactNode }) {
-  return <span className="help__line">{children}</span>;
+  return <span className="helptip__line">{children}</span>;
 }

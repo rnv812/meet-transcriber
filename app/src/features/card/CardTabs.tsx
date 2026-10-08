@@ -179,11 +179,11 @@ export function CardTabs({
   };
 
   return (
-    <div className="tabs">
-      <div className="tabs__list" role="tablist" aria-label="Содержимое записи" onKeyDown={onKeyDown}>
+    <div className="card-tabs">
+      <div className="card-tabs__list" role="tablist" aria-label="Содержимое записи" onKeyDown={onKeyDown}>
         {tabs.map((t) => (
           <button
-            key={t.id} type="button" role="tab" className="tabs__tab"
+            key={t.id} type="button" role="tab" className="card-tabs__tab"
             id={`${base}-${t.id}`} aria-controls={`${base}-${t.id}-panel`}
             aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1}
             ref={(el) => { buttons.current[t.id] = el; }}
@@ -197,7 +197,7 @@ export function CardTabs({
         ))}
       </div>
       {tabs.map((t) => (
-        <div key={t.id} className="tabs__panel" role="tabpanel"
+        <div key={t.id} className="card-tabs__panel" role="tabpanel"
           ref={t.id === "transcript" ? transcriptPanel : undefined}
           id={`${base}-${t.id}-panel`} aria-labelledby={`${base}-${t.id}`} hidden={tab !== t.id}>
           {opened.has(t.id) && panels[t.id]()}

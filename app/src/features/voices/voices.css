@@ -27,7 +27,7 @@
 .voices__notice-actions { display: inline-flex; gap: 6px; }
 .voices__empty { display: flex; flex-direction: column; height: 100%; }
 .voices__empty .voices__notice { margin: 16px 20px 0; }
-.voices__empty .empty { flex: 1; height: auto; }
+.voices__empty .empty-state { flex: 1; height: auto; }
 .pcard { display: flex; flex-direction: column; gap: 12px; outline: none; }
 .pcard__head { display: flex; align-items: center; gap: 14px; }
 .pcard__name {
@@ -51,4 +51,4 @@
   height: 28px; background: var(--surface-2); color: var(--text); border: 1px solid var(--line-2);
   border-radius: var(--r-md); font: inherit;
 }
-.voices__title .help { margin-left: 6px; }
+.voices__title .helptip { margin-left: 6px; }

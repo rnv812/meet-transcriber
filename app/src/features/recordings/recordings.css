@@ -18,16 +18,16 @@
   font: inherit; cursor: pointer;
 }
 .link:hover { text-decoration: underline; }
-.search {
+.search-field {
   height: 28px; padding: 0 10px; width: 100%;
   background: var(--surface); color: var(--text);
   border: 1px solid var(--line-2); border-radius: var(--r-md); font: inherit;
 }
-.search::placeholder { color: var(--text-3); }
-.search:focus { outline: none; border-color: var(--accent); }
+.search-field::placeholder { color: var(--text-3); }
+.search-field:focus { outline: none; border-color: var(--accent); }
 /* Поиск и фильтр по категориям — одной строкой; включённый фильтр — меткой под ними. */
 .rec-list__search { display: flex; align-items: center; gap: 6px; }
-.rec-list__search .search { flex: 1; min-width: 0; }
+.rec-list__search .search-field { flex: 1; min-width: 0; }
 /* Строка поиска с подсказками (SearchSuggest, combobox): список — под полем и «Фильтрами» во всю
    ширину строки (подробности вариантов не обрезаются), поверх списка записей. */
 .rec-list__search { position: relative; }

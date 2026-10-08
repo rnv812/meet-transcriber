@@ -228,7 +228,7 @@ export function FiltersButton({
                 () => onReplace(["date"], dateChip && sameChip(dateChip, p.chip) ? [] : [p.chip])))}
               {customDate && option("t:custom", chipText(customDate, ctx), true, null, () => onReplace(["date"], []))}
               <div className="filters__period">
-                <input type="text" className="search filters__period-input" aria-label="Выбрать период"
+                <input type="text" className="search-field filters__period-input" aria-label="Выбрать период"
                   placeholder="Выбрать… 5 окт, сентябрь" title="5 окт, сентябрь, с 1.09 по 15.09, прошлая неделя"
                   value={period}
                   onChange={(e) => setPeriod(e.target.value)}

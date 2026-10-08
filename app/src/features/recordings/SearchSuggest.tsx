@@ -140,7 +140,7 @@ export function SearchSuggest({ value, onChange, onApply, onBackspaceEmpty, endp
       <input
         ref={input}
         type="search"
-        className="search"
+        className="search-field"
         role="combobox"
         placeholder={placeholder}
         title="Поиск по названиям и тексту расшифровок. Префиксы: участник:, группа:, категория:, дата:, есть:, дольше:…"

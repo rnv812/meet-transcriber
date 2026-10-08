@@ -1,14 +1,14 @@
 /* Вкладка «Агент»: строка управления, подсказка и терминал во всю высоту. */
 
 .agent { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.agent--empty > .empty { flex: 1; height: auto; }
+.agent--empty > .empty-state { flex: 1; height: auto; }
 .agent__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .agent__label { color: var(--text-2); font-size: 12px; }
 .agent__select {
   height: 28px; padding: 0 6px; background: var(--surface-2); color: var(--text);
   border: 1px solid var(--line-2); border-radius: var(--r-md); font: inherit;
 }
-.agent__bar .help { margin-right: 6px; }
+.agent__bar .helptip { margin-right: 6px; }
 .agent__phase { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--text-2); }
 .agent__model { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .agent__dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-3); }

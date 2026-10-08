@@ -1,12 +1,12 @@
 /* «?» с пояснением (ui/HelpTip.tsx): общий для настроек, мастера и карточки. */
-.help { position: relative; display: inline-flex; flex: none; vertical-align: middle; }
-.help__button {
+.helptip { position: relative; display: inline-flex; flex: none; vertical-align: middle; }
+.helptip__button {
   width: 18px; height: 18px; padding: 0; border: 1px solid var(--line-2); border-radius: 50%;
   background: var(--surface); color: var(--text-2); font: inherit; font-size: 11px; line-height: 1; cursor: pointer;
 }
-.help__button:hover, .help__button:focus-visible, .help__button[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
-.help__button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.help__tip {
+.helptip__button:hover, .helptip__button:focus-visible, .helptip__button[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+.helptip__button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.helptip__tip {
   position: fixed; z-index: 50; width: 300px; max-width: calc(100vw - 16px);
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
@@ -14,5 +14,5 @@
   text-transform: none; letter-spacing: normal; white-space: normal;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
-.help__title { color: var(--text); font-weight: 600; }
-.help__line code { color: var(--text); font-size: 11px; }
+.helptip__title { color: var(--text); font-weight: 600; }
+.helptip__line code { color: var(--text); font-size: 11px; }

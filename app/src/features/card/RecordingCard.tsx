@@ -542,7 +542,7 @@ export function RecordingCard({
   );
 
   return (
-    <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`} ref={cardEl}>
+    <section className={`rec-card${panel.open && status.kind === "ready" ? " rec-card--with-spk" : ""}`} ref={cardEl}>
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil}
         speakers={status.kind === "text" ? NO_NAMES : speakers} people={people}
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}

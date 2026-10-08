@@ -47,8 +47,8 @@ export function StorageMissing() {
   const where = status?.missing ?? status?.root ?? "Выбранная папка";
   const unreadable = Boolean(status?.unreadable);
   return (
-    <div className="empty storage-missing">
-      <div className="empty__title">{unreadable ? STORAGE_UNREADABLE_TITLE : STORAGE_MISSING_TITLE}</div>
+    <div className="empty-state storage-missing">
+      <div className="empty-state__title">{unreadable ? STORAGE_UNREADABLE_TITLE : STORAGE_MISSING_TITLE}</div>
       {unreadable ? (
         <div>
           Не удалось прочитать, где хранятся движок и модели (файл storage.json повреждён — например, после
