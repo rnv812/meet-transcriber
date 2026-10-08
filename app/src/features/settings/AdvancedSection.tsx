@@ -37,10 +37,12 @@ export function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
         <Row label="Окно регулярной встречи" help={<RecurringWindowTip />} disabled={!hookOn}
           hint="Запись, начатая в этот промежуток, считается регулярной встречей">
           <span className="with-unit">
-            <input type="text" aria-label="Начало окна" className="input--time" placeholder="11:00" disabled={!hookOn}
+            <input type="text" aria-label="Начало окна" className="field field--sm input--time num" placeholder="11:00"
+              disabled={!hookOn}
               value={win?.[0] ?? ""} onChange={(e) => setWin(0, e.target.value)} />
             <span className="unit">—</span>
-            <input type="text" aria-label="Конец окна" className="input--time" placeholder="12:00" disabled={!hookOn}
+            <input type="text" aria-label="Конец окна" className="field field--sm input--time num" placeholder="12:00"
+              disabled={!hookOn}
               value={win?.[1] ?? ""} onChange={(e) => setWin(1, e.target.value)} />
           </span>
         </Row>

@@ -8,7 +8,7 @@ import { noProvider } from "../features/card/assistant";
 import { type Endpoint, getAssistant, liveAttach, liveDetach, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import {
-  DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_LABEL, TEMP_NOTE, TEMP_STOP_LABEL,
+  DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_STOP_LABEL,
 } from "../lib/recordingStop";
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
@@ -19,7 +19,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { floatingStyle, useFloating } from "../ui/floating";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
-import { RailTip } from "./RailTip";
+import { Tip } from "../ui/Tip";
 import "./rail.css";
 
 /** Меньше стольких ГБ на диске записей — предупреждение «Мало места» (рейка и страница «Идёт запись»). */
@@ -36,6 +36,10 @@ const RECORD_ITEM = "Записать";
 const RECORD_NOTE = "без ассистента; расшифровка — после остановки";
 const STOP_NOTE = "запись сохранится и расшифруется";
 const TEMP_STOP_NOTE = "встреча и разговор удалятся — с подтверждением";
+const START_GROUP = "С ассистентом";
+const ATTACH_GROUP = "Включить ассистента";
+/** Под «Временная — не сохранится» — что именно не сохранится. */
+const TEMP_ITEM_NOTE = "ни записи, ни расшифровки — только разговор с ассистентом";
 const IDLE_MENU = "Варианты записи";
 const RECORDING_MENU = "Действия с записью";
 
@@ -109,6 +113,17 @@ function RecItem({ icon, title, note, danger = false, ...rest }: {
         <span className="rec-menu__note">{note}</span>
       </span>
     </button>
+  );
+}
+
+/** Группа пунктов меню с подписью (как `.spotlight__group` Aurora): «С ассистентом», «Включить ассистента». */
+function MenuGroup({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId();
+  return (
+    <div className="rec-menu__group" role="group" aria-labelledby={id}>
+      <div className="rec-menu__group-label" id={id}>{label}</div>
+      {children}
+    </div>
   );
 }
 
@@ -262,13 +277,18 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   // Справа от кнопки, верхом вровень с ней; всегда в пределах окна (ui/floating).
   const menuPos = useFloating(menu ? anchor : null, menuBox, { gap: 0 });
   const hintId = useId();
-  const tipId = useId();
   const blocked = noProvider(assistant);
   // Профиль по умолчанию (`assist.profile`) — первым и с пометкой (ревью M5);
   // старый резидент его не присылает — порядок как есть, без пометки.
   const fallback = assistant?.profile ? profileOf(assistant.profile) : null;
   const profiles = fallback ? [fallback, ...PROFILES.filter((p) => p !== fallback)] : PROFILES;
-  const mark = (p: AgentProfile) => (p === fallback ? " (по умолчанию)" : "");
+  /** «Рабочая встреча» и тихая пометка «по умолчанию» справа — у профиля из настроек. */
+  const profileTitle = (p: AgentProfile) => (
+    <>
+      {PROFILE_LABELS[p]}
+      {p === fallback && <small className="rec-menu__default"><span className="sr-only">, </span>по умолчанию</small>}
+    </>
+  );
   // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню и вопрос больше не к месту.
   useEffect(() => { setMenu(false); setAsking(null); }, [mode]);
   // Открытое меню — фокус на первый пункт (прежнее действие кнопки: он всегда доступен).
@@ -337,13 +357,16 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   let label = START_LABEL;
   let act: (() => void) | null = () => run("start");
   let lines: string[] = [];
+  /** Часы записи под кнопкой (видны всё время записи, без наведения); нет — не пишем. */
+  let elapsed: string | null = null;
   if (recording) {
     const note = !attached ? null : live?.stopping ? "Ассистент выключается…"
       : live?.starting || warmingUp(live) ? startingText(live) : null;
     const listening = attached && liveActive && !warmingUp(live) && !live?.stopping;
     label = temporary ? TEMP_STOP_LABEL : STOP_LABEL;
     act = () => (temporary ? ask("temp-end") : run("stop"));
-    const head = [`Идёт запись · ${clock(snapshot.elapsed_s + since)}`,
+    elapsed = clock(snapshot.elapsed_s + since);
+    const head = [`Идёт запись · ${elapsed}`,
       listening ? "ассистент" : null, snapshot.source === "auto" ? "автозапись" : null];
     lines = [head.filter(Boolean).join(" · "), temporary ? TEMP_BADGE : null, note]
       .filter((x): x is string => !!x);
@@ -361,7 +384,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     const warming = warmingUp(live);
     label = STOP_LABEL;
     act = () => runLive(liveStop);
-    const head = ["Идёт запись", liveS === null ? null : clock(liveS), warming ? null : "ассистент"];
+    elapsed = liveS === null ? null : clock(liveS);
+    const head = ["Идёт запись", elapsed, warming ? null : "ассистент"];
     lines = [head.filter(Boolean).join(" · "), warming ? startingText(live) : null]
       .filter((x): x is string => !!x);
   }
@@ -404,13 +428,17 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
           <RecItem icon={<Icon as={Power} />} title="Выключить ассистента"
             note="запись продолжится, сводка останется в карточке"
             disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)} />
-        ) : profiles.map((p) => (
-          <RecItem key={p} icon={agentIcon} title={<>Включить ассистента · {PROFILE_LABELS[p]}{mark(p)}</>}
-            note={`догонит начало встречи; ${PROFILE_NOTES[p]}`}
-            disabled={blocked} aria-describedby={noProviderHint}
-            onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)} />
-        ))}
-        {blocked && !attached && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+        ) : (
+          <MenuGroup label={ATTACH_GROUP}>
+            {profiles.map((p) => (
+              <RecItem key={p} icon={agentIcon} title={profileTitle(p)}
+                note={`догонит начало встречи; ${PROFILE_NOTES[p]}`}
+                disabled={blocked} aria-describedby={noProviderHint}
+                onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)} />
+            ))}
+            {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+          </MenuGroup>
+        )}
         {temporary ? (
           <RecItem icon={<Icon as={Save} />} title={KEEP_LABEL}
             note="запись ляжет в библиотеку и расшифруется, как обычная" onClick={() => run("keep")} />
@@ -428,14 +456,18 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       <>
         <RecItem ref={item} icon={<i className="rec-menu__dot" />} title={RECORD_ITEM} note={RECORD_NOTE}
           onClick={() => act?.()} />
-        {profiles.map((p) => (
-          <RecItem key={p} icon={agentIcon} title={<>С ассистентом · {PROFILE_LABELS[p]}{mark(p)}</>}
-            note={PROFILE_NOTES[p]} disabled={blocked} aria-describedby={noProviderHint}
-            onClick={() => runLive((ep) => liveStart(ep, { profile: p }), START_FAILED)} />
-        ))}
-        <RecItem icon={<Icon as={Timer} />} title={TEMP_LABEL} note={TEMP_NOTE}
-          disabled={blocked} aria-describedby={noProviderHint} onClick={startTemporary} />
-        {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+        <div className="rec-menu__sep" role="separator" />
+        {/* «С ассистентом» — подписью группы, пункты — короткие: не переносятся на две строки. */}
+        <MenuGroup label={START_GROUP}>
+          {profiles.map((p) => (
+            <RecItem key={p} icon={agentIcon} title={profileTitle(p)}
+              note={PROFILE_NOTES[p]} disabled={blocked} aria-describedby={noProviderHint}
+              onClick={() => runLive((ep) => liveStart(ep, { profile: p }), START_FAILED)} />
+          ))}
+          <RecItem icon={<Icon as={Timer} />} title={TEMP_BADGE} note={TEMP_ITEM_NOTE}
+            disabled={blocked} aria-describedby={noProviderHint} onClick={startTemporary} />
+          {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+        </MenuGroup>
       </>
     );
   }
@@ -443,15 +475,20 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
 
   return (
     <div className={`rail-rec${open ? " rail-rec--open" : ""}`} ref={box}>
-      <RailTip tip={lines.length ? <TipLines lines={lines} /> : label} id={lines.length ? tipId : undefined}>
+      {/* Подсказка справа (ui/Tip): состояние — она же описание кнопки; повторяет имя — без описания.
+          Открыто меню — подсказки нет: она не ложится поверх пунктов. */}
+      <Tip side="right" describe={lines.length > 0}
+        content={open ? null : lines.length ? <TipLines lines={lines} /> : label}>
         <Button ref={main} variant={idle ? "primary" : "danger"} size="lg" flat className="btn--icon" aria-label={label}
-          aria-describedby={lines.length ? tipId : undefined} disabled={!act}
+          disabled={!act}
           aria-haspopup={menuLabel ? "menu" : undefined} aria-expanded={menuLabel ? open : undefined}
           onClick={() => (menuLabel ? setMenu(!menu) : act?.())} onContextMenu={openMenu}>
           {idle ? <i className="rail-rec__dot" aria-hidden="true" />
             : <Icon as={Square} fill="currentColor" stroke="none" />}
         </Button>
-      </RailTip>
+      </Tip>
+      {/* Часы записи — под кнопкой всё время записи (макет: «Идёт запись · 12:47»): не нужно наводить. */}
+      {elapsed && <span className="rail-rec__time num" aria-hidden="true">{elapsed}</span>}
       <span ref={anchor} className="rail-rec__anchor" aria-hidden="true" />
       {open && (
         <div ref={menuBox} className="rec-menu glass glass--dense" role="menu" aria-label={menuLabel ?? undefined}
@@ -485,7 +522,6 @@ export function RecordingWarnings({ endpoint, snapshot, online = true }: {
   online?: boolean;
 }) {
   const [error, setError] = useFadingError();
-  const baseId = useId();
   if (!endpoint || !snapshot || !online) return null;
   const recording = snapshot.status === "recording";
   const warns: { key: string; label: string; details: string[]; onClick?: () => void }[] = [];
@@ -508,17 +544,15 @@ export function RecordingWarnings({ endpoint, snapshot, online = true }: {
   if (!warns.length && !error) return null;
   return (
     <div className="rail-warn">
-      {warns.map((w) => {
-        const id = w.details.length ? `${baseId}-${w.key}` : undefined;
-        return (
-          <RailTip key={w.key} id={id} tip={id ? <TipLines lines={[w.label, ...w.details]} /> : w.label}>
-            <Button variant="ghost" size="md" className="btn--icon rail__warn" aria-label={w.label}
-              aria-describedby={id} onClick={w.onClick}>
-              <Icon as={TriangleAlert} />
-            </Button>
-          </RailTip>
-        );
-      })}
+      {warns.map((w) => (
+        // Подсказка справа: имя и подробности; подробности — и описание кнопки для диктора.
+        <Tip key={w.key} side="right" describe={w.details.length > 0}
+          content={w.details.length ? <TipLines lines={[w.label, ...w.details]} /> : w.label}>
+          <Button variant="ghost" size="md" className="btn--icon rail__warn" aria-label={w.label} onClick={w.onClick}>
+            <Icon as={TriangleAlert} />
+          </Button>
+        </Tip>
+      ))}
       {error && <RailError text={error} onDismiss={() => setError(null)} up />}
     </div>
   );

@@ -9,6 +9,8 @@
  */
 
 import type { Endpoint } from "../../lib/api";
+import { Slider } from "../../ui/Slider";
+import { SLIDER_WIDTH } from "./fields";
 import { HfTokenRow } from "./HfTokenRow";
 import { OwnerVoiceRow } from "./OwnerVoice";
 import { Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
@@ -29,12 +31,8 @@ export function SpeakersSection({ draft, set, endpoint }: { draft: Raw; set: Set
         <OwnerVoiceRow endpoint={endpoint} device={pickedName(draft.recording?.mic_device)} />
         <Row label="Порог узнавания голоса" htmlFor="asr-voice-threshold" help={<VoiceThresholdTip />}
           hint="Насколько голос должен быть похож на образец из базы голосов, чтобы спикер получил имя">
-          <span className="with-unit">
-            <input id="asr-voice-threshold" type="range" min={50} max={95} step={1} value={threshold}
-              aria-valuetext={`${threshold}%`}
-              onChange={(e) => set("asr", "voice_threshold", Number(e.target.value) / 100)} />
-            <span className="unit num">{threshold}%</span>
-          </span>
+          <Slider id="asr-voice-threshold" min={50} max={95} value={threshold} width={SLIDER_WIDTH}
+            format={(x) => `${x}%`} onChange={(x) => set("asr", "voice_threshold", x / 100)} />
         </Row>
       </SettingsCard>
     </>

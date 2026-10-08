@@ -4,7 +4,7 @@ import { errorText } from "../../lib/format";
 import {
   type Appearance, type AuroraStyle, type Palette, type ThemePref, PALETTES, appearanceToSettings,
 } from "../../theme/appearance";
-import { Radio, Row, Switch } from "./Section";
+import { Row, Segmented, Switch, radioKeys } from "./Section";
 import "./appearance.css";
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
@@ -76,23 +76,25 @@ export function AppearanceSection({ endpoint, value, onPreview }: {
 
   return (
     <div className="appearance">
-      <Radio label="Тема" hint="«Системная» — как в Windows или macOS, меняется вместе с ней."
+      <Segmented label="Тема" hint="«Системная» — как в Windows или macOS, меняется вместе с ней"
         value={value.theme} options={THEME_OPTIONS} onChange={(theme) => change({ ...value, theme })} />
-      <Row label="Палитра сияния" hint="Цвет сияния, знака ИИ и главной кнопки. Статусы и поверхности не меняются.">
-        <div role="radiogroup" aria-label="Палитра сияния" className="swatches">
+      <Row label="Палитра сияния" hint="Цвет сияния, знака ИИ и главной кнопки. Статусы и поверхности не меняются" stack>
+        {/* Образцы — радио-кнопки (стрелки двигают выбор), а не родные радио: кружок здесь — сам образец. */}
+        <div role="radiogroup" aria-label="Палитра сияния" className="swatches"
+          onKeyDown={radioKeys(PALETTES, value.aurora, (aurora) => change({ ...value, aurora }))}>
           {PALETTES.map((p) => (
-            <label key={p} className="swatch" data-aurora={p}>
-              <input type="radio" name="aurora" checked={value.aurora === p}
-                onChange={() => change({ ...value, aurora: p })} aria-label={PALETTE_NAMES[p]} />
+            <button key={p} type="button" role="radio" aria-checked={value.aurora === p} className="swatch" data-aurora={p}
+              tabIndex={value.aurora === p ? 0 : -1}
+              onClick={() => { if (value.aurora !== p) change({ ...value, aurora: p }); }}>
               <span className="swatch__chip" aria-hidden="true" />
               <span className="swatch__name">{PALETTE_NAMES[p]}</span>
-            </label>
+            </button>
           ))}
         </div>
       </Row>
-      <Radio label="Вид сияния" hint="Сияние — мягкие пятна, волны — слоистые листы. Видно на пустых экранах и в мастере."
+      <Segmented label="Вид сияния" hint="Сияние — мягкие пятна, волны — слоистые листы. Видно на пустых экранах и в мастере"
         value={value.auroraStyle} options={STYLE_OPTIONS} onChange={(auroraStyle) => change({ ...value, auroraStyle })} />
-      <Switch label="Живое сияние" hint="Медленный дрейф сияния. При «Уменьшить движение» в системе выключено всегда."
+      <Switch label="Живое сияние" hint="Медленный дрейф сияния. При «Уменьшить движение» в системе выключено всегда"
         value={value.motion} onChange={(motion) => change({ ...value, motion })} />
       {error && <p className="appearance__error" role="alert">Не удалось сохранить оформление: {error}</p>}
     </div>

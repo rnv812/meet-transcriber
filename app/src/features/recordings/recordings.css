@@ -82,7 +82,16 @@
   display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 8px 34px 8px 10px; border: 0;
   border-radius: var(--r-sm); background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
-.rec-item__head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* Строка названия: название, ✦ ИИ, «агент» и справа — бейдж состояния высотой 20 на месте «⋯»
+   (бейдж уходит в поле справа, где «⋯»; при наведении и у выбранной вместо него — «⋯»). */
+.rec-item__head { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 20px; }
+.badge.rec-item__badge {
+  flex: none; height: 20px; margin-right: -28px; padding: 0 8px; white-space: nowrap;
+  font-size: var(--text-xs); line-height: 20px;
+}
+.rec-item:hover .rec-item__badge, .rec-item--selected .rec-item__badge, .rec-item--menu .rec-item__badge,
+.rec-item:focus-within .rec-item__badge { visibility: hidden; }
+.rec-item__tip-line { display: block; }
 .rec-item__title {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 500;
 }
@@ -101,11 +110,6 @@
 .rec-item__when > .num { flex: none; }
 /* Идёт запись — точка цвета акцента перед словом. */
 .rec-item__live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-/* Бейдж Aurora — 24 px; в строке меты он выходит в её поля, а не раздвигает строку: строки
-   с бейджем и без — одной высоты. Узкий список: бейдж целиком переносится на свою строку. */
-.rec-item__meta > .rec-item__badge { margin-block: -3px; white-space: nowrap; }
-/* Бейдж без своего цвета («Не расшифровано», «В очереди») не сливается с выделенной строкой. */
-.rec-item--selected .badge--plain { background: var(--hairline-strong); }
 /* Идёт расшифровка: мета одной строкой — дата слева, этап и доля справа (с многоточием);
    под ней полоса хода 4 px. */
 .rec-item__meta--progress { flex-wrap: nowrap; }
@@ -191,7 +195,9 @@
 
 /* Выбор нескольких записей (Ctrl/Shift+щелчок, Ctrl+A) и групповые действия. */
 .rec-item--picking .rec-item__main { padding-left: 32px; }
-.rec-item__pick { position: absolute; left: 10px; top: 11px; margin: 0; z-index: 1; cursor: pointer; accent-color: var(--accent); }
+/* Флажки списка — флажок Aurora .cb, но 18 px (--check локально): строка плотнее формы. */
+.cb.rec-item__pick, .cb.date-sec__pick, .rec-pickbar__keep .cb { --check: 18px; border-radius: 5px; }
+.cb.rec-item__pick { position: absolute; left: 10px; top: 10px; z-index: 1; }
 .rec-item--picked, .rec-item--picked:hover { background: var(--accent-soft); }
 .rec-pickbar {
   display: flex; flex-direction: column; gap: 6px; padding: 10px; font-size: var(--text-xs);
@@ -200,7 +206,6 @@
 .rec-pickbar__row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rec-pickbar__count { color: var(--ink); font-weight: 500; }
 .rec-pickbar__keep { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); cursor: pointer; }
-.rec-pickbar__keep input { margin: 0; accent-color: var(--accent); }
 .rec-pickbar__note { font-size: var(--text-xs); color: var(--ink-3); }
 /* Заготовки строк, пока библиотека загружается впервые. */
 .rec-skel__row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
@@ -223,7 +228,7 @@
 .date-sec--open .date-sec__chevron { transform: rotate(90deg); }
 .date-sec__count { color: var(--ink-3); font-weight: 400; }
 /* Флажок раздела — над флажками строк. */
-.date-sec__pick { flex: none; margin: 0 0 0 10px; cursor: pointer; accent-color: var(--accent); }
+.cb.date-sec__pick { margin: 0 0 0 10px; }
 .rec-found { margin: 0; padding: 0 2px; font-size: var(--text-xs); color: var(--ink-3); }
 /* Длинный список: строки за экраном не раскладываются. Сдерживание отрисовки
    обрезает всё, что выходит за строку, — рамка фокуса внутрь (inset-тень), а с открытым

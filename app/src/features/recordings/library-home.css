@@ -1,0 +1,37 @@
+/* Ничего не выбрано (LibraryHome.tsx): колонка от левого верхнего угла карточки — те же поля,
+   что у шапки встречи (24), по ширине чтения; «Записи» и счётчик, «Новая встреча» на тихом
+   сиянии (card aurora-wash), «Последняя». Сетка 8/16/24. */
+.lib-home {
+  box-sizing: border-box; max-width: 760px; padding: var(--s-5) var(--s-5) var(--s-6);
+  display: flex; flex-direction: column; gap: var(--s-5);
+}
+.lib-home__head { display: flex; align-items: baseline; gap: var(--s-3); }
+.lib-home__title { margin: 0; font-size: var(--text-h2); line-height: var(--lh-tight); }
+.lib-home__count { color: var(--ink-3); font-size: var(--text-sm); }
+
+.lib-home__start { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-4); padding: var(--s-5); }
+.lib-home__start-text { display: flex; flex-direction: column; gap: 4px; }
+.lib-home__start-title { margin: 0; color: var(--ink); font: 600 var(--text-lg)/var(--lh-snug) var(--font-body); }
+.lib-home__start-lead { margin: 0; max-width: 56ch; color: var(--ink-2); font-size: var(--text-ui); line-height: var(--lh-body); }
+.lib-home__actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.lib-home__dot { width: 10px; height: 10px; flex: none; border-radius: var(--r-full); background: var(--on-accent-strong); }
+.lib-home__auto { display: inline-flex; align-items: center; gap: var(--s-2); color: var(--ink-2); font-size: var(--text-sm); }
+.lib-home__auto-dot { width: 6px; height: 6px; flex: none; border-radius: var(--r-full); background: var(--ink-3); }
+.lib-home__auto-dot--on { background: var(--accent); }
+.lib-home__error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
+
+.lib-home__last { display: flex; flex-direction: column; gap: var(--s-2); }
+.lib-home__label { margin: 0; color: var(--ink-3); font: 500 var(--text-sm)/var(--lh-snug) var(--font-body); }
+/* Последняя встреча — карточка-кнопка: название и мета слева, состояние и стрелка справа. */
+.lib-home__rec {
+  display: flex; align-items: center; gap: var(--s-3); width: 100%; box-sizing: border-box;
+  padding: var(--s-3) var(--s-4); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+  transition: background var(--d), border-color var(--d);
+}
+.lib-home__rec:hover { background: var(--surface-2); border-color: var(--hairline-strong); }
+/* Тень карточки не вытесняет рамку фокуса Aurora. */
+.lib-home__rec:focus-visible { box-shadow: var(--focus-ring), var(--elev-1); }
+.lib-home__rec-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lib-home__rec-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.lib-home__rec-meta { color: var(--ink-3); font-size: var(--text-sm); }
+.lib-home__rec-go { flex: none; color: var(--ink-3); }

@@ -15,6 +15,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { OS, type Os } from "../../lib/platform";
 import { Icon } from "../../ui/Icon";
+import { fieldClass } from "./fields";
 
 export type CallProgram = { id: string; title: string; exes: string[]; messenger?: boolean };
 
@@ -99,8 +100,8 @@ function PresetBox({ program, selected, onToggle }: {
     if (ref.current) ref.current.indeterminate = some;
   }, [some]);
   return (
-    <label className="callapps__item">
-      <input ref={ref} type="checkbox" checked={all} aria-label={program.title} onChange={onToggle} />
+    <label className="check-row callapps__item">
+      <input ref={ref} type="checkbox" className="cb" checked={all} aria-label={program.title} onChange={onToggle} />
       <span className="callapps__name">
         <span>{program.title}</span>
         <span className="callapps__exes">{program.exes.join(", ")}</span>
@@ -158,7 +159,7 @@ function AddProgram({ processes: initial, loadProcesses, selected, os, onAdd, on
   return (
     <div className="callapps__add">
       <span className="with-unit">
-        <input type="text" role="combobox" aria-label="Программа" aria-expanded={expanded} aria-controls={listId}
+        <input type="text" className={fieldClass()} role="combobox" aria-label="Программа" aria-expanded={expanded} aria-controls={listId}
           aria-autocomplete="list" aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
           placeholder={os === "macos" ? "Поиск по запущенным или имя процесса" : "Поиск по запущенным или имя.exe"} autoFocus value={query}
           onChange={(e) => { setQuery(e.target.value); setActive(-1); }} onKeyDown={onKey} />

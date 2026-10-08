@@ -148,8 +148,9 @@ test("старая встреча: прежние подсказки — тол�
   // Вопросы `meet ask` — на вкладке «Агент» (ревью I4).
   expect(screen.queryByText("Какой срок?")).toBeNull();
   expect(within(old).queryByRole("button")).toBeNull();
-  // Чата нет — можно спросить ассистента.
-  expect(screen.getByRole("button", { name: "Спросить ассистента о встрече" })).toBeEnabled();
+  // Чата нет — строка ввода сразу (без лишней кнопки), над лентой — служебная строка.
+  expect(field()).toBeEnabled();
+  expect(screen.getByText("Чата с ассистентом у этой встречи нет")).toBeInTheDocument();
 });
 
 test("над журналом — когда кончилась встреча и что переписка сохранена; без времени конца — только второе", async () => {
@@ -164,16 +165,18 @@ test("над журналом — когда кончилась встреча �
 test("чата нет — и строки о сохранённой переписке нет", async () => {
   vi.mocked(getRecordingChat).mockResolvedValue(answer());
   render(<AssistantTab endpoint={ep} id={ID} folder={FOLDER} jobs={[]} endedAt={new Date(2026, 9, 7, 11, 38)} />);
-  await screen.findByRole("button", { name: "Спросить ассистента о встрече" });
+  expect(await screen.findByText("Ассистент на этой встрече не писал")).toBeInTheDocument();
   expect(screen.queryByText(/переписка сохранена/i)).toBeNull();
 });
 
-test("чата нет: «Спросить ассистента о встрече» открывает строку ввода с фокусом", async () => {
+test("чата нет: сразу строка ввода с быстрыми вопросами — без кнопки «Спросить ассистента о встрече»", async () => {
   vi.mocked(getRecordingChat).mockResolvedValue(answer());
   vi.mocked(continueChat).mockResolvedValue({ message: userMsg("m1", { client_id: "c1" }), job: chatJob("queued") });
   render(<Tab />);
-  await userEvent.click(await screen.findByRole("button", { name: "Спросить ассистента о встрече" }));
-  expect(field()).toHaveFocus();
+  expect(await screen.findByText("Ассистент на этой встрече не писал")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Спросить ассистента о встрече" })).toBeNull();
+  // Вкладку открыли — фокус не уводится из списка вкладок (стрелки по вкладкам работают).
+  expect(field()).not.toHaveFocus();
   expect(screen.getByRole("group", { name: "Быстрые вопросы" })).toHaveTextContent("Кратко итоги");
   await userEvent.click(screen.getByRole("button", { name: "Кратко итоги" }));
   expect(continueChat).toHaveBeenCalledWith(ep, ID, { text: "Кратко итоги", client_id: "c1", attachments: [] });

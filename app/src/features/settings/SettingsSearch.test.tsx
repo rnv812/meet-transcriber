@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { HIGHLIGHT_MS, SettingsPane } from "./SettingsPane";
+import { SettingsSearch } from "./SettingsSearch";
 import * as api from "../../lib/api";
 
 vi.mock("../../lib/api", async (orig) => ({
@@ -111,7 +112,7 @@ test("↑/↓ по выдаче, Enter — раздел, «Тонкая наст
   await userEvent.keyboard("{ArrowUp}{ArrowDown}{Enter}");
   expect(await screen.findByRole("heading", { level: 2, name: "Модели ИИ" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Тонкая настройка" })).toHaveAttribute("aria-expanded", "true");
-  const box = await screen.findByRole("checkbox", { name: "Локальную модель — через прокси" });
+  const box = await screen.findByRole("switch", { name: "Локальную модель — через прокси" });
   const row = box.closest(".srow")!;
   await waitFor(() => expect(row).toHaveClass("setting-found"));
   expect(box).toHaveFocus();
@@ -154,4 +155,15 @@ test("подсветка — фон --selection, без анимации при 
   const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
   expect(/\.setting-found \{([^}]*)\}/.exec(css)?.[1]).toMatch(/background: var\(--selection\)/);
   expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.setting-found \{ transition: none; \} \}/);
+});
+
+test("своя «×» вместо системной: очищает запрос и возвращает фокус в поле", async () => {
+  const onQuery = vi.fn();
+  const ref = { current: null as HTMLInputElement | null };
+  const { rerender } = render(<SettingsSearch query="" onQuery={onQuery} onPick={() => {}} inputRef={ref} />);
+  expect(screen.queryByRole("button", { name: "Очистить поиск" })).toBeNull();
+  rerender(<SettingsSearch query="прокси" onQuery={onQuery} onPick={() => {}} inputRef={ref} />);
+  await userEvent.click(screen.getByRole("button", { name: "Очистить поиск" }));
+  expect(onQuery).toHaveBeenLastCalledWith("");
+  expect(screen.getByRole("combobox", { name: "Поиск по настройкам" })).toHaveFocus();
 });

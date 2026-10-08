@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { MeetMark } from "../ui/MeetMark";
-import { RailTip } from "./RailTip";
+import { Tip } from "../ui/Tip";
 import "./rail.css";
 
 export type Section = "recordings" | "voices" | "settings";
@@ -28,17 +28,18 @@ export function Nav({ section, onSelect, record, alerts }: {
   const item = (id: Section) => {
     const current = id === section;
     return (
-      <RailTip tip={LABEL[id]}>
+      // Подсказка справа повторяет имя кнопки — диктору описанием не нужна.
+      <Tip content={LABEL[id]} side="right" describe={false}>
         <Button variant={current ? "deep" : "ghost"} size="lg" className="btn--icon rail__item"
           aria-label={LABEL[id]} aria-current={current ? "page" : undefined} onClick={() => onSelect(id)}>
           <Icon as={ICON[id]} />
         </Button>
-      </RailTip>
+      </Tip>
     );
   };
   return (
     <nav className="rail" aria-label="Разделы" data-tauri-drag-region>
-      <div className="rail__mark" title="Meet"><MeetMark size={22} /></div>
+      <div className="rail__mark" aria-hidden="true"><MeetMark size={24} /></div>
       {record}
       <div className="rail__sep" aria-hidden="true" />
       {item("recordings")}

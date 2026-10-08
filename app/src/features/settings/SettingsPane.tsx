@@ -1,8 +1,10 @@
 /**
- * Настройки: слева меню — шесть групп («Общее», «Запись», «Расшифровка», «ИИ»,
- * «Встречи», «Система») и 17 узких разделов (0.4); справа — колонка раздела
- * (по центру, не шире 760 px; шапка с «Сохранить» — над той же колонкой),
- * внутри — подгруппы-карточки, плотность Aurora `compact`.
+ * Настройки: слева меню — заголовок «Настройки», поиск, шесть групп («Общее»,
+ * «Запись», «Расшифровка», «ИИ», «Встречи», «Система») и 17 узких разделов
+ * (0.4); справа — колонка раздела (по центру, не шире 760 px; шапка с
+ * «Сохранить» и строкой «см. также» — над той же колонкой), внутри —
+ * подгруппы-карточки. Плотность обычная: строки, поля и кнопки — 32 px по
+ * одной линейке (доводка 0.4, C1).
  *
  * Черновик по группам (`auto_record`, `asr`, …) + «Сохранить/Сбросить»; PATCH
  * принимает секции целиком. Исключение — переключатель автозаписи: резидент
@@ -33,6 +35,7 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { Loading, StatusSlot } from "../../ui/Loading";
 import { PaneResizer } from "../../ui/PaneResizer";
+import { Tip } from "../../ui/Tip";
 import { About } from "./About";
 import { type Appearance, DEFAULT_APPEARANCE } from "../../theme/appearance";
 import { AdvancedSection } from "./AdvancedSection";
@@ -53,7 +56,7 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { JiraSection } from "./JiraSection";
 import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { ModelsSection, modelsChangesInvalid } from "./ModelsSection";
-import { RevealFineTuning, SettingsCard, type Raw, type SetFn } from "./Section";
+import { RevealFineTuning, SeeAlsoSlot, SettingsCard, type Raw, type SetFn } from "./Section";
 import { SettingsSearch } from "./SettingsSearch";
 import { MENU, MENU_GROUPS, type SectionId, type SettingsEntry } from "./settingsIndex";
 import { SoundSection } from "./SoundSection";
@@ -144,6 +147,8 @@ const FOUND_CLASS = "setting-found";
 const FOCUSABLE = "input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
 const FOCUSABLE_CONTROL = ["input", "select", "textarea", "button"]
   .map((t) => `.srow__control ${t}:not([disabled])`).join(", ") + ", .amark__cell button:not([disabled])";
+/** В группе радио-кнопок (сегменты) — фокус на выбранный вариант, а не на первый. */
+const CHECKED_CONTROL = ".srow__control [role=radio][aria-checked=true]:not([disabled])";
 
 const reducedMotion = () => typeof window.matchMedia === "function"
   && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -164,8 +169,8 @@ export function findRow(root: ParentNode, label: string): HTMLElement | null {
   return null;
 }
 
-/** Меню разделов: тексту настроек справа остаётся не меньше 420 px. */
-const SETTINGS_MENU = { def: 220, min: 160, max: 360, reserve: 420 };
+/** Меню разделов: 220 px по макету, шире 280 — пустое место; тексту настроек справа — не меньше 420 px. */
+const SETTINGS_MENU = { def: 220, min: 180, max: 280, reserve: 420 };
 
 export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef, onDirtyChange, appearance, onAppearance }: {
   endpoint: Endpoint;
@@ -215,6 +220,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [askReset, setAskReset] = useState(false);
+  // Место в шапке раздела для «см. также» (SeeAlso head): узел после отрисовки.
+  const [seeSlot, setSeeSlot] = useState<HTMLElement | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -272,7 +279,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
         return;
       }
       row.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
-      const control = row.querySelector<HTMLElement>(FOCUSABLE_CONTROL) ?? row.querySelector<HTMLElement>(FOCUSABLE);
+      const control = row.querySelector<HTMLElement>(CHECKED_CONTROL) ?? row.querySelector<HTMLElement>(FOCUSABLE_CONTROL)
+        ?? row.querySelector<HTMLElement>(FOCUSABLE);
       control?.focus({ preventScroll: true });
       row.classList.add(FOUND_CLASS);
       setTimeout(() => row.classList.remove(FOUND_CLASS), HIGHLIGHT_MS);
@@ -374,30 +382,37 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     <div className="settings">
       <nav className="settings__menu" aria-label="Разделы настроек">
         <span id={dirtyNoteId} className="sr-only">Есть несохранённые изменения</span>
+        <span className="type-h3 settings__menu-title">Настройки</span>
         <SettingsSearch query={query} onQuery={setQuery} onPick={pick} inputRef={searchRef} />
         {/* Пока в поиске текст — выдача вместо меню. */}
         {query.trim() === "" && MENU_GROUPS.map((g, i) => (
           <div key={g.title} role="group" aria-labelledby={`${menuId}-${i}`} className="settings__group">
-            <span id={`${menuId}-${i}`} className="settings__group-title">{g.title}</span>
+            <span id={`${menuId}-${i}`} className="eyebrow settings__group-title">{g.title}</span>
             {g.items.map((m) => (
-              <button key={m.id} type="button" className="settings__item"
-                title={dirtySections.has(m.id) ? "Есть несохранённые изменения" : undefined}
-                aria-describedby={dirtySections.has(m.id) ? dirtyNoteId : undefined}
-                aria-current={m.id === section ? "page" : undefined} onClick={() => setSection(m.id)}>
-                <span className="settings__item-title">{m.title}</span>
-                {dirtySections.has(m.id) && <span className="settings__dirty" data-dirty aria-hidden="true" />}
-              </button>
+              <Tip key={m.id} side="right" describe={false}
+                content={dirtySections.has(m.id) ? "Есть несохранённые изменения" : null}>
+                <button type="button" className="settings__item"
+                  aria-describedby={dirtySections.has(m.id) ? dirtyNoteId : undefined}
+                  aria-current={m.id === section ? "page" : undefined} onClick={() => setSection(m.id)}>
+                  <span className="settings__item-title">{m.title}</span>
+                  {dirtySections.has(m.id) && <span className="settings__dirty" data-dirty aria-hidden="true" />}
+                </button>
+              </Tip>
             ))}
           </div>
         ))}
       </nav>
       <PaneResizer name="settings-menu" cssVar="--settings-menu-w" spec={SETTINGS_MENU}
         panel="before" label="Ширина меню настроек" />
-      <div className="settings__body" data-density="compact">
+      <div className="settings__body">
         <div className="settings__column">
           {/* Шапка постоянной высоты и над той же колонкой, что и строки. */}
           <header className="settings__head">
-            <h2 className="type-h3 settings__title">{MENU.find((m) => m.id === section)?.title}</h2>
+            <div className="settings__heading">
+              <h2 className="type-h3 settings__title">{MENU.find((m) => m.id === section)?.title}</h2>
+              {/* «См. также» раздела (SeeAlso head) — сюда, под заголовок. */}
+              <p className="settings__see" ref={setSeeSlot} />
+            </div>
             <div className="settings__actions">
               {showBar && (
                 <>
@@ -405,7 +420,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
                     {isDirty ? (dirtySections.has(section) ? "Есть несохранённые изменения" : `Не сохранено: ${dirtyTitles.join(", ")}`)
                       : notice}
                   </StatusSlot>
-                  <Button onClick={() => setAskReset(true)} disabled={pending || !isDirty}>Сбросить…</Button>
+                  <Button variant="ghost" onClick={() => setAskReset(true)} disabled={pending || !isDirty}>Сбросить…</Button>
                   <Button variant="primary" onClick={save} busy={pending} disabled={!isDirty || invalid}>
                     Сохранить
                   </Button>
@@ -420,6 +435,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           )}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="settings__content" ref={contentRef}>
+          <SeeAlsoSlot.Provider value={seeSlot}>
           <RevealFineTuning.Provider value={reveal}>
           {!settings && section !== "about" && section !== "diagnostics" && section !== "appearance" ? (
             error ? <EmptyState title="Настройки недоступны" /> : <Loading label="Загружаю настройки…" />
@@ -476,6 +492,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <AdvancedSection draft={draft} set={set} />
           )}
           </RevealFineTuning.Provider>
+          </SeeAlsoSlot.Provider>
           </div>
         </div>
       </div>

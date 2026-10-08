@@ -23,7 +23,9 @@ import { openUrl } from "../../lib/shell";
 import type { AssistantInfo, ProxyInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { FineTuning, Row, SettingsCard, type Raw, type SetFn } from "./Section";
+import { Tip } from "../../ui/Tip";
+import { fieldClass } from "./fields";
+import { FineTuning, Radio, Row, SettingsCard, type Raw, type SetFn } from "./Section";
 import { LocalModelRows, LocalViaProxyRow } from "./LocalModelRows";
 import { ProviderTip } from "./tips";
 import { PRIVACY_CLOUD, PRIVACY_LOCAL } from "../../lib/llm";
@@ -204,26 +206,44 @@ export function modelsChangesInvalid(changes: Raw, draft?: Raw): boolean {
       && socksLocalError(draft?.llm ?? changes.llm) !== null);
 }
 
-/** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
+/** Подпись «Авто» в таблице моделей; порядок выбора — подсказкой (AUTO_ORDER). */
+export const AUTO_SHORT = "первая готовая из включённых";
+/** Порядок выбора «Авто» (llm.resolve). */
 export const AUTO_ORDER = "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode — только явным выбором)";
 
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
 
 type Check = { busy: boolean; ok?: boolean; text?: string };
 
-function status(p: Provider, info: AssistantInfo | null): string | null {
+/**
+ * Состояние модели бейджем DS: итог «Проверить», если был, иначе что видит
+ * резидент — найден ли CLI (путь — в подсказке), отвечает ли локальный сервер,
+ * кого сейчас выбирает «Авто». Сведений ещё нет — пусто.
+ */
+function ProviderState({ provider, info, check }: { provider: string; info: AssistantInfo | null; check?: Check }) {
+  if (check && !check.busy) {
+    return check.ok ? <span className="badge badge--fresh">работает</span> : <span className="badge badge--error">не работает</span>;
+  }
   if (!info) return null;
-  if (p.value === "auto") {
+  if (provider === "auto") {
     // `provider` — кто отвечает при СОХРАНЁННОМ выборе: при явном Codex это
     // Codex, а не то, кого взял бы «Авто» (он предпочёл бы Claude Code).
-    if (info.setting !== "auto") return AUTO_ORDER;
-    if (info.provider) return `сейчас: ${titleOf(info.provider)}`;
-    return info.checking ? "определяю…" : "нет доступного провайдера";
+    if (info.setting !== "auto") return null;
+    if (info.provider) return <span className="badge badge--info">сейчас: {titleOf(info.provider)}</span>;
+    return info.checking ? <span className="badge">определяю…</span> : <span className="badge badge--error">нет доступного</span>;
   }
-  const found = info.available[p.value];
+  const found = info.available[provider];
   if (!found) return null;
-  if (p.value === LOCAL) return `адрес: ${found.base_url ?? ""} — ${found.found ? "доступен" : "недоступен"}`;
-  return found.found ? `найден: ${found.path ?? ""}` : null;
+  if (provider === LOCAL) {
+    return (
+      <Tip content={`адрес: ${found.base_url ?? ""}`}>
+        <span className={`badge ${found.found ? "badge--fresh" : "badge--error"}`}>{found.found ? "доступен" : "недоступен"}</span>
+      </Tip>
+    );
+  }
+  return found.found
+    ? <Tip content={found.path ?? ""}><span className="badge badge--fresh">найден</span></Tip>
+    : <span className="badge badge--error">не найден</span>;
 }
 
 /**
@@ -333,65 +353,86 @@ export function ModelsSection({ draft, saved, set, endpoint }: {
         <Row label="Модели"
           hint="Включённые можно выбрать у действий карточки. Модель по умолчанию готовит анализ, итоги и названия автоматически и ведёт живого ассистента"
           help={<ProviderTip />} stack>
-          {/* Радио «по умолчанию» — одна группа по имени (name), рядом с флажками «включена». */}
-          <div role="group" aria-label="Модели" className="providers">
-            {PROVIDERS.map((p) => {
-              const line = status(p, info);
-              const missing = p.link && info?.available[p.value]?.found === false;
-              const c = checks[p.value];
-              const concrete = p.value !== "auto";
-              return (
-                <div key={p.value} role="group" aria-label={p.label} className="provider">
-                  <div className="provider__head">
-                    <label className="radios__item"
-                      title={(!concrete && autoBlocked) || "Модель по умолчанию: вся автоматическая работа"}>
-                      <input type="radio" name="llm-provider" checked={chosen === p.value}
-                        disabled={!concrete && autoBlocked !== null && chosen !== "auto"}
-                        onChange={() => makeDefault(p.value)} />
-                      {p.label}
-                    </label>
-                    {chosen === p.value && <span className="provider__default">по умолчанию</span>}
-                    {concrete && (
-                      <label className="provider__enable" title={locked(p.value) ?? "Можно выбрать у действий карточки"}>
-                        <input type="checkbox" aria-label={`Включить: ${p.label}`} checked={on(p.value)}
-                          disabled={locked(p.value) !== null} onChange={(e) => toggle(p.value, e.target.checked)} />
-                        включена
-                      </label>
-                    )}
-                  </div>
-                  <div className="provider__status">
-                    {missing ? (
-                      <span className="muted">не найден — установите{" "}
-                        <button type="button" className="provider__link"
-                          onClick={() => void openUrl(`https://${p.link}`)}>
-                          {p.link}
-                        </button>
-                      </span>
-                    ) : !concrete && autoBlocked && chosen !== "auto" ? <span className="muted">{autoBlocked}</span>
-                      : line ? <span className="muted">{line}</span> : null}
-                  </div>
-                  {concrete && on(p.value) && (
-                    <div className={`provider__privacy${p.value === LOCAL && loopback(baseUrl) ? " provider__privacy--local" : ""}`}>
-                      {privacyLine(p.value, baseUrl)}
-                    </div>
-                  )}
-                  <div className="provider__check">
-                    <Button onClick={() => void check(p.value)} disabled={c?.busy}>
-                      {c?.busy ? "Проверяю…" : "Проверить"}
-                    </Button>
-                    {c && !c.busy && <span className={c.ok ? "notice" : "error"}>{c.text}</span>}
-                  </div>
-                </div>
-              );
-            })}
-            {infoError && <span className="error">Сведения о провайдерах недоступны: {infoError}</span>}
-            {llmDirty && <span className="muted">Проверяются сохранённые настройки — сначала сохраните изменения</span>}
+          {/* Таблица: модель · по умолчанию (радио одной группы по name) · включена · состояние · проверка. */}
+          <div className="scroll-x mtable-wrap">
+            <table className="tbl mtable" aria-label="Модели">
+              <thead>
+                <tr>
+                  <th scope="col">Модель</th>
+                  <th scope="col" className="mtable__c">По умолчанию</th>
+                  <th scope="col" className="mtable__c">Включена</th>
+                  <th scope="col"><span className="sr-only">Проверка</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {PROVIDERS.map((p) => {
+                  const c = checks[p.value];
+                  const concrete = p.value !== "auto";
+                  const missing = p.link && info?.available[p.value]?.found === false;
+                  const lock = concrete ? locked(p.value) : null;
+                  const sub = !concrete
+                    ? (autoBlocked && chosen !== "auto" ? autoBlocked : AUTO_SHORT)
+                    : missing ? null : on(p.value) ? privacyLine(p.value, baseUrl) : null;
+                  return (
+                    <tr key={p.value} aria-label={p.label}>
+                      <td className="mtable__model">
+                        <span className="mtable__head">
+                          <span className="mtable__name">{p.label}</span>
+                          <ProviderState provider={p.value} info={info} check={c} />
+                        </span>
+                        {missing ? (
+                          <span className="mtable__sub">не найден — установите{" "}
+                            <button type="button" className="provider__link"
+                              onClick={() => void openUrl(`https://${p.link}`)}>
+                              {p.link}
+                            </button>
+                          </span>
+                        ) : sub === AUTO_SHORT ? (
+                          <Tip content={AUTO_ORDER}><span className="mtable__sub">{sub}</span></Tip>
+                        ) : sub && (
+                          <span className={`mtable__sub${p.value === LOCAL && loopback(baseUrl) ? " mtable__sub--local" : ""}`}>
+                            {sub}
+                          </span>
+                        )}
+                        {c && !c.busy && c.text && (c.text !== "работает" || !c.ok) && (
+                          <span className={`mtable__note ${c.ok ? "muted" : "error"}`}>{c.text}</span>
+                        )}
+                      </td>
+                      <td className="mtable__c">
+                        <Tip content={(!concrete && autoBlocked) || "Модель по умолчанию: вся автоматическая работа"}>
+                          <input type="radio" className="rd" name="llm-provider" aria-label={p.label}
+                            checked={chosen === p.value}
+                            disabled={!concrete && autoBlocked !== null && chosen !== "auto"}
+                            onChange={() => makeDefault(p.value)} />
+                        </Tip>
+                      </td>
+                      <td className="mtable__c">
+                        {concrete ? (
+                          <Tip content={lock ?? "Можно выбрать у действий карточки"}>
+                            <button type="button" role="switch" className="switch" aria-label={`Включить: ${p.label}`}
+                              aria-checked={on(p.value)} disabled={lock !== null}
+                              onClick={() => toggle(p.value, !on(p.value))} />
+                          </Tip>
+                        ) : <span className="muted">—</span>}
+                      </td>
+                      <td className="mtable__act">
+                        <Button onClick={() => void check(p.value)} disabled={c?.busy}>
+                          {c?.busy ? "Проверяю…" : "Проверить"}
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
+          {infoError && <span className="error mtable__foot">Сведения о провайдерах недоступны: {infoError}</span>}
+          {llmDirty && <span className="muted mtable__foot">Проверяются сохранённые настройки — сначала сохраните изменения</span>}
         </Row>
         {on(CLAUDE) && (
           <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
             hint="Готовит итоги и анализ, отвечает на вопросы и ведёт живого ассистента">
-            <input id="llm-model" type="text" placeholder="sonnet"
+            <input id="llm-model" type="text" className={fieldClass()} placeholder="sonnet"
               value={String(llm("model") ?? "")}
               onChange={(e) => set("llm", "model", e.target.value)} />
           </Row>
@@ -399,9 +440,10 @@ export function ModelsSection({ draft, saved, set, endpoint }: {
         {on(OPENCODE) && (
           <Row label={OPENCODE_MODEL_LABEL} htmlFor="llm-opencode-model" help={<OpencodeModelTip />}
             hint="Провайдер/модель, как в opencode models. Пусто — модель из настроек OpenCode">
-            <input id="llm-opencode-model" type="text" spellCheck={false} placeholder="anthropic/claude-sonnet-4-5"
+            <input id="llm-opencode-model" type="text" className={fieldClass({ mono: true })} spellCheck={false}
+              placeholder="anthropic/claude-sonnet-4-5" aria-invalid={ocModelProblem ? true : undefined}
               value={ocModel} onChange={(e) => set("llm", "opencode_model", e.target.value)} />
-            {ocModelProblem && <span className="error">{ocModelProblem}</span>}
+            {ocModelProblem && <span className="error proxy__error">{ocModelProblem}</span>}
           </Row>
         )}
       </SettingsCard>
@@ -414,33 +456,25 @@ export function ModelsSection({ draft, saved, set, endpoint }: {
         </SettingsCard>
       )}
       <SettingsCard title="Подключение">
-        <Row label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"
-          help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>} stack>
-          <div role="radiogroup" aria-label={PROXY_LABEL} className="radios radios--column">
-            <label className="radios__item">
-              <input type="radio" name="llm-proxy" checked={proxyMode === "system"}
-                onChange={() => set("llm", "proxy", "system")} />
-              {systemProxyLabel(info?.proxy)}
-            </label>
-            <label className="radios__item">
-              <input type="radio" name="llm-proxy" checked={proxyMode === "none"}
-                onChange={() => set("llm", "proxy", "none")} />
-              Без прокси
-            </label>
-            <label className="radios__item">
-              <input type="radio" name="llm-proxy" checked={proxyMode === "custom"}
-                onChange={() => set("llm", "proxy", customStart)} />
-              Свой адрес…
-            </label>
-          </div>
+        <Radio label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"
+          help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>} stack
+          value={proxyMode}
+          options={[
+            { value: "system", label: systemProxyLabel(info?.proxy) },
+            { value: "none", label: "Без прокси" },
+            { value: "custom", label: "Свой адрес…" },
+          ]}
+          onChange={(mode) => set("llm", "proxy", mode === "custom" ? customStart : mode)}>
           {proxyMode === "custom" && (
-            <>
-              <input type="text" aria-label="Адрес прокси" placeholder="http://127.0.0.1:8080" value={proxy}
+            <span className="proxy">
+              <input type="text" className={fieldClass({ wide: true, mono: true })} aria-label="Адрес прокси"
+                placeholder="http://127.0.0.1:8080" value={proxy} spellCheck={false}
+                aria-invalid={proxyProblem ? true : undefined}
                 onChange={(e) => { setCustomProxy(e.target.value); set("llm", "proxy", e.target.value); }} />
               {proxyProblem && <span className="error proxy__error">{proxyProblem}</span>}
-            </>
+            </span>
           )}
-        </Row>
+        </Radio>
       </SettingsCard>
       <FineTuning>
         <LocalViaProxyRow value={llm("local_via_proxy") === true} set={set} disabled={!on(LOCAL)} />

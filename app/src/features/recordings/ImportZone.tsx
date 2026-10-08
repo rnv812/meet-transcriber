@@ -12,9 +12,11 @@ export const BROWSER_HINT = "Импорт — из приложения или �
  * Импорт файлов: выбор файла, перетаскивание в окно (подписка оболочки — одна на
  * всё время жизни) и ошибки по каждому файлу. Общий для зоны импорта над списком и
  * пустой библиотеки на всё окно (LibraryEmpty): где он смонтирован, туда и
- * импортирует брошенный в окно файл.
+ * импортирует брошенный в окно файл. `dragDrop: false` — только выбор файла:
+ * брошенный файл принимает зона над списком, смонтированная рядом (LibraryHome).
  */
-export function useImportFiles(endpoint: Endpoint | null, onImported?: () => void) {
+export function useImportFiles(endpoint: Endpoint | null, onImported?: () => void,
+  { dragDrop = true }: { dragDrop?: boolean } = {}) {
   const [errors, setErrors] = useState<string[]>([]);
   const [over, setOver] = useState(false);
 
@@ -41,7 +43,7 @@ export function useImportFiles(endpoint: Endpoint | null, onImported?: () => voi
   importRef.current = importPaths;
 
   useEffect(() => {
-    if (!inTauri()) return;
+    if (!inTauri() || !dragDrop) return;
     let off: (() => void) | undefined;
     let dead = false;
     void (async () => {
@@ -66,7 +68,7 @@ export function useImportFiles(endpoint: Endpoint | null, onImported?: () => voi
       dead = true;
       off?.();
     };
-  }, []);
+  }, [dragDrop]);
 
   const choose = async () => {
     if (!inTauri()) {

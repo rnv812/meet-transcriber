@@ -36,7 +36,8 @@
   display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r-md); cursor: pointer;
 }
 .cat-filter__option:hover { background: var(--surface-3); }
-.cat-filter__option input { margin: 0; accent-color: var(--accent); }
+/* Флажок Aurora .cb — 18 px (--check локально): плотный список «Фильтров». */
+.cat-filter__option .cb { --check: 18px; border-radius: 5px; }
 .cat-filter__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-filter__option-count { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .cat-filter__foot {

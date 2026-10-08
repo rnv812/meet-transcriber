@@ -109,7 +109,9 @@ test("удалить нельзя только модель, которая се
   expect(await within(rnnt).findByText("50 %")).toBeInTheDocument();
   const busy = within(rnnt).getByRole("button", { name: "Удалить модель GigaAM RNNT" });
   expect(busy).toBeDisabled();
-  expect(busy).toHaveAttribute("title", "Модель скачивается — удалить её можно после загрузки");
+  // Причина — подсказкой Aurora (ui/Tip), а не системным title.
+  expect(busy).not.toHaveAttribute("title");
+  expect(busy).toHaveAccessibleDescription("Модель скачивается — удалить её можно после загрузки");
   const ctc = screen.getByRole("group", { name: "GigaAM CTC" });
   expect(within(ctc).getByRole("button", { name: "Удалить модель GigaAM CTC" })).toBeEnabled();
   expect(within(ctc).getByRole("button", { name: "Скачать" })).toBeEnabled();

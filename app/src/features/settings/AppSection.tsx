@@ -8,7 +8,7 @@ import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { AutostartRow } from "./AutostartRow";
 import { TextRow } from "./fields";
-import { PathText, Radio, Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { PathText, Row, Segmented, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 
 export function AppSection({ draft, set, recordingsDir, onRunWizard }: {
   draft: Raw; set: SetFn; recordingsDir: string | null;
@@ -20,7 +20,7 @@ export function AppSection({ draft, set, recordingsDir, onRunWizard }: {
     <>
       <SettingsCard title="Запуск и уведомления">
         <AutostartRow />
-        <Radio label="Уведомления" value={(draft.ui?.notifications as "all" | "important" | "off") ?? "all"}
+        <Segmented label="Уведомления" value={(draft.ui?.notifications as "all" | "important" | "off") ?? "all"}
           hint="«Только важные» — начало и конец записи, готовая расшифровка и ошибки, без промежуточных шагов"
           options={[
             { value: "all", label: "Все" },

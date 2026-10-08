@@ -20,6 +20,9 @@ import { plural } from "../../lib/format";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Icon } from "../../ui/Icon";
+import { Select } from "../../ui/Select";
+import { Tip } from "../../ui/Tip";
+import { fieldClass } from "./fields";
 import { Row, Switch, type Raw, type SetFn } from "./Section";
 import "./jira-settings.css";
 
@@ -114,7 +117,8 @@ function Aliases({ project, disabled, onChange }: {
         </ul>
       )}
       <span className="jproj__add">
-        <input type="text" aria-label={`Новый вариант названия ${project.key}`} placeholder="как ещё говорят на встречах"
+        <input type="text" className={fieldClass()} aria-label={`Новый вариант названия ${project.key}`}
+          placeholder="как ещё говорят на встречах"
           value={text} disabled={disabled} spellCheck={false} aria-invalid={error ? true : undefined}
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
         <Button onClick={add} disabled={disabled || !typed || !!error}>Добавить вариант</Button>
@@ -158,7 +162,8 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
       <Row label="Адрес Jira" htmlFor="jira-base" stack disabled={!on} hint={baseError
         ? <span className="error">{baseError}</span> : on ? "Пусто — ссылок нет. Например, https://jira.example.com"
           : "Включите «Ссылки на задачи Jira», чтобы задать адрес"}>
-        <input id="jira-base" type="text" inputMode="url" placeholder="https://jira.example.com" value={base}
+        <input id="jira-base" type="text" className={fieldClass({ wide: true, mono: true })} inputMode="url"
+          placeholder="https://jira.example.com" value={base}
           spellCheck={false} disabled={!on} aria-invalid={baseError ? true : undefined}
           onChange={(e) => set("integrations", "jira_base_url", e.target.value)} />
       </Row>
@@ -175,17 +180,19 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
             <ul className="jproj__chips" aria-label="Ключи проектов">
               {projects.map((p) => (
                 <li key={p.key} className={`jchip${open === p.key ? " jchip--open" : ""}`}>
-                  <button type="button" className="jchip__key" aria-expanded={open === p.key}
-                    aria-controls={open === p.key ? `jira-aliases-${p.key}` : undefined}
-                    title={`Варианты названия ${p.key}`} onClick={() => setOpen(open === p.key ? null : p.key)}>
-                    <Icon as={open === p.key ? ChevronDown : ChevronRight} size="sm" />
-                    <span className="jchip__name">{p.key}</span>
-                    {p.aliases.length > 0 && (
-                      <span className="jchip__n num">
-                        +{p.aliases.length} {plural(p.aliases.length, "вариант", "варианта", "вариантов")}
-                      </span>
-                    )}
-                  </button>
+                  <Tip content={`Варианты названия ${p.key}`}>
+                    <button type="button" className="jchip__key" aria-expanded={open === p.key}
+                      aria-controls={open === p.key ? `jira-aliases-${p.key}` : undefined}
+                      onClick={() => setOpen(open === p.key ? null : p.key)}>
+                      <Icon as={open === p.key ? ChevronDown : ChevronRight} size="sm" />
+                      <span className="jchip__name">{p.key}</span>
+                      {p.aliases.length > 0 && (
+                        <span className="jchip__n num">
+                          +{p.aliases.length} {plural(p.aliases.length, "вариант", "варианта", "вариантов")}
+                        </span>
+                      )}
+                    </button>
+                  </Tip>
                   <button type="button" className="jchip__remove" aria-label={`Убрать проект ${p.key}`}
                     disabled={!on} onClick={() => removeProject(p.key)}><Icon as={X} size="sm" /></button>
                 </li>
@@ -201,7 +208,8 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
               onChange={(aliases) => setProjects(projects.map((p) => (p.key === opened.key ? { ...p, aliases } : p)))} />
           )}
           <span className="jproj__add">
-            <input type="text" aria-label="Ключ проекта" placeholder="ORION" value={newKey} disabled={!on}
+            <input type="text" className={fieldClass({ short: true, mono: true })} aria-label="Ключ проекта"
+              placeholder="ORION" value={newKey} disabled={!on}
               spellCheck={false} autoCapitalize="characters" aria-invalid={keyError ? true : undefined}
               onChange={(e) => setNewKey(e.target.value.toUpperCase())}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addProject(); } }} />
@@ -214,12 +222,10 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
         hint={defaultError(fallback, projects) ?? (projects.length
           ? "Для номеров без проекта после слов «баг», «тикет», «задача»: «в баге 4452»"
           : "Сначала добавьте проекты")}>
-        <select id="jira-default" value={projects.some((p) => p.key === fallback) ? fallback : ""}
-          disabled={!on || !projects.length}
-          onChange={(e) => set("integrations", "jira_default_project", e.target.value)}>
-          <option value="">Не выбран</option>
-          {projects.map((p) => <option key={p.key} value={p.key}>{p.key}</option>)}
-        </select>
+        <Select id="jira-default" size="sm" width={180} align="end"
+          value={projects.some((p) => p.key === fallback) ? fallback : ""} disabled={!on || !projects.length}
+          options={[{ value: "", label: "Не выбран" }, ...projects.map((p) => ({ value: p.key, label: p.key }))]}
+          onChange={(v) => set("integrations", "jira_default_project", v)} />
       </Row>
     </>
   );
@@ -239,7 +245,8 @@ export function JiraPatternRow({ draft, set }: { draft: Raw; set: SetFn }) {
       ? <span className="error">{patternError}</span>
       : <>Ключи, написанные текстом, например <code>SPR-131</code>: регулярное выражение или проекты через
         запятую. Пусто — {projects.length ? "ключи проектов" : <>любой ключ (<code>{DEFAULT_JIRA_KEYS}</code>)</>}</>}>
-      <input id="jira-pattern" type="text" className="input--wide" placeholder={effective} value={pattern}
+      <input id="jira-pattern" type="text" className={fieldClass({ wide: true, mono: true })} placeholder={effective}
+        value={pattern}
         spellCheck={false} disabled={!on} aria-invalid={patternError ? true : undefined}
         onChange={(e) => set("integrations", "jira_pattern", e.target.value)} />
     </Row>

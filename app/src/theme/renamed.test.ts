@@ -108,8 +108,9 @@ test("CSS окна не оставляет элементов прежних б�
  * окна его не объявляет — проверка выше): файл → имена.
  */
 const AURORA_IN_MARKUP = new Map<string, string[]>([
-  // Подгруппа настроек — `.card` Aurora (feedback.css), этап 4.
-  [join("features", "settings", "Section.tsx"), ["card"]],
+  // Подгруппа настроек — `.card` Aurora (feedback.css), этап 4; короткие перечисления —
+  // сегменты `.tabs.tabs--sm` Aurora с ролями радио (доводка 0.4, C8–C9).
+  [join("features", "settings", "Section.tsx"), ["card", "tabs"]],
   // Строка поиска по записям — `.search` Aurora (controls.css): значок слева в поле, этап 3.
   [join("features", "recordings", "SearchSuggest.tsx"), ["search"]],
   // «Поиск по настройкам» — `.search` Aurora (значок слева в поле), этап 4.

@@ -43,26 +43,32 @@ export function EnginePane({ endpoint, onReinstall }: {
   return (
     <>
       <Row label="Состояние" hint="Без движка встречи записываются, но не расшифровываются">
-        <span className={engine.installed ? "tag tag--live" : "tag"}>{engine.installed ? "установлен" : "не установлен"}</span>
+        <span className={`badge ${engine.installed ? "badge--fresh" : "badge--error"}`}>
+          {engine.installed ? "установлен" : "не установлен"}
+        </span>
         {onReinstall && (
           <Button onClick={onReinstall}>{engine.installed ? "Переустановить движок" : "Установить движок…"}</Button>
         )}
       </Row>
       <Row label="Видеокарта" hint="Без видеокарты расшифровка идёт на процессоре и занимает больше времени">
-        <span className="tag">{engine.gpu.available ? (engine.gpu.name ?? "есть") : "не найдена"}</span>
+        <span className={`badge ${engine.gpu.available ? "badge--plain" : "badge--stale"}`}>
+          {engine.gpu.available ? (engine.gpu.name ?? "есть") : "не найдена"}
+        </span>
       </Row>
       <Row label="ffmpeg" hint="Нужен для записи и преобразования аудио">
-        <span className={engine.ffmpeg ? "tag tag--live" : "tag"}>{engine.ffmpeg ? "есть" : "нет"}</span>
+        <span className={`badge ${engine.ffmpeg ? "badge--fresh" : "badge--error"}`}>{engine.ffmpeg ? "есть" : "нет"}</span>
       </Row>
-      <Row label="Компоненты" hint={engine.flavor === "cuda" ? "Сборка для видеокарты (CUDA)"
+      <Row label="Компоненты" stack hint={engine.flavor === "cuda" ? "Сборка для видеокарты (CUDA)"
         : engine.flavor === "mac" ? "Сборка для Apple Silicon (экспериментально)" : "Сборка для процессора (CPU)"}>
-        <span className="tags">
+        <span className="tags tags--start">
           {engine.components.map((c) => (
-            <span key={c.module} className={c.installed ? "tag tag--live" : "tag"}>
-              {c.title}{!c.installed && c.note ? ` — ${c.note}` : ""}
-            </span>
+            <span key={c.module} className={`badge ${c.installed ? "badge--plain" : "badge--error"}`}>{c.title}</span>
           ))}
         </span>
+        {/* Почему компонента нет — строкой под бейджами, а не внутри бейджа. */}
+        {engine.components.filter((c) => !c.installed && c.note).map((c) => (
+          <span key={c.module} className="srow__hint engine__note">{c.title}: {c.note}</span>
+        ))}
       </Row>
       <Row label="Расположение" hint="Окружение, в котором служба записи выполняет расшифровку">
         <span className="folder"><PathText path={engine.target} /></span>
@@ -81,10 +87,9 @@ export function EngineSection({ endpoint, draft, onReinstall, onOpenAsr, onOpenS
 }) {
   return (
     <>
-      <SeeAlso>
-        Выбор движка и моделей — в разделе{" "}
+      <SeeAlso head>
+        Выбор движка и модели — в разделе{" "}
         <Button variant="link" onClick={onOpenAsr}>«Распознавание»</Button>.
-        Здесь — установка движка и загрузка моделей.
       </SeeAlso>
       <SettingsCard title="Движок">
         <EnginePane endpoint={endpoint} onReinstall={onReinstall} />

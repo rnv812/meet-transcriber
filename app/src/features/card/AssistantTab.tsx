@@ -13,7 +13,8 @@
  *   `GET /recordings/{id}/chat` по тому же событию. «Стоп» снимает задачу.
  * - **Старые встречи** (до 0.3.6) — прежние подсказки и вопросы только для
  *   чтения, под заголовком «Подсказки (старый ассистент)».
- * - **Чата нет** — «Спросить ассистента о встрече».
+ * - **Чата нет** — служебная строка «Ассистент на этой встрече не писал» и сразу
+ *   строка ввода с быстрыми вопросами (доводка 0.4, D5: без лишней кнопки).
  * - **Профиль сессии** (0.3.7) — с каким профилем шла встреча («Профиль:
  *   Личный»); «Продолжить разговор» идёт с ним же (резидент берёт его из
  *   журнала встречи). В «Личном» — свои быстрые вопросы, без рабочих.
@@ -27,14 +28,14 @@
  * подключена — лента видна, строка ввода недоступна с причиной.
  */
 
-import { MessageSquare, Square } from "lucide-react";
+import { Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Endpoint, cancelJob } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
 import { isModelProgress } from "../../lib/progress";
 import type { AssistantInfo, ChatUpdatedEvent, Job, LegacyAssistant, RecordingChat } from "../../lib/types";
 import { Button } from "../../ui/Button";
-import { EmptyState } from "../../ui/EmptyState";
+import { Tip } from "../../ui/Tip";
 import { JobProgress } from "../../ui/JobProgress";
 import { ChatComposer } from "../../live/ChatComposer";
 import { LiveChat } from "../../live/LiveChat";
@@ -68,8 +69,11 @@ export function activeChatJob(jobs: Job[], folder: string): Job | null {
 function Thinking({ job, onStop }: { job: Job; onStop: () => void }) {
   const stop = (
     // Как «Стоп» строки ввода чата (ChatComposer): контурная кнопка со значком и словом.
-    <Button size="sm" icon={Square} className="chat-compose__stop" aria-label="Остановить ответ"
-      title="Снять задачу ответа ассистента" onClick={onStop}>Стоп</Button>
+    <Tip content="Снять задачу ответа ассистента">
+      <Button size="sm" icon={Square} className="chat-compose__stop" aria-label="Остановить ответ" onClick={onStop}>
+        Стоп
+      </Button>
+    </Tip>
   );
   if (job.state === "running" && isModelProgress(job)) {
     return (
@@ -139,7 +143,6 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
 }) {
   const [info, setInfo] = useState<RecordingChat | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
   const jobRef = useRef<Job | null>(null);
   const backend = useMemo(() => recordingChatBackend(id, () => jobRef.current, setInfo), [id]);
   const chat = useChat(endpoint, backend, { profile: info?.profile ?? null });
@@ -215,13 +218,23 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
       )}
       {info?.legacy && <LegacyView legacy={info.legacy} />}
       {!info && !error && <p className="muted assist-chat__loading">Загружаю чат ассистента…</p>}
-      {info && (hasChat || asking || thinking) ? (
+      {info && (
+        // Макет: колонка до 760 по центру, служебная строка сверху, внизу — сразу поле ввода
+        // с быстрыми вопросами (без кнопки «Спросить ассистента о встрече» — лишний шаг).
         <div className="chat-ws__main assist-chat__main">
-          {hasChat && <p className="assist-chat__saved">{savedNote(endedAt)}</p>}
+          <p className="assist-chat__saved">
+            {hasChat ? savedNote(endedAt)
+              : info.legacy?.hints?.length ? "Чата с ассистентом у этой встречи нет" : "Ассистент на этой встрече не писал"}
+            {!enabled && onOpenSettings && (
+              <>{" · "}<Button variant="link" onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button></>
+            )}
+          </p>
           {profile && (
-            <p className="assist-chat__profile" title={PROFILE_NOTES[profile]}>
-              <span className="muted">Профиль:</span> {profileLabel(profile)}
-            </p>
+            <Tip content={PROFILE_NOTES[profile]}>
+              <p className="assist-chat__profile">
+                <span className="muted">Профиль:</span> {profileLabel(profile)}
+              </p>
+            </Tip>
           )}
           <LiveChat chat={chat} disabled={!!reason}
             empty="Спросите ассистента о встрече: он видит расшифровку, итоги и то, что вы приложите." />
@@ -230,21 +243,10 @@ export function AssistantTab({ endpoint, id, folder, jobs, event = null, assista
           <div className="assist-chat__continue" role="group" aria-label="Продолжить разговор">
             <span className="assist-chat__label">Продолжить разговор</span>
             <ChatComposer chat={chat} disabledReason={reason} vision={vision} quick={profile === "personal" ? PERSONAL_QUESTIONS : AFTER_QUESTIONS}
-              placeholder="Спросить о встрече…" autoFocus={asking && !hasChat} />
+              placeholder="Спросить о встрече…" />
           </div>
         </div>
-      ) : info ? (
-        <EmptyState
-          title={info.legacy?.hints?.length ? "Чата с ассистентом у этой встречи нет" : "Ассистент на этой встрече не писал"}
-          hint={reason ?? "Ассистент ответит по расшифровке и итогам встречи; можно приложить файлы."}
-          action={reason && !enabled && onOpenSettings ? (
-            <Button variant="link" onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>
-          ) : (
-            <Button icon={MessageSquare} disabled={!!reason} onClick={() => setAsking(true)}>
-              Спросить ассистента о встрече
-            </Button>
-          )} />
-      ) : null}
+      )}
     </div>
   );
 }

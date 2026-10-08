@@ -248,8 +248,9 @@ test("«Звук»: выбранный микрофон сохраняется �
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Звук" }));
   const mic = await screen.findByRole("combobox", { name: "Микрофон" });
-  await waitFor(() => expect(mic).toHaveDisplayValue("Как в системе (сейчас: Микрофон)"));
-  await userEvent.selectOptions(mic, "USB-микрофон");
+  await waitFor(() => expect(mic).toHaveTextContent("Как в системе (сейчас: Микрофон)"));
+  await userEvent.click(mic);
+  await userEvent.click(screen.getByRole("option", { name: "USB-микрофон" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
   expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ recording: { mic_device: { name: "USB-микрофон" } } });
@@ -323,7 +324,11 @@ const modelRow = (title: string) => {
 
 // --- «Распознавание»: устройство, движок и модель для видеокарты и процессора ---
 
-const OTHER = "\u0000other";
+/** Выбор в списке Aurora (ui/Select): раскрыть и нажать пункт. */
+async function choose(combo: HTMLElement, name: string | RegExp) {
+  await userEvent.click(combo);
+  await userEvent.click(screen.getByRole("option", { name }));
+}
 const openAsr = async (engine: Partial<api.EngineState> | null, asr: Record<string, unknown> = {}) => {
   if (engine) vi.mocked(api.getEngine).mockResolvedValue({ ...structuredClone(engineState), ...engine });
   vi.mocked(api.getSettings).mockResolvedValue({ ...structuredClone(settings), asr: { ...settings.asr, ...asr } });
@@ -343,13 +348,17 @@ test("«Распознавание»: строки видеокарты и пр�
   const gpu = await screen.findByRole("group", { name: "Видеокарта" });
   expect(within(within(gpu).getByRole("radiogroup", { name: "Движок" })).getByRole("radio", { name: "Whisper" }))
     .toBeChecked();
-  expect(await within(gpu).findByRole("combobox", { name: "Модель Whisper" })).toHaveValue("large-v3");
-  expect(within(gpu).getByRole("option", { name: "Whisper large-v3 — русский fine-tune — скачана" })).toBeInTheDocument();
-  expect(within(gpu).getByRole("option", { name: "Whisper medium — 1.5 ГБ, не скачана" })).toBeInTheDocument();
+  const whisper = await within(gpu).findByRole("combobox", { name: "Модель Whisper" });
+  expect(whisper).toHaveTextContent("Whisper large-v3 — русский fine-tune");
+  // В списке — скачана ли модель (серым справа).
+  await userEvent.click(whisper);
+  expect(screen.getByRole("option", { name: /^Whisper large-v3 — русский fine-tune/ })).toHaveTextContent("скачана");
+  expect(screen.getByRole("option", { name: /^Whisper medium/ })).toHaveTextContent("1.5 ГБ, не скачана");
+  await userEvent.keyboard("{Escape}");
   const cpu = deviceRow("Процессор");
   // Нет cpu_backend в настройках — GigaAM, как у резидента по умолчанию.
   expect(within(cpu).getByRole("radio", { name: "GigaAM" })).toBeChecked();
-  expect(within(cpu).getByRole("combobox", { name: "Модель GigaAM" })).toHaveValue("v3_e2e_rnnt");
+  expect(within(cpu).getByRole("combobox", { name: "Модель GigaAM" })).toHaveTextContent("GigaAM v3 — русский");
   // Модель Whisper процессора — не отдельное поле, а запасной путь GigaAM.
   expect(within(cpu).queryByRole("combobox", { name: "Модель Whisper" })).toBeNull();
   expect(cpu).toHaveTextContent("Записи не на русском распознаёт Whisper: small");
@@ -388,7 +397,9 @@ test("«Распознавание»: состояние движка не за�
 test("«Распознавание»: другое устройство в черновике — «После сохранения», отметка переезжает сразу", async () => {
   await openAsr({ cuda_ok: true });
   await screen.findByText("Сейчас: видеокарта (RTX 5070 Ti)");
-  await userEvent.selectOptions(screen.getByLabelText("Устройство"), "cpu");
+  const device = screen.getByRole("radiogroup", { name: "Устройство" });
+  expect(device).toHaveClass("tabs", "tabs--sm");
+  await userEvent.click(within(device).getByRole("radio", { name: "Процессор" }));
   expect(screen.getByText("После сохранения: процессор")).toBeInTheDocument();
   expect(deviceRow("Процессор")).toHaveAttribute("data-state", "active");
   expect(await savedPatch()).toEqual({ asr: { device: "cpu" } });
@@ -416,7 +427,7 @@ test("«Распознавание»: смена движка меняет по�
   await within(gpu).findByRole("combobox", { name: "Модель Whisper" });
   await userEvent.click(within(gpu).getByRole("radio", { name: "GigaAM" }));
   expect(within(gpu).queryByRole("combobox", { name: "Модель Whisper" })).toBeNull();
-  expect(within(gpu).getByRole("combobox", { name: "Модель GigaAM" })).toHaveValue("v3_e2e_rnnt");
+  expect(within(gpu).getByRole("combobox", { name: "Модель GigaAM" })).toHaveTextContent("GigaAM v3 — русский");
   // Модель GigaAM одна на оба устройства — так и сказано, когда она у обоих.
   expect(gpu).toHaveTextContent("Одна модель GigaAM для видеокарты и процессора");
   expect(gpu).toHaveTextContent("Записи не на русском распознаёт Whisper: Whisper large-v3 — русский fine-tune");
@@ -425,10 +436,10 @@ test("«Распознавание»: смена движка меняет по�
   await userEvent.click(within(cpu).getByRole("radio", { name: "Whisper" }));
   expect(within(cpu).queryByRole("combobox", { name: "Модель GigaAM" })).toBeNull();
   // «small» нет в каталоге — «Другая…» и поле с id.
-  expect(within(cpu).getByRole("combobox", { name: "Модель Whisper" })).toHaveValue(OTHER);
+  expect(within(cpu).getByRole("combobox", { name: "Модель Whisper" })).toHaveTextContent("Другая…");
   expect(within(cpu).getByRole("textbox", { name: "Модель Whisper: id модели или папка" })).toHaveValue("small");
   expect(gpu).not.toHaveTextContent("Одна модель GigaAM");
-  await userEvent.selectOptions(within(gpu).getByRole("combobox", { name: "Модель GigaAM" }), "v3_e2e_ctc");
+  await choose(within(gpu).getByRole("combobox", { name: "Модель GigaAM" }), /CTC/);
   expect(await savedPatch())
     .toEqual({ asr: { backend: "gigaam", cpu_backend: "faster-whisper", gigaam_model: "v3_e2e_ctc" } });
 });
@@ -442,10 +453,10 @@ test("«Распознавание»: модель Whisper для записей
   await userEvent.click(change);
   expect(within(cpu).getByRole("button", { name: "скрыть" })).toHaveAttribute("aria-expanded", "true");
   const picker = await within(cpu).findByRole("combobox", { name: "Модель Whisper для записей не на русском" });
-  await userEvent.selectOptions(picker, "medium");
+  await choose(picker, /^Whisper medium/);
   expect(cpu).toHaveTextContent("Записи не на русском распознаёт Whisper: Whisper medium");
   // «Другая…» — своё значение.
-  await userEvent.selectOptions(picker, OTHER);
+  await choose(picker, /^Другая…/);
   const custom = within(cpu).getByRole("textbox", { name: "Модель Whisper для записей не на русском: id модели или папка" });
   await userEvent.clear(custom);
   await userEvent.type(custom, "D:\\models\\whisper");
@@ -583,7 +594,10 @@ test("«Движок и модели»: движок без GigaAM — уста�
   });
   await openEngine();
   expect(await screen.findByText("установлен")).toBeInTheDocument();
-  expect(screen.getByText("распознавание речи (GigaAM) — не установлена — будет установлена при обновлении движка"))
+  // Компоненты — бейджами, почему нет — строкой под ними.
+  expect(screen.getByText("распознавание речи (GigaAM)")).toHaveClass("badge", "badge--error");
+  expect(screen.getByText("PyTorch")).toHaveClass("badge", "badge--plain");
+  expect(screen.getByText("распознавание речи (GigaAM): не установлена — будет установлена при обновлении движка"))
     .toBeInTheDocument();
 });
 
@@ -609,7 +623,8 @@ test("правка — точка у своего раздела в меню и 
   expect(screen.getByRole("button", { name: "Сбросить…" })).toBeDisabled();
   await userEvent.type(name, "а");
   expect(menuItem("Приложение").querySelector("[data-dirty]")).not.toBeNull();
-  expect(menuItem("Приложение")).toHaveAttribute("title", "Есть несохранённые изменения");
+  // Подсказка — облачком Aurora (ui/Tip), не системным title.
+  expect(menuItem("Приложение")).not.toHaveAttribute("title");
   // Экранному диктору — описанием кнопки, имя раздела то же.
   expect(menuItem("Приложение")).toHaveAccessibleDescription("Есть несохранённые изменения");
   expect(menuItem("Распознавание").querySelector("[data-dirty]")).toBeNull();
@@ -723,11 +738,16 @@ test("меню — группы с подписями обычным регис�
   }
 });
 
-test("без initial открывается «Приложение»; заголовок раздела — второго уровня, панель плотная", async () => {
+test("без initial открывается «Приложение»; заголовок раздела — второго уровня, плотность обычная (кнопки и поля — 32 px)", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   const head = await screen.findByRole("heading", { level: 2, name: "Приложение" });
   expect(screen.getByRole("button", { name: "Приложение" })).toHaveAttribute("aria-current", "page");
-  expect(head.closest("[data-density='compact']")).not.toBeNull();
+  // Плотность compact (28 px кнопки) — только в таблицах; на теле настроек её нет (доводка 0.4, C1).
+  expect(head.closest("[data-density='compact']")).toBeNull();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toHaveClass("btn--sm");
+  expect(screen.getByLabelText("Ваше имя в расшифровке")).toHaveClass("field", "field--sm");
+  // Над поиском — заголовок «Настройки», как в макете.
+  expect(within(screen.getByRole("navigation", { name: "Разделы настроек" })).getByText("Настройки")).toHaveClass("type-h3");
 });
 
 test.each([
@@ -774,7 +794,9 @@ test("«Звук» и «Движок и модели» — без голоса, 
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="sound" onRunWizard={vi.fn()} />);
   expect(await screen.findByRole("combobox", { name: "Микрофон" })).toBeInTheDocument();
   expect(screen.queryByRole("group", { name: "Мой голос" })).toBeNull();
-  expect(screen.getByRole("button", { name: "«Спикеры»" })).toBeInTheDocument();
+  // «См. также» всего раздела — в шапке под заголовком (доводка 0.4, C10).
+  await waitFor(() => expect(document.querySelector(".settings__head .settings__see"))
+    .toContainElement(screen.getByRole("button", { name: "«Спикеры»" })));
   await userEvent.click(screen.getByRole("button", { name: "Движок и модели" }));
   expect(await screen.findByText(/Движок не загрузился/)).toBeInTheDocument();
   expect(screen.queryByRole("group", { name: "Токен Hugging Face" })).toBeNull();
@@ -817,13 +839,13 @@ test("«Приложение»: уведомления, имя, расшифро
 
 test("«Модели ИИ» — провайдеры и прокси; «Ассистент» — участник и база знаний, без моделей и запуска агента", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
-  expect(await screen.findByRole("group", { name: "Модели" })).toBeInTheDocument();
+  expect(await screen.findByRole("table", { name: "Модели" })).toBeInTheDocument();
   expect(screen.getByRole("radiogroup", { name: "Прокси для подключения к моделям" })).toBeInTheDocument();
   expect(screen.queryByRole("switch", { name: "Ассистент — участник встречи" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Ассистент" }));
   expect(await screen.findByRole("switch", { name: "Ассистент — участник встречи" })).toBeInTheDocument();
   expect(screen.getByRole("group", { name: "База знаний для ассистента" })).toBeInTheDocument();
-  expect(screen.queryByRole("group", { name: "Модели" })).toBeNull();
+  expect(screen.queryByRole("table", { name: "Модели" })).toBeNull();
   expect(screen.queryByRole("group", { name: "Запуск Claude Code" })).toBeNull();
   // Модель, которая ведёт ассистента, выбирается в «Моделях ИИ» — туда ссылка.
   await userEvent.click(screen.getByRole("button", { name: "«Модели ИИ»" }));
@@ -864,12 +886,18 @@ test("меню: наведение тише выбранного (--surface-2 п
   expect(jira).not.toMatch(/var\(--(text|text-2|text-3|line|surface|surface-hover)\)/);
 });
 
-test("меню: подписи групп жирные, группы разделены линией и отступом", () => {
+test("меню помещается в окно: пункты по 32 px, подписи групп — .eyebrow, без черт между группами (доводка 0.4, C4)", async () => {
   const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
-  const rule = (sel: string) => new RegExp(`${sel.replace(/[.+]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
-  expect(rule(".settings__group-title")).toMatch(/font-weight: 700/);
-  expect(rule(".settings__group-title")).toMatch(/color: var\(--ink\)/);
-  expect(rule(".settings__group + .settings__group")).toMatch(/border-top: 1px solid var\(--hairline\)/);
+  const rule = (sel: string) => new RegExp(`(?:^|\\n)${sel.replace(/[.+[\]"=]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+  expect(rule(".settings__item")).toMatch(/height: var\(--control-sm\)/);
+  expect(rule(".settings__item")).toMatch(/var\(--text-ui\)/);
+  expect(css).not.toMatch(/\.settings__group \+ \.settings__group/);
+  expect(css).not.toMatch(/border-top/);
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  const nav = await screen.findByRole("navigation", { name: "Разделы настроек" });
+  for (const title of within(nav).getAllByRole("group").map((g) => g.getAttribute("aria-labelledby")!)) {
+    expect(document.getElementById(title)).toHaveClass("eyebrow");
+  }
 });
 
 test.each([

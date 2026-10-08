@@ -82,8 +82,9 @@ test("участник включён (по умолчанию): частота,
 test("«Профиль по умолчанию»: рабочая встреча, если не задан; личный сохраняется ключом", async () => {
   open();
   const group = await screen.findByRole("radiogroup", { name: PROFILE_DEFAULT_LABEL });
-  expect(within(group).getAllByRole("radio").map((r) => r.closest("label")?.textContent))
-    .toEqual(["Рабочая встреча", "Личный"]);
+  // Короткое перечисление — сегменты Aurora (.tabs--sm), как «Профиль» в панели встречи.
+  expect(group).toHaveClass("tabs", "tabs--sm");
+  expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Рабочая встреча", "Личный"]);
   expect(within(group).getByRole("radio", { name: "Рабочая встреча" })).toBeChecked();
   expect(screen.getByText(/база знаний, прошлые встречи, подсказки по встрече/)).toBeInTheDocument();
   await userEvent.click(within(group).getByRole("radio", { name: "Личный" }));
@@ -178,9 +179,16 @@ test("расширенные возможности по согласию: вк�
   const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
   expect(sw).toHaveAttribute("aria-checked", "true");
   const row = sw.closest(".srow")!;
+  // Под переключателем — одна строка; подробности и оговорки — в «?».
   expect(row).toHaveTextContent("с вашими правами");
-  expect(row).toHaveTextContent("Meet покажет карточкой и выполнит только после «Разрешить один раз»");
+  expect(row).toHaveTextContent("действия — только после «Разрешить»");
   expect(row).toHaveTextContent("Без вашей просьбы — только эта встреча и вложения");
+  await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Что дают расширенные возможности" }));
+  const tip = screen.getByRole("tooltip");
+  expect(tip).toHaveTextContent("«Разрешить один раз»");
+  expect(tip).toHaveTextContent("MCP-инструменты, чьё имя не похоже на запись, выполняются без вопроса");
+  expect(tip).toHaveTextContent("запускают хуки самого репозитория");
+  await userEvent.keyboard("{Escape}");
   await userEvent.click(sw);
   expect(sw).toHaveAttribute("aria-checked", "false");
   expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_OFF_HINT);

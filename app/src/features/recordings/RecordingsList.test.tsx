@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingsList } from "./RecordingsList";
 import * as api from "../../lib/api";
@@ -96,10 +96,11 @@ test("строка: агент записи работает — метка «а
   vi.mocked(useAgentLive).mockImplementation((id: string) => id === "a");
   try {
     setup();
-    const mark = within(mains()[0]!).getByTitle("Агент работает");
+    const mark = mains()[0]!.querySelector(".rec-item__agent")!;
     expect(mark).toHaveTextContent("агент работает");
+    expect(mark).not.toHaveAttribute("title");
     expect(mark.querySelector(".agent-mark")).toHaveAttribute("aria-hidden", "true");
-    expect(within(mains()[1]!).queryByTitle("Агент работает")).toBeNull();
+    expect(mains()[1]!.querySelector(".rec-item__agent")).toBeNull();
   } finally {
     vi.mocked(useAgentLive).mockImplementation(impl);
   }
@@ -394,16 +395,24 @@ test("ничего не найдено — подсказка и «Сброси�
   expect(onQ).toHaveBeenCalledWith("");
 });
 
-test("название в строке: подсказка — полное название, только если оно обрезано", () => {
+test("название в строке: подсказка — полное название, только если оно обрезано", async () => {
   setup();
   const title = within(screen.getByRole("list", { name: "Среда, 30 сентября" })).getByText("Планёрка");
   Object.defineProperty(title, "clientWidth", { value: 100, configurable: true });
   Object.defineProperty(title, "scrollWidth", { value: 100, configurable: true });
+  // Облачко Aurora (ui/Tip), а не системный title: строки — подсказка и (если обрезано) название.
+  const bubble = () => document.body.querySelector(".tooltip.tip");
   fireEvent.mouseEnter(title);
-  expect(title).toHaveAttribute("title", "Двойной щелчок или F2 — переименовать");
+  await waitFor(() => expect(bubble()).not.toBeNull());
+  expect(title).not.toHaveAttribute("title");
+  expect([...bubble()!.querySelectorAll(".rec-item__tip-line")].map((l) => l.textContent))
+    .toEqual(["Двойной щелчок или F2 — переименовать"]);
+  fireEvent.mouseLeave(title);
   Object.defineProperty(title, "scrollWidth", { value: 300, configurable: true });
   fireEvent.mouseEnter(title);
-  expect(title.getAttribute("title")).toBe("Планёрка\nДвойной щелчок или F2 — переименовать");
+  await waitFor(() => expect(bubble()?.querySelectorAll(".rec-item__tip-line")).toHaveLength(2));
+  expect([...bubble()!.querySelectorAll(".rec-item__tip-line")].map((l) => l.textContent))
+    .toEqual(["Планёрка", "Двойной щелчок или F2 — переименовать"]);
 });
 
 test("бейдж идущей расшифровки: общая доля впереди этапа — это ход всей работы", async () => {

@@ -11,7 +11,8 @@ import { Highlight } from "../../ui/Highlight";
 import { LinkedText } from "../../ui/LinkedText";
 import { TypeIcon } from "./markup";
 
-export type PersonColor = { name: string; color: string; has_avatar: boolean };
+/** Человек базы голосов для карточки: цвет, фото и «Кто это» (подсказка у чипа в шапке). */
+export type PersonColor = { name: string; color: string; has_avatar: boolean; role?: string };
 
 const NO_LINKS: JiraMatch[] = [];
 

@@ -113,22 +113,6 @@ test("ссылка-кнопка — шрифтом окружающего тек
  * нарушение. Пустой список — цель.
  */
 const NATIVE_ALLOWED = new Set<string>([
-  // Пакет C: настройки.
-  "features/settings/AsrChoice.tsx: <select>",
-  "features/settings/JiraSettings.tsx: <select>",
-  "features/settings/LiveHintsRows.tsx: <select>",
-  "features/settings/LocalModelRows.tsx: <select>",
-  "features/settings/SoundSection.tsx: <select>",
-  "features/settings/fields.tsx: range",
-  "features/settings/SpeakersSection.tsx: range",
-  "features/settings/AppearanceSection.tsx: radio без .rd",
-  "features/settings/BrowserCalls.tsx: checkbox без .cb",
-  "features/settings/CallPrograms.tsx: checkbox без .cb",
-  "features/settings/ExportSection.tsx: checkbox без .cb",
-  "features/settings/LocalModelRows.tsx: checkbox без .cb",
-  "features/settings/ModelsSection.tsx: checkbox без .cb",
-  "features/settings/ModelsSection.tsx: radio без .rd",
-
   // Пакет D: главное окно, список записей.
   "features/recordings/DateSections.tsx: checkbox без .cb",
   "features/recordings/FilterPanel.tsx: checkbox без .cb",

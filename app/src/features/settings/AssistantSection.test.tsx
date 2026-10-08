@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
-  AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, enabledOf, loopback, opencodeModelError, privacyLine, proxyError,
+  AUTO_ORDER, AUTO_SHORT, RECHECK_MS, RECHECK_TRIES, enabledOf, loopback, opencodeModelError, privacyLine, proxyError,
 } from "./ModelsSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
@@ -70,7 +70,8 @@ beforeEach(() => {
 const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
 /** «Ассистент» (0.4): участник встречи, база знаний, живая расшифровка. */
 const openAssistant = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
-const option = (name: string) => screen.getByRole("group", { name });
+/** Строка модели в таблице «Модели» (0.4: таблица вместо групп). */
+const option = (name: string) => screen.getByRole("row", { name });
 
 test("раздел «Модели ИИ» есть в меню и открывается по initial", async () => {
   open();
@@ -78,14 +79,29 @@ test("раздел «Модели ИИ» есть в меню и открыва�
   expect(await screen.findByRole("radio", { name: "Авто" })).toBeChecked();
 });
 
-test("статусы провайдеров — из getAssistant().available", async () => {
+test("статусы провайдеров — из getAssistant().available: бейджи DS, путь и адрес — в подсказке", async () => {
   open();
-  expect(await screen.findByText("найден: C:\\Users\\me\\.local\\bin\\claude.exe")).toBeInTheDocument();
+  const found = await within(await screen.findByRole("row", { name: "Claude Code" })).findByText("найден");
+  expect(found).toHaveClass("badge", "badge--fresh");
+  expect(found).toHaveAccessibleDescription("C:\\Users\\me\\.local\\bin\\claude.exe");
+  expect(within(option("Codex")).getByText("не найден")).toHaveClass("badge", "badge--error");
   expect(within(option("Codex")).getByText(/не найден — установите/)).toBeInTheDocument();
   expect(within(option("Codex")).getByText("github.com/openai/codex")).toBeInTheDocument();
-  expect(within(option("Локальная (LM Studio / Ollama)"))
-    .getByText("адрес: http://127.0.0.1:1234/v1 — недоступен")).toBeInTheDocument();
-  expect(within(option("Авто")).getByText("сейчас: Claude Code")).toBeInTheDocument();
+  const local = within(option("Локальная (LM Studio / Ollama)")).getByText("недоступен");
+  expect(local).toHaveClass("badge--error");
+  expect(local).toHaveAccessibleDescription("адрес: http://127.0.0.1:1234/v1");
+  expect(within(option("Авто")).getByText("сейчас: Claude Code")).toHaveClass("badge", "badge--info");
+});
+
+test("«Модели» — таблица DS: радио «по умолчанию» .rd, «включена» — переключатель", async () => {
+  open();
+  const table = await screen.findByRole("table", { name: "Модели" });
+  expect(table).toHaveClass("tbl");
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
+    .toEqual(["Модель", "По умолчанию", "Включена", "Проверка"]);
+  for (const radio of within(table).getAllByRole("radio")) expect(radio).toHaveClass("rd");
+  expect(within(option("Codex")).getByRole("switch", { name: "Включить: Codex" })).toHaveClass("switch");
+  expect(within(table).queryByRole("checkbox")).toBeNull();
 });
 
 test("не найден Claude Code — ссылка claude.ai/code; локальная отвечает — «доступен»", async () => {
@@ -98,11 +114,11 @@ test("не найден Claude Code — ссылка claude.ai/code; локал�
     },
   });
   open();
-  const claude = await screen.findByRole("group", { name: "Claude Code" });
+  const claude = await screen.findByRole("row", { name: "Claude Code" });
   expect(await within(claude).findByText("claude.ai/code")).toBeInTheDocument();
-  expect(within(option("Codex")).getByText("найден: C:\\codex.exe")).toBeInTheDocument();
-  expect(within(option("Локальная (LM Studio / Ollama)"))
-    .getByText("адрес: http://127.0.0.1:1234/v1 — доступен")).toBeInTheDocument();
+  expect(within(option("Codex")).getByText("найден")).toHaveAccessibleDescription("C:\\codex.exe");
+  expect(within(option("Локальная (LM Studio / Ollama)")).getByText("доступен"))
+    .toHaveAccessibleDescription("адрес: http://127.0.0.1:1234/v1");
   expect(within(option("Авто")).getByText("сейчас: Локальная (LM Studio / Ollama)")).toBeInTheDocument();
 });
 
@@ -110,15 +126,16 @@ test("выбран Codex — «Авто» не выдаёт Codex за свой 
   vi.mocked(api.getSettings).mockResolvedValue(merge(structuredClone(settings), { llm: { provider: "codex" } }));
   vi.mocked(api.getAssistant).mockResolvedValue({ ...structuredClone(info), provider: "codex", setting: "codex" });
   open();
-  const auto = await screen.findByRole("group", { name: "Авто" });
-  expect(await within(auto).findByText(AUTO_ORDER)).toBeInTheDocument();
+  const auto = await screen.findByRole("row", { name: "Авто" });
+  // Порядок выбора — подсказкой у короткой подписи.
+  expect(await within(auto).findByText(AUTO_SHORT)).toHaveAccessibleDescription(AUTO_ORDER);
   expect(within(auto).queryByText(/сейчас:/)).not.toBeInTheDocument();
 });
 
 test("пока резидент проверяет вход — у «Авто» «определяю…»", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue({ ...structuredClone(info), provider: null, checking: true });
   open();
-  const auto = await screen.findByRole("group", { name: "Авто" });
+  const auto = await screen.findByRole("row", { name: "Авто" });
   expect(await within(auto).findByText("определяю…")).toBeInTheDocument();
 });
 
@@ -126,7 +143,7 @@ test("«Проверить» Codex: «Проверяю…» без повтор�
   let finish: (v: ProviderCheck) => void = () => {};
   vi.mocked(api.checkProvider).mockImplementation(() => new Promise((r) => { finish = r; }));
   open();
-  await screen.findByText("найден: C:\\Users\\me\\.local\\bin\\claude.exe");
+  await screen.findByText("сейчас: Claude Code");
   await userEvent.click(within(option("Codex")).getByRole("button", { name: "Проверить" }));
   expect(api.checkProvider).toHaveBeenCalledWith(ep, "codex");
   const busy = within(option("Codex")).getByRole("button", { name: "Проверяю…" });
@@ -265,7 +282,7 @@ test("«определяю…» переспрашивает резидента 
   try {
     vi.mocked(api.getAssistant).mockResolvedValue({ ...structuredClone(info), provider: null, checking: true });
     open();
-    await screen.findByRole("group", { name: "Авто" });
+    await screen.findByRole("row", { name: "Авто" });
     for (let i = 0; i < 40; i++) await vi.advanceTimersByTimeAsync(RECHECK_MS);
     expect(vi.mocked(api.getAssistant).mock.calls.length).toBeLessThanOrEqual(RECHECK_TRIES + 1);
   } finally {
@@ -275,7 +292,7 @@ test("«определяю…» переспрашивает резидента 
 
 test("«не найден — установите»: ссылка открывается в браузере через оболочку", async () => {
   open();
-  const group = await screen.findByRole("group", { name: "Codex" });
+  const group = await screen.findByRole("row", { name: "Codex" });
   const codex = await within(group).findByRole("button", { name: "github.com/openai/codex" });
   await userEvent.click(codex);
   expect(shell.openUrl).toHaveBeenCalledWith("https://github.com/openai/codex");
@@ -378,7 +395,8 @@ test("живые подсказки (агент-участник выключе�
   await userEvent.click(within(tier).getByRole("radio", { name: "Быстрее" }));
   // «Быстрее» поясняется для того, кто отвечает сейчас (Claude Code).
   expect(screen.getByText("«Быстрее» — Claude Code: модель Haiku без размышлений")).toBeInTheDocument();
-  await userEvent.selectOptions(screen.getByLabelText("Сколько подсказок держать"), "3");
+  await userEvent.click(screen.getByRole("combobox", { name: "Сколько подсказок держать" }));
+  await userEvent.click(screen.getByRole("option", { name: "3" }));
   await userEvent.click(screen.getByRole("switch", { name: "Не отвлекать по умолчанию" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
@@ -390,8 +408,9 @@ test("«Только сводка» — число подсказок не вы�
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0, participant: false } }));
   openAssistant();
   await userEvent.click(await screen.findByRole("button", { name: "Тонкая настройка" }));
-  expect(await screen.findByLabelText("Сколько подсказок держать")).toBeDisabled();
-  expect(screen.getByRole("option", { name: "По активности (5 или 8)" })).toBeInTheDocument();
+  const max = await screen.findByRole("combobox", { name: "Сколько подсказок держать" });
+  expect(max).toBeDisabled();
+  expect(max).toHaveTextContent("По активности (5 или 8)");
   for (const label of ["Что такое активность подсказок", "Какая модель ведёт подсказки", "Что значит «Не отвлекать»"]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
@@ -408,7 +427,7 @@ test("модель Claude Code: правка уходит в llm.model; Claude C
   await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
   // Модель по умолчанию — Codex, но Claude Code включён: его модель всё ещё задаётся.
   expect(screen.getByRole("textbox", { name: "Модель Claude Code" })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("checkbox", { name: "Включить: Claude Code" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Включить: Claude Code" }));
   expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
 });
 
@@ -418,7 +437,7 @@ test("OpenCode: не найден — ссылка opencode.ai/docs/; найде
     available: { ...structuredClone(info.available), opencode: { found: false, path: null } },
   });
   open();
-  const oc = await screen.findByRole("group", { name: "OpenCode" });
+  const oc = await screen.findByRole("row", { name: "OpenCode" });
   expect(await within(oc).findByText("opencode.ai/docs/")).toBeInTheDocument();
   await userEvent.click(within(oc).getByText("opencode.ai/docs/"));
   expect(shell.openUrl).toHaveBeenCalledWith("https://opencode.ai/docs/");
@@ -455,7 +474,7 @@ test("opencodeModelError — как у резидента", () => {
 test("«Проверить» OpenCode уходит провайдеру opencode", async () => {
   vi.mocked(api.checkProvider).mockResolvedValue({ ok: false, error: "не авторизован: нет входа", provider: "opencode" });
   open();
-  const oc = await screen.findByRole("group", { name: "OpenCode" });
+  const oc = await screen.findByRole("row", { name: "OpenCode" });
   await userEvent.click(within(oc).getByRole("button", { name: "Проверить" }));
   expect(await within(oc).findByText("не авторизован: нет входа")).toBeInTheDocument();
   expect(api.checkProvider).toHaveBeenCalledWith(ep, "opencode");
@@ -489,14 +508,14 @@ test("включить вторую модель: у каждой включён
     llm: { provider: "openai-compatible", enabled: ["openai-compatible"], local_model: "qwen3" },
   }));
   open();
-  const local = await screen.findByRole("group", { name: "Локальная (LM Studio / Ollama)" });
+  const local = await screen.findByRole("row", { name: "Локальная (LM Studio / Ollama)" });
   expect(within(local).getByText("локальная — данные не покидают компьютер")).toBeInTheDocument();
-  expect(within(local).getByText("по умолчанию")).toBeInTheDocument();
+  expect(within(local).getByRole("radio", { name: "Локальная (LM Studio / Ollama)" })).toBeChecked();
   // Модель по умолчанию выключить нельзя.
-  expect(within(local).getByRole("checkbox", { name: "Включить: Локальная (LM Studio / Ollama)" })).toBeDisabled();
-  const claude = screen.getByRole("group", { name: "Claude Code" });
+  expect(within(local).getByRole("switch", { name: "Включить: Локальная (LM Studio / Ollama)" })).toBeDisabled();
+  const claude = screen.getByRole("row", { name: "Claude Code" });
   expect(within(claude).queryByText(/облачная/)).toBeNull();
-  await userEvent.click(within(claude).getByRole("checkbox", { name: "Включить: Claude Code" }));
+  await userEvent.click(within(claude).getByRole("switch", { name: "Включить: Claude Code" }));
   expect(within(claude).getByText("облачная — текст встречи уходит провайдеру")).toBeInTheDocument();
   expect(screen.getByRole("radio", { name: "Локальная (LM Studio / Ollama)" })).toBeChecked();
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -510,14 +529,14 @@ test("у «Авто» нельзя выключить последнюю его 
     llm: { provider: "auto", enabled: ["claude-code", "opencode"] },
   }));
   open();
-  const claude = await screen.findByRole("checkbox", { name: "Включить: Claude Code" });
+  const claude = await screen.findByRole("switch", { name: "Включить: Claude Code" });
   expect(claude).toBeDisabled();
-  expect(claude.closest("label")).toHaveAttribute("title", expect.stringMatching(/Последняя модель для «Авто»/));
+  expect(claude).toHaveAccessibleDescription(/Последняя модель для «Авто»/);
   // Включили другую — первую уже можно выключить.
-  await userEvent.click(screen.getByRole("checkbox", { name: "Включить: Codex" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Включить: Codex" }));
   expect(claude).toBeEnabled();
   // OpenCode «Авто» не выбирает — его выключать можно всегда.
-  expect(screen.getByRole("checkbox", { name: "Включить: OpenCode" })).toBeEnabled();
+  expect(screen.getByRole("switch", { name: "Включить: OpenCode" })).toBeEnabled();
 });
 
 test("«Авто» без своих моделей не выбрать — сначала включить одну, само оно никого не включает (N2)", async () => {
@@ -528,7 +547,7 @@ test("«Авто» без своих моделей не выбрать — сн
   const auto = await screen.findByRole("radio", { name: "Авто" });
   expect(auto).toBeDisabled();
   expect(within(option("Авто")).getByText(/Включите Claude Code, Codex или локальную модель/)).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("checkbox", { name: "Включить: Codex" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Включить: Codex" }));
   expect(auto).toBeEnabled();
   await userEvent.click(auto);
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));

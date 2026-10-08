@@ -47,10 +47,12 @@
 }
 .badge.card__person:hover { background: var(--surface-2); }
 .badge.card__person--unnamed { color: var(--ink-2); }
-.card__person-mark {
-  flex: none; display: grid; place-items: center; width: 22px; height: 22px; overflow: hidden;
+/* Знак участника (PersonMark.tsx): инициал или фото в кольце цвета спикера (lib/tones) на --surface-2 —
+   в шапке, в панели «Спикеры»; размер задаёт компонент. Без цвета — кольцо цвета контура. */
+.person-mark {
+  flex: none; display: grid; place-items: center; overflow: hidden;
   border-radius: var(--r-full); background: var(--surface-2); box-shadow: inset 0 0 0 2px var(--person, var(--control-line));
-  color: var(--ink); font-size: 10px; font-weight: 600;
+  color: var(--ink); font-weight: 600; line-height: 1;
 }
 .card__merge { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-xs); }
 .card__merge code { margin-left: 4px; overflow-wrap: anywhere; }
@@ -101,9 +103,10 @@
 .turn-break { display: flex; align-items: center; gap: 12px; padding: 10px 0; color: var(--ink-3); font-size: var(--text-xs); }
 .turn-break::before, .turn-break::after { content: ""; flex: 1; border-top: 1px dashed var(--hairline-strong); }
 .turn-break__text { flex: none; }
-/* Время — тихая кнопка Geist Mono (щелчок — слушать с этого места). */
+/* Время — тихая кнопка Geist Mono (щелчок — слушать с этого места). Текст времени — вровень с левым
+   краем колонки карточки («Глава 1», поиск, вкладки): поле кнопки уходит в поле реплики. */
 .turn__time {
-  grid-column: 1; justify-self: start; max-width: 100%; height: var(--turn-line); padding: 0 6px; text-align: left;
+  grid-column: 1; justify-self: start; max-width: 100%; height: var(--turn-line); margin-left: -6px; padding: 0 6px; text-align: left;
   border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); font: inherit;
   font-family: var(--font-code); font-size: var(--text-xs); line-height: var(--turn-line); white-space: nowrap; cursor: pointer;
 }
@@ -152,7 +155,11 @@ button.turn__speaker:hover { text-decoration: underline; }
 .tmenu { display: flex; flex-direction: column; gap: 6px; font-size: var(--text-xs); }
 .tmenu__title { color: var(--ink); font-weight: 600; }
 .tmenu__scope { display: flex; flex-direction: column; gap: 4px; color: var(--ink); }
-.tmenu__scope label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+/* Радио Aurora .rd в меню реплики — 16 px (--check локально), текст меню (13 px), радио — по первой строке. */
+.tmenu__scope .check-row {
+  --check: 16px; min-height: 24px; gap: 8px; align-items: flex-start; font-size: var(--text-sm); line-height: 1.4;
+}
+.tmenu__scope .check-row .rd { margin-top: 1px; }
 .tmenu__hint { font-size: 11px; }
 .tmenu__error { margin: 0; font-size: var(--text-xs); }
 .tmenu__links { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; border-top: 1px solid var(--hairline); }

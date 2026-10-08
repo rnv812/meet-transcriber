@@ -28,6 +28,7 @@ import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
+import { Tip } from "../../ui/Tip";
 import { Row } from "./Section";
 import "./ownv.css";
 
@@ -263,15 +264,15 @@ export function OwnerVoiceFound({ endpoint, voice }: { endpoint: Endpoint; voice
         ? <span>Похоже, это ваш голос — послушайте:</span>
         : <span>Похоже, это ваш голос, но записи с примерами уже удалены.</span>}
       {found.samples.map((s, i) => (dead.has(i)
-        ? <IconButton key={`${s.recording}-${s.start}`} icon={Play} size="xs" disabled
+        ? <IconButton key={`${s.recording}-${s.start}`} icon={Play} disabled
             label={`Пример ${i + 1} недоступен — запись удалена`} />
-        : <IconButton key={`${s.recording}-${s.start}`} icon={Play} size="xs"
+        : <IconButton key={`${s.recording}-${s.start}`} icon={Play}
             label={`Послушать пример ${i + 1} — встреча ${shortDate(s.recording)}`} onClick={() => play(s, i)} />
       ))}
       <span className="muted" aria-hidden="true">·</span>
-      <Button size="xs" variant="primary" disabled={answering} onClick={() => voice.answer(true)}>Да, это я</Button>
+      <Button variant="primary" disabled={answering} onClick={() => voice.answer(true)}>Да, это я</Button>
       <span className="muted" aria-hidden="true">·</span>
-      <Button size="xs" disabled={answering} onClick={() => voice.answer(false)}>Нет</Button>
+      <Button disabled={answering} onClick={() => voice.answer(false)}>Нет</Button>
       {found.conflict && (
         <span className="notice">Он не похож на ваш записанный образец — послушайте внимательно.</span>
       )}
@@ -337,26 +338,27 @@ export function OwnerVoiceRow({ endpoint, device, pollMs }: {
           {samples.map((s) => (
             <span key={s.id} className="ownv__sample">
               <span>{sampleText(s)}</span>
-              <Button size="xs" onClick={() => void remove(s)} disabled={voice.busy}
+              <Button onClick={() => void remove(s)} disabled={voice.busy}
                 aria-label={`Удалить образец: ${sampleText(s)}`}>Удалить</Button>
             </span>
           ))}
           {!open && (
-            <Button size="xs" onClick={() => setOpen(true)} disabled={!voice.status}>
+            <Button onClick={() => setOpen(true)} disabled={!voice.status}>
               {enrolled ? "Перезаписать" : "Записать"}
             </Button>
           )}
           {!open && (
-            <Button size="xs" variant="ghost" onClick={() => voice.derive()}
-              disabled={!voice.status || voice.status.recording || !voice.status.ready || voice.busy
-                || voice.pending}
-              title="Поискать ваш голос в последних звонках — без записи образца">
-              Найти по прошлым встречам
-            </Button>
+            <Tip content="Поискать ваш голос в последних звонках — без записи образца">
+              <Button variant="ghost" onClick={() => voice.derive()}
+                disabled={!voice.status || voice.status.recording || !voice.status.ready || voice.busy
+                  || voice.pending}>
+                Найти по прошлым встречам
+              </Button>
+            </Tip>
           )}
           {deriving && <span className="muted" aria-live="polite">Ищу ваш голос в последних встречах…</span>}
           {deriving && voice.status?.derive?.job && (
-            <Button size="xs" variant="ghost" onClick={() => voice.stopDerive()}>Остановить поиск</Button>
+            <Button variant="ghost" onClick={() => voice.stopDerive()}>Остановить поиск</Button>
           )}
           {!open && voice.error && <span className="error">{voice.error}</span>}
         </div>

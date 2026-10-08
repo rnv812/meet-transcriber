@@ -61,10 +61,12 @@ export function ReplacementsEditor({ value, onChange }: { value: unknown; onChan
         </div>
       )}
       <form className="repl__add" onSubmit={(e) => { e.preventDefault(); add(); }}>
-        <input type="text" aria-label="Как распознаётся" placeholder="Как распознаётся" value={from}
+        <input type="text" className="field field--sm repl__field" aria-label="Как распознаётся" placeholder="Как распознаётся"
+          value={from}
           maxLength={200} onChange={(e) => setFrom(e.target.value)} />
         <span className="muted">→</span>
-        <input type="text" aria-label="Как правильно" placeholder="Как правильно" value={to}
+        <input type="text" className="field field--sm repl__field" aria-label="Как правильно" placeholder="Как правильно"
+          value={to}
           maxLength={200} onChange={(e) => setTo(e.target.value)} />
         <Button type="submit" disabled={!ready}>Добавить</Button>
       </form>

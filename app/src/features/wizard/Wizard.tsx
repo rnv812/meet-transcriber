@@ -16,6 +16,7 @@ import { X, Check } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { MeetMark } from "../../ui/MeetMark";
+import { Tip } from "../../ui/Tip";
 import { StepDevices } from "./StepDevices";
 import { StepDone } from "./StepDone";
 import { type InstallPhase, StepEngine } from "./StepEngine";
@@ -189,12 +190,13 @@ export function Wizard({
             ))}
           </ol>
           {step !== "done" && (
-            <Button className="wizard__skip-all" variant="ghost" icon={X} aria-label="Пропустить мастер"
-              onClick={onClose} disabled={installing}
-              title={installing ? "Дождитесь окончания установки"
-                : "Мастер можно запустить снова: Настройки → Приложение → «Мастер первого запуска»"}>
-              Пропустить мастер
-            </Button>
+            <Tip content={installing ? "Дождитесь окончания установки"
+              : "Мастер можно запустить снова: Настройки → Приложение → «Мастер первого запуска»"}>
+              <Button className="wizard__skip-all" variant="ghost" icon={X} aria-label="Пропустить мастер"
+                onClick={onClose} disabled={installing}>
+                Пропустить мастер
+              </Button>
+            </Tip>
           )}
         </aside>
         <section className="wizard__step" aria-labelledby={headingId}>

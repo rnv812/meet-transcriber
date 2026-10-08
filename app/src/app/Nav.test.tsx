@@ -12,10 +12,11 @@ test("рейка «Разделы»: знак Meet сверху, разделы 
   const onSelect = vi.fn();
   render(<Nav section="recordings" onSelect={onSelect} />);
   const nav = screen.getByRole("navigation", { name: "Разделы" });
-  // Знак — первым, только для глаз (имя «Meet» — во всплывающей подсказке).
+  // Знак — первым, только для глаз; 24 px — не теряется над кнопкой записи 48 (системной подсказки нет).
   const mark = nav.firstElementChild as HTMLElement;
-  expect(mark).toHaveAttribute("title", "Meet");
-  expect(mark.querySelector("svg.meet-mark")).toHaveAttribute("aria-hidden", "true");
+  expect(mark).not.toHaveAttribute("title");
+  expect(mark).toHaveAttribute("aria-hidden", "true");
+  expect(mark.querySelector("svg.meet-mark")).toHaveAttribute("width", "24");
   const buttons = within(nav).getAllByRole("button");
   expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Записи", "Голоса", "Настройки"]);
   expect(screen.getByRole("button", { name: "Записи" })).toHaveAttribute("aria-current", "page");
@@ -26,7 +27,7 @@ test("рейка «Разделы»: знак Meet сверху, разделы 
   expect(onSelect).toHaveBeenCalledWith("settings");
 });
 
-test("рейка без подписей: в кнопке только значок, имя — aria-label и подсказка справа", () => {
+test("рейка без подписей: в кнопке только значок, имя — aria-label и подсказка справа (ui/Tip)", async () => {
   render(<Nav section="voices" onSelect={() => {}} />);
   expect(screen.getByRole("button", { name: "Голоса" })).toHaveAttribute("aria-current", "page");
   for (const name of ["Записи", "Голоса", "Настройки"]) {
@@ -34,10 +35,15 @@ test("рейка без подписей: в кнопке только знач�
     expect(button).toHaveTextContent("");
     expect(button.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     // Подсказка повторяет имя — для экранного диктора её нет (имя уже прочитано).
-    const tip = button.parentElement?.querySelector(".tooltip");
-    expect(tip).toHaveTextContent(name);
-    expect(tip).toHaveAttribute("aria-hidden", "true");
+    expect(button).not.toHaveAccessibleDescription();
+    expect(button).not.toHaveAttribute("title");
   }
+  // С клавиатуры облачко — сразу, справа от кнопки.
+  await userEvent.tab();
+  const tip = document.body.querySelector(".tooltip.tip");
+  expect(tip).toHaveTextContent("Записи");
+  expect(tip).toHaveAttribute("aria-hidden", "true");
+  expect(tip).toHaveAttribute("data-side", "right");
 });
 
 test("кнопка записи — под знаком, предупреждения — внизу над «Настройками»", () => {
@@ -67,6 +73,7 @@ test("меню кнопки записи — меню Aurora: узкой «ещ�
   expect(rail).toMatch(/\.rec-menu__item \{[^}]*min-height: 44px/);
   expect(rail).toMatch(/\.rec-menu__item:hover:not\(:disabled\), \.rec-menu__item:focus-visible \{[^}]*background: var\(--surface-3\)/);
   expect(rail).toMatch(/\.rec-menu__icon \{/);
-  // Открытое меню не прячется под подсказкой кнопки.
-  expect(rail).toMatch(/\.rail-rec--open \.tooltip \{[^}]*visibility: hidden/);
+  // Знак 24 с отступом 8, черта — 32.
+  expect(rail).toMatch(/\.rail__mark \{[^}]*margin-bottom: 8px/);
+  expect(rail).toMatch(/\.rail__sep \{[^}]*width: 32px/);
 });

@@ -82,7 +82,7 @@ export function DateSections<T extends { id: string }>({
             onKeyDown={onSectionKey}>
             <div className="date-sec__head">
               {picking && onPickSection && (
-                <input type="checkbox" className="date-sec__pick" aria-label={`Выбрать все в разделе «${section.label}»`}
+                <input type="checkbox" className="cb date-sec__pick" aria-label={`Выбрать все в разделе «${section.label}»`}
                   checked={n > 0 && n === items.length}
                   ref={(el) => { if (el) el.indeterminate = n > 0 && n < items.length; }}
                   onChange={() => onPickSection(items, n < items.length)} />

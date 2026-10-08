@@ -16,6 +16,7 @@ import { type Endpoint, getExportPreview } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import type { ExportPreview } from "../../lib/types";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { fieldClass } from "./fields";
 import { FolderRow, Row, Switch, type Raw, type SetFn } from "./Section";
 
 export const PREVIEW_DELAY_MS = 400;
@@ -155,7 +156,8 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
         onChange={(x) => set("export", "meetings_dir", x)} />
       <Row label="Шаблон имени папки" htmlFor="export-template" hint="Имя папки встречи; «/» создаёт вложенные папки"
         help={<TokenHelp />} stack>
-        <input id="export-template" type="text" value={template}
+        <input id="export-template" type="text" className={fieldClass({ wide: true, mono: true })} value={template}
+          spellCheck={false} aria-invalid={local && folderTemplateError(template) ? true : undefined}
           onChange={(e) => set("export", "folder_template", e.target.value)} />
         <span className="export__preview" aria-live="polite">
           {problem ? <span className="error">{problem}</span>
@@ -169,18 +171,18 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
         </span>
       </Row>
       <Row label="Имя файла расшифровки" htmlFor="export-transcript-name" hint="Те же подстановки; расширение .md добавляется автоматически">
-        <input id="export-transcript-name" type="text" value={transcriptName}
+        <input id="export-transcript-name" type="text" className={fieldClass()} value={transcriptName}
           onChange={(e) => set("export", "transcript_name", e.target.value)} />
       </Row>
       <Row label="Имя файла итогов" htmlFor="export-summary-name" hint="Те же подстановки; расширение .md добавляется автоматически">
-        <input id="export-summary-name" type="text" value={summaryName}
+        <input id="export-summary-name" type="text" className={fieldClass()} value={summaryName}
           onChange={(e) => set("export", "summary_name", e.target.value)} />
       </Row>
       <Row label="Что выгружать" hint="Итоги — если они уже подготовлены; две дорожки записи сводятся в одну">
         <div className="checks">
           {FLAGS.map((f) => (
-            <label key={f.key} className="checks__item">
-              <input type="checkbox" checked={flags[f.key]} onChange={() => set("export", f.key, !flags[f.key])} />
+            <label key={f.key} className="check-row checks__item">
+              <input type="checkbox" className="cb" checked={flags[f.key]} onChange={() => set("export", f.key, !flags[f.key])} />
               {f.label}
             </label>
           ))}

@@ -34,6 +34,12 @@ function Harness({ initial, onDraft, list = devices }: {
 
 const recording = { mic_device: null, output_device: null };
 
+/** Выбор в списке Aurora (ui/Select): раскрыть и нажать пункт. */
+async function choose(combo: HTMLElement, name: string) {
+  await userEvent.click(combo);
+  await userEvent.click(screen.getByRole("option", { name }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getOwnerVoice).mockResolvedValue({
@@ -46,9 +52,10 @@ beforeEach(() => {
 test("по умолчанию — «Как в системе» с именем текущего системного устройства", () => {
   render(<Harness initial={{ recording }} />);
   const mic = screen.getByRole("combobox", { name: "Микрофон" });
-  expect(mic).toHaveDisplayValue("Как в системе (сейчас: Микрофон)");
+  expect(mic).toHaveTextContent("Как в системе (сейчас: Микрофон)");
+  expect(mic).toHaveClass("select-btn", "select-btn--sm");
   const out = screen.getByRole("combobox", { name: "Звук собеседников (вывод)" });
-  expect(out).toHaveDisplayValue("Как в системе (сейчас: Колонки)");
+  expect(out).toHaveTextContent("Как в системе (сейчас: Колонки)");
   expect(screen.getByText(/применятся со следующей записи/)).toBeInTheDocument();
 });
 
@@ -56,19 +63,19 @@ test("выбор устройства пишет {name}, «Как в систе�
   const drafts: Raw[] = [];
   render(<Harness initial={{ recording }} onDraft={(d) => drafts.push(d)} />);
   const mic = screen.getByRole("combobox", { name: "Микрофон" });
-  await userEvent.selectOptions(mic, "USB-микрофон");
+  await choose(mic, "USB-микрофон");
   expect(drafts.at(-1)?.recording?.mic_device).toEqual({ name: "USB-микрофон" });
-  await userEvent.selectOptions(mic, "");
+  await choose(mic, "Как в системе (сейчас: Микрофон)");
   expect(drafts.at(-1)?.recording?.mic_device).toBeNull();
   const out = screen.getByRole("combobox", { name: "Звук собеседников (вывод)" });
-  await userEvent.selectOptions(out, "Наушники");
+  await choose(out, "Наушники");
   expect(drafts.at(-1)?.recording?.output_device).toEqual({ name: "Наушники" });
 });
 
 test("выбранное, но отключённое устройство остаётся в списке с пометкой", () => {
   render(<Harness initial={{ recording: { ...recording, mic_device: { name: "Гарнитура" } } }} />);
   expect(screen.getByRole("combobox", { name: "Микрофон" }))
-    .toHaveDisplayValue("Гарнитура (не подключено)");
+    .toHaveTextContent("Гарнитура (не подключено)");
 });
 
 test("«Проверить» проверяет выбранное в черновике и показывает уровень", async () => {
@@ -79,6 +86,8 @@ test("«Проверить» проверяет выбранное в черно
   expect(api.testDevice).toHaveBeenCalledWith(ep, "mic", "USB-микрофон");
   const meter = await within(row).findByRole("meter", { name: "Уровень: Микрофон" });
   expect(meter).toHaveAttribute("aria-valuenow", "42");
+  // Уровень — полосками (как дорожки «Идёт запись»): закрашено до пика.
+  expect(meter.querySelectorAll("i.is-lit").length).toBe(Math.round(0.42 * meter.querySelectorAll("i").length));
   expect(within(row).getByText(/Звук есть: USB-микрофон/)).toBeInTheDocument();
 });
 
@@ -115,11 +124,12 @@ test("«?» у вывода объясняет запись через loopback"
   expect(screen.getByRole("tooltip")).toHaveTextContent(/loopback/);
 });
 
-test("список недоступен — только «Как в системе» и причина", () => {
+test("список недоступен — только «Как в системе» и причина", async () => {
   render(<Harness initial={{ recording }} list={{ available: false, pinning: true, error: "нет WASAPI" }} />);
   const mic = screen.getByRole("combobox", { name: "Микрофон" });
-  expect(within(mic).getAllByRole("option")).toHaveLength(1);
-  expect(mic).toHaveDisplayValue("Как в системе");
+  expect(mic).toHaveTextContent("Как в системе");
+  await userEvent.click(mic);
+  expect(screen.getAllByRole("option")).toHaveLength(1);
   expect(screen.getByText(/Список устройств недоступен: нет WASAPI/)).toBeInTheDocument();
 });
 

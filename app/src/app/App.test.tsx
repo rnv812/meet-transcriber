@@ -254,7 +254,7 @@ test("префиксы строки — фильтром резиденту, в 
   expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveValue("бюджет ");
   expect(within(screen.getByRole("group", { name: "Условия поиска" })).getByText("Анна")).toBeInTheDocument();
   expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] }, "бюджет ");
-  await userEvent.click(screen.getByText("Планёрка"));
+  await userEvent.click(within(document.querySelector<HTMLElement>('[data-pane="list"]')!).getByText("Планёрка"));
   expect(screen.getByTestId("card")).toHaveAttribute("data-find", "бюджет");
 });
 
@@ -394,7 +394,7 @@ test("офлайн: в списке и в карточке — «Служба з
 
 test.each(["Голоса", "Настройки"])("офлайн: в разделе «%s» — то же сообщение", async (name) => {
   const { container } = render(<App />);
-  await userEvent.click(screen.getByText(name));
+  await userEvent.click(screen.getByRole("button", { name }));
   expect(container.querySelector('[data-pane="detail"]')).toHaveTextContent(OFFLINE);
 });
 
@@ -411,6 +411,28 @@ test("пустая библиотека — на всё окно (без спи�
   expect(container.querySelector('[data-pane="list"]')).toBeNull();
   expect(within(detail).getByText("Нажмите «Начать запись» или перетащите файл")).toBeInTheDocument();
   expect(screen.queryByText("Выберите запись")).toBeNull();
+});
+
+test("записи есть, ничего не выбрано: «Записи» со счётчиком и последняя встреча — она открывается", async () => {
+  noGroups();
+  residentState.current = online();
+  useLibrarySpy.mockReturnValue({
+    items: [
+      { id: "old", path: "C:/rec/old", started_at: "2026-09-30T10:00:00", duration_s: 60, tracks: {},
+        has_transcript: true, has_voices: false, title: "Старая", source: "record" },
+      { id: "new", path: "C:/rec/new", started_at: "2026-10-06T11:00:00", duration_s: 3720, tracks: {},
+        has_transcript: true, has_voices: false, title: "Планирование спринта", source: "record" },
+    ],
+    jobs: [], loading: false, error: null, refresh: async () => {},
+  });
+  const { container } = render(<App />);
+  const detail = container.querySelector<HTMLElement>('[data-pane="detail"]')!;
+  expect(within(detail).getByRole("heading", { name: "Записи" })).toBeInTheDocument();
+  expect(within(detail).getByText("2 записи")).toBeInTheDocument();
+  expect(screen.queryByText("Выберите запись")).toBeNull();
+  await userEvent.click(within(within(detail).getByRole("region", { name: "Последняя" }))
+    .getByRole("button", { name: /Планирование спринта/ }));
+  expect(await screen.findByTestId("card")).toHaveTextContent("new");
 });
 
 test("библиотека не загрузилась — список с ошибкой, а не «Записей пока нет» на всё окно", async () => {

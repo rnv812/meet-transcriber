@@ -14,6 +14,7 @@ import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/she
 import { keepTranscript } from "../../lib/sameTranscript";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, statusOf } from "../../lib/status";
+import { speakerTones } from "../../lib/tones";
 import type { Category, ChatUpdatedEvent, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { KIND_LABEL } from "../../live/liveModel";
 import { AgentMark } from "../../ui/AgentMark";
@@ -199,6 +200,11 @@ export function RecordingCard({
   // поэтому дорожку по имени спикера выбирать не нужно.
   const play = useCallback((t: Turn) => player.current?.seek(t.start, true), []);
   const seeked = useCallback((t: number) => setSeekTo((r) => ({ t, n: (r?.n ?? 0) + 1 })), []);
+  /** Время из итогов: плеер — на это место (без воспроизведения), лента — к реплике. */
+  const goToTime = useCallback((t: number) => {
+    player.current?.seek(t);
+    seeked(t);
+  }, [seeked]);
   const audioAvailable = useCallback((ok: boolean) => setAudioFailed(!ok), []);
 
   // Состояние задач этой записи: при смене (очередь, готово) карточку надо перечитать.
@@ -285,7 +291,8 @@ export function RecordingCard({
   const askHint = useCallback((h: LiveHint) => askAgent({
     kind: "hint", refs: [{ t: h.source_t, speaker: KIND_LABEL[h.kind] ?? null, text: h.text }],
   }), [askAgent]);
-  const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
+  // Цвет спикера — один на шапку, ленту и панель «Спикеры» (lib/tones): по порядку в шапке.
+  const colors = useMemo(() => speakerTones(speakers, people), [speakers, people]);
   const textFix = useTextFix({
     endpoint, id, turns, segments: segments ?? NO_SEGMENTS, playable: !!rec && Object.keys(rec.tracks).length > 0
       && !audioFailed, head: rec?.edit_head, onPlay: playPhrase, onChanged: speakersChanged,
@@ -504,7 +511,12 @@ export function RecordingCard({
               <AgentMark size={16} />Улучшить
             </Button>
           }
-          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn} />
+          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn}
+          // Разовое предложение анализа — только на «Расшифровке», над лентой: вкладки не сдвигаются.
+          notice={offerAnalysis ? (
+            <AnalysisOffer busy={busy} onAnswer={answerOffer}
+              onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
+          ) : null} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "text":
@@ -558,7 +570,8 @@ export function RecordingCard({
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
       agentContext={`${rec.transcript_phase ?? "final"}:${rec.transcript_at ?? ""}`}
       showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk} chatEvent={chatEvent}
-      onAskAgent={askAgent} onAgentTaken={agentTaken} meetingEnd={meetingEndOf(rec.started_at, rec.duration_s)} />
+      onAskAgent={askAgent} onAgentTaken={agentTaken} meetingEnd={meetingEndOf(rec.started_at, rec.duration_s)}
+      onTime={goToTime} />
   );
 
   const actions = (
@@ -591,7 +604,7 @@ export function RecordingCard({
   return (
     <section className={`rec-card${panel.open && status.kind === "ready" ? " rec-card--with-spk" : ""}`} ref={cardEl}>
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil}
-        speakers={status.kind === "text" ? NO_NAMES : speakers} people={people}
+        speakers={status.kind === "text" ? NO_NAMES : speakers} people={people} tones={colors}
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
         onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
         categories={categories} onCategory={chooseCategory}
@@ -606,10 +619,6 @@ export function RecordingCard({
           <AnalysisStatus state={analysis.state} busy={busy} durationS={rec.duration_s ?? spokenUntil}
             onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
               ? (p) => void doReanalyze(p) : undefined} />
-        )}
-        {offerAnalysis && (
-          <AnalysisOffer busy={busy} onAnswer={answerOffer}
-            onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
         )}
         {status.kind === "ready" && improve.status}
         {kbDone && (
@@ -669,7 +678,7 @@ export function RecordingCard({
           label="Ширина панели спикеров" className="spk-resize" />
       )}
       {panel.mounted && status.kind === "ready" && (
-        <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
+        <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} tones={colors} avatarVersion={avatarVersion}
           open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl} jobs={jobs}
           onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged}
           removedAsk={removedAsk} />

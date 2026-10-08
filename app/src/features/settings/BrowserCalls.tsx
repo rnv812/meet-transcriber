@@ -15,6 +15,7 @@ import { OS, type Os } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Icon } from "../../ui/Icon";
+import { fieldClass } from "./fields";
 
 export type Browser = { exe: string; title: string };
 
@@ -79,8 +80,9 @@ export function BrowserCalls({ browsers, onBrowsers, os = OS }: {
       <span className="srow__hint">Отметьте браузеры, в которых вы созваниваетесь</span>
       <div className="callapps__grid">
         {browsersFor(os).map((b) => (
-          <label key={b.exe} className="callapps__item">
-            <input type="checkbox" aria-label={b.title} checked={selected.has(lower(b.exe))} onChange={() => toggle(b.exe)} />
+          <label key={b.exe} className="check-row callapps__item">
+            <input type="checkbox" className="cb" aria-label={b.title} checked={selected.has(lower(b.exe))}
+              onChange={() => toggle(b.exe)} />
             <span className="callapps__name">
               <span>{b.title}</span>
               <span className="callapps__exes">{b.exe}</span>
@@ -114,8 +116,8 @@ export function CallSites({ requireSite, sites, onRequireSite, onSites }: {
 
   return (
     <div className="callapps" role="group" aria-label="Сайты звонков">
-      <label className="callapps__item">
-        <input type="checkbox" checked={requireSite} onChange={(e) => onRequireSite(e.target.checked)} />
+      <label className="check-row callapps__item">
+        <input type="checkbox" className="cb" checked={requireSite} onChange={(e) => onRequireSite(e.target.checked)} />
         <span className="callapps__name">
           <span className="srow__label">Только если в заголовке окна сайт звонка</span>
           <span className="callapps__exes">
@@ -143,7 +145,7 @@ export function CallSites({ requireSite, sites, onRequireSite, onSites }: {
       </ul>
       <div className="callapps__add">
         <span className="with-unit">
-          <input type="text" aria-label="Новый сайт звонка" placeholder="Например, Моя платформа"
+          <input type="text" className={fieldClass()} aria-label="Новый сайт звонка" placeholder="Например, Моя платформа"
             value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} />
           <Button onClick={add} disabled={!typed || duplicate}>Добавить</Button>
         </span>

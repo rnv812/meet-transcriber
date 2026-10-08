@@ -57,9 +57,11 @@ test("модели сервера ищутся сразу и выбираютс�
   open();
   const select = await picker();
   expect(api.listLocalModels).toHaveBeenCalledWith(ep, URL1, null, false);
-  expect(within(select).getByRole("option", { name: "qwen3:8b" })).toBeInTheDocument();
+  expect(select).toHaveTextContent("Выберите модель…");
   expect(screen.getByText("Найдено моделей: 2")).toBeInTheDocument();
-  await userEvent.selectOptions(select, "gemma3:4b");
+  await userEvent.click(select);
+  expect(screen.getByRole("option", { name: "qwen3:8b" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("option", { name: "gemma3:4b" }));
   expect(screen.getByRole("textbox", { name: "Имя модели" })).toHaveValue("gemma3:4b");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { local_model: "gemma3:4b" } }));
@@ -69,11 +71,11 @@ test("имя можно вписать руками — список не меш
   vi.mocked(api.getSettings).mockResolvedValue(settings("qwen3:8b"));
   open();
   const select = await picker();
-  expect(select).toHaveValue("qwen3:8b");
+  expect(select).toHaveTextContent("qwen3:8b");
   const name = screen.getByRole("textbox", { name: "Имя модели" });
   await userEvent.clear(name);
   await userEvent.type(name, "my-finetune");
-  expect(select).toHaveValue("");
+  expect(select).toHaveTextContent("Выберите модель…");
   // Вписанной нет на сервере — так и сказано.
   expect(screen.getByText("Модели «my-finetune» на сервере нет — выберите другую из списка")).toBeInTheDocument();
 });
@@ -145,7 +147,7 @@ test("Ollama: «llama3.2» — это «llama3.2:latest» из списка, а 
   vi.mocked(api.listLocalModels).mockResolvedValue(found("llama3.2:latest", "qwen3:8b"));
   open();
   const select = await picker();
-  expect(select).toHaveValue("llama3.2:latest");
+  expect(select).toHaveTextContent("llama3.2:latest");
   expect(screen.queryByText(/на сервере нет/)).toBeNull();
   expect(sameModel("hf.co/org/repo", "hf.co/org/repo:latest")).toBe(true);
   expect(sameModel("qwen3:8b", "qwen3")).toBe(false);
@@ -155,7 +157,7 @@ test("«Локальную модель — через прокси»: по ум
   open();
   await picker();
   await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
-  const box = screen.getByRole("checkbox", { name: "Локальную модель — через прокси" });
+  const box = screen.getByRole("switch", { name: "Локальную модель — через прокси" });
   expect(box).not.toBeChecked();
   await userEvent.click(box);
   await waitFor(() => expect(api.listLocalModels).toHaveBeenLastCalledWith(ep, URL1, null, true), { timeout: 3000 });
@@ -168,7 +170,7 @@ test("«Проверить» локальную модель — с окном �
     ok: true, error: null, provider: "openai-compatible", detail: "окно контекста модели: 32768 токенов" });
   open();
   await picker();
-  const local = screen.getByRole("group", { name: "Локальная (LM Studio / Ollama)" });
+  const local = screen.getByRole("row", { name: "Локальная (LM Studio / Ollama)" });
   await userEvent.click(within(local).getByRole("button", { name: "Проверить" }));
   expect(await within(local).findByText("работает; окно контекста модели: 32768 токенов")).toBeInTheDocument();
 });
@@ -181,7 +183,7 @@ test("«через прокси» с SOCKS-адресом — понятное �
   await picker();
   expect(screen.queryByRole("alert")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
-  await userEvent.click(screen.getByRole("checkbox", { name: "Локальную модель — через прокси" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Локальную модель — через прокси" }));
   expect(screen.getByRole("alert")).toHaveTextContent("SOCKS-прокси для локальной модели не поддерживается");
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
 });

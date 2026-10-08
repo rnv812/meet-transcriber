@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
@@ -22,7 +22,13 @@ const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
   provider: "claude", setting: "auto", available: {}, knowledge_dir: null, checking: false, ...o,
 });
 /** Подсказка кнопки остановки: «Идёт запись · мм:сс», ассистент, этап его запуска. */
-const status = () => screen.getByRole("tooltip");
+const status = () => {
+  // Облачко ui/Tip — при наведении; тот же текст — описание кнопки (скрытый узел по aria-describedby).
+  const id = stopButton().getAttribute("aria-describedby")?.split(" ").pop();
+  const node = id ? document.getElementById(id) : null;
+  if (!node) throw new Error("у кнопки записи нет подсказки-описания");
+  return node;
+};
 const stopButton = () => screen.getByRole("button", { name: "Остановить и сохранить" });
 /** Меню «Действия с записью» открывает сама кнопка остановки. */
 const openMenu = () => userEvent.click(stopButton());
@@ -39,7 +45,7 @@ test("во время записи меню кнопки «Действия с �
   render(<Harness />);
   expect(status()).toHaveTextContent("Идёт запись · 12:34");
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
+  const item = await screen.findByRole("menuitem", { name: /^Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
   expect(item).toHaveTextContent("догонит начало встречи");
   await userEvent.click(item);
@@ -50,14 +56,15 @@ test("во время записи меню кнопки «Действия с �
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
-test("«Включить ассистента · Личный» — подключает с профилем «Личный»", async () => {
+test("«Включить ассистента» → «Личный» — подключает с профилем «Личный»", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
     { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Личный/ });
-  expect(screen.getAllByRole("menuitem", { name: /Включить ассистента/ })).toHaveLength(2);
+  const item = await screen.findByRole("menuitem", { name: /^Личный/ });
+  // Профили — пунктами группы «Включить ассистента» (подпись группы, а не в каждом пункте).
+  expect(within(screen.getByRole("group", { name: "Включить ассистента" })).getAllByRole("menuitem")).toHaveLength(2);
   await waitFor(() => expect(item).toBeEnabled());
   expect(item).toHaveTextContent("без базы знаний");
   await userEvent.click(item);
@@ -69,7 +76,7 @@ test("без подключённой модели «Включить ассис
   const attach = vi.spyOn(api, "liveAttach");
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
+  const item = await screen.findByRole("menuitem", { name: /^Рабочая встреча/ });
   await waitFor(() => expect(item).toBeDisabled());
   expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code, Codex или OpenCode в настройках");
   await userEvent.click(item);
@@ -100,7 +107,7 @@ test("отказ резидента виден рядом с кнопкой", as
   vi.spyOn(api, "liveAttach").mockRejectedValue(new Error("Ассистент ещё запускается или останавливается"));
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
   await openMenu();
-  const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
+  const item = await screen.findByRole("menuitem", { name: /^Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
   await userEvent.click(item);
   expect(await screen.findByRole("alert")).toHaveTextContent("Ассистент ещё запускается");

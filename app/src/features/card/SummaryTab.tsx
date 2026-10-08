@@ -38,6 +38,54 @@ import { ModelSplitButton } from "./modelPick";
 
 const COPIED_MS = 2000;
 
+/** Таблицы итогов — карточка Aurora с таблицей `.tbl` (макет «Итоги»: «Задачи» — Кто / Что / Срок). */
+const SUMMARY_TABLES = { wrap: "card summary-table", table: "tbl" };
+
+const TASKS_HEAD = /^#{1,6}\s*(?:задачи|поручения|action items)\s*:?\s*$/i;
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
+/** Похоже на срок: день недели, месяц, число, «завтра», «конец недели»… */
+const DATEISH = /(понедельник|вторник|сред[уаыеи]|четверг|пятниц|суббот|воскресен|завтра|сегодня|недел|месяц|квартал|январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр|\d)/i;
+const cell = (s: string) => s.replace(/\|/g, "/").trim() || "—";
+const unbold = (s: string) => s.replace(/^\*\*(.+)\*\*$/, "$1").replace(/^__(.+)__$/, "$1").trim();
+
+/** Пункт задачи «Кто: что (срок)» → [кто, что, срок]; не названо — «—». */
+function taskRow(text: string): [string, string, string] {
+  let who = "";
+  let what = text.trim();
+  const named = /^(\*\*[^*]{1,40}\*\*|[^:—–]{1,40}?)\s*(?::|\s[—–-])\s+(.+)$/.exec(what);
+  if (named) { who = unbold(named[1]!); what = named[2]!.trim(); }
+  let when = "";
+  const paren = /\s*\(((?:до|срок:?|к)\s+[^)]+|[^)]*\d[^)]*)\)\s*\.?$/i.exec(what);
+  if (paren && DATEISH.test(paren[1]!)) {
+    when = paren[1]!.replace(/^срок:?\s*/i, "");
+    what = what.slice(0, paren.index).trim();
+  } else {
+    const tail = /[,;]?\s+((?:до|к)\s+[^,;]+?)\.?$/i.exec(what);
+    if (tail && DATEISH.test(tail[1]!)) { when = tail[1]!; what = what.slice(0, tail.index).trim(); }
+  }
+  return [cell(who), cell(what), cell(when)];
+}
+
+/**
+ * Раздел «Задачи» списком («- Анна: план к среде») — таблицей «Кто | Что | Срок», как просит
+ * промпт итогов и как в макете; раздел уже таблицей, прозой или без раздела — как есть.
+ */
+export function tasksAsTable(markdown: string): string {
+  const lines = markdown.split("\n");
+  const at = lines.findIndex((l) => TASKS_HEAD.test(l.trim()));
+  if (at < 0) return markdown;
+  let end = at + 1;
+  while (end < lines.length && !/^#{1,6}\s/.test(lines[end]!)) end++;
+  const body = lines.slice(at + 1, end);
+  const filled = body.filter((l) => l.trim());
+  if (!filled.length || !filled.every((l) => LIST_ITEM.test(l))) return markdown;
+  const rows = filled.map((l) => taskRow(LIST_ITEM.exec(l)![1]!));
+  const table = ["| Кто | Что | Срок |", "|---|---|---|", ...rows.map((r) => `| ${r.join(" | ")} |`)];
+  const lead = body.slice(0, body.findIndex((l) => l.trim()));
+  const trail = body.slice(body.length - [...body].reverse().findIndex((l) => l.trim()));
+  return [...lines.slice(0, at + 1), ...lead, ...table, ...trail, ...lines.slice(end)].join("\n");
+}
+
 /** «Итоги собрал Claude Code · 14 сен 11:41»; модель неизвестна — «Итоги собраны · …»; ничего — null. */
 export function summaryByline(summary: Summary): string | null {
   const who = llmLabel(summary.llm);
@@ -49,7 +97,9 @@ export function summaryByline(summary: Summary): string | null {
   return [who ? `Итоги собрал ${who}` : "Итоги собраны", at].filter(Boolean).join(" · ");
 }
 
-export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettings, onAskAgent }: {
+export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettings, onAskAgent, onTime }: {
+  /** Время «[мм:сс]» в итогах — чипом; нажатие ведёт к этой реплике в «Расшифровке». Нет — время текстом. */
+  onTime?: (seconds: number) => void;
   endpoint: Endpoint;
   id: string;
   /** Папка записи: по ней задачи модели относятся к этой записи. */
@@ -205,7 +255,8 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           )}
         </div>
         {hint}
-        <Markdown source={summary.markdown} className="assist__md" itemAction={askItem} jira={jira} />
+        <Markdown source={tasksAsTable(summary.markdown)} className="assist__md" itemAction={askItem} jira={jira}
+          tables={SUMMARY_TABLES} onTime={onTime} />
       </>
     );
   } else if (summary === null && draft) {
@@ -222,7 +273,8 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           <p className="muted assist__draft-note">
             Сводка, которую ассистент вёл во время встречи. Итоги модель сверит с полной расшифровкой.
           </p>
-          <Markdown source={draft.markdown} className="assist__md" itemAction={askItem} jira={jira} />
+          <Markdown source={tasksAsTable(draft.markdown)} className="assist__md" itemAction={askItem} jira={jira}
+            tables={SUMMARY_TABLES} onTime={onTime} />
         </section>
       </>
     );

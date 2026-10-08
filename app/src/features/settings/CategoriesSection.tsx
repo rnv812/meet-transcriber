@@ -20,6 +20,7 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { IconButton } from "../../ui/IconButton";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
+import { Tip } from "../../ui/Tip";
 
 /** Категория в черновике: у новой id пустой, `key` — только для окна. */
 export type DraftCategory = Category & { key?: string };
@@ -119,10 +120,12 @@ function ColorPicker({ value, name, onChange }: { value: string; name: string; o
         <Popover anchor={button.current} label="Цвет категории" width={212} onClose={close} anchorToggles>
           <div role="radiogroup" aria-label="Цвет категории" className="catedit__palette" onKeyDown={onKeyDown}>
             {CATEGORY_PALETTE.map((p) => (
-              <button key={p.color} type="button" role="radio" aria-checked={p === current} aria-label={p.name}
-                title={p.name} className="catedit__color" style={{ background: p.color }}
-                tabIndex={p === focused ? 0 : -1} autoFocus={p === focused}
-                onClick={() => { onChange(p.color); close(); }} />
+              <Tip key={p.color} content={p.name} describe={false}>
+                <button type="button" role="radio" aria-checked={p === current} aria-label={p.name}
+                  className="catedit__color" style={{ background: p.color }}
+                  tabIndex={p === focused ? 0 : -1} autoFocus={p === focused}
+                  onClick={() => { onChange(p.color); close(); }} />
+              </Tip>
             ))}
           </div>
         </Popover>

@@ -1,27 +1,29 @@
 /*
- * Настройки: меню слева — группы с подписью и пункты разделов (220 px по
- * умолчанию, ширину можно менять), справа — колонка по центру (до 760 px).
- * Шапка с названием раздела и «Сохранить» — внутри той же колонки, высота
- * постоянная: состояние «не сохранено / сохранено» не переносит её на две строки.
- * Только токены Atlas Aurora; плотность — `data-density="compact"` на панели.
+ * Настройки: меню слева — заголовок «Настройки», поиск, группы (подпись
+ * `.eyebrow`) и пункты разделов по 32 px (220 px по умолчанию, ширину можно
+ * менять); справа — колонка по центру (до 760 px). Шапка с названием раздела,
+ * строкой «см. также» и «Сохранить» — внутри той же колонки.
+ *
+ * Плотность обычная (не `compact`, доводка 0.4, C1): кнопки `btn--sm`, поля
+ * `field--sm` и списки `select-btn--sm` — 32 px, строка — одна линейка. Только
+ * токены Atlas Aurora.
  */
 .settings { display: flex; height: 100%; min-height: 0; }
+
+/* ── Меню разделов ── */
 .settings__menu {
-  width: var(--settings-menu-w, 220px); flex: none; padding: 12px 10px; display: flex; flex-direction: column; gap: 12px;
+  width: var(--settings-menu-w, 220px); flex: none; padding: var(--s-4) 10px var(--s-3); display: flex; flex-direction: column;
   border-right: 1px solid var(--hairline); overflow: auto;
 }
-.settings__group { display: flex; flex-direction: column; gap: 2px; }
-/* Группы разделены линией и отступом: меню читается блоками, а не сплошным списком. */
-.settings__group + .settings__group { margin-top: var(--s-1); padding-top: var(--s-3); border-top: 1px solid var(--hairline); }
-/* Подпись группы — обычным регистром (голос дизайн-системы), жирным: заметнее пунктов,
-   хотя и мельче их. */
-.settings__group-title {
-  padding: 2px 10px 6px; color: var(--ink); font-size: var(--text-sm); line-height: 1.2; font-weight: 700;
-}
+/* «Настройки» — заголовок меню, как в макете (type-h3). */
+.settings__menu-title { padding: 0 10px 10px; color: var(--ink); }
+.settings__group { display: flex; flex-direction: column; gap: 2px; margin-top: var(--s-1); }
+/* Подпись группы — .eyebrow (11 px, верхний регистр, --ink-3): тише пунктов, без черты между группами. */
+.settings__group-title { padding: 10px 10px var(--s-1); }
 .settings__item {
-  display: flex; align-items: center; gap: 8px; height: 40px; flex: none;
-  padding: 0 10px; border: 0; border-radius: var(--r-md); background: none;
-  color: var(--ink-2); font: inherit; text-align: left; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; height: var(--control-sm); flex: none;
+  padding: 0 10px; border: 0; border-radius: var(--r-control-sm); background: none;
+  color: var(--ink-2); font: 400 var(--text-ui)/1 var(--font-body); text-align: left; cursor: pointer;
   transition: background var(--d), color var(--d);
 }
 /* Наведение тише выбранного: выбранный — --surface-3 с контуром, под мышью — --surface-2. */
@@ -32,29 +34,37 @@
   background: var(--surface-3); color: var(--ink); font-weight: 600;
   outline: 1px solid var(--control-line); outline-offset: -1px;
 }
-.settings__item-title { flex: 1; min-width: 0; }
+.settings__item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Точка «в разделе есть несохранённые изменения». */
 .settings__dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+
+/* ── Колонка раздела ── */
 .settings__body { flex: 1; min-width: 0; overflow: auto; scrollbar-gutter: stable; padding: 0 32px 32px; }
 .settings__column { max-width: 760px; margin: 0 auto; }
+/* Шапка постоянной высоты: заголовок всегда на одной высоте (с «см. также» под ним и без),
+   кнопки — по центру строки заголовка. */
 .settings__head {
   position: sticky; top: 0; z-index: 2; background: var(--canvas);
-  display: flex; align-items: center; gap: 16px; height: 64px;
+  display: flex; align-items: flex-start; gap: var(--s-4); min-height: 80px; padding: 20px 0 var(--s-3);
   border-bottom: 1px solid var(--hairline);
 }
+.settings__heading { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 /* Заголовок раздела — размер type-h3 (Unbounded 20 px), класс на элементе. */
-.settings__title { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.settings__actions { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; }
+.settings__title { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 24px; }
+/* «См. также» раздела (SeeAlso head) — под заголовком, --text-sm. Пусто — строки нет. */
+.settings__see { margin: 0; color: var(--ink-3); font-size: var(--text-sm); line-height: 1.4; }
+.settings__see:empty { display: none; }
+.settings__actions { display: flex; align-items: center; gap: var(--s-2); flex: none; min-width: 0; margin-top: -4px; }
 .settings__state {
   min-width: 0; max-width: 300px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  line-height: 18px;
+  line-height: 18px; font-size: var(--text-sm);
 }
 .settings__content { padding-top: var(--s-4); display: flex; flex-direction: column; gap: var(--s-4); }
 
 /* Подгруппа раздела — карточка Aurora (.card) с заголовком type-card-title. */
-.scard { padding: var(--s-2) var(--s-5); min-width: 0; }
-.scard__title { margin: var(--s-4) 0 var(--s-1); color: var(--ink); }
-.scard > .srow:last-child, .scard > :last-child .srow:last-child { border-bottom: 0; }
+.scard { padding: var(--s-1) var(--s-5); min-width: 0; }
+.scard__title { margin: var(--s-4) 0 0; color: var(--ink); }
+.scard > .srow:last-child, .scard > :last-child .srow:last-child, .scard > .callapps:last-child { border-bottom: 0; }
 .see-also { margin: 0; }
 
 /* «Тонкая настройка» — последняя карточка раздела, свёрнута; заголовок тише подгрупп. */
@@ -64,157 +74,156 @@
 .sfine .disclosure__head:hover { color: var(--ink); }
 .sfine .disclosure__body > :last-child, .sfine .disclosure__body > :last-child .srow:last-child { border-bottom: 0; }
 
-/* «Анализ встречи»: таблица «Размечать / Показывать в карточке». */
-.amark { width: 100%; border-collapse: collapse; margin: var(--s-2) 0 var(--s-1); }
-.amark__col {
-  padding: 0 0 var(--s-2); border-bottom: 1px solid var(--hairline);
-  color: var(--ink-3); font-size: 12px; font-weight: 500; text-align: left;
+/* Пояснение под заголовком карточки и между строками. */
+.sdesc { margin: var(--s-2) 0 0; font-size: var(--text-sm); line-height: 1.45; }
+/* Карточка без заголовка начинается пояснением — отступ как у строки. */
+.scard > .sdesc:first-child { margin-top: var(--s-4); }
+/* Заметка-выноска в карточке: Aurora .callout в плотном виде (как card__callout). */
+.callout.scallout {
+  grid-template-columns: 20px minmax(0, 1fr); gap: 10px; margin: var(--s-2) 0; padding: 10px 14px;
+  font-size: var(--text-sm); line-height: 1.5;
 }
-.amark__col--ctl { width: 120px; padding-left: var(--s-3); }
-.amark__row + .amark__row > * { border-top: 1px solid var(--hairline); }
-.amark__item {
-  padding: var(--s-3) 0; text-align: left; font-weight: inherit; vertical-align: top;
-}
-.amark__item .srow__label, .amark__item .srow__hint { display: block; }
-.amark__item .srow__hint { margin-top: 2px; }
-.amark__cell { padding: var(--s-3) 0 var(--s-3) var(--s-3); vertical-align: top; }
-.amark .switch:disabled { opacity: 0.5; cursor: not-allowed; }
-.amark__note { display: block; margin-top: 4px; color: var(--ink-3); font-size: 12px; line-height: 1.4; }
-.amark__intro { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.callout.scallout .ic { width: var(--icon-xl); height: var(--icon-xl); margin-top: 0; }
 
-/* «Поиск по настройкам» над меню: поле Aurora .search + .field--sm, выдача — вместо групп меню. */
-.ssearch { display: flex; flex-direction: column; gap: var(--s-2); }
-.ssearch__list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.ssearch__list[hidden] { display: none; }
-.ssearch__item {
-  padding: 8px 10px; border-radius: var(--r-md); color: var(--ink-2); cursor: pointer;
-  font-size: var(--text-sm); line-height: 1.35; overflow-wrap: anywhere;
-}
-.ssearch__item[aria-selected="true"] { background: var(--surface-2); color: var(--ink); }
-.ssearch__section { color: var(--ink-3); }
-.ssearch__label { color: var(--ink); }
-.ssearch__empty { margin: 0; padding: 4px 10px; font-size: 12px; }
-
-/* Найденная поиском строка: фон --selection на 1,5 с (снимается классом); без анимации при reduced-motion. */
-.setting-found {
-  background: var(--selection); border-radius: var(--r-sm);
-  margin-inline: -8px; padding-inline: 8px; transition: background var(--d) var(--ease-out);
-}
-@media (prefers-reduced-motion: reduce) { .setting-found { transition: none; } }
-@media (max-width: 1000px) {
-  .settings__body { padding: 0 20px 24px; }
-  .settings__state { max-width: 160px; }
-}
-
+/* ── Строка настроек ── */
 /*
- * Строка настроек: подпись с пояснением слева (flex 1, переносится) и элемент
- * управления справа (до 420 px). Не хватает места — элемент переходит на
- * следующую строку под подпись: колонки никогда не наезжают друг на друга.
+ * Подпись с пояснением слева (flex 1, переносится) и элемент управления справа
+ * (до 420 px), по центру по вертикали. Не хватает места — элемент переходит
+ * под подпись: колонки не наезжают друг на друга. Ритм — как в макете:
+ * 14 px сверху и снизу, подпись → пояснение 2 px.
  */
 .srow {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px;
-  padding: 12px 0; border-bottom: 1px solid var(--hairline);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-5);
+  padding: 14px 0; border-bottom: 1px solid var(--hairline);
 }
-.srow__text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.srow__text { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 .srow__head { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.srow__label { color: var(--ink); }
-.srow__hint { color: var(--ink-3); font-size: 12px; line-height: 1.4; }
+.srow__label { color: var(--ink); font-weight: 500; }
+.srow__hint { color: var(--ink-3); font-size: var(--text-sm); line-height: 1.45; }
 .srow__control {
   flex: 0 1 auto; min-width: 0; max-width: min(420px, 100%); margin-left: auto;
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+  display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; justify-content: flex-end;
 }
-/* Под подписью во всю ширину: списки вариантов, составные элементы. */
+/* Под подписью во всю ширину: списки вариантов, таблицы, длинные поля. */
 .srow--stack { align-items: stretch; }
 .srow--stack .srow__text { flex-basis: 100%; }
 .srow--stack .srow__control { flex: 1 1 100%; max-width: none; margin-left: 0; justify-content: flex-start; }
-.srow input[type="text"], .srow input[type="number"], .srow select, .hotwords__text {
-  background: var(--surface-1); color: var(--ink); border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md); padding: 5px 8px; font: inherit;
-}
-/* Ширины полей: s — 90 (имя, код языка), m — 260 (по умолчанию),
-   l — пути, адреса, команды и id моделей: во всю колонку, моноширинным. */
-.srow input[type="text"] { width: 260px; min-width: 0; max-width: 100%; }
-.srow input.input--short { width: 90px; }
-.srow input.input--wide,
-.srow #llm-base-url, .srow input[aria-label="Адрес прокси"], .srow #export-template, .srow #jira-base {
-  width: 100%; font-family: var(--font-code); font-size: 12px;
-}
-.srow:has(#llm-base-url) .srow__control, .srow:has(input[aria-label="Адрес прокси"]) .srow__control,
-.srow:has(#export-template) .srow__control, .srow:has(#jira-base) .srow__control { flex: 1 1 360px; max-width: none; }
-.srow input:disabled, .srow select:disabled { opacity: 0.5; cursor: not-allowed; }
-/* Строка зависит от выключенного переключателя: приглушена. */
+/* Строка зависит от выключенного выбора: приглушена вся группа (не каждый элемент по отдельности). */
 .srow--disabled .srow__label { color: var(--ink-2); }
-.srow input.input--time { width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
-.srow .num { min-width: 0; width: 80px; }
-.with-unit { display: inline-flex; align-items: center; gap: 6px; }
-.unit { color: var(--ink-3); }
-/* Единица в слоте постоянной ширины: поля «минут» и «секунд» встают на одну вертикаль. */
-.unit--slot { min-width: 52px; }
+.srow--disabled .srow__control { opacity: 0.5; }
+.srow.srow--disabled .srow__control :disabled { opacity: 1; }
+
+/* Поля — Aurora .field.field--sm (32 px); здесь только ширины. */
+.field.input--short { width: 96px; }
+.field.input--mid { width: 260px; max-width: 100%; }
+.field.input--wide { width: 100%; }
+.field.input--mono { font-family: var(--font-code); font-size: var(--text-xs); }
+.field.input--time { width: 72px; text-align: center; }
+/* Многострочное поле (термины, переменные окружения) — та же рамка, высота по строкам. */
+.field.field--area {
+  height: auto; min-height: 72px; padding: 8px 10px; border-radius: var(--r-control-sm);
+  font-size: var(--text-sm); line-height: 1.5; resize: vertical;
+}
+.field.field--area.input--mono { font-size: var(--text-xs); }
+.srow .field:disabled, .callapps .field:disabled, .kb-exclude .field:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Число: «−» · поле без системных стрелок · «+» · единица. */
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+.field.stepper__input { width: 64px; padding: 0 6px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.stepper__input::-webkit-inner-spin-button, .stepper__input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.with-unit { display: inline-flex; align-items: center; gap: var(--s-2); }
+.unit { color: var(--ink-3); font-size: var(--text-sm); }
+
+/* Бегунок в карточке: кольцо бегунка — цвета карточки, а не фона окна. */
+.scard .slider__input::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--surface-1); }
+
+/* Короткое перечисление — сегменты Aurora .tabs.tabs--sm с ролями радио (Segmented):
+   выбранный — по aria-checked (у вкладок Aurora — по aria-selected), как «Как часто писать» в панели. */
+.sseg { flex: none; max-width: 100%; }
+.sseg button[aria-checked='true'] {
+  background: var(--deep); color: var(--on-deep); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line);
+}
+.sseg button[aria-checked='true']:focus-visible { box-shadow: var(--focus-ring), inset 0 0 0 1px var(--control-line); }
+.sseg button:disabled { cursor: default; }
+.srow:not(.srow--disabled) .sseg button:disabled { opacity: 0.5; }
+
+/* Радио и флажки — Aurora .rd / .cb в .check-row. */
+.radios { display: flex; flex-wrap: wrap; gap: 4px var(--s-5); justify-content: flex-end; }
+/* Флажки — сеткой в два столбца: флажки стоят на одной вертикали. */
+.checks { display: grid; grid-template-columns: repeat(2, max-content); gap: 4px var(--s-5); }
+.radios__item, .checks__item { gap: 10px; font-size: var(--text-ui); }
+.radios--column { flex-direction: column; align-items: flex-start; gap: 2px; }
+/* Частично отмеченный флажок (пресет программы отмечен не целиком) — черта вместо галочки. */
+.cb:indeterminate { background: var(--primary); border-color: var(--primary); }
+.cb:indeterminate::after {
+  width: 10px; height: 0; border-left: 0; border-bottom: 2px solid var(--on-primary); transform: none;
+}
+.proxy { display: flex; flex-direction: column; gap: 4px; width: 100%; padding-left: calc(var(--check) + 10px); }
+.proxy__error { flex-basis: 100%; font-size: var(--text-sm); }
+
+/* Пути и папки. */
 .tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-.tag { padding: 1px 8px; border-radius: 10px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; }
-.tag--live { color: var(--success); }
-.path { font-size: 12px; color: var(--ink-2); word-break: break-all; }
+.tags--start { justify-content: flex-start; }
+.engine__note { flex-basis: 100%; }
+.path { font-size: var(--text-xs); color: var(--ink-2); word-break: break-all; font-family: var(--font-code); }
 /* Путь в одну строку: многоточие в начале, целиком — в title (PathText). */
 .path--clip {
   display: block; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  word-break: normal; text-align: left; font-family: var(--font-code);
+  word-break: normal; text-align: left;
 }
-.folder { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.folder { display: flex; align-items: center; gap: var(--s-2); min-width: 0; max-width: 100%; }
 .folder .btn { flex: none; white-space: nowrap; }
 .folder__empty { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .srow:has(.folder) .srow__control { flex: 1 1 300px; }
-.radios, .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; justify-content: flex-end; }
-.radios__item, .checks__item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.radios--column { flex-direction: column; align-items: flex-start; }
-.proxy__error { flex-basis: 100%; font-size: 12px; }
+
 /* «О программе» → «Обновления»: итог проверки и ход загрузки под кнопкой —
    в строке постоянной высоты (появление текста не сдвигает страницу). */
 .update {
-  flex-basis: 100%; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start;
-  justify-content: flex-end; gap: 8px; font-size: 12px;
+  flex-basis: 100%; min-height: 36px; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start;
+  justify-content: flex-end; gap: var(--s-2); font-size: var(--text-sm);
 }
 .authors { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.update__error { color: var(--danger); font-size: 12px; }
+.update__error { color: var(--danger); font-size: var(--text-sm); }
 /* «Расположение» (macOS, не из «Программ»): пояснение и кнопка перемещения. */
-.move { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; font-size: 12px; }
+.move { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-2); font-size: var(--text-sm); }
 .update__progress { flex: 1 1 240px; }
-.sdesc { margin: 8px 0 0; font-size: 12px; }
-.sbar { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
-/* Подзаголовок внутри раздела — обычным регистром. */
-.shead { margin: 24px 0 4px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
+/* Подзаголовок внутри раздела (журналы «Диагностики»). */
+.shead { margin: var(--s-5) 0 var(--s-1); font-size: var(--text-sm); font-weight: 600; color: var(--ink-3); }
 .log {
   margin: 0; max-height: 260px; overflow: auto; padding: 10px; white-space: pre-wrap;
-  background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md);
-  font: 12px/1.5 var(--font-code); color: var(--ink-2);
+  background: var(--surface-sunken); border: 1px solid var(--hairline); border-radius: var(--r-md);
+  font: var(--text-xs)/1.5 var(--font-code); color: var(--ink-2);
 }
 .error { color: var(--danger); }
 .notice { color: var(--success); }
 
-.hotwords { padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
-.hotwords__text { width: 100%; resize: vertical; font-family: var(--font-code); }
-.hotwords__bar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+/* «Словарь»: термины распознавания. */
+.hotwords { padding: 14px 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.hotwords__bar { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-3); font-size: var(--text-sm); }
 .hotwords__counter { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .hotwords__counter--over { color: var(--danger); font-weight: 600; }
 
-/* «Ассистент»: провайдеры столбиком, у каждого — статус и «Проверить». */
-.providers { display: flex; flex-direction: column; gap: 10px; align-items: stretch; min-width: 320px; }
-.provider { display: grid; grid-template-columns: 1fr minmax(0, 300px); gap: 2px 12px; align-items: center; }
-/* Первая строка модели: «по умолчанию» (радио), метка и «включена». */
-.provider__head { grid-column: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.provider__default { font-size: 11px; color: var(--accent-line); }
-.provider__enable { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; color: var(--ink-2); }
-/* Куда уходит текст встречи у включённой модели. */
-.provider__privacy { grid-column: 1; font-size: 12px; padding-left: 22px; color: var(--ink-2); }
-.provider__privacy--local { color: var(--success); }
-/* Строка статуса есть всегда (пустая, пока сведения не пришли): строки не сдвигаются. */
-.provider__status { grid-column: 1; min-height: 18px; font-size: 12px; word-break: break-all; padding-left: 22px; }
-/* «Проверить» — у правого края во всех строках; итог проверки — слева от кнопки. */
-.provider__check {
-  grid-column: 2; grid-row: 1 / span 3; display: flex; flex-direction: row-reverse; align-items: center; gap: 8px;
-  justify-content: flex-start; min-width: 0;
-}
-.provider__check .btn { min-width: 96px; }
-.provider__check .error, .provider__check .notice { font-size: 12px; max-width: 190px; text-align: right; }
+/* «Модели ИИ»: таблица провайдеров (Aurora .tbl, строка --row 56 px). Первый и последний
+   столбцы — без внешних отступов: левый край совпадает с подписями строк карточки. */
+.mtable-wrap { width: 100%; }
+.mtable th { padding: 0 var(--s-3) var(--s-2); position: static; background: none; white-space: nowrap; }
+.mtable td { padding: 6px var(--s-3); }
+.mtable th:first-child, .mtable td:first-child { padding-left: 0; }
+.mtable th:last-child, .mtable td:last-child { padding-right: 0; }
+.mtable tbody tr:last-child td { border-bottom: 0; }
+.mtable tbody tr:hover td { background: none; }
+.mtable .mtable__c { width: 112px; text-align: center; }
+.mtable .badge { white-space: nowrap; }
+.mtable__c .rd, .mtable__c .switch { vertical-align: middle; }
+.mtable__model { min-width: 220px; }
+.mtable__head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px var(--s-2); }
+.mtable__name { color: var(--ink); font-weight: 500; }
+.mtable__sub, .mtable__note { display: block; margin-top: 2px; font-size: var(--text-sm); line-height: 1.4; color: var(--ink-3); }
+.mtable__sub--local { color: var(--success); }
+.mtable__note.error { color: var(--danger); }
+.mtable__act { width: 1%; text-align: right; }
+.mtable__act .btn { min-width: 104px; }
+.mtable__foot { display: block; margin-top: var(--s-2); font-size: var(--text-sm); }
 .provider__link {
   padding: 0; border: 0; background: none; font: inherit; color: var(--ink-2);
   text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
@@ -222,73 +231,68 @@
 .provider__link:hover { color: var(--ink); }
 
 /* «Экспорт встреч»: пример имени папки под полем шаблона и «?» с подстановками. */
-.export__preview { flex-basis: 100%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; text-align: right; }
+.export__preview { flex-basis: 100%; display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); }
 
-/* «Звук»: выбор устройства, «Проверить» и полоска уровня под ними. */
-.sound__pick { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
-/* Имена устройств бывают длинными: ширина фиксирована, закрытый список обрезает текст сам. */
-.srow .sound__select { width: 320px; min-width: 0; max-width: 100%; text-overflow: ellipsis; }
-.sound__result {
-  flex-basis: 100%; min-height: 18px; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
-  font-size: 12px; text-align: right;
-}
-.sound__level { flex: none; width: 120px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
-.sound__fill { display: block; height: 100%; background: var(--success); transition: width var(--d); }
+/* «Звук»: [список на всю ширину] [уровень] [Проверить], под ними — итог проверки одной строкой. */
+.sound__pick { display: flex; align-items: center; gap: var(--s-3); width: 100%; min-width: 0; }
+.sound__pick .selectbox { flex: 1 1 auto; }
+.sound__pick .btn { flex: none; }
+.sound__result { flex-basis: 100%; min-height: 20px; display: flex; align-items: center; gap: var(--s-2); font-size: var(--text-sm); }
+.sound__result:empty { min-height: 0; margin-top: calc(-1 * var(--s-2)); }
+/* Уровень — полоски высотой до 32 px, как уровни дорожек «Идёт запись» (rec-now__bars). */
+.sound__bars { flex: none; display: flex; align-items: center; gap: 3px; width: 88px; height: 32px; }
+.sound__bars i { display: block; flex: 1; min-width: 2px; border-radius: 1px; background: var(--data-empty); }
+.sound__bars--mic i.is-lit { background: var(--data-4); }
+.sound__bars--output i.is-lit { background: var(--data-1); }
+.sound__bars--quiet i.is-lit { background: var(--ink-3); }
 
 /* «Автозапись» → программы звонков: пресеты сеткой, свои — чипами, поиск по запущенным. */
-.callapps { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--hairline); }
-.callapps__head { display: flex; align-items: center; gap: 8px; }
-.callapps__head--sub { margin-top: 6px; }
-.callapps__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 16px; }
-.callapps__item { display: inline-flex; align-items: flex-start; gap: 6px; cursor: pointer; }
-.callapps__item input { margin-top: 3px; }
-.callapps__name { display: flex; flex-direction: column; min-width: 0; }
-.callapps__exes { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
-.callapps__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+.callapps { display: flex; flex-direction: column; gap: var(--s-2); padding: 14px 0; border-bottom: 1px solid var(--hairline); }
+.callapps__head { display: flex; align-items: center; gap: var(--s-2); }
+.callapps__head--sub { margin-top: var(--s-1); }
+.callapps__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px var(--s-4); }
+.callapps__item { align-items: flex-start; gap: 10px; padding: 4px 0; }
+.callapps__name { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
+.callapps__exes { color: var(--ink-3); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.callapps__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: var(--s-1) 0 0; padding: 0; list-style: none; }
 .callchip {
-  display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
-  background: var(--surface-2); color: var(--ink); font-size: 12px;
+  display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 4px 0 10px; border-radius: var(--r-xs);
+  background: var(--surface-3); color: var(--ink); font-size: var(--text-xs);
 }
 .callchip__remove {
   width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none;
-  color: var(--ink-2); font: inherit; line-height: 1; cursor: pointer;
+  color: var(--ink-2); font: inherit; line-height: 1; cursor: pointer; display: inline-grid; place-items: center;
 }
-.callchip__remove:hover, .callchip__remove:focus-visible { background: var(--surface-3); color: var(--ink); }
+.callchip__remove:hover, .callchip__remove:focus-visible { background: var(--surface-2); color: var(--ink); }
 .callapps__add { display: flex; flex-direction: column; gap: 4px; max-width: 420px; }
-.callapps__add input[type="text"] {
-  flex: 1; min-width: 0; background: var(--surface-1); color: var(--ink); border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md); padding: 5px 8px; font: inherit;
-}
+.callapps__add .field { flex: 1 1 auto; min-width: 0; }
 .callapps__options {
   margin: 0; padding: 4px; list-style: none; max-height: 220px; overflow: auto;
   background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md);
 }
-.callapps__option { padding: 4px 8px; border-radius: var(--r-md); cursor: pointer; }
-.callapps__option:hover, .callapps__option--active { background: var(--surface-3); }
-.callapps__note { margin: 0; font-size: 12px; }
+.callapps__option { padding: 6px 10px; border-radius: var(--r-control-sm); cursor: pointer; font-size: var(--text-sm); }
+.callapps__option:hover, .callapps__option--active { background: var(--surface-2); }
+.callapps__note { margin: 0; font-size: var(--text-sm); }
 
 /* Исправления для будущих расшифровок (ReplacementsEditor). */
-.repl { padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.repl { padding: 14px 0; display: flex; flex-direction: column; gap: var(--s-2); }
 .repl__list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .repl__item {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 8px;
-  border-radius: var(--r-sm); background: var(--surface-2);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); min-height: var(--control-sm);
+  padding: 0 4px 0 10px; border-radius: var(--r-control-sm); background: var(--surface-2);
 }
 .repl__rule { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
 .repl__rule b { font-weight: 600; color: var(--ink); }
-.repl__remove { flex: none; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 12px; cursor: pointer; }
+.repl__remove { flex: none; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: var(--text-sm); cursor: pointer; }
 .repl__remove:hover { color: var(--danger); text-decoration: underline; }
-.repl__empty { font-size: 12px; line-height: 1.45; }
-.repl__add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.repl__add input[type="text"] {
-  flex: 1 1 160px; min-width: 0; padding: 5px 8px; font: inherit;
-  background: var(--surface-1); color: var(--ink); border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
-}
+.repl__empty { font-size: var(--text-sm); line-height: 1.45; }
+.repl__add { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.field.repl__field { flex: 1 1 160px; width: auto; min-width: 0; }
 
 /* «Категории встреч»: строка — порядок, цвет, название, описание для ИИ, удалить. */
 .catedit { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
-.catedit__item { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--hairline); }
-.catedit__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.catedit__item { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--hairline); }
+.catedit__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
 .catedit__move { display: inline-flex; flex: none; }
 .catedit__move .btn:disabled { opacity: 0.3; background: none; }
 .catedit__swatch {
@@ -306,85 +310,139 @@
 .catedit__desc { flex: 1 1 220px; }
 .catedit__remove { flex: none; }
 .catedit__confirm { margin-left: 56px; }
-.catedit__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
-.catedit__help { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
+.catedit__actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: 14px 0; }
+.catedit__help { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: var(--text-sm); }
 .catedit__palette { display: grid; grid-template-columns: repeat(6, 24px); gap: 8px; padding: 2px; }
 .catedit__color {
   width: 24px; height: 24px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer;
 }
 .catedit__color[aria-checked="true"] { border-color: var(--ink); }
+
 /* «Запуск агента (вкладка «Агент»)»: свои параметры Claude Code и Codex. */
-.agent-launch { margin-top: 8px; }
-.agent-launch__title { display: flex; align-items: center; gap: 8px; margin: 16px 0 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.agent-launch { margin-top: var(--s-2); }
+.agent-launch__title {
+  display: flex; align-items: center; gap: var(--s-2); margin: var(--s-4) 0 0;
+  font-size: var(--text-ui); font-weight: 600; color: var(--ink);
+}
 .agent-launch__title .btn { margin-left: auto; }
 .agent-launch .srow__control { flex-direction: column; align-items: stretch; gap: 4px; }
-.agent-launch input[type="text"], .agent-launch textarea { width: 100%; font: 12px/1.5 var(--font-code); }
-.agent-launch textarea {
-  background: var(--surface-1); color: var(--ink); border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md); padding: 5px 8px; resize: vertical;
-}
-.agent-launch__preview { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.agent-launch__preview { margin: 6px 0 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
 
 /*
- * «Распознавание»: строки «Видеокарта» и «Процессор». Та, что распознаёт при
- * выбранном устройстве, — с рамкой акцентного цвета и меткой «используется»;
- * другая — тише; недоступная видеокарта — приглушена, с причиной.
+ * «Распознавание»: строки «Видеокарта» и «Процессор» — карточки с контуром.
+ * Та, что распознаёт при выбранном устройстве, — с контуром --control-line и
+ * бейджем «используется»; другая — тише; недоступная видеокарта — пунктир без
+ * заливки, с причиной.
  */
 .asr-now { display: block; margin-top: 2px; color: var(--ink-2); }
-.asr-intro { margin: 10px 0 4px; line-height: 1.5; }
+.asr-intro { margin: var(--s-3) 0 var(--s-1); line-height: 1.5; }
 .asr-device {
-  margin: 10px 0; padding: 2px 14px; border: 1px solid var(--hairline-strong); border-radius: var(--r-lg);
+  margin: var(--s-3) 0; padding: 2px var(--s-4); border-radius: var(--r-lg);
+  box-shadow: inset 0 0 0 1px var(--hairline);
 }
-.asr-device--active { border-color: var(--accent); background: var(--accent-soft); }
+.asr-device--active { box-shadow: inset 0 0 0 1px var(--control-line); }
 .asr-device--secondary .asr-device__title { color: var(--ink-2); }
-.asr-device--disabled { border-style: dashed; }
+.asr-device--disabled { box-shadow: none; border: 1px dashed var(--hairline-strong); }
 .asr-device--disabled .asr-device__title { color: var(--ink-3); }
-.asr-device__head { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
+.asr-device__head { display: flex; align-items: center; gap: var(--s-2); min-height: 24px; padding-top: var(--s-3); }
 .asr-device__title { font-weight: 600; color: var(--ink); }
-.asr-device__note { margin: 2px 0 0; font-size: 12px; color: var(--ink-3); }
+.asr-device__note { margin: 2px 0 0; font-size: var(--text-sm); color: var(--ink-3); }
 .asr-device .srow:last-child { border-bottom: 0; }
 .asr-model { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.asr-model select { width: 100%; }
-.asr-fallback { margin: 0; padding: 10px 0 12px; font-size: 12px; color: var(--ink-3); }
+.asr-fallback { margin: 0; padding: 10px 0 14px; font-size: var(--text-sm); color: var(--ink-3); }
 .asr-fallback__model { color: var(--ink-2); }
 
 /* «Где хранить движок и модели»: папка, проверка перед переносом, ход, вопрос об остатках. */
-.storage { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+.storage { display: flex; flex-direction: column; gap: var(--s-2); width: 100%; min-width: 0; }
 .storage p { margin: 0; }
-.storage__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.storage__actions { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .storage__plan, .storage__leftovers {
-  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3);
   border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-2);
 }
-.storage__leftovers { margin: 8px 0 12px; }
+.storage__leftovers { margin: var(--s-2) 0 var(--s-3); }
 .storage__progress { display: flex; flex-direction: column; gap: 6px; }
 .storage__progress .btn { align-self: flex-start; }
-.storage__line { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.storage-missing .storage__actions { justify-content: center; margin-top: 8px; }
+.storage__line { font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-missing .storage__actions { justify-content: center; margin-top: var(--s-2); }
 
-/* «Движок и модели»: строка модели — где выбрана, загрузка с полоской, удаление с подтверждением в строке. */
-.model-row__chosen { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px; color: var(--success); }
-.model-row__chosen--muted { color: var(--ink-2); }
+/* «Движок и модели»: строка модели — бейджи и кнопки по центру строки, загрузка с полоской во всю ширину. */
+.model-row .srow__label { display: inline-flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
 .model-row__progress { flex-basis: 100%; }
 
 /* «Диагностика»: заголовок журналов с кнопкой «Обновить». */
-.diag__logs-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.diag__logs-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s-2); }
 
-/* Локальная модель: адрес и «Найти модели» в строку, под ними — что нашлось. */
-.local-find { display: flex; gap: 8px; align-items: center; flex: 1 1 100%; min-width: 0; }
+/* Локальная модель: адрес и «Найти модели» в строку; список найденных и имя — рядом. */
+.local-find { display: flex; gap: var(--s-2); align-items: center; flex: 1 1 100%; min-width: 0; }
 .local-find .btn { flex: none; }
-.local-find__status { flex: 1 1 100%; min-height: 18px; font-size: 12px; }
+.local-find__status { flex: 1 1 100%; min-height: 18px; font-size: var(--text-sm); }
 .local-find__status:empty { display: none; }
+.local-model { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; width: 100%; }
+.local-model .local-model__pick { flex: 1 1 260px; }
+.local-model .field { flex: 1 1 200px; width: auto; }
 
 /* Агент-участник: исключённые папки базы знаний и пометки. */
-.kb-exclude { display: flex; flex-direction: column; gap: 6px; }
-.kb-exclude__list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; }
-.kb-exclude__item { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 8px;
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-md); background: var(--surface-1); }
-.kb-exclude__empty { font-size: 12px; }
-.kb-exclude__add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.kb-exclude__add input { width: 160px; }
-.kb-exclude__note { align-self: flex-start; padding: 0 6px; border-radius: 8px; background: var(--warning-soft);
-  color: var(--warning); font-size: 11.5px; line-height: 18px; }
-.participant__warn { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; color: var(--warning); font-size: 12px; }
-.participant__vision { margin-top: 2px; }
+.kb-exclude { display: flex; flex-direction: column; gap: var(--s-2); }
+.kb-exclude__list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.kb-exclude__item {
+  display: inline-flex; align-items: center; gap: 2px; height: var(--control-sm); padding: 0 2px 0 10px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r-control-sm);
+}
+.kb-exclude__empty { font-size: var(--text-sm); }
+.kb-exclude__add { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.kb-exclude__add .field { width: 180px; }
+.kb-exclude__note { align-self: flex-start; }
+.participant__vision { margin: 0; padding: 0 0 14px; }
+
+/* «Анализ встречи»: таблица «Размечать / Показывать в карточке» — Aurora .tbl в плотности
+   compact (единственное место настроек, где она к месту). */
+.amark { margin: var(--s-2) 0 var(--s-1); }
+.amark th { position: static; background: none; }
+.amark thead th { padding: 0 0 var(--s-2) var(--s-3); white-space: nowrap; }
+.amark thead th:first-child { padding-left: 0; }
+.amark .amark__col--ctl { width: 1%; padding-left: var(--s-5); text-align: center; }
+.amark tbody tr:hover td, .amark tbody tr:hover th { background: none; }
+.amark tbody tr:last-child > * { border-bottom: 0; }
+.amark .amark__item {
+  padding: var(--s-3) 0; text-align: left; font-size: var(--text-ui); color: inherit; vertical-align: middle;
+  border-bottom: 1px solid var(--hairline);
+}
+.amark__item .srow__label, .amark__item .srow__hint { display: block; }
+.amark__item .srow__hint { margin-top: 2px; }
+.amark td.amark__cell { padding: var(--s-3) 0 var(--s-3) var(--s-5); height: auto; vertical-align: middle; text-align: center; }
+.amark td.amark__cell .switch { vertical-align: middle; }
+.amark .switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.amark__note { display: block; margin-top: 4px; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.4; }
+.amark__intro { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* «Поиск по настройкам» над меню: поле Aurora .search + .field--sm, выдача — вместо групп меню. */
+.ssearch { display: flex; flex-direction: column; gap: var(--s-2); }
+/* Системная «×» поля type=search — прочь: очищает своя кнопка (и Esc). */
+.ssearch__input::-webkit-search-cancel-button, .ssearch__input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.ssearch__clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 50%; background: none; color: var(--ink-3); display: grid; place-items: center; cursor: pointer;
+}
+.ssearch__clear:hover { background: var(--surface-2); color: var(--ink); }
+.ssearch__list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ssearch__list[hidden] { display: none; }
+.ssearch__item {
+  padding: 8px 10px; border-radius: var(--r-control-sm); color: var(--ink-2); cursor: pointer;
+  font-size: var(--text-sm); line-height: 1.35; overflow-wrap: anywhere;
+}
+.ssearch__item[aria-selected="true"] { background: var(--surface-2); color: var(--ink); }
+.ssearch__section { color: var(--ink-3); }
+.ssearch__label { color: var(--ink); }
+.ssearch__empty { margin: 0; padding: 4px 10px; font-size: var(--text-sm); }
+
+/* Найденная поиском строка: фон --selection на 1,5 с (снимается классом); без анимации при reduced-motion. */
+.setting-found {
+  background: var(--selection); border-radius: var(--r-sm);
+  margin-inline: -8px; padding-inline: 8px; transition: background var(--d) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) { .setting-found { transition: none; } }
+@media (max-width: 1000px) {
+  .settings__body { padding: 0 20px 24px; }
+  .settings__state { max-width: 160px; }
+}

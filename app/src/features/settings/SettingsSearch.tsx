@@ -8,7 +8,7 @@
  */
 
 import { useId, useMemo, useState, type KeyboardEvent, type RefObject } from "react";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { IS_MAC } from "../../lib/platform";
 import { Icon } from "../../ui/Icon";
 import { searchSettings, sectionTitle, type SettingsEntry } from "./settingsIndex";
@@ -62,6 +62,13 @@ export function SettingsSearch({ query, onQuery, onPick, inputRef }: {
           autoComplete="off" spellCheck={false} value={query}
           onChange={(e) => onQuery(e.target.value)} onKeyDown={onKeyDown} />
         {!typed && <kbd className="kbd" aria-hidden="true">{IS_MAC ? "⌘F" : "Ctrl+F"}</kbd>}
+        {/* Своя «×» вместо системной кнопки поля поиска (её прячет settings.css). */}
+        {typed && (
+          <button type="button" className="ssearch__clear" aria-label="Очистить поиск"
+            onClick={() => { onQuery(""); inputRef?.current?.focus(); }}>
+            <Icon as={X} size="sm" />
+          </button>
+        )}
       </div>
       {/* Выдача в разметке всегда (aria-controls указывает на существующее), пустая — скрыта. */}
       <ul id={listId} role="listbox" aria-label="Найденные настройки" className="ssearch__list"

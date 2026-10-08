@@ -77,7 +77,8 @@ test("Jira: проекты — чипы ключей с вариантами н�
   await userEvent.type(alias, "орайон{Enter}");
   expect(within(screen.getByRole("list", { name: "Варианты названия ORION" })).getByText("орайон")).toBeInTheDocument();
   expect(orion).toHaveTextContent("+1 вариант");
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Проект по умолчанию" }), "ORION");
+  await userEvent.click(screen.getByRole("combobox", { name: "Проект по умолчанию" }));
+  await userEvent.click(screen.getByRole("option", { name: "ORION" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
     integrations: {
@@ -96,9 +97,9 @@ test("Jira: убрали проект по умолчанию — он сбра�
     },
   });
   open();
-  expect(await screen.findByRole("combobox", { name: "Проект по умолчанию" })).toHaveValue("OPS");
+  expect(await screen.findByRole("combobox", { name: "Проект по умолчанию" })).toHaveTextContent("OPS");
   await userEvent.click(screen.getByRole("button", { name: "Убрать проект OPS" }));
-  expect(screen.getByRole("combobox", { name: "Проект по умолчанию" })).toHaveValue("");
+  expect(screen.getByRole("combobox", { name: "Проект по умолчанию" })).toHaveTextContent("Не выбран");
   // Шаблон скрыт в «Тонкой настройке», подсказка в поле — то, что действует без него.
   await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   const pattern = screen.getByRole("textbox", { name: "Шаблон ключа для текста" });

@@ -51,7 +51,7 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
         кнопкой «Сохранить термины» под списком
       </div>
       <textarea
-        aria-label="Термины распознавания" className="hotwords__text" rows={8} value={text}
+        aria-label="Термины распознавания" className="field field--area input--mono hotwords__text" rows={8} value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="hotwords__bar">

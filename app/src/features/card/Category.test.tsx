@@ -26,7 +26,9 @@ function setup(category: Recording["category"] = null) {
 test("метка категории под названием; от ИИ — подсказка об этом", () => {
   setup({ id: "daily", source: "ai" });
   const chip = screen.getByRole("button", { name: "Категория: Дейлик. Изменить" });
-  expect(chip).toHaveAttribute("title", "Категорию определил ИИ — нажмите, чтобы выбрать другую");
+  // Подсказка — облачко Aurora (ui/Tip), а не системный title.
+  expect(chip).not.toHaveAttribute("title");
+  expect(chip).toHaveAccessibleDescription("Категорию определил ИИ — нажмите, чтобы выбрать другую");
   // Метка — малая контурная кнопка Aurora с точкой цвета и именем.
   expect(chip).toHaveClass("btn", "btn--outline", "btn--sm");
   expect(chip).toHaveTextContent("Дейлик");

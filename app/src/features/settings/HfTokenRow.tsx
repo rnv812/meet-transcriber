@@ -21,18 +21,18 @@ const SOURCE: Record<string, string> = {
   env: "из переменной среды HF_TOKEN",
 };
 
-function StatusLine({ status }: { status: HfStatus }) {
-  if (!status.configured) return <span className="muted">Не задан — расшифровка без разделения на спикеров</span>;
-  const where = SOURCE[status.source ?? ""] ?? "задан";
-  return (
-    <span className="hf-status">
-      <span className="muted">{where}</span>
-      {" · "}
-      {status.check === null ? <span className="muted">не проверен</span>
-        : status.check.ok ? <span className="notice">доступ есть</span>
-        : <span className="error">нет доступа</span>}
-    </span>
-  );
+/** Где лежит токен — строкой подсказки. */
+function SourceLine({ status }: { status: HfStatus }) {
+  if (!status.configured) return <span className="srow__hint">Не задан — расшифровка без разделения на спикеров</span>;
+  return <span className="srow__hint">Токен {SOURCE[status.source ?? ""] ?? "задан"}</span>;
+}
+
+/** Пускает ли HF к модели спикеров — бейджем рядом с кнопками. */
+function CheckBadge({ status }: { status: HfStatus }) {
+  if (!status.configured) return <span className="badge badge--stale">не задан</span>;
+  if (status.check === null) return <span className="badge badge--stale">не проверен</span>;
+  return status.check.ok ? <span className="badge badge--fresh">доступ есть</span>
+    : <span className="badge badge--error">нет доступа</span>;
 }
 
 export function HfTokenRow({ endpoint, onChanged }: {
@@ -83,15 +83,17 @@ export function HfTokenRow({ endpoint, onChanged }: {
   const failed = status?.check && !status.check.ok ? status.check : null;
   return (
     <div role="group" aria-label="Токен Hugging Face" className="hf-row">
-      <div className="srow">
+      {/* Подпись и пояснение сверху, состояние и действия — одной строкой под ними. */}
+      <div className="srow srow--stack">
         <div className="srow__text">
           <span className="srow__head"><span className="srow__label">Токен Hugging Face</span><HfTokenTip /></span>
           <span className="srow__hint">
             Нужен для разделения на спикеров <DiarizationTip /> — модель доступна после принятия условий на huggingface.co
           </span>
-          {status && <StatusLine status={status} />}
+          {status && <SourceLine status={status} />}
         </div>
         <div className="srow__control">
+          {status && <CheckBadge status={status} />}
           <Button onClick={() => setEditing((v) => !v)} aria-expanded={editing} disabled={!status}>
             {configured ? "Изменить токен" : "Задать токен"}
           </Button>

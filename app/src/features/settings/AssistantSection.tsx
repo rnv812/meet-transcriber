@@ -8,6 +8,7 @@
 
 import type { Endpoint } from "../../lib/api";
 import { Button } from "../../ui/Button";
+import { NumberField } from "./fields";
 import { LiveHintsRows } from "./LiveHintsRows";
 import { currentProvider, useAssistantInfo } from "./ModelsSection";
 import { KnowledgeRows, ParticipantRows } from "./ParticipantRows";
@@ -41,7 +42,7 @@ export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: 
   return (
     <>
       {onOpenModels && (
-        <SeeAlso>
+        <SeeAlso head>
           Какая модель ведёт ассистента — в разделе{" "}
           <Button variant="link" onClick={onOpenModels}>«Модели ИИ»</Button>.
         </SeeAlso>
@@ -59,12 +60,9 @@ export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: 
       <FineTuning pinned={win !== undefined && windowInvalid(win)}>
         <Row label="Окно живой расшифровки, с" htmlFor="assist-window" help={<LiveWindowTip min={WINDOW_MIN} max={WINDOW_MAX} />}
           hint="Как часто расшифровывается новый звук. Применяется со следующего запуска ассистента">
-          <input id="assist-window" type="number" className="num" min={WINDOW_MIN} max={WINDOW_MAX} step={5}
-            value={win ?? ""}
-            onChange={(e) => {
-              const n = e.target.value === "" ? null : Number(e.target.value);
-              set("assist", "window_seconds", n !== null && Number.isFinite(n) ? n : null);
-            }} />
+          <NumberField id="assist-window" label="Окно живой расшифровки" min={WINDOW_MIN} max={WINDOW_MAX} step={5}
+            value={win ?? null} invalid={win !== undefined && windowInvalid(win)}
+            onChange={(n) => set("assist", "window_seconds", n)} />
           {win !== undefined && windowInvalid(win) && <span className="error">От {WINDOW_MIN} до {WINDOW_MAX} секунд</span>}
         </Row>
         <LiveHintsRows draft={draft} set={set} provider={provider} hints={draft.assist?.participant === false} />

@@ -15,8 +15,10 @@ import { useEffect, useState } from "react";
 import {
   AGENTS, type AgentId, type LaunchDraft, envText, launchError, parseEnv, previewCommand,
 } from "../../lib/agentLaunch";
+import { fieldClass } from "./fields";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Tip } from "../../ui/Tip";
 import { Row, type Raw, type SetFn } from "./Section";
 import { MODEL_LABEL, OPENCODE_MODEL_LABEL } from "./ModelsSection";
 
@@ -137,7 +139,7 @@ function EnvField({ id, agent, env, onChange }: {
   const errors = typeof env === "string" ? parseEnv(env).errors : [];
   return (
     <>
-      <textarea id={id} rows={3} spellCheck={false} value={text}
+      <textarea id={id} rows={3} spellCheck={false} value={text} className="field field--area input--mono"
         placeholder={PLACEHOLDERS[agent].env}
         onChange={(e) => {
           const value = e.target.value;
@@ -164,13 +166,15 @@ function AgentLaunchRows({ agent, label, launch, knowledge, model, onChange }: {
       <h4 className="agent-launch__title">
         {label}
         <LaunchTip agent={agent} />
-        <Button size="xs" onClick={() => onChange(EMPTY)} disabled={!dirty} aria-label={`Параметры ${label} по умолчанию`}
-          title="Вернуть параметры по умолчанию (вступит в силу после «Сохранить»)">
-          По умолчанию
-        </Button>
+        <Tip content="Вернуть параметры по умолчанию (вступит в силу после «Сохранить»)">
+          <Button variant="ghost" onClick={() => onChange(EMPTY)} disabled={!dirty} aria-label={`Параметры ${label} по умолчанию`}>
+            По умолчанию
+          </Button>
+        </Tip>
       </h4>
       <Row label="Дополнительные параметры" htmlFor={argsId} hint="Аргументы командной строки, через пробел" stack>
-        <input id={argsId} type="text" spellCheck={false} value={launch.args}
+        <input id={argsId} type="text" className={fieldClass({ wide: true, mono: true })} spellCheck={false}
+          value={launch.args}
           placeholder={PLACEHOLDERS[agent].args}
           onChange={(e) => onChange({ ...launch, args: e.target.value })} />
         {errors.args && <span className="error">{errors.args}</span>}

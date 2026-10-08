@@ -24,6 +24,7 @@ import { Disclosure } from "../../ui/Disclosure";
 import { Icon } from "../../ui/Icon";
 import { ETA_TICK_MS } from "../../ui/JobProgress";
 import { ProgressBar } from "../../ui/ProgressBar";
+import { Tip } from "../../ui/Tip";
 import { driveOf, freeSpaceShortfall, gb } from "./gate";
 
 const ENGINE_PROFILE = { cuda: "для видеокарты", cpu: "для процессора", mac: "для Apple Silicon" } as const;
@@ -217,12 +218,12 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
   if (installed) {
     return (
       <>
-        <div className="wizard__alert wizard__alert--ok" role="status">
-          <Icon as={Check} size="md" />
-          <b>Движок установлен</b>
-          <span className="muted">
-            · версия {engine.version}{engine.profile ? ` · ${ENGINE_PROFILE[engine.profile]}` : ""}
-          </span>
+        <div className="callout callout--ok wizard__callout" role="status">
+          <Icon as={Check} size="md" className="ic" />
+          <p>
+            <b>Движок установлен</b>
+            версия {engine.version}{engine.profile ? ` · ${ENGINE_PROFILE[engine.profile]}` : ""}
+          </p>
         </div>
         {recordingHint}
         <div className="wizard__bar">
@@ -251,18 +252,20 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
           {/* Хвост лога говорит больше строки оболочки: показываем что-то одно. */}
           {failure ? (
             <>
-              <div className="wizard__alert wizard__alert--bad" role="alert">
-                <Icon as={TriangleAlert} size="md" />
-                <b>
-                  Шаг {failure.step} не удался{progress.titles[failure.step] ? `: ${progress.titles[failure.step]}` : ""}
-                </b>
+              <div className="callout callout--err wizard__callout" role="alert">
+                <Icon as={TriangleAlert} size="md" className="ic" />
+                <p>
+                  <b>
+                    Шаг {failure.step} не удался{progress.titles[failure.step] ? `: ${progress.titles[failure.step]}` : ""}
+                  </b>
+                </p>
               </div>
               <pre className="wizard__code">{failure.tail}</pre>
             </>
           ) : error && (
-            <div className="wizard__alert wizard__alert--bad" role="alert">
-              <Icon as={TriangleAlert} size="md" />
-              <b>{error}</b>
+            <div className="callout callout--err wizard__callout" role="alert">
+              <Icon as={TriangleAlert} size="md" className="ic" />
+              <p><b>{error}</b></p>
             </div>
           )}
         </div>
@@ -278,11 +281,12 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
       {recordingHint}
       <div className="wizard__bar">
         {offerCpu && (
-          <button type="button" className="wizard__link" onClick={() => void run(false, "cpu")}
-            disabled={recording || cpuShortfall !== null}
-            title="Расшифровка на процессоре — медленнее, зато движок меньше">
-            Установить CPU-версию ({gb(cpuNeeds)} ГБ)
-          </button>
+          <Tip content="Расшифровка на процессоре — медленнее, зато движок меньше">
+            <button type="button" className="wizard__link" onClick={() => void run(false, "cpu")}
+              disabled={recording || cpuShortfall !== null}>
+              Установить CPU-версию ({gb(cpuNeeds)} ГБ)
+            </button>
+          </Tip>
         )}
         {phase === "running" && <span className="muted">Это займёт несколько минут: скачиваются гигабайты</span>}
         {phase === "failed" && (

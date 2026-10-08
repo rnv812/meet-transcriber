@@ -63,7 +63,7 @@ const CASES: [string, (s: typeof screen) => HTMLElement[]][] = [
     s.getByRole("checkbox", { name: /Только если в заголовке окна сайт звонка/ }),
     s.getByRole("list", { name: "Сайты звонков" }),
   ]],
-  ["models", (s) => [s.getByRole("checkbox", { name: "Локальную модель — через прокси" })]],
+  ["models", (s) => [s.getByRole("switch", { name: "Локальную модель — через прокси" })]],
   ["assistant", (s) => [
     s.getByLabelText("Окно живой расшифровки, с"),
     s.getByRole("switch", { name: "Не отвлекать по умолчанию" }),
@@ -92,7 +92,7 @@ test("основные строки остаются на виду: «Звонк
   await userEvent.click(screen.getByRole("button", { name: "Распознавание" }));
   expect(await screen.findByLabelText("Язык речи")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Модели ИИ" }));
-  expect(await screen.findByRole("group", { name: "Модели" })).toBeInTheDocument();
+  expect(await screen.findByRole("table", { name: "Модели" })).toBeInTheDocument();
   expect(screen.getByLabelText("Адрес сервера")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Дополнительно" }));
   expect(screen.getByRole("switch", { name: "Сообщать другим программам о занятости видеокарты" })).toBeInTheDocument();
@@ -112,7 +112,7 @@ test("«Локальную модель — через прокси» без л�
   vi.mocked(api.getSettings).mockResolvedValue({ ...structuredClone(settings), llm: { provider: "claude-code", enabled: ["claude-code"] } });
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
   await userEvent.click(await screen.findByRole("button", { name: FINE }));
-  expect(screen.getByRole("checkbox", { name: "Локальную модель — через прокси" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Локальную модель — через прокси" })).toBeDisabled();
   expect(screen.getByText(/Включите локальную модель/)).toBeInTheDocument();
 });
 

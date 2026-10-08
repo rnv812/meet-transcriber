@@ -9,6 +9,7 @@ import {
 import { Button } from "../../ui/Button";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Tip } from "../../ui/Tip";
 import { PathText, Row } from "./Section";
 import { VoiceBaseTip } from "./tips";
 
@@ -190,7 +191,7 @@ function UpdateRow() {
         {state.kind === "installing" && (
           <>
             <InstallProgress progress={state.progress} />
-            <Button size="xs" onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
+            <Button onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
           </>
         )}
         {state.kind === "launched" && <span>{launchedText(state.result)}</span>}
@@ -290,7 +291,9 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
         hint="Скачайте новый установщик и запустите его — данные сохранятся"
       >
         {releases && (
-          <Button variant="link" title={releases} onClick={() => void openUrl(releases)}>Скачать новую версию</Button>
+          <Tip content={releases}>
+            <Button variant="link" onClick={() => void openUrl(releases)}>Скачать новую версию</Button>
+          </Tip>
         )}
       </Row>
       <Row label="Папка данных" hint="Настройки, журналы и база голосов" help={<VoiceBaseTip />}>

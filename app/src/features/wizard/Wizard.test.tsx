@@ -490,7 +490,18 @@ test("идёт установка — «Пропустить мастер» не
   await userEvent.click(screen.getByRole("button", { name: "Установить" }));
   const skip = screen.getByRole("button", { name: "Пропустить мастер" });
   expect(skip).toBeDisabled();
-  expect(skip).toHaveAttribute("title", "Дождитесь окончания установки");
+  // Причина — облачком Aurora (ui/Tip) и описанием кнопки, не системным title.
+  expect(skip).not.toHaveAttribute("title");
+  expect(skip).toHaveAccessibleDescription("Дождитесь окончания установки");
+});
+
+test("плашки мастера — выноски Aurora: «Движок установлен» — callout--ok, шрифты — токены", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const css = readFileSync(join(process.cwd(), "src", "features", "wizard", "wizard.css"), "utf8");
+  expect(css).not.toMatch(/wizard__alert/);
+  expect(css).not.toMatch(/font-size: 1[1-5]px/);
+  expect(css).toMatch(/\.wizard__num \{[^}]*font-family: var\(--font-body\)/);
 });
 
 test("названия шагов установки совпадают с оболочкой (engine.rs)", async () => {

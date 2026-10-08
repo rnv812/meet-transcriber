@@ -1,4 +1,5 @@
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Disclosure } from "../../ui/Disclosure";
@@ -30,11 +31,14 @@ export function Row({ label, hint, help, htmlFor, stack, disabled, children }: {
   );
 }
 
-export function Switch({ label, hint, help, value, onChange }: {
-  label: string; hint?: ReactNode; help?: ReactNode; value: boolean; onChange: (v: boolean) => void;
+export function Switch({ label, hint, help, value, disabled, onChange }: {
+  label: string; hint?: ReactNode; help?: ReactNode; value: boolean;
+  /** Сейчас не переключить (строка приглушена, причина — в `hint`). */
+  disabled?: boolean;
+  onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="srow">
+    <div className={`srow${disabled ? " srow--disabled" : ""}`}>
       <div className="srow__text">
         <span className="srow__head">
           <span className="srow__label">{label}</span>
@@ -45,7 +49,7 @@ export function Switch({ label, hint, help, value, onChange }: {
       <div className="srow__control">
         <button
           type="button" role="switch" aria-checked={value} aria-label={label}
-          className="switch"
+          className="switch" disabled={disabled}
           onClick={() => onChange(!value)}
         />
       </div>
@@ -53,23 +57,84 @@ export function Switch({ label, hint, help, value, onChange }: {
   );
 }
 
-export function Radio<T extends string>({ label, hint, help, value, options, disabled, onChange }: {
+/**
+ * Варианты столбиком (длинные подписи, вариант с полем под ним): радио Aurora
+ * `.rd` в `.check-row`. Короткое перечисление в 2–3 слова — `Segmented`.
+ * `stack` — варианты под подписью, иначе справа в строку.
+ */
+export function Radio<T extends string>({ label, hint, help, value, options, disabled, stack, onChange, children }: {
   label: string; hint?: ReactNode; help?: ReactNode; value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: ReactNode }[];
   /** Выбор сейчас недоступен (строка приглушена, причина — рядом). */
   disabled?: boolean;
+  stack?: boolean;
   onChange: (v: T) => void;
+  /** Под вариантами (поле своего значения). */
+  children?: ReactNode;
 }) {
   const name = useId();
   return (
-    <Row label={label} hint={hint} help={help} disabled={disabled}>
-      <div role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} className="radios">
+    <Row label={label} hint={hint} help={help} disabled={disabled} stack={stack}>
+      <div role="radiogroup" aria-label={label} aria-disabled={disabled || undefined}
+        className={`radios${stack ? " radios--column" : ""}`}>
         {options.map((o) => (
           <label key={o.value} className="check-row radios__item">
             <input type="radio" className="rd" name={name} checked={value === o.value} disabled={disabled}
               onChange={() => onChange(o.value)} />
             {o.label}
           </label>
+        ))}
+      </div>
+      {children}
+    </Row>
+  );
+}
+
+/**
+ * Стрелки в группе радио-кнопок (сегменты, образцы палитры): ←/↑ и →/↓ —
+ * соседний вариант, Home/End — крайние; выбор сразу и фокус на нём. Кнопки
+ * группы — по порядку `values`.
+ */
+export function radioKeys<T extends string>(values: readonly T[], value: T, onChange: (v: T) => void) {
+  return (e: KeyboardEvent<HTMLElement>) => {
+    const at = values.indexOf(value);
+    const last = values.length - 1;
+    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? Math.min(last, at + 1)
+      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? Math.max(0, at - 1)
+        : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    if (next === at) return;
+    onChange(values[next]!);
+    e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
+  };
+}
+
+/**
+ * Короткое перечисление (2–3 варианта в слово-два): сегменты Aurora
+ * `.tabs.tabs--sm` с ролями радио, справа в строке — как «Как часто писать» и
+ * «Профиль» в панели встречи. Выбранный — по `aria-checked` (`.sseg`), в
+ * порядке обхода — только он (стрелки двигают выбор).
+ */
+export function Segmented<T extends string>({ label, hint, help, value, options, disabled, onChange }: {
+  label: string; hint?: ReactNode; help?: ReactNode; value: T;
+  options: readonly { value: T; label: string; title?: string }[];
+  disabled?: boolean;
+  onChange: (v: T) => void;
+}) {
+  const values = options.map((o) => o.value);
+  // Значения нет среди вариантов — в обход попадает первый.
+  const focusable = values.includes(value) ? value : values[0];
+  return (
+    <Row label={label} hint={hint} help={help} disabled={disabled}>
+      <div role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} className="tabs tabs--sm sseg"
+        onKeyDown={disabled ? undefined : radioKeys(values, value, onChange)}>
+        {options.map((o) => (
+          <button key={o.value} type="button" role="radio" aria-checked={value === o.value}
+            tabIndex={o.value === focusable ? 0 : -1} disabled={disabled} aria-description={o.title}
+            onClick={() => { if (o.value !== value) onChange(o.value); }}>
+            {o.label}
+          </button>
         ))}
       </div>
     </Row>
@@ -153,8 +218,20 @@ export function FineTuning({ defaultOpen = false, pinned = false, children }: {
   );
 }
 
-/** Строка-ссылка на другой раздел: «… — в разделе «Спикеры»». */
-export function SeeAlso({ children }: { children: ReactNode }) {
+/**
+ * Место в шапке раздела под заголовком (SettingsPane) для «см. также» всего
+ * раздела: `SeeAlso head` выносится туда порталом. Нет места (раздел отрисован
+ * отдельно, в тестах) — строка остаётся на месте.
+ */
+export const SeeAlsoSlot = createContext<HTMLElement | null>(null);
+
+/**
+ * Строка-ссылка на другой раздел: «… — в разделе «Спикеры»». `head` — про весь
+ * раздел: в шапку под заголовок; без него — на месте (внутри карточки).
+ */
+export function SeeAlso({ head = false, children }: { head?: boolean; children: ReactNode }) {
+  const slot = useContext(SeeAlsoSlot);
+  if (head && slot) return createPortal(<span className="see-also">{children}</span>, slot);
   return <p className="muted sdesc see-also">{children}</p>;
 }
 

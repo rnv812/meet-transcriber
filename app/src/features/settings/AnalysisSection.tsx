@@ -18,7 +18,7 @@ import { useId } from "react";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { PlayerKeysTip } from "../card/PlayerKeysTip";
-import { Radio, SeeAlso, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { SeeAlso, Segmented, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 
 /** Строка таблицы: подпись, ключ в `analysis` (размечать) и в `transcript_view` (показывать). */
 export type MarkShowItem = {
@@ -143,7 +143,7 @@ function MarkShowTable({ draft, set }: { draft: Raw; set: SetFn }) {
   const marked = (k: string) => draft.analysis?.[k] !== false;
   const shown = (k: string) => draft.transcript_view?.[k] !== false;
   return (
-    <table className="amark" aria-label="Что размечать и что показывать">
+    <table className="tbl amark" data-density="compact" aria-label="Что размечать и что показывать">
       <thead>
         <tr>
           <th scope="col" className="amark__col">Элемент</th>
@@ -185,7 +185,7 @@ export function PlayerRows({ draft, set }: { draft: Raw; set: SetFn }) {
   const curve = (v("curve") as "always" | "hover" | "off" | undefined) ?? "hover";
   return (
     <>
-      <Radio label="Кривая важности над плеером" help={<CurveTip />} value={curve}
+      <Segmented label="Кривая важности над плеером" help={<CurveTip />} value={curve}
         options={[
           { value: "always", label: "Всегда" },
           { value: "hover", label: "При наведении" },

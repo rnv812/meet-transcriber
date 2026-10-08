@@ -6,8 +6,9 @@
   background: var(--surface-1); border-right: 1px solid var(--hairline);
   display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
-.rail__mark { flex: none; height: 40px; display: grid; place-items: center; margin-bottom: 6px; user-select: none; }
-.rail__sep { flex: none; width: 28px; height: 1px; margin: 8px 0; background: var(--hairline); }
+/* Знак Meet 24 px: над кнопкой записи 48 — с отступом 8, не теряется. */
+.rail__mark { flex: none; height: 40px; display: grid; place-items: center; margin-bottom: 8px; user-select: none; }
+.rail__sep { flex: none; width: 32px; height: 1px; margin: 8px 0; background: var(--hairline); }
 /* «Настройки» и предупреждения — внизу рейки. */
 .rail__foot {
   margin-top: auto; padding-top: 8px; border-top: 1px solid var(--hairline);
@@ -18,12 +19,7 @@
 /* Выбранный раздел — «глубокая» заливка и контур (контур — outline: box-shadow занят рамкой фокуса). */
 .rail__item[aria-current="page"] { outline: 1px solid var(--control-line); outline-offset: -1px; }
 
-/* Подсказки рейки — справа от кнопки, по центру по высоте (Aurora ставит их сверху). */
-.rail__tip { flex: none; }
-.rail__tip .tooltip { left: calc(100% + 8px); top: 50%; bottom: auto; transform: translate(-4px, -50%); }
-.rail .rail__tip:hover .tooltip, .rail .rail__tip:focus-within .tooltip { transform: translate(0, -50%); }
-/* Мостик для указателя — слева от подсказки, а не под ней. */
-.rail__tip .tooltip::after { top: 0; bottom: 0; left: auto; right: 100%; width: 8px; height: auto; }
+/* Подсказки рейки — ui/Tip справа от кнопки; строки состояния записи — каждая своей строкой. */
 .rail__tip-line { display: block; }
 
 /* Кнопка записи: главная (primary) в простое, «Остановить» (danger) во время записи.
@@ -31,8 +27,10 @@
 .rail-rec { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; }
 .rail-rec__dot { width: 12px; height: 12px; border-radius: 50%; background: var(--on-accent-strong); }
 .rail-rec__anchor { position: absolute; left: calc(100% + 8px); top: 0; width: 0; height: 0; }
-/* Меню открыто — подсказка кнопки не всплывает поверх него. */
-.rail-rec--open .tooltip { visibility: hidden; opacity: 0; }
+/* Часы записи под кнопкой — Geist Mono, цветом записи: длительность видна без наведения. */
+.rail-rec__time {
+  margin-top: 4px; color: var(--danger); font: 500 var(--text-xs)/1 var(--font-code); white-space: nowrap;
+}
 
 /* Меню вариантов записи — меню Aurora (overlays.css `.menu`): плотное стекло, r-lg,
    пункты со значком, названием и пояснением; ui/floating держит его в пределах окна. */
@@ -55,8 +53,13 @@
   flex: none; width: var(--icon); height: 20px; display: inline-grid; place-items: center; color: var(--ink-2);
 }
 .rec-menu__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
-.rec-menu__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.rec-menu__title { font-weight: 500; }
+.rec-menu__text { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rec-menu__title { display: flex; align-items: baseline; gap: 8px; font-weight: 500; }
+/* «по умолчанию» — тихо, справа от названия профиля (как small в .menu Aurora). */
+.rec-menu__default { margin-left: auto; color: var(--ink-3); font-size: var(--text-xs); font-weight: 400; }
+/* Подпись группы «С ассистентом» — как .spotlight__group Aurora. */
+.rec-menu__group { display: flex; flex-direction: column; gap: 2px; }
+.rec-menu__group-label { margin: 6px 10px 4px; color: var(--ink-3); font: 500 var(--text-xs)/1 var(--font-body); }
 .rec-menu__note { color: var(--ink-3); font-size: var(--text-xs); line-height: 1.35; }
 /* «Остановить без сохранения…» — внизу меню, за чертой и красным: удаляет запись. */
 .rec-menu__sep { flex: none; height: 1px; margin: 3px 4px; background: var(--hairline); }

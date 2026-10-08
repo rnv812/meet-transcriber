@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { RecordingBadge, RecordingWarnings } from "./RecordingBadge";
@@ -13,8 +13,17 @@ const snap = (extra: Partial<Snapshot>): Snapshot => ({
   auto_record: { enabled: false, processes: [], grace_seconds: 0, state: null, mic: null, render: null },
   recordings_dir: "", gpu_busy: false, disk_free_gb: 100, last_stop: null, ...extra,
 });
-/** Подсказка кнопки записи: «Идёт запись · мм:сс», состояние ассистента, пометки. */
-const status = () => screen.getByRole("tooltip");
+/**
+ * Подсказка кнопки записи: «Идёт запись · мм:сс», состояние ассистента, пометки. Облачко (ui/Tip)
+ * всплывает при наведении; тот же текст — описание кнопки (скрытый узел по aria-describedby).
+ */
+const status = () => {
+  const button = document.querySelector<HTMLElement>(".rail-rec .btn")!;
+  const id = button.getAttribute("aria-describedby")?.split(" ").pop();
+  const node = id ? document.getElementById(id) : null;
+  if (!node) throw new Error("у кнопки записи нет подсказки-описания");
+  return node;
+};
 const stop = () => screen.getByRole("button", { name: "Остановить и сохранить" });
 const startButton = () => screen.getByRole("button", { name: "Начать запись" });
 /** Кнопка записи открывает меню вариантов; «Записать» — обычная запись (то, что раньше делал щелчок). */
@@ -23,12 +32,17 @@ const startPlain = async () => {
   await userEvent.click(await screen.findByRole("menuitem", { name: /^Записать/ }));
 };
 
-test("вне записи — главная кнопка-значок рейки «Начать запись» с подсказкой", () => {
+test("вне записи — главная кнопка-значок рейки «Начать запись» с подсказкой", async () => {
   render(<RecordingBadge endpoint={ep} snapshot={snap({})} />);
   const start = screen.getByRole("button", { name: "Начать запись" });
   expect(start).toHaveClass("btn", "btn--primary", "btn--lg", "btn--icon");
   expect(start).toHaveTextContent("");
-  expect(start.parentElement?.querySelector(".tooltip")).toHaveTextContent("Начать запись");
+  // Подсказка — облачко Aurora справа (ui/Tip); повторяет имя — без описания для диктора.
+  expect(start).not.toHaveAccessibleDescription();
+  await userEvent.tab();
+  expect(document.body.querySelector(".tooltip.tip")).toHaveTextContent("Начать запись");
+  // Часов под кнопкой в простое нет.
+  expect(document.querySelector(".rail-rec__time")).toBeNull();
   expect(screen.queryByRole("button", { name: "Остановить и сохранить" })).toBeNull();
   // Меню вариантов открывает сама кнопка: отдельной узкой «ещё» под ней нет.
   expect(start).toHaveAttribute("aria-haspopup", "menu");
@@ -42,6 +56,9 @@ test("при записи: «Остановить и сохранить» (dange
   render(<RecordingBadge endpoint={ep} snapshot={snap({ status: "recording", source: "manual", elapsed_s: 754 })} />);
   expect(stop()).toHaveClass("btn--danger", "btn--lg", "btn--icon");
   expect(stop()).toHaveAccessibleDescription("Идёт запись · 12:34");
+  // Часы — и под кнопкой, всё время записи (без наведения); диктору их читает описание.
+  expect(document.querySelector(".rail-rec__time")).toHaveTextContent("12:34");
+  expect(document.querySelector(".rail-rec__time")).toHaveAttribute("aria-hidden", "true");
   expect(stop()).toHaveAttribute("aria-haspopup", "menu");
   expect(screen.queryByRole("button", { name: "Начать запись" })).toBeNull();
   await userEvent.click(stop());
@@ -146,10 +163,12 @@ test("щелчок снаружи закрывает меню, повторны�
   expect(spy).not.toHaveBeenCalled();
 });
 
-test("мало места — кнопка-значок предупреждения с той же подсказкой", () => {
+test("мало места — кнопка-значок предупреждения с той же подсказкой", async () => {
   render(<RecordingWarnings endpoint={ep} snapshot={snap({ disk_free_gb: 3.2 })} />);
   const warn = screen.getByRole("button", { name: "Мало места: 3.2 ГБ" });
-  expect(warn.parentElement?.querySelector(".tooltip")).toHaveTextContent("Мало места: 3.2 ГБ");
+  expect(warn).not.toHaveAttribute("title");
+  await userEvent.tab();
+  expect(document.body.querySelector(".tooltip.tip")).toHaveTextContent("Мало места: 3.2 ГБ");
 });
 
 test("места хватает, резидент не на связи — предупреждений нет", () => {
@@ -202,7 +221,7 @@ test("ответ команды применяется сразу: «Идёт з
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   render(<Harness />);
   await startPlain();
-  expect(await screen.findByRole("tooltip")).toHaveTextContent("Идёт запись · 00:00");
+  await waitFor(() => expect(status()).toHaveTextContent("Идёт запись · 00:00"));
   expect(stop()).toBeInTheDocument();
 });
 
@@ -236,7 +255,8 @@ const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
 });
 const openMenu = async () => {
   await userEvent.click(startButton());
-  return screen.findByRole("menuitem", { name: /С ассистентом · Рабочая встреча/ });
+  return within(await screen.findByRole("group", { name: "С ассистентом" }))
+    .findByRole("menuitem", { name: /^Рабочая встреча/ });
 };
 
 test("кнопка записи открывает меню: «С ассистентом» запускает живой режим, ответ применяется сразу", async () => {
@@ -263,12 +283,13 @@ test("профиль выбирается тем же щелчком: два п�
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   const first = await openMenu();
   const items = screen.getAllByRole("menuitem");
-  expect(items.map((i) => i.textContent)).toEqual([
-    expect.stringMatching(/^Записать/),
-    expect.stringContaining("С ассистентом · Рабочая встреча"),
-    expect.stringContaining("С ассистентом · Личный"),
-    expect.stringContaining("Временная встреча"),
+  // «Записать» · черта · подпись группы «С ассистентом» и короткие пункты (не в две строки).
+  expect(items.map((i) => i.querySelector(".rec-menu__title")?.textContent)).toEqual([
+    "Записать", "Рабочая встреча", "Личный", "Временная — не сохранится",
   ]);
+  const group = screen.getByRole("group", { name: "С ассистентом" });
+  expect(items.slice(1).every((i) => group.contains(i))).toBe(true);
+  expect(group.previousElementSibling).toHaveAttribute("role", "separator");
   expect(items[2]).toHaveTextContent("без базы знаний");
   expect(first).toBe(items[1]);
   await waitFor(() => expect(items[0]).toHaveFocus());
@@ -281,11 +302,11 @@ test("профиль по умолчанию из настроек — перв�
   const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   await openMenu();
-  await waitFor(() => expect(screen.getAllByRole("menuitem")[1])
-    .toHaveTextContent("С ассистентом · Личный (по умолчанию)"));
+  await waitFor(() => expect(screen.getAllByRole("menuitem")[1]).toHaveTextContent(/^Личный, по умолчанию/));
   const items = screen.getAllByRole("menuitem");
+  expect(items[1]!.querySelector("small.rec-menu__default")).toHaveTextContent("по умолчанию");
   expect(items[0]).toHaveTextContent(/^Записать/);
-  expect(items[2]).toHaveTextContent("С ассистентом · Рабочая встреча");
+  expect(items[2]).toHaveTextContent(/^Рабочая встреча/);
   expect(items[2]).not.toHaveTextContent("по умолчанию");
   await userEvent.click(items[1]!);
   expect(start).toHaveBeenCalledWith(ep, { profile: "personal" });
@@ -295,7 +316,7 @@ test("без провайдера неактивны оба пункта про�
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null }));
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   await openMenu();
-  const agentItems = () => screen.getAllByRole("menuitem", { name: /С ассистентом|Временная встреча/ });
+  const agentItems = () => within(screen.getByRole("group", { name: "С ассистентом" })).getAllByRole("menuitem");
   expect(agentItems()).toHaveLength(3);
   await waitFor(() => expect(agentItems().every((i) => (i as HTMLButtonElement).disabled)).toBe(true));
   expect(screen.getByRole("menuitem", { name: /^Записать/ })).toBeEnabled();

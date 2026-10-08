@@ -9,9 +9,10 @@
 .drawer.spk[hidden] { display: none; }
 /* Разделитель панели — по её левому краю. */
 .rec-card > .spk-resize { position: absolute; top: 0; bottom: 0; right: var(--spk-w, 420px); z-index: 21; }
+/* Шапка панели — 56 px (--topbar-h), как строка шапки карточки. */
 .spk__head {
-  flex: none; display: flex; align-items: center; gap: 4px;
-  padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--hairline);
+  flex: none; display: flex; align-items: center; gap: 4px; box-sizing: border-box;
+  height: var(--topbar-h); padding: 0 12px 0 16px; border-bottom: 1px solid var(--hairline);
 }
 .spk__title { flex: 1; min-width: 0; margin: 0; color: var(--ink); font: 600 15px/1.3 var(--font-body); }
 .spk__title:focus { outline: none; } /* фокус ставится программно при открытии панели */
@@ -47,7 +48,11 @@
 .spk-row__stats { margin-top: 2px; color: var(--ink-3); font-size: var(--text-xs); }
 .spk-row__ask { color: var(--ink-2); font-size: var(--text-xs); }
 .spk-row__bar { height: 4px; border-radius: 2px; background: var(--data-empty); overflow: hidden; }
-.spk-row__bar span { display: block; height: 100%; background: var(--accent); }
+/* Полоса доли — цветом спикера (--person на строке, lib/tones); неназванный — серый. */
+.spk-row__bar span { display: block; height: 100%; background: var(--person, var(--ink-3)); }
+/* «Показать все реплики», «Объединить с…», «Разделить…» — тихие кнопки Aurora; подпись — вровень
+   с краем знака и полосы (поле кнопки уходит влево). */
+.btn.spk-row__turns { align-self: flex-start; margin-left: -12px; }
 /* Дорожка спикера записи звонка: «в комнате» — голос с микрофона владельца. */
 .badge.spk-badge { align-self: center; height: 20px; padding: 0 8px; font-size: 11px; font-weight: 500; }
 
@@ -81,8 +86,7 @@
 
 /* «Назначить…» / «Объединить с…» с открытым списком — как нажатая кнопка Aurora. */
 .spk-row .btn[aria-expanded="true"] { background: var(--surface-3); color: var(--ink); }
-.spk-row__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.spk-row__actions .spk-link { align-self: center; margin-left: 4px; }
+.ctl-row.spk-row__actions { gap: 4px; margin-left: -12px; }
 /* Небольшая кнопка с контуром — в полосе выбора реплик (TurnEdit). */
 .spk-btn {
   height: 28px; padding: 0 10px; border: 1px solid var(--hairline-strong); border-radius: var(--r-control-sm);
@@ -150,7 +154,6 @@
 .spk-split__setup, .spk-split__preview, .spk-split__work { display: flex; flex-direction: column; gap: 10px; }
 .spk-split__modes { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
 .spk-split__mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); font-size: var(--text-sm); cursor: pointer; }
-.field.spk-split__select { width: auto; padding-right: 4px; }
 .spk-split__k { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: var(--text-sm); }
 .spk-split__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .spk-split__people {
@@ -166,6 +169,4 @@
 .spk-thr { margin-top: 4px; }
 .spk-thr__body { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 0; font-size: var(--text-xs); }
 .spk-thr__row { display: flex; align-items: center; gap: 8px; }
-.spk-thr__row input[type="range"] { flex: 1; accent-color: var(--accent); }
-.spk-thr__value { min-width: 36px; color: var(--ink); }
 .spk-thr__plan ul { margin: 0; padding-left: 16px; color: var(--ink); line-height: 1.5; }

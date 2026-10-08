@@ -15,10 +15,11 @@ import { errorText } from "../../lib/format";
 import { llmLabel, originOf, provenance, retryText } from "../../lib/llm";
 import type { Analysis, AnalysisFeature, AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
 import { isModelProgress } from "../../lib/progress";
+import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { JobProgress } from "../../ui/JobProgress";
-import { Callout } from "./Callout";
 import { CONFIRMS } from "./CardActions";
 import { Popover } from "../../ui/Popover";
 import "./analysis.css";
@@ -214,6 +215,9 @@ export function AnalysisStatus({ state, busy, onRun, durationS }: {
   }
 }
 
+/** Предложение одной строкой; подробности (ANALYSIS_OFFER) — в «?». */
+export const ANALYSIS_OFFER_SHORT = "Разметить встречу моделью: главы, важное, выводы?";
+
 /** Текст разового предложения включить авто-анализ (обновившимся с 0.2.x). */
 export const ANALYSIS_OFFER = "Анализ встречи: типы фраз, главы, важное и выводы. Текст встречи отправляется "
   + "выбранной модели (Claude Code, Codex или OpenCode). Включить автоматически после расшифровки?";
@@ -228,20 +232,26 @@ export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
   onAnswer: (answer: "granted" | "declined") => void;
   onOpenSettings?: () => void;
 }) {
+  // Одна строка над лентой «Расшифровки» (на месте «Наблюдений» макета): вкладки не сдвигаются.
   return (
-    <Callout tone="ai" role="region" label="Предложение: анализ встречи"
-      actions={<>
-        <Button variant="primary" onClick={() => onAnswer("granted")} disabled={busy}>Включить</Button>
-        <Button onClick={() => onAnswer("declined")} disabled={busy}>Не сейчас</Button>
-      </>}>
-      {ANALYSIS_OFFER}
-      <span className="muted">
-        {" "}Можно изменить в{" "}
-        {onOpenSettings
-          ? <button type="button" className="link-btn" onClick={onOpenSettings}>настройках</button>
-          : "настройках"}
+    <div className="card aurora-wash analysis-offer" role="region" aria-label="Предложение: анализ встречи">
+      <AgentMark size={16} />
+      <span className="analysis-offer__text">{ANALYSIS_OFFER_SHORT}</span>
+      <HelpTip label="Что такое анализ встречи" title="Анализ встречи">
+        <TipLine>{ANALYSIS_OFFER}</TipLine>
+        <TipLine>
+          Можно изменить в{" "}
+          {onOpenSettings
+            ? <button type="button" className="link-btn" onClick={onOpenSettings}>настройках</button>
+            : "настройках"}
+          {" "}«Анализ встречи».
+        </TipLine>
+      </HelpTip>
+      <span className="analysis-offer__actions">
+        <Button variant="primary" size="sm" flat onClick={() => onAnswer("granted")} disabled={busy}>Включить</Button>
+        <Button variant="ghost" size="sm" onClick={() => onAnswer("declined")} disabled={busy}>Не сейчас</Button>
       </span>
-    </Callout>
+    </div>
   );
 }
 

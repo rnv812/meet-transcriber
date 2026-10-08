@@ -14,7 +14,8 @@
  */
 
 import {
-  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject,
+  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent,
+  type RefObject,
 } from "react";
 import {
   applySpeakers, getSpeakers, redoSpeakers, revertSpeakers, undoSpeakers, type Endpoint,
@@ -22,11 +23,14 @@ import {
 import { CircleHelp, Play, Plus, UserRound, X } from "lucide-react";
 import { clock, errorText, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
+import { speakerTones } from "../../../lib/tones";
 import type { Job, SpeakerRow, SpeakersView } from "../../../lib/types";
 import { Avatar } from "../../../ui/Avatar";
 import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import { IconButton } from "../../../ui/IconButton";
+import { Tip } from "../../../ui/Tip";
+import { PersonMark } from "../PersonMark";
 import type { PersonColor } from "../Turns";
 import { HistoryList, HistoryTools, useUndoKeys } from "./SpeakerHistory";
 import { MicRemoved } from "./MicRemoved";
@@ -52,7 +56,7 @@ type Pick = { label: string; mode: "assign" | "merge" };
 type Option = { key: string; text: string; hint?: string; change: Change; person?: PersonColor };
 
 export function SpeakersPanel({
-  endpoint, recordingId, people, avatarVersion, open, focus, version, playable, cardRef, jobs = NO_JOBS,
+  endpoint, recordingId, people, tones, avatarVersion, open, focus, version, playable, cardRef, jobs = NO_JOBS,
   onClose, onPlay, onShowTurns, onChanged, removedAsk = 0,
 }: {
   /** Растёт с каждым «Показать» убранные повторы из карточки: список «Убрано с микрофона» раскрыт. */
@@ -62,6 +66,8 @@ export function SpeakersPanel({
   /** Задачи резидента: счёт голосов для «Разделить спикера». */
   jobs?: Job[];
   people: PersonColor[];
+  /** Цвета спикеров встречи (lib/tones) — те же, что в шапке и ленте; нет — по порядку строк панели. */
+  tones?: ReadonlyMap<string, string>;
   avatarVersion?: Record<string, number>;
   open: boolean;
   /** Строка, к которой перейти (клик по участнику); `n` растёт с каждой просьбой. */
@@ -115,6 +121,7 @@ export function SpeakersPanel({
   useEffect(() => { void load(); }, [load, version]);
 
   const order = useMemo(() => view?.speakers.map((r) => r.label) ?? [], [view]);
+  const rowTones = useMemo(() => tones ?? speakerTones(order, people), [tones, order, people]);
   const owner = view?.owner ?? "Вы";
   const history = view?.history ?? [];
   const pos = view?.pos ?? 0;
@@ -287,7 +294,7 @@ export function SpeakersPanel({
         {view && view.speakers.length === 0 && <div className="muted spk__msg">В расшифровке нет спикеров</div>}
         {view?.speakers.map((row) => (
           <SpeakerRowView key={row.label} row={row} rows={view.speakers} staged={staged} owner={owner}
-            people={people} avatarVersion={avatarVersion} endpoint={endpoint} playable={playable}
+            people={people} tone={rowTones.get(row.label)} avatarVersion={avatarVersion} endpoint={endpoint} playable={playable}
             focused={focus?.label === row.label}
             pick={pick?.label === row.label ? pick.mode : null}
             remember={canRemember(row) ? rememberOf(row) : null}
@@ -326,7 +333,7 @@ export function SpeakersPanel({
 }
 
 function SpeakerRowView({
-  row, rows, staged, owner, people, avatarVersion, endpoint, playable, focused, pick, remember, rememberOwner,
+  row, rows, staged, owner, people, tone, avatarVersion, endpoint, playable, focused, pick, remember, rememberOwner,
   ownerCandidate = false, refEl,
   onPick, onStage, onRemember, onRememberOwner, onPlay, onShowTurns, onSplit,
 }: {
@@ -335,6 +342,8 @@ function SpeakerRowView({
   staged: Staged;
   owner: string;
   people: PersonColor[];
+  /** Цвет спикера (кольцо знака и полоса доли); нет — серый. */
+  tone?: string;
   avatarVersion?: Record<string, number>;
   endpoint: Endpoint;
   playable: boolean;
@@ -360,10 +369,10 @@ function SpeakerRowView({
   const change = staged[row.label];
   const titleId = useId();
   return (
-    <section ref={refEl} tabIndex={-1} aria-labelledby={titleId}
+    <section ref={refEl} tabIndex={-1} aria-labelledby={titleId} style={{ "--person": tone } as CSSProperties}
       className={`spk-row${focused ? " spk-row--focus" : ""}${change ? " spk-row--staged" : ""}`}>
       <div className="spk-row__head">
-        <Avatar name={row.label} color={person?.color} hasAvatar={person?.has_avatar}
+        <PersonMark name={row.label} tone={tone} hasAvatar={!!person?.has_avatar}
           version={avatarVersion?.[row.label]} size={28} endpoint={endpoint} />
         <div className="spk-row__who">
           <div className="spk-row__name" id={titleId}>
@@ -378,7 +387,7 @@ function SpeakerRowView({
         <Button size="sm" aria-expanded={pick === "assign"} onClick={() => onPick("assign")}>Назначить…</Button>
       </div>
       <div className="spk-row__bar" aria-hidden="true">
-        <span style={{ width: pct(row.share), background: person?.color }} />
+        <span style={{ width: pct(row.share) }} />
       </div>
 
       {row.samples.length > 0 && (
@@ -394,7 +403,9 @@ function SpeakerRowView({
           ))}
         </ul>
       )}
-      <button type="button" className="spk-link" onClick={() => onShowTurns(row.label)}>Показать все реплики</button>
+      <Button variant="ghost" size="sm" className="spk-row__turns" onClick={() => onShowTurns(row.label)}>
+        Показать все реплики
+      </Button>
 
       {row.suggestions.length > 0 && (
         <div className="spk-row__sugs" role="group" aria-label="Похожие голоса из базы">
@@ -417,18 +428,18 @@ function SpeakerRowView({
       )}
 
       {(rows.length > 1 || row.turns > 1 || change) && (
-        <div className="spk-row__actions">
+        <div className="ctl-row spk-row__actions">
           {rows.length > 1 && (
-            <Button variant="ghost" size="xs" aria-expanded={pick === "merge"} onClick={() => onPick("merge")}>
+            <Button variant="ghost" size="sm" aria-expanded={pick === "merge"} onClick={() => onPick("merge")}>
               Объединить с…
             </Button>
           )}
           {row.turns > 1 && !change && (
-            <Button variant="ghost" size="xs" onClick={onSplit} title="Под этим спикером оказались разные люди">
-              Разделить…
-            </Button>
+            <Tip content="Под этим спикером оказались разные люди">
+              <Button variant="ghost" size="sm" onClick={onSplit}>Разделить…</Button>
+            </Tip>
           )}
-          {change && <button type="button" className="spk-link" onClick={() => onStage(null)}>Убрать правку</button>}
+          {change && <Button variant="ghost" size="sm" onClick={() => onStage(null)}>Убрать правку</Button>}
         </div>
       )}
 
@@ -489,11 +500,17 @@ function SpeakerRowView({
 /** Где звучит спикер записи звонка: у микрофона, но не владелец, — человек рядом с ним в комнате. */
 function trackBadge(track: SpeakerRow["track"]) {
   if (track === "mic") {
-    return <span className={`${BADGE_CLASS.plain} spk-badge`} title="Говорил в ваш микрофон: человек рядом с вами">в комнате</span>;
+    return (
+      <Tip content="Говорил в ваш микрофон: человек рядом с вами">
+        <span className={`${BADGE_CLASS.plain} spk-badge`}>в комнате</span>
+      </Tip>
+    );
   }
   if (track === "mixed") {
     return (
-      <span className={`${BADGE_CLASS.plain} spk-badge`} title="Слышен и в звонке, и в вашем микрофоне">в звонке и в комнате</span>
+      <Tip content="Слышен и в звонке, и в вашем микрофоне">
+        <span className={`${BADGE_CLASS.plain} spk-badge`}>в звонке и в комнате</span>
+      </Tip>
     );
   }
   return null;

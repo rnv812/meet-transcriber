@@ -12,6 +12,7 @@ import { AiBadge } from "../../ui/AiBadge";
 import { BADGE_CLASS } from "../../ui/badge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
+import { Tip } from "../../ui/Tip";
 import { whoRanges } from "../../lib/libraryQuery";
 import { nfc } from "../../lib/search";
 import {
@@ -83,6 +84,12 @@ const NO_CATEGORIES: Category[] = [];
 const NO_WHO: string[][] = [];
 const RENAME_HINT = "Двойной щелчок или F2 — переименовать";
 
+/** Длительность в списке и на главной: «1 ч 02 мин», короче минуты — «< 1 мин», неизвестна — пусто. */
+export function listDuration(s: number | null | undefined): string {
+  if (!s || s <= 0) return "";
+  return s < 30 ? "< 1 мин" : duration(s);
+}
+
 /** Как отметить запись для групповых действий: Ctrl+щелчок — переключить, Shift+щелчок — диапазон. */
 export type PickHow = "toggle" | "range";
 
@@ -138,13 +145,15 @@ export const RecordingItem = memo(function RecordingItem({
   const live = status.kind === "recording";
   /** Ход расшифровки известен: полоса внизу строки, этап и доля — словами в мете, а не бейджем. */
   const progress = job !== null && shown !== null;
-  const meta = [whenShort, rec.duration_s ? duration(rec.duration_s) : ""].filter(Boolean).join(" · ");
+  const meta = [whenShort, listDuration(rec.duration_s)].filter(Boolean).join(" · ");
   const title = rec.title ?? (when || rec.id);
   const hits = rec.hits ?? [];
   const more = (rec.total ?? 0) - hits.length;
   const category = categoryOf(rec, categories);
 
   const [editing, setEditing] = useState(false);
+  /** Название обрезано (замер при наведении): полное — в подсказке. */
+  const [clipped, setClipped] = useState(false);
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState<{ at: { x: number; y: number } | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -251,7 +260,7 @@ export const RecordingItem = memo(function RecordingItem({
         else openMenuAt(e.clientX, e.clientY);
       } : undefined}>
       {picking && !editing && (
-        <input type="checkbox" className="rec-item__pick" aria-label={`Выбрать «${title}»`} checked={picked}
+        <input type="checkbox" className="cb rec-item__pick" aria-label={`Выбрать «${title}»`} checked={picked}
           onChange={() => onPick?.(rec.id, "toggle")} />
       )}
       {editing ? (
@@ -283,25 +292,36 @@ export const RecordingItem = memo(function RecordingItem({
           }}
           onKeyDown={(e) => { if (e.key === "F2" && actions) { e.preventDefault(); begin(); } }}>
           <span className="rec-item__head">
-            <span className="rec-item__title"
-              // Подсказка: полное название, если оно обрезано, и как переименовать.
-              onMouseEnter={(e) => {
-                const el = e.currentTarget;
-                const clipped = el.scrollWidth > el.clientWidth + 1;
-                const tip = [clipped ? title : null, actions ? RENAME_HINT : null].filter(Boolean).join("\n");
-                if (tip) el.title = tip; else el.removeAttribute("title");
-              }}
-              onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
-              {rec.title && rec.title_ranges?.length
-                // Подсветка — по названию в NFC (так считает резидент).
-                ? <Highlight text={nfc(rec.title)} ranges={rec.title_ranges} /> : title}
-            </span>
+            {/* Подсказка: полное название, если оно обрезано, и как переименовать (облачко Aurora). */}
+            <Tip describe={false} content={clipped || actions ? (
+              <>
+                {clipped && <span className="rec-item__tip-line">{title}</span>}
+                {actions && <span className="rec-item__tip-line">{RENAME_HINT}</span>}
+              </>
+            ) : null}>
+              <span className="rec-item__title"
+                onMouseEnter={(e) => {
+                  const el = e.currentTarget;
+                  setClipped(el.scrollWidth > el.clientWidth + 1);
+                }}
+                onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
+                {rec.title && rec.title_ranges?.length
+                  // Подсветка — по названию в NFC (так считает резидент).
+                  ? <Highlight text={nfc(rec.title)} ranges={rec.title_ranges} /> : title}
+              </span>
+            </Tip>
             {rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
             {/* Агент этой записи работает (вкладка «Агент») — и когда открыта другая запись. */}
             {agentLive && (
-              <span className="rec-item__agent" title="Агент работает">
-                <AgentMark size={12} />агент<span className="sr-only"> работает</span>
-              </span>
+              <Tip content="Агент работает" describe={false}>
+                <span className="rec-item__agent">
+                  <AgentMark size={12} />агент<span className="sr-only"> работает</span>
+                </span>
+              </Tip>
+            )}
+            {/* Состояние — справа в строке названия, на месте «⋯» (он виден при наведении и у выбранной). */}
+            {badge && !live && !progress && (
+              <span className={`${BADGE_CLASS[badge.tone || "plain"]} rec-item__badge`}>{badge.text}</span>
             )}
           </span>
           <span className={`rec-item__meta${progress ? " rec-item__meta--progress" : ""}`}>
@@ -310,9 +330,10 @@ export const RecordingItem = memo(function RecordingItem({
               <span className="num">{live ? ["Идёт запись", meta].filter(Boolean).join(" · ") : meta}</span>
               {category && <CategoryMark category={category} />}
             </span>
-            {badge && progress && <span className="rec-item__status" title={badge.text}>{badge.text}</span>}
-            {badge && !live && !progress && (
-              <span className={`${BADGE_CLASS[badge.tone || "plain"]} rec-item__badge`}>{badge.text}</span>
+            {badge && progress && (
+              <Tip content={badge.text} describe={false}>
+                <span className="rec-item__status">{badge.text}</span>
+              </Tip>
             )}
           </span>
         </button>
@@ -365,8 +386,11 @@ export const RecordingItem = memo(function RecordingItem({
       )}
       {more > 0 && (
         // Открыть запись с этим поиском: в карточке — все совпадения.
-        <button type="button" className="link rec-hits__more" title="Открыть запись и показать все совпадения"
-          onClick={() => onSelect(rec.id)}>Ещё совпадений: {more}</button>
+        <Tip content="Открыть запись и показать все совпадения">
+          <button type="button" className="link rec-hits__more" onClick={() => onSelect(rec.id)}>
+            Ещё совпадений: {more}
+          </button>
+        </Tip>
       )}
     </li>
   );

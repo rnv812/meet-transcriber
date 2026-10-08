@@ -1,17 +1,19 @@
-import { useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { categoryOf, NO_CATEGORY_NAME } from "../../lib/categories";
 import { TITLE_MAX, type Endpoint } from "../../lib/api";
 import { dayLabel, duration, plural } from "../../lib/format";
 import { llmLabel } from "../../lib/llm";
-import { initials, isUnnamed } from "../../lib/speakers";
+import { isUnnamed } from "../../lib/speakers";
+import { speakerTone } from "../../lib/tones";
 import type { Category, MergeInfo, Recording } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
-import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { CategoryDot, CategoryMenu } from "../../ui/Category";
 import { Popover } from "../../ui/Popover";
 import { Skeleton } from "../../ui/Loading";
+import { Tip } from "../../ui/Tip";
 import { Truncate } from "../../ui/Truncate";
+import { PersonMark } from "./PersonMark";
 import type { PersonColor } from "./Turns";
 
 /** Подпись объединённой встречи: из скольких записей и что стало с исходными. */
@@ -50,13 +52,15 @@ function CategoryButton({ rec, list, onPick, onSettings }: {
     ? "Категорию определил ИИ — нажмите, чтобы выбрать другую" : "Категория встречи — нажмите, чтобы выбрать";
   return (
     <>
-      <Button ref={button} variant="secondary" className={`card__cat${category ? "" : " card__cat--none"}`}
-        aria-haspopup="menu" aria-expanded={open}
-        aria-label={`Категория: ${category?.name ?? NO_CATEGORY_NAME}. Изменить`} title={hint}
-        onClick={() => setOpen((v) => !v)}>
-        <CategoryDot color={category?.color} />
-        <Truncate className="card__cat-name">{category?.name ?? NO_CATEGORY_NAME}</Truncate>
-      </Button>
+      <Tip content={hint}>
+        <Button ref={button} variant="secondary" className={`card__cat${category ? "" : " card__cat--none"}`}
+          aria-haspopup="menu" aria-expanded={open}
+          aria-label={`Категория: ${category?.name ?? NO_CATEGORY_NAME}. Изменить`}
+          onClick={() => setOpen((v) => !v)}>
+          <CategoryDot color={category?.color} />
+          <Truncate className="card__cat-name">{category?.name ?? NO_CATEGORY_NAME}</Truncate>
+        </Button>
+      </Tip>
       {open && button.current && (
         <Popover anchor={button.current} label="Категория встречи" width={240} onClose={close} anchorToggles>
           <CategoryMenu list={list} current={category?.id ?? null}
@@ -68,39 +72,37 @@ function CategoryButton({ rec, list, onPick, onSettings }: {
   );
 }
 
-/** Цвета кольца участника без своего цвета — по порядку в шапке (палитра данных Aurora). */
-const RINGS = ["var(--data-1)", "var(--data-2)", "var(--data-3)", "var(--data-4)"];
-
 /**
- * Участник в шапке: бейдж с инициалом в кольце цвета спикера (фото — внутри
- * кольца, если есть). Неназванный — кольцо без цвета. Для диктора — только имя.
+ * Участник в шапке: бейдж с инициалом в кольце цвета спикера (lib/tones — тот
+ * же цвет, что у точки в ленте и в панели «Спикеры»; фото — внутри кольца).
+ * Неназванный — кольцо без цвета. В подсказке — «Кто это» человека из базы
+ * голосов (роль), без неё — «Кто это?». Для диктора имя — название кнопки,
+ * подсказка — её описание.
  */
-function PersonChip({ name, person, index, endpoint, avatarVersion, onClick }: {
+function PersonChip({ name, person, tone, endpoint, avatarVersion, onClick }: {
   name: string;
   person?: PersonColor;
-  index: number;
+  tone?: string;
   endpoint: Endpoint;
   avatarVersion?: number;
   onClick: () => void;
 }) {
   const unnamed = isUnnamed(name);
-  const ring = unnamed ? "var(--control-line)" : person?.color || RINGS[index % RINGS.length]!;
   return (
     // Узнанное автоматически имя тоже бывает ошибочным: исправить можно любое.
-    <button type="button" className={`badge badge--plain card__person${unnamed ? " card__person--unnamed" : ""}`}
-      title="Кто это?" onClick={onClick}>
-      <span className="card__person-mark" style={{ "--person": ring } as CSSProperties} aria-hidden="true">
-        {person?.has_avatar && !unnamed
-          ? <Avatar name={name} hasAvatar version={avatarVersion} size={16} endpoint={endpoint} />
-          : initials(name)}
-      </span>
-      <span>{name}</span>
-    </button>
+    <Tip content={(!unnamed && person?.role) || "Кто это?"}>
+      <button type="button" className={`badge badge--plain card__person${unnamed ? " card__person--unnamed" : ""}`}
+        onClick={onClick}>
+        <PersonMark name={name} tone={tone} hasAvatar={!!person?.has_avatar} version={avatarVersion}
+          endpoint={endpoint} />
+        <span>{name}</span>
+      </button>
+    </Tip>
   );
 }
 
 export function CardHeader({
-  rec, durationS = rec.duration_s, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
+  rec, durationS = rec.duration_s, speakers, people, tones, endpoint, avatarVersion, onRename, onNameSpeaker,
   onOpenSpeakers, speakersOpen = false, categories, onCategory, onOpenCategories, actions,
 }: {
   rec: Recording;
@@ -108,6 +110,8 @@ export function CardHeader({
   durationS?: number | null;
   speakers: string[];
   people: PersonColor[];
+  /** Цвета спикеров встречи (lib/tones, одна карта с лентой и панелью); нет — по порядку в шапке. */
+  tones?: ReadonlyMap<string, string>;
   endpoint: Endpoint;
   avatarVersion?: Record<string, number>;
   /** Новое название; null — вернуть автоматическое. */
@@ -165,9 +169,11 @@ export function CardHeader({
             }}
           />
         ) : (
-          <h1 className="card__title" title="Нажмите, чтобы переименовать" onClick={begin}>
-            {shown}{rec.title_source === "ai" && rec.title && <AiBadge onClick={begin} by={llmLabel(rec.title_llm)} />}
-          </h1>
+          <Tip content="Нажмите, чтобы переименовать">
+            <h1 className="card__title" onClick={begin}>
+              {shown}{rec.title_source === "ai" && rec.title && <AiBadge onClick={begin} by={llmLabel(rec.title_llm)} />}
+            </h1>
+          </Tip>
         )}
         {actions}
       </div>
@@ -176,15 +182,20 @@ export function CardHeader({
           {meta && <span className="card__meta num">{meta}</span>}
           {category}
           {speakers.length > 0 && (meta || category) && <span className="card__meta-sep" aria-hidden="true" />}
-          {speakers.map((name, i) => (
-            <PersonChip key={name} name={name} person={people.find((x) => x.name === name)} index={i}
-              endpoint={endpoint} avatarVersion={avatarVersion?.[name]} onClick={() => onNameSpeaker?.(name)} />
-          ))}
+          {speakers.map((name, i) => {
+            const person = people.find((x) => x.name === name);
+            return (
+              <PersonChip key={name} name={name} person={person}
+                tone={tones ? tones.get(name) : speakerTone(name, i, person)}
+                endpoint={endpoint} avatarVersion={avatarVersion?.[name]} onClick={() => onNameSpeaker?.(name)} />
+            );
+          })}
           {speakers.length > 0 && onOpenSpeakers && (
-            <Button variant="ghost" aria-expanded={speakersOpen} title="Имена, голоса и история изменений"
-              onClick={onOpenSpeakers}>
-              {`Спикеры (${speakers.length})`}
-            </Button>
+            <Tip content="Имена, голоса и история изменений">
+              <Button variant="ghost" aria-expanded={speakersOpen} onClick={onOpenSpeakers}>
+                {`Спикеры (${speakers.length})`}
+              </Button>
+            </Tip>
           )}
         </div>
       )}

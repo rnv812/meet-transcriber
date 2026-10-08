@@ -476,7 +476,7 @@ export function RecordingsList({
           </div>
           {move && <GroupPickbar move={move} chosen={chosen} />}
           <label className="rec-pickbar__keep">
-            <input type="checkbox" checked={keepOriginals} onChange={(e) => setKeepOriginals(e.target.checked)} />
+            <input type="checkbox" className="cb" checked={keepOriginals} onChange={(e) => setKeepOriginals(e.target.checked)} />
             Сохранить исходные записи
           </label>
           <div className="rec-pickbar__row">

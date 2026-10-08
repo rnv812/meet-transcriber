@@ -26,6 +26,7 @@ import { Button } from "../../ui/Button";
 import { CategoryDot } from "../../ui/Category";
 import { IconButton } from "../../ui/IconButton";
 import { Popover } from "../../ui/Popover";
+import { Tip } from "../../ui/Tip";
 import { Truncate } from "../../ui/Truncate";
 
 /** Счётчики — не на каждую букву поиска. */
@@ -163,7 +164,7 @@ export function FiltersButton({
   const option = (key: string, label: string, checked: boolean, count: number | null, onChange: () => void,
     dot?: string | null, autoFocus = false) => (
     <label key={key} className={`cat-filter__option${count === 0 ? " filters__option--zero" : ""}`}>
-      <input type="checkbox" checked={checked} onChange={onChange} autoFocus={autoFocus} />
+      <input type="checkbox" className="cb" checked={checked} onChange={onChange} autoFocus={autoFocus} />
       {dot !== undefined && <CategoryDot color={dot} />}
       <Truncate className="cat-filter__name">{label}</Truncate>
       <span className="cat-filter__option-count" aria-hidden="true">{count ?? ""}</span>
@@ -228,11 +229,13 @@ export function FiltersButton({
                 () => onReplace(["date"], dateChip && sameChip(dateChip, p.chip) ? [] : [p.chip])))}
               {customDate && option("t:custom", chipText(customDate, ctx), true, null, () => onReplace(["date"], []))}
               <div className="filters__period">
-                <input type="text" className="field field--sm filters__period-input" aria-label="Выбрать период"
-                  placeholder="Выбрать… 5 окт, сентябрь" title="5 окт, сентябрь, с 1.09 по 15.09, прошлая неделя"
-                  value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyPeriod(); } }} />
+                <Tip content="Например: 5 окт, сентябрь, с 1.09 по 15.09, прошлая неделя">
+                  <input type="text" className="field field--sm filters__period-input" aria-label="Выбрать период"
+                    placeholder="Выбрать… 5 окт, сентябрь"
+                    value={period}
+                    onChange={(e) => setPeriod(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyPeriod(); } }} />
+                </Tip>
                 {period.trim() && (
                   <span className={`filters__period-note${typedPeriod ? "" : " filters__period-note--bad"}`} role="status">
                     {typedPeriod ? typedPeriod.label : dateHint(period, now) ?? "Не понял дату"}

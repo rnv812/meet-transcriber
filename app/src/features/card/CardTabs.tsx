@@ -21,6 +21,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import type { AgentRequest } from "../../lib/agentRef";
 import type { Endpoint } from "../../lib/api";
 import type { ChatUpdatedEvent, Job } from "../../lib/types";
+import { Tip } from "../../ui/Tip";
 import { AgentTab, type AgentInsert } from "./AgentTab";
 import { AssistantTab } from "./AssistantTab";
 import { useAgentLive } from "./agentSessions";
@@ -68,8 +69,10 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
 
 export function CardTabs({
   endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript, stage = "ready", agentRequest = null,
-  onAskAgent, onAgentTaken, agentContext, chatEvent = null, meetingEnd = null,
+  onAskAgent, onAgentTaken, agentContext, chatEvent = null, meetingEnd = null, onTime,
 }: {
+  /** Время «[мм:сс]» в итогах: перейти к этому месту записи. */
+  onTime?: (seconds: number) => void;
   endpoint: Endpoint;
   id: string;
   folder: string;
@@ -169,7 +172,9 @@ export function CardTabs({
   const shared = { endpoint, id, folder, jobs, assistant, onOpenSettings };
   const panels: Record<Tab, () => ReactNode> = {
     transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
-    summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent} />,
+    // Время в итогах — к этой реплике: на «Расшифровку», лента прокручивается к ней.
+    summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent}
+      onTime={onTime ? (t) => { onTime(t); open("transcript"); } : undefined} />,
     assistant: () => (
       <AssistantTab endpoint={endpoint} id={id} folder={folder} jobs={jobs} event={chatEvent} assistant={assistant}
         onOpenSettings={onOpenSettings} endedAt={meetingEnd} />
@@ -196,7 +201,9 @@ export function CardTabs({
             >
               {t.label}
               {t.id === "agent" && agentLive && (
-                <span className="agent-live" aria-hidden="true" title="Агент работает" />
+                <Tip content="Агент работает" describe={false}>
+                  <span className="agent-live" aria-hidden="true" />
+                </Tip>
               )}
             </button>
           ))}

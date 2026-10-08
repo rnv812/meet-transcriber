@@ -3,10 +3,10 @@
  * (`analysis.consent` = "pending"): видно в готовой карточке, пока не ответили;
  * ответ уходит резиденту и больше не спрашивается. Новой установке — не видно.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
-import { ANALYSIS_OFFER } from "./analysis";
+import { ANALYSIS_OFFER, ANALYSIS_OFFER_SHORT } from "./analysis";
 import * as api from "../../lib/api";
 import type { Recording, Transcript } from "../../lib/types";
 
@@ -52,7 +52,8 @@ beforeEach(() => {
 
 const offer = () => screen.queryByRole("region", { name: "Предложение: анализ встречи" });
 
-test("текст предложения — тот, что согласован", () => {
+test("текст предложения — тот, что согласован; в строке — коротко", () => {
+  expect(ANALYSIS_OFFER_SHORT).toBe("Разметить встречу моделью: главы, важное, выводы?");
   expect(ANALYSIS_OFFER).toBe("Анализ встречи: типы фраз, главы, важное и выводы. Текст встречи отправляется "
     + "выбранной модели (Claude Code, Codex или OpenCode). Включить автоматически после расшифровки?");
 });
@@ -63,11 +64,19 @@ test.each([["Включить", "granted"], ["Не сейчас", "declined"]] a
     const { rerender } = render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
     await screen.findByText(/Начинаем планёрку/);
     await waitFor(() => expect(offer()).not.toBeNull());
-    expect(offer()).toHaveTextContent(ANALYSIS_OFFER);
-    // Предложение ИИ — выноска на сиянии (aurora-wash).
-    expect(offer()).toHaveClass("callout", "aurora-wash");
-    expect(offer()).toHaveTextContent("Можно изменить в настройках");
-    await userEvent.click(screen.getByRole("button", { name: label }));
+    // Одна строка над лентой «Расшифровки» (на месте «Наблюдений» макета), на тихом сиянии;
+    // подробности — что текст уходит модели — в «?».
+    expect(offer()).toHaveTextContent(ANALYSIS_OFFER_SHORT);
+    expect(offer()).toHaveClass("card", "aurora-wash");
+    expect(offer()!.closest('[role="tabpanel"]')).toHaveAccessibleName("Расшифровка");
+    expect(document.querySelector(".card__notices [aria-label='Предложение: анализ встречи']")).toBeNull();
+    await userEvent.click(within(offer()!).getByRole("button", { name: "Что такое анализ встречи" }));
+    expect(await screen.findByText(ANALYSIS_OFFER)).toBeInTheDocument();
+    expect(screen.getByText(/Можно изменить в/)).toBeInTheDocument();
+    for (const name of ["Включить", "Не сейчас"]) {
+      expect(within(offer()!).getByRole("button", { name })).toHaveClass("btn--sm");
+    }
+    await userEvent.click(within(offer()!).getByRole("button", { name: label }));
     expect(api.answerAnalysisOffer).toHaveBeenCalledWith(ep, "r1", answer);
     await waitFor(() => expect(offer()).toBeNull());
     // Перечитанная карточка не спрашивает снова.
@@ -81,7 +90,8 @@ test("«в настройках» ведёт в раздел «Анализ вс
   const onOpenSettings = vi.fn();
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
   await waitFor(() => expect(offer()).not.toBeNull());
-  await userEvent.click(screen.getByRole("button", { name: "настройках" }));
+  await userEvent.click(within(offer()!).getByRole("button", { name: "Что такое анализ встречи" }));
+  await userEvent.click(await screen.findByRole("button", { name: "настройках" }));
   expect(onOpenSettings).toHaveBeenCalledWith("analysis");
 });
 

@@ -196,7 +196,10 @@ export type ItemAction = (text: string, section: string | null) => ReactNode;
 /** Чем отрисовка дополняет текст: щелчок по таймкоду (секунды), действие у пункта. */
 type Ctx = {
   onTime?: (seconds: number) => void; itemAction?: ItemAction; section?: string | null; jira?: JiraLinker | null;
+  tables?: TableClasses;
 };
+/** Свои классы таблиц (итоги: карточка и таблица Aurora `.tbl`). */
+export type TableClasses = { wrap?: string; table?: string };
 const WORD = /[\p{L}\p{N}_]/u;
 const isWord = (c: string | undefined) => c !== undefined && WORD.test(c);
 
@@ -292,8 +295,8 @@ function render(blocks: Block[], outer: Ctx = {}): ReactNode[] {
       }
       case "table":
         return (
-          <div key={k} className="md-table">
-            <table>
+          <div key={k} className={ctx.tables?.wrap ? `md-table ${ctx.tables.wrap}` : "md-table"}>
+            <table className={ctx.tables?.table}>
               <thead>
                 <tr>
                   {b.head.map((c, j) => <th key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</th>)}
@@ -321,7 +324,7 @@ function render(blocks: Block[], outer: Ctx = {}): ReactNode[] {
   });
 }
 
-export function Markdown({ source, className, onTime, itemAction, jira = null }: {
+export function Markdown({ source, className, onTime, itemAction, jira = null, tables }: {
   source: string;
   className?: string;
   /** Таймкоды «[мм:сс]» — кнопки; щелчок передаёт секунды. */
@@ -330,10 +333,12 @@ export function Markdown({ source, className, onTime, itemAction, jira = null }:
   itemAction?: ItemAction;
   /** Ключи задач Jira — ссылками. */
   jira?: JiraLinker | null;
+  /** Свои классы таблиц: обёртки и самой таблицы. */
+  tables?: TableClasses;
 }) {
   const nodes = useMemo(
-    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira }),
-    [source, onTime, itemAction, jira],
+    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira, tables }),
+    [source, onTime, itemAction, jira, tables],
   );
   return <div className={className ? `md ${className}` : "md"}>{nodes}</div>;
 }

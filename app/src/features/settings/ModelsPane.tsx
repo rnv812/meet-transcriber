@@ -5,14 +5,13 @@ import {
 import { errorText } from "../../lib/format";
 import { inTauri, retryGigaamInstall } from "../../lib/shell";
 import { jobActive, useTrackedJobs } from "../../state/useTrackedJob";
-import { Check } from "lucide-react";
 import { downloadDetail, jobFraction } from "../../lib/progress";
 import type { Job } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
-import { Icon } from "../../ui/Icon";
 import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
+import { Tip } from "../../ui/Tip";
 import { PathText, Row } from "./Section";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "разделение на спикеров", align: "время слов" };
@@ -54,7 +53,7 @@ function ModelRow({ model, job, removing, canDownload, usage, confirming, onDown
       <div className="srow__text">
         <span className="srow__label">
           {model.title}
-          {model.recommended && <span className="tag tag--live">рекомендуется</span>}
+          {model.recommended && <span className="badge badge--info">рекомендуется</span>}
         </span>
         <span className="srow__hint">{model.note}</span>
         <span className="srow__hint">
@@ -66,23 +65,27 @@ function ModelRow({ model, job, removing, canDownload, usage, confirming, onDown
       </div>
       <div className="srow__control">
         {selected && (
-          <span className="model-row__chosen" title="Модель выбрана в разделе «Распознавание»">
-            <Icon as={Check} size="sm" />Выбрана
-          </span>
+          <Tip content="Модель выбрана в разделе «Распознавание»">
+            <span className="badge badge--fresh">Выбрана</span>
+          </Tip>
         )}
         {isGigaam(model) && model.downloaded ? (
           // GigaAM не обновляется: веса закреплены контрольной суммой.
-          <span className="model-row__chosen model-row__chosen--muted">Скачана</span>
+          <span className="badge badge--plain">Скачана</span>
         ) : !loading && (
-          <Button onClick={onDownload} disabled={blocked !== null} title={blocked ?? undefined}>
-            {model.downloaded ? "Обновить" : "Скачать"}
-          </Button>
+          <Tip content={blocked}>
+            <Button onClick={onDownload} disabled={blocked !== null}>
+              {model.downloaded ? "Обновить" : "Скачать"}
+            </Button>
+          </Tip>
         )}
         {model.removable && (
-          <Button variant="danger" onClick={onRemove} disabled={noRemove !== null} title={noRemove ?? undefined}
-            aria-label={`Удалить модель ${model.title}`}>
-            Удалить…
-          </Button>
+          <Tip content={noRemove}>
+            <Button variant="danger" onClick={onRemove} disabled={noRemove !== null}
+              aria-label={`Удалить модель ${model.title}`}>
+              Удалить…
+            </Button>
+          </Tip>
         )}
       </div>
       {loading && mine && (

@@ -63,8 +63,10 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools, seekTo = null, nowTurn = null,
-  textPhase = false, onFix, fixHint = null,
+  textPhase = false, onFix, fixHint = null, notice = null,
 }: {
+  /** Строка над лентой, на месте «Наблюдений» (разовое предложение анализа). */
+  notice?: ReactNode;
   turns: Turn[];
   colors: Map<string, string>;
   playable: boolean;
@@ -420,6 +422,7 @@ export function TranscriptView({
         )}
         {tools}
       </div>
+      {notice}
       {view && view.insights.length > 0 && (
         <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
       )}

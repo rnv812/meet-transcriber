@@ -24,16 +24,19 @@
  * осталась от прежнего режима, видно предупреждение с «Вернуть чат».
  */
 
-import { X } from "lucide-react";
+import { TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import { kbExcludeEntry, kbRelative } from "../../lib/kb";
 import { pickFolder } from "../../lib/shell";
+import { fieldClass } from "./fields";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
+import { Tip } from "../../ui/Tip";
 import type { AgentProfile } from "../../lib/types";
 import { PROFILES, PROFILE_LABELS, profileOf } from "../../live/profiles";
-import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
+import { Row, Segmented, Switch, type Raw, type SetFn } from "./Section";
 
 type Frequency = "less" | "normal" | "more";
 const FREQUENCIES: { value: Frequency; label: string }[] = [
@@ -62,13 +65,10 @@ export const KB_MAP_LABEL = "Показывать ассистенту карт�
 export const VISION_NOTE = "Картинки видят Claude Code и Codex; OpenCode и локальная модель получают только текст сообщения";
 export const DENY_NOTE = "исключения — только просьба";
 export const FREEDOM_LABEL = "Расширенные возможности ассистента (файлы вне встречи, MCP, веб) — по согласию";
+/** Подсказка под переключателем — одна строка; подробности и оговорки — в «?» (FreedomTip). */
 export const FREEDOM_ON_HINT =
-  "Claude Code: по вашей просьбе ассистент сразу читает файлы, ищет в вебе, смотрит через ваши MCP-серверы " +
-  "(Jira, GitLab…) с вашими правами и выполняет простые команды чтения; действия — запись, правку задачи, другие " +
-  "команды, открытие страницы — Meet покажет карточкой и выполнит только после «Разрешить один раз» (или «до конца " +
-  "встречи»). Без вашей просьбы — только эта встреча и вложения. MCP-инструменты, чьё имя не похоже на запись, " +
-  "выполняются без вопроса; «git commit» и «git pull», разрешённые до конца встречи, запускают хуки самого " +
-  "репозитория";
+  "По вашей просьбе — файлы, веб и ваши MCP с вашими правами; действия — только после «Разрешить». "
+  + "Без вашей просьбы — только эта встреча и вложения";
 export const FREEDOM_FILES_NOTE = "Codex/OpenCode: только чтение файлов по вашей просьбе; MCP, веб и действия — только с Claude Code";
 /** Закрытые папки и чувствительные пути у моделей без проверки каждого вызова. */
 export const FREEDOM_CLOSED_NOTE: Record<string, string> = {
@@ -115,6 +115,10 @@ function FreedomTip() {
         такое до конца встречи» или «Отклонить». Кнопки самого ассистента («Да, создай») действия не разрешают.
         Без ответа за 2 минуты — не выполняется. Лишнее Meet блокирует — в чате появится строка «Ассистент хотел
         … — запрос заблокирован».
+      </TipLine>
+      <TipLine>
+        MCP-инструменты, чьё имя не похоже на запись, выполняются без вопроса. «git commit» и «git pull»,
+        разрешённые до конца встречи, запускают хуки самого репозитория.
       </TipLine>
       <TipLine>
         Закрыто всегда: папки «Не показывать ассистенту», ключи и пароли (SSH, облака, настройки Claude Code и
@@ -181,7 +185,8 @@ function KbExcludeEditor({ value, kbRoot, provider, onChange }: {
         ) : <span className="muted kb-exclude__empty">Исключений нет — ассистент видит всю базу знаний</span>}
         <div className="kb-exclude__add">
           <Button onClick={() => void pick()} disabled={!kbRoot}>Выбрать папку…</Button>
-          <input type="text" aria-label="Папка внутри базы знаний" placeholder="Папка/" value={text} spellCheck={false}
+          <input type="text" className={fieldClass({ mono: true })} aria-label="Папка внутри базы знаний"
+            placeholder="Папка/" value={text} spellCheck={false}
             disabled={!kbRoot}
             onChange={(e) => { setText(e.target.value); setError(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); typed(); } }} />
@@ -190,9 +195,9 @@ function KbExcludeEditor({ value, kbRoot, provider, onChange }: {
         </div>
         {error && <span className="error" role="alert">{error}</span>}
         {deny && (
-          <span className="kb-exclude__note" title={`${deny} не умеет запрещать чтение папок: исключённые папки указаны ему только просьбой в инструкции`}>
-            {deny}: {DENY_NOTE}
-          </span>
+          <Tip content={`${deny} не умеет запрещать чтение папок: исключённые папки указаны ему только просьбой в инструкции`}>
+            <span className="badge badge--stale kb-exclude__note">{deny}: {DENY_NOTE}</span>
+          </Tip>
         )}
       </div>
     </Row>
@@ -219,16 +224,21 @@ export function ParticipantRows({ draft, set, provider }: {
       {on && (
         <>
           {assist.activity === "summary" && (
-            <div className="participant__warn" role="alert">
-              <span>Выбрано «Только сводка» прежнего ассистента — во время встречи он молчит.</span>
-              <Button variant="link" onClick={() => set("assist", "activity", "calm")}>Вернуть чат</Button>
+            <div className="callout callout--warn scallout" role="alert">
+              <Icon as={TriangleAlert} className="ic" />
+              <p>
+                Выбрано «Только сводка» прежнего ассистента — во время встречи он молчит.{" "}
+                <Button variant="link" onClick={() => set("assist", "activity", "calm")}>Вернуть чат</Button>
+              </p>
             </div>
           )}
-          <Radio label={PROFILE_DEFAULT_LABEL} value={profile} options={PROFILE_OPTIONS}
+          <Segmented label={PROFILE_DEFAULT_LABEL} value={profile} options={PROFILE_OPTIONS}
             hint={PROFILE_HINTS[profile]} onChange={(v) => set("assist", "profile", v)} />
-          <Radio label="Как часто писать" value={frequency} options={FREQUENCIES}
+          <Segmented label="Как часто писать" value={frequency} options={FREQUENCIES}
             hint="Просьба к ассистенту в инструкции; меняется и в панели встречи"
             onChange={(v) => set("assist", "frequency", v)} />
+          {/* Место для «Режима агента» (`assist.agent_mode`: auto | confirm) — такой же строкой
+              `Segmented` здесь, между частотой и расширенными возможностями (и строкой в settingsIndex). */}
           <Switch label={FREEDOM_LABEL} help={<FreedomTip />} value={freedom}
             onChange={(v) => set("assist", "agent_freedom", v)}
             hint={freedom

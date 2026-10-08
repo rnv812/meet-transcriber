@@ -20,5 +20,13 @@
 .title-suggest__title { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .title-suggest__busy { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
 .title-suggest__row { display: flex; justify-content: flex-end; gap: 8px; }
+/* Разовое предложение анализа (AnalysisOffer): одна строка над лентой «Расшифровки» — ✦, вопрос,
+   «?» с подробностями и малые кнопки справа (макет: место «Наблюдений»). */
+.analysis-offer {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2);
+  margin: 0 0 var(--s-2); padding: 8px 8px 8px 14px; font-size: var(--text-sm);
+}
+.analysis-offer__text { min-width: 0; color: var(--ink); }
+.analysis-offer__actions { display: flex; gap: 6px; margin-left: auto; }
 /* Модель не дала части разметки (главы, важность): сказано прямо, а не пустой полосой. */
 .analysis-status__missing { color: var(--warning); }

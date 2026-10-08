@@ -211,13 +211,13 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
         <div className="storage">
           <span className="folder"><PathText path={info.home} /></span>
           {info.custom && !system ? (
-            <span className="muted">Движок, модели Whisper, разделения на спикеров и GigaAM — в этой папке.</span>
+            <span className="srow__hint">Движок, модели Whisper, разделения на спикеров и GigaAM — в этой папке</span>
           ) : info.custom ? (
-            <span className="muted">Системный диск: движок и все модели Meet — в папке Meet.</span>
+            <span className="srow__hint">Системный диск: движок и все модели Meet — в папке Meet</span>
           ) : (
-            <span className="muted">
+            <span className="srow__hint">
               По умолчанию: движок и GigaAM — в папке Meet на системном диске, модели Whisper и разделения на
-              спикеров — в общем кэше Hugging Face <PathText path={info.hf_cache} />.
+              спикеров — в общем кэше Hugging Face <code className="path">{info.hf_cache}</code>
             </span>
           )}
           {stopped && (
@@ -243,7 +243,7 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
           )}
           {plan && <PlanBox plan={plan} onStart={start} onCancel={() => setPlan(null)} />}
           <MoveProgress cancellable={Boolean(status?.cancellable)} />
-          {move.kind === "done" && <p className="tag tag--live">Готово: движок и модели — в {move.path}</p>}
+          {move.kind === "done" && <p className="notice">Готово: движок и модели — в {move.path}</p>}
           {move.kind === "failed" && <p className="error">{move.error}</p>}
           {error && <p className="error">{error}</p>}
         </div>

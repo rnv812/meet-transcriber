@@ -7,7 +7,8 @@
  */
 
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
+import { Select } from "../../ui/Select";
+import { Row, Segmented, Switch, type Raw, type SetFn } from "./Section";
 
 type Activity = "calm" | "active" | "summary";
 type Tier = "agent" | "fast";
@@ -106,21 +107,18 @@ export function LiveHintsRows({ draft, set, provider, hints = true }: {
   if (!hints) return quiet;
   return (
     <>
-      <Radio label="Активность подсказок" help={<LiveActivityTip />} value={activity} options={ACTIVITIES}
+      <Segmented label="Активность подсказок" help={<LiveActivityTip />} value={activity} options={ACTIVITIES}
         hint={`Как часто ассистент обновляет сводку и подсказки. ${NEXT_RUN}`}
         onChange={(v) => set("assist", "activity", v)} />
-      <Radio label="Модель для живых подсказок" help={<HintsModelTip />} value={tier} options={TIERS}
+      <Segmented label="Модель для живых подсказок" help={<HintsModelTip />} value={tier} options={TIERS}
         hint={tier === "fast" ? `«Быстрее» — ${fastMeaning(provider)}` : "Та же модель, что отвечает на вопросы и готовит итоги"}
         onChange={(v) => set("assist", "hints_model", v)} />
       <Row label="Сколько подсказок держать" htmlFor="assist-max-hints" disabled={activity === "summary"}
         hint={activity === "summary" ? "Подсказок нет: выбрано «Только сводка». Выберите «Сдержанно» или «Активно», чтобы задать"
           : "Сверх этого числа уходят наименее важные; закреплённые остаются"}>
-        <select id="assist-max-hints" value={maxHints} disabled={activity === "summary"}
-          onChange={(e) => set("assist", "max_hints", Number(e.target.value))}>
-          {choices.map((n) => (
-            <option key={n} value={n}>{n === 0 ? "По активности (5 или 8)" : String(n)}</option>
-          ))}
-        </select>
+        <Select id="assist-max-hints" size="sm" align="end" value={String(maxHints)} disabled={activity === "summary"}
+          options={choices.map((n) => ({ value: String(n), label: n === 0 ? "По активности (5 или 8)" : String(n) }))}
+          onChange={(v) => set("assist", "max_hints", Number(v))} />
       </Row>
       {quiet}
     </>

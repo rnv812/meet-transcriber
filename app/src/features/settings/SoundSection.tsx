@@ -18,6 +18,7 @@ import { errorText } from "../../lib/format";
 import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Select, type SelectOption } from "../../ui/Select";
 import { Row, SeeAlso, SettingsCard, type Raw, type SetFn } from "./Section";
 
 /** Ниже этого пика считаем, что звука не было (шум тишины, а не речь). */
@@ -66,32 +67,56 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
   };
 
   const percent = check ? Math.round(Math.min(1, Math.max(0, check.peak)) * 100) : 0;
+  const options: SelectOption[] = [
+    { value: "", label: system ? `Как в системе (сейчас: ${system})` : "Как в системе" },
+    ...(missing && value !== null ? [{ value, label: `${value} (не подключено)` }] : []),
+    ...names.map((n) => ({ value: n, label: n })),
+  ];
   return (
     <div role="group" aria-label={label}>
-      <Row label={label} hint={hint} help={help} htmlFor={id}>
+      <Row label={label} hint={hint} help={help} htmlFor={id} stack>
         <span className="sound__pick">
-          <select id={id} className="sound__select" title={value ?? (system ? `Как в системе (сейчас: ${system})` : undefined)}
-            value={value ?? ""}
-            onChange={(e) => { setCheck(null); onChange(e.target.value || null); }}>
-            <option value="">{system ? `Как в системе (сейчас: ${system})` : "Как в системе"}</option>
-            {missing && <option value={value}>{`${value} (не подключено)`}</option>}
-            {names.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
+          <Select id={id} size="sm" width="100%" value={value ?? ""} options={options}
+            onChange={(v) => { setCheck(null); onChange(v || null); }} />
+          {/* Уровень — между списком и кнопкой: до проверки полоски серые, после — до пика. */}
+          <LevelBars label={label} percent={check ? percent : null} kind={kind} quiet={!!check && check.peak < SILENCE} />
+          <Button onClick={() => void run()} busy={checking}>Проверить</Button>
         </span>
-        <Button onClick={() => void run()} busy={checking}>Проверить</Button>
         {/* Итог проверки — в строке постоянной высоты: появление не сдвигает разделы ниже. */}
         <span className="sound__result" aria-live="polite">
-            {check && (
-              <span role="meter" aria-label={`Уровень: ${label}`} aria-valuemin={0} aria-valuemax={100}
-                aria-valuenow={percent} className="sound__level">
-                <span className="sound__fill" style={{ width: `${percent}%` }} />
-              </span>
-            )}
-            {check && <span className={check.peak < SILENCE || check.fallback ? "muted" : "notice"}>{resultText(kind, check)}</span>}
-            {error && <span className="error">{error}</span>}
+          {check && <span className={check.peak < SILENCE || check.fallback ? "muted" : "notice"}>{resultText(kind, check)}</span>}
+          {error && <span className="error">{error}</span>}
         </span>
       </Row>
     </div>
+  );
+}
+
+/** Полосок в индикаторе уровня. */
+const BARS = 16;
+/** Высоты полосок (доля от 32 px): неровная «волна», чтобы индикатор читался как звук, а не как полоса загрузки. */
+const BAR_SHAPE = Array.from({ length: BARS }, (_, i) => 0.3 + 0.6 * Math.abs(Math.sin((i + 1) * 0.9)) * (0.55 + 0.45 * ((i * 7) % 5) / 4));
+
+/**
+ * Пиковый уровень проверки — полосками, как уровни дорожек «Идёт запись»:
+ * закрашены полоски до уровня (микрофон — `--data-4`, вывод — `--data-1`),
+ * остальные — `--data-empty`. До проверки (`percent` null) — только серые
+ * полоски, для диктора их нет.
+ */
+function LevelBars({ label, percent, kind, quiet }: {
+  label: string; percent: number | null; kind: DeviceKind; quiet: boolean;
+}) {
+  const lit = percent === null ? 0 : Math.round((percent / 100) * BARS);
+  const meter = percent === null ? { "aria-hidden": true } : {
+    role: "meter", "aria-label": `Уровень: ${label}`, "aria-valuemin": 0, "aria-valuemax": 100,
+    "aria-valuenow": percent, "aria-valuetext": `${percent} %`,
+  };
+  return (
+    <span {...meter} className={`sound__bars sound__bars--${kind}${quiet ? " sound__bars--quiet" : ""}`}>
+      {BAR_SHAPE.map((h, i) => (
+        <i key={i} className={i < lit ? "is-lit" : undefined} style={{ height: `${Math.round(h * 100)}%` }} />
+      ))}
+    </span>
   );
 }
 
@@ -103,51 +128,53 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
   const v = (k: string) => pickedName(draft.recording?.[k]);
   const choose = (key: string) => (name: string | null) => set("recording", key, name ? { name } : null);
   return (
-    <SettingsCard title="Устройства">
-      <p className="muted sdesc">
-        Запись идёт двумя дорожками: ваш микрофон и звук собеседников. Изменения применятся со следующей записи.
-      </p>
-      {devices && !devices.available && (
-        <p className="muted sdesc">Список устройств недоступен: {devices.error ?? "причина неизвестна"}</p>
-      )}
-      <DeviceRow id="sound-mic" kind="mic" label="Микрофон" endpoint={endpoint}
-        hint={`Ваш голос. «Как в системе» — микрофон ${OS_TEXT.systemName} по умолчанию`}
-        items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} />
-      <DeviceRow id="sound-output" kind="output" label="Звук собеседников (вывод)" endpoint={endpoint}
-        hint={IS_MAC
-          ? "Системный звук (ScreenCaptureKit) или виртуальное устройство, например BlackHole"
-          : "Устройство, через которое вы слышите собеседников: наушники или колонки"}
-        help={IS_MAC ? (
-          <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
-            <TipLine>
-              «Системный звук» записывается через ScreenCaptureKit: нужно разрешение «Запись экрана» —
-              Системные настройки → Конфиденциальность и безопасность → Запись экрана (в macOS 15 — «Запись
-              экрана и системного звука»), включите Meet. Изображение экрана не сохраняется.
-            </TipLine>
-            <TipLine>
-              Без этого разрешения выберите виртуальное устройство ввода, например BlackHole, и направьте в него
-              звук звонка (через «Устройство с несколькими выходами» в «Настройке Audio-MIDI»).
-            </TipLine>
-          </HelpTip>
-        ) : (
-          <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
-            <TipLine>
-              Голоса собеседников записываются с выбранного устройства вывода через WASAPI loopback: программа
-              получает копию звука, который Windows отправляет в наушники или колонки.
-            </TipLine>
-            <TipLine>Другие звуки компьютера (уведомления, музыка) тоже попадут в эту дорожку.</TipLine>
-            <TipLine>
-              «Как в системе» — запись перейдёт на новое устройство, если вы смените его во время звонка.
-            </TipLine>
-          </HelpTip>
-        )}
-        items={devices?.outputs ?? []} value={v("output_device")} onChange={choose("output_device")} />
+    <>
       {onOpenSpeakers && (
-        <SeeAlso>
+        <SeeAlso head>
           Образец вашего голоса — в разделе{" "}
           <Button variant="link" onClick={onOpenSpeakers}>«Спикеры»</Button>.
         </SeeAlso>
       )}
-    </SettingsCard>
+      <SettingsCard title="Устройства">
+        <p className="muted sdesc">
+          Запись идёт двумя дорожками: ваш микрофон и звук собеседников. Изменения применятся со следующей записи.
+        </p>
+        {devices && !devices.available && (
+          <p className="muted sdesc">Список устройств недоступен: {devices.error ?? "причина неизвестна"}</p>
+        )}
+        <DeviceRow id="sound-mic" kind="mic" label="Микрофон" endpoint={endpoint}
+          hint={`Ваш голос. «Как в системе» — микрофон ${OS_TEXT.systemName} по умолчанию`}
+          items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} />
+        <DeviceRow id="sound-output" kind="output" label="Звук собеседников (вывод)" endpoint={endpoint}
+          hint={IS_MAC
+            ? "Системный звук (ScreenCaptureKit) или виртуальное устройство, например BlackHole"
+            : "Устройство, через которое вы слышите собеседников: наушники или колонки"}
+          help={IS_MAC ? (
+            <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
+              <TipLine>
+                «Системный звук» записывается через ScreenCaptureKit: нужно разрешение «Запись экрана» —
+                Системные настройки → Конфиденциальность и безопасность → Запись экрана (в macOS 15 — «Запись
+                экрана и системного звука»), включите Meet. Изображение экрана не сохраняется.
+              </TipLine>
+              <TipLine>
+                Без этого разрешения выберите виртуальное устройство ввода, например BlackHole, и направьте в него
+                звук звонка (через «Устройство с несколькими выходами» в «Настройке Audio-MIDI»).
+              </TipLine>
+            </HelpTip>
+          ) : (
+            <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
+              <TipLine>
+                Голоса собеседников записываются с выбранного устройства вывода через WASAPI loopback: программа
+                получает копию звука, который Windows отправляет в наушники или колонки.
+              </TipLine>
+              <TipLine>Другие звуки компьютера (уведомления, музыка) тоже попадут в эту дорожку.</TipLine>
+              <TipLine>
+                «Как в системе» — запись перейдёт на новое устройство, если вы смените его во время звонка.
+              </TipLine>
+            </HelpTip>
+          )}
+          items={devices?.outputs ?? []} value={v("output_device")} onChange={choose("output_device")} />
+      </SettingsCard>
+    </>
   );
 }

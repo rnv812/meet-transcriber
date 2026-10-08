@@ -5,6 +5,7 @@ import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
 import { RecordingsList, useToday } from "../features/recordings/RecordingsList";
 import { LibraryEmpty } from "../features/recordings/LibraryEmpty";
+import { LibraryHome } from "../features/recordings/LibraryHome";
 import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
@@ -93,7 +94,7 @@ export function App() {
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
   // Совсем пустая библиотека (макет EMPTY): ни записей, ни групп, ни поиска, ни условий (категории —
-  // тоже метки `query.chips`), ни пустой группы — сияние на всё окно вместо списка и «Выберите запись».
+  // тоже метки `query.chips`), ни пустой группы — сияние на всё окно вместо списка и LibraryHome.
   // Группы есть, ещё не прочитаны или не прочитались («Группы недоступны» с повтором) — список остаётся;
   // библиотека не загрузилась — тоже список: там ошибка, а «Записей пока нет» было бы неправдой.
   const bareLibrary = section === "recordings" && !offline && !!resident.endpoint && !selected
@@ -253,6 +254,7 @@ export function App() {
               onAvatar={(name) => { bumpAvatar(name); void refreshPeople(); }}
               onChanged={() => void refreshPeople()}
               onOpenRecording={openRecording}
+              onOpenSettings={openSettings}
             />
           ) : section === "settings" && resident.endpoint ? (
             <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
@@ -283,9 +285,13 @@ export function App() {
               onChanged={() => void library.refresh()}
               onDeleted={() => { setSelected(null); void library.refresh(); }}
             />
-          ) : (
-            <EmptyState title="Выберите запись" />
-          )}
+          ) : library.items.length > 0 || (!library.loading && groupsUi.supported !== null) ? (
+            // Ничего не выбрано, а записи есть (или идёт поиск): «Записи», новая встреча, последняя.
+            // Пустой список, пока библиотека или группы читаются, — ещё не ответ: вдруг это «Записей пока нет».
+            <LibraryHome endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
+              items={library.items} jobs={library.jobs} onOpen={selectFromList}
+              onSnapshot={resident.applySnapshot} onImported={() => void library.refresh()} />
+          ) : null}
         </main>
       </div>
       <ShellResize list={section === "recordings" && !bareLibrary} />

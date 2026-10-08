@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
@@ -25,14 +25,15 @@ const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
 });
 const reply = (s: Snapshot, action: string): CommandResult => ({ ...s, ok: true, action });
 
-test("простой: в меню кнопки записи есть «Временная встреча с ассистентом» — /live/start с temporary", async () => {
+test("простой: в меню кнопки записи, в группе «С ассистентом», — «Временная — не сохранится» — /live/start с temporary", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
   render(<RecordingBadge endpoint={ep} snapshot={base()} />);
   await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
-  const item = await screen.findByRole("menuitem", { name: /Временная встреча с ассистентом/ });
+  const group = await screen.findByRole("group", { name: "С ассистентом" });
+  const item = await within(group).findByRole("menuitem", { name: /^Временная — не сохранится/ });
   await waitFor(() => expect(item).toBeEnabled());
-  expect(item).toHaveTextContent("не сохранится");
+  expect(item).toHaveTextContent("ни записи, ни расшифровки");
   await userEvent.click(item);
   expect(start).toHaveBeenCalledWith(ep, { temporary: true });
 });
@@ -42,7 +43,7 @@ test("без подключённой модели временная встре
   const start = vi.spyOn(api, "liveStart");
   render(<RecordingBadge endpoint={ep} snapshot={base()} />);
   await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
-  const item = await screen.findByRole("menuitem", { name: /Временная встреча/ });
+  const item = await screen.findByRole("menuitem", { name: /^Временная — не сохранится/ });
   await waitFor(() => expect(item).toBeDisabled());
   await userEvent.click(item);
   expect(start).not.toHaveBeenCalled();
@@ -119,7 +120,8 @@ test("временная встреча: «Сохранить как обычн�
   expect(screen.queryByRole("menuitem", { name: /Остановить без сохранения/ })).toBeNull();
   await userEvent.click(await screen.findByRole("menuitem", { name: /Сохранить как обычную встречу/ }));
   expect(command).toHaveBeenCalledWith(ep, "keep");
-  await waitFor(() => expect(screen.getByRole("tooltip")).not.toHaveTextContent("Временная — не сохранится"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Остановить и сохранить" }))
+    .not.toHaveAccessibleDescription(/Временная — не сохранится/));
   // Теперь это обычная запись: «Остановить и сохранить» без вопроса.
   await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
   await userEvent.click(await screen.findByRole("menuitem", { name: /^Остановить и сохранить/ }));

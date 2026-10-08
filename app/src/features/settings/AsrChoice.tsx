@@ -17,7 +17,9 @@ import {
   type Endpoint, type EngineState, type Model, type ModelsState, GIGAAM_PREFIX, getEngine, getModels, isGigaam,
 } from "../../lib/api";
 import { Button } from "../../ui/Button";
-import { Radio, Row, type Raw, type SetFn } from "./Section";
+import { Select, type SelectOption } from "../../ui/Select";
+import { fieldClass } from "./fields";
+import { Row, Segmented, type Raw, type SetFn } from "./Section";
 
 export type AsrDevice = "cuda" | "cpu";
 type Backend = "faster-whisper" | "gigaam";
@@ -29,6 +31,8 @@ const GIGAAM_FALLBACK = [
 ];
 const DEFAULT_GIGAAM = "v3_e2e_rnnt";
 const OTHER = "\u0000other";
+/** Ширина списка модели GigaAM в строке: под самое длинное название. */
+const SELECT_WIDTH = 260;
 
 const KEYS: Record<AsrDevice, { backend: string; model: string; fallback: Backend }> = {
   cuda: { backend: "backend", model: "model", fallback: "faster-whisper" },
@@ -84,8 +88,9 @@ const whisperModels = (models: ModelsState | null) =>
 const modelTitle = (models: ModelsState | null, id: string) =>
   models?.items.find((m) => m.id === id)?.title ?? id;
 
-function optionText(m: Model): string {
-  return `${m.title} — ${m.downloaded ? "скачана" : `${m.size_gb} ГБ, не скачана`}`;
+/** Пункт списка моделей: название и справа серым — скачана ли. */
+function modelOption(m: Model): SelectOption {
+  return { value: m.id, label: m.title, detail: m.downloaded ? "скачана" : `${m.size_gb} ГБ, не скачана` };
 }
 
 /**
@@ -104,18 +109,16 @@ function WhisperPicker({ id, label, hint, value, models, disabled, onChange }: {
     <Row label={label} hint={hint} htmlFor={id} stack disabled={disabled}>
       <div className="asr-model">
         {options.length > 0 && (
-          <select id={id} value={showOther ? OTHER : value} disabled={disabled}
-            onChange={(e) => {
-              if (e.target.value === OTHER) { setOther(true); return; }
+          <Select id={id} size="sm" width="100%" value={showOther ? OTHER : value} disabled={disabled}
+            options={[...options.map(modelOption), { value: OTHER, label: "Другая…", detail: "id или папка" }]}
+            onChange={(v) => {
+              if (v === OTHER) { setOther(true); return; }
               setOther(false);
-              onChange(e.target.value);
-            }}>
-            {options.map((m) => <option key={m.id} value={m.id}>{optionText(m)}</option>)}
-            <option value={OTHER}>Другая…</option>
-          </select>
+              onChange(v);
+            }} />
         )}
         {showOther && (
-          <input type="text" className="input--wide" spellCheck={false} disabled={disabled}
+          <input type="text" className={fieldClass({ wide: true, mono: true })} spellCheck={false} disabled={disabled}
             id={options.length === 0 ? id : undefined}
             aria-label={options.length === 0 ? undefined : `${label}: id модели или папка`}
             placeholder="id модели на Hugging Face или путь к папке" value={value}
@@ -154,14 +157,14 @@ function DeviceRow({ device, draft, set, models, gpu, active, otherUsesGigaam }:
       data-state={state}>
       <div className="asr-device__head">
         <span id={`${uid}-title`} className="asr-device__title">{TITLE[device]}</span>
-        {active && !unavailable && <span className="tag tag--live">используется</span>}
+        {active && !unavailable && <span className="badge badge--fresh">используется</span>}
       </div>
       {(unavailable || !active) && (
         <p className="asr-device__note">
           {unavailable ? `Недоступна: ${gpu?.reason}` : secondaryNote(device, String(asr.device ?? "auto"), gpu)}
         </p>
       )}
-      <Radio label="Движок" value={backend} disabled={unavailable}
+      <Segmented label="Движок" value={backend} disabled={unavailable}
         options={[
           { value: "faster-whisper", label: "Whisper" },
           { value: "gigaam", label: "GigaAM" },
@@ -174,10 +177,9 @@ function DeviceRow({ device, draft, set, models, gpu, active, otherUsesGigaam }:
         <>
           <Row label="Модель GigaAM" htmlFor={`asr-gigaam-${device}`} disabled={unavailable}
             hint={otherUsesGigaam ? "Одна модель GigaAM для видеокарты и процессора" : undefined}>
-            <select id={`asr-gigaam-${device}`} value={gigaam} disabled={unavailable}
-              onChange={(e) => set("asr", "gigaam_model", e.target.value)}>
-              {gigaamList.map((m) => <option key={m.name} value={m.name}>{m.title}</option>)}
-            </select>
+            <Select id={`asr-gigaam-${device}`} size="sm" width={SELECT_WIDTH} value={gigaam} disabled={unavailable}
+              options={gigaamList.map((m) => ({ value: m.name, label: m.title }))}
+              onChange={(v) => set("asr", "gigaam_model", v)} />
           </Row>
           <p className="asr-fallback">
             {language === "ru" || language === "auto"
@@ -225,17 +227,17 @@ export function AsrChoice({ draft, saved, set, endpoint, help, onOpenEngine }: {
   const isSaved = device === String(saved.asr?.device ?? "auto");
   return (
     <>
-      <Row label="Устройство" htmlFor="asr-device" help={help}
+      <Segmented label="Устройство" help={help} value={device}
         hint={<>
           Авто — видеокарта, если она доступна, иначе процессор
           {(engineTried || device !== "auto") && <span className="asr-now" role="status">{nowLine(device, gpu, isSaved)}</span>}
-        </>}>
-        <select id="asr-device" value={device} onChange={(e) => set("asr", "device", e.target.value)}>
-          <option value="auto">Авто</option>
-          <option value="cuda">Видеокарта</option>
-          <option value="cpu">Процессор</option>
-        </select>
-      </Row>
+        </>}
+        options={[
+          { value: "auto", label: "Авто" },
+          { value: "cuda", label: "Видеокарта" },
+          { value: "cpu", label: "Процессор" },
+        ]}
+        onChange={(v) => set("asr", "device", v)} />
       <p className="muted sdesc asr-intro">
         GigaAM понимает только русский, зато распознаёт в несколько раз быстрее. Whisper понимает и другие языки,
         точнее пишет английские термины и учитывает список терминов распознавания.
