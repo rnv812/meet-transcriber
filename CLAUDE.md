@@ -40,6 +40,30 @@
 записи, `voices/`, `hotwords.txt` и `glossary.txt` лежат в корне репозитория и в
 git не попадают.
 
+## Оформление (0.4, Atlas Aurora)
+
+Спек: `docs/superpowers/specs/2026-10-08-0.4-atlas-aurora-design.md`.
+
+- **Токены и компоненты дизайн-системы** — `app/src/theme/aurora/` (версия
+  артефакта — в `SOURCE.md`). Файлы генерирует только `scripts/vendor_aurora.py`,
+  руками их не править; отличия Meet — поверх, в `theme/aurora-fixes.css`.
+  `theme/aurora-fallbacks.css` — запасные значения для WebKit без `color-mix()`
+  (macOS 13).
+- **Тема, палитра, сияние** — ключи `ui.theme` (`system`/`dark`/`light`),
+  `ui.aurora` (5 палитр), `ui.aurora_style` (`glow`/`waves`), `ui.motion`;
+  Python — `settings.Ui` (обновившийся без `ui.theme` получает `dark`). Окно:
+  `theme/appearance.ts` + `theme/useAppearance.ts` (атрибуты `data-theme`,
+  `data-aurora` на `<html>`), до React — `app/public/appearance-boot.js`;
+  оболочка (тема окна, фон, рассылка окнам) — `src-tauri/src/appearance.rs`.
+- **Стражи CSS** (`app/src/theme/*.test.ts`, `app/src/lib/webkit.test.ts`): корневой
+  класс блока — ровно в одном файле (`cssClasses`); нет литералов цвета
+  (`noColors`) и белого (`noWhite`) вне `theme/aurora/`; одна рамка фокуса
+  (`focus`); каждая `var(--…)` объявлена (`tokens`); переименованные классы не
+  возвращаются (`renamed`); `color-mix()` вне файлов дизайн-системы и regex с
+  lookbehind в коде окна запрещены (`webkit`). Исключения — списком с причиной.
+- **Цвет**: только `var(--…)`; текст цвета акцента — `--accent-line` (не
+  `--accent`: в светлой теме контраст ниже 4,5:1), на заливке акцента — `--on-accent`.
+
 ## Ассистент-участник (0.3.6)
 
 Во время записи с ассистентом дочерний `meet assist` (`assist/app.py`) ведёт
