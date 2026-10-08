@@ -110,11 +110,11 @@ def test_authors_have_full_names():
     """В «О программе», установщике и метаданных — только имена. Ники и
     ссылки на GitHub — в README, у всех трёх авторов одинаково."""
     readme = _text(ROOT / "README.md")
-    assert "**Андрей Сивуха** — архитектура десктопного приложения ([@ndrsvh]" in readme
+    assert "**Андрей Сивуха** — дизайнер, архитектура десктопного приложения ([@ndrsvh]" in readme
     notice = _text(ROOT / "NOTICE")
-    assert "Andrey Sivukha — desktop application architecture" in notice
+    assert "Andrey Sivukha — designer, desktop application architecture" in notice
     about = _text(ROOT / "app" / "src" / "features" / "settings" / "About.tsx")
-    assert '{ name: "Андрей Сивуха", role: "архитектура десктопного приложения" }' in about
+    assert '{ name: "Андрей Сивуха", role: "дизайнер, архитектура десктопного приложения" }' in about
     for path in (
         ROOT / "NOTICE",
         ROOT / "LICENSE",
