@@ -11,7 +11,7 @@ import { useId, useMemo, useState, type KeyboardEvent, type RefObject } from "re
 import { Search, X } from "lucide-react";
 import { IS_MAC } from "../../lib/platform";
 import { Icon } from "../../ui/Icon";
-import { searchSettings, sectionTitle, type SettingsEntry } from "./settingsIndex";
+import { matchParts, searchSettings, sectionTitle, type SettingsEntry } from "./settingsIndex";
 
 export function SettingsSearch({ query, onQuery, onPick, inputRef }: {
   query: string;
@@ -78,7 +78,9 @@ export function SettingsSearch({ query, onQuery, onPick, inputRef }: {
             className="ssearch__item" onMouseDown={(e) => e.preventDefault()} onMouseMove={() => setActive(i)}
             onClick={() => onPick(entry)}>
             <span className="ssearch__section">{sectionTitle(entry.section)}</span>{" › "}
-            <span className="ssearch__label">{entry.label}</span>
+            <span className="ssearch__label">
+              {matchParts(entry.label, query).map((p, k) => (p.hit ? <b key={k} className="ssearch__hit">{p.text}</b> : p.text))}
+            </span>
           </li>
         ))}
       </ul>

@@ -440,12 +440,20 @@
 .ssearch__label { color: var(--ink); }
 .ssearch__empty { margin: 0; padding: 4px 10px; font-size: var(--text-sm); }
 
-/* Найденная поиском строка: фон --selection на 1,5 с (снимается классом); без анимации при reduced-motion. */
+.ssearch__hit { font-weight: 700; }
+
+/* Найденная поиском строка (0.5): лёгкий фон --surface-2, плавно гаснет за 2 с без мигания;
+   подпись — жирным. Класс снимается через HIGHLIGHT_MS; при reduced-motion фон просто стоит. */
 .setting-found {
-  background: var(--selection); border-radius: var(--r-sm);
-  margin-inline: -8px; padding-inline: 8px; transition: background var(--d) var(--ease-out);
+  border-radius: var(--r-sm); margin-inline: -8px; padding-inline: 8px;
+  animation: setting-found 2s var(--ease-out) forwards;
 }
-@media (prefers-reduced-motion: reduce) { .setting-found { transition: none; } }
+.setting-found .srow__label { font-weight: 700; }
+@keyframes setting-found {
+  0%, 35% { background: var(--surface-2); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .setting-found { animation: none; background: var(--surface-2); } }
 @media (max-width: 1000px) {
   .settings__body { padding: 0 20px 24px; }
   .settings__state { max-width: 160px; }

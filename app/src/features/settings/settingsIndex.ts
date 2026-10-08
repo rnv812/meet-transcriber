@@ -190,6 +190,27 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
 const norm = (s: string) => s.toLowerCase().replace(/ё/g, "е");
 
 /**
+ * Подпись, разбитая на куски по совпавшим словам запроса (0.5: совпавшее —
+ * жирным в выдаче). Регистр и «ё» не важны; пересекающиеся совпадения
+ * сливаются в один кусок.
+ */
+export function matchParts(label: string, query: string): { text: string; hit: boolean }[] {
+  const words = norm(query).split(/\s+/).filter(Boolean);
+  const text = norm(label);
+  const hit = new Array<boolean>(label.length).fill(false);
+  for (const w of words) {
+    for (let at = text.indexOf(w); at >= 0; at = text.indexOf(w, at + 1)) hit.fill(true, at, at + w.length);
+  }
+  const parts: { text: string; hit: boolean }[] = [];
+  for (let i = 0; i < label.length; i++) {
+    const last = parts.at(-1);
+    if (last && last.hit === hit[i]) last.text += label[i];
+    else parts.push({ text: label[i]!, hit: hit[i]! });
+  }
+  return parts;
+}
+
+/**
  * Поиск по индексу: все слова запроса должны найтись в подписи, пояснении,
  * ключевых словах или названии раздела. Выше — совпадение в начале подписи,
  * затем в подписи, затем остальное; порядок внутри — как в окне.

@@ -127,6 +127,9 @@ test("клик по строке выдачи — открывает разде�
   window.matchMedia = ((q: string) => ({ matches: q.includes("reduce"), media: q })) as unknown as typeof window.matchMedia;
   const field = await open();
   await userEvent.type(field, "главы");
+  // 0.5: совпавшее слово в выдаче — жирным.
+  expect(screen.getByRole("option", { name: "Анализ встречи › Главы" }).querySelector(".ssearch__hit"))
+    .toHaveTextContent("Главы");
   await userEvent.click(screen.getByRole("option", { name: "Анализ встречи › Главы" }));
   expect(await screen.findByRole("heading", { level: 2, name: "Анализ встречи" })).toBeInTheDocument();
   // Строка таблицы «Размечать / Показывать»: фокус — на первом переключателе.
@@ -151,10 +154,16 @@ test("Ctrl+F на панели настроек — к полю поиска (и
   expect(field).toHaveFocus();
 });
 
-test("подсветка — фон --selection, без анимации при reduced-motion", () => {
+test("подсветка (0.5) — лёгкий --surface-2 гаснет за 2 с без мигания, подпись жирным; при reduced-motion — без анимации", () => {
   const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
-  expect(/\.setting-found \{([^}]*)\}/.exec(css)?.[1]).toMatch(/background: var\(--selection\)/);
-  expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.setting-found \{ transition: none; \} \}/);
+  expect(/\.setting-found \{([^}]*)\}/.exec(css)?.[1]).toMatch(/animation: setting-found 2s/);
+  const frames = /@keyframes setting-found \{([\s\S]*?)\r?\n\}/.exec(css)?.[1] ?? "";
+  expect(frames).toMatch(/background: var\(--surface-2\)/);
+  expect(frames).not.toMatch(/--selection|--accent/);               // спокойно: не акцент
+  expect(frames.match(/background:/g)).toHaveLength(2);             // туда и обратно не мигает: один спад
+  expect(css).toMatch(/\.setting-found \.srow__label \{ font-weight: 700; \}/);
+  expect(css).toMatch(/prefers-reduced-motion: reduce\) \{ \.setting-found \{ animation: none;/);
+  expect(HIGHLIGHT_MS).toBe(2000);
 });
 
 test("своя «×» вместо системной: очищает запрос и возвращает фокус в поле", async () => {

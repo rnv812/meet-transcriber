@@ -141,8 +141,8 @@ const FIND_IGNORED = "[role=dialog], [role=alertdialog], [aria-modal=true], .pop
 /** Сколько раз и как часто искать строку, пока раздел догружает данные. */
 const FIND_TRIES = 20;
 const FIND_RETRY_MS = 100;
-/** Подсветка найденной строки (`--selection`). */
-export const HIGHLIGHT_MS = 1500;
+/** Подсветка найденной строки (0.5: `--surface-2`, гаснет за 2 с — settings.css). */
+export const HIGHLIGHT_MS = 2000;
 const FOUND_CLASS = "setting-found";
 const FOCUSABLE = "input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
 const FOCUSABLE_CONTROL = ["input", "select", "textarea", "button"]
