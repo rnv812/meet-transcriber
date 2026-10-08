@@ -38,6 +38,15 @@ const load = (messages: ChatMessage[], seq = 50) =>
   act(() => chat.sink.onChatSnapshot({ messages, seq, agent: agentInfo() } as ChatSnapshot));
 const log = () => screen.getByRole("log", { name: "Чат с ассистентом" });
 const rows = () => Array.from(log().querySelectorAll<HTMLElement>(":scope > li[data-key]"));
+/** Кнопка дочитки. Лента в 200 сообщений: getByRole считал бы имя у каждого элемента (секунды на запрос). */
+const more = () => document.querySelector<HTMLButtonElement>("button.chat__more");
+const moreLabel = "Показать более ранние сообщения";
+const clickMore = async () => {
+  const b = more();
+  expect(b).toHaveTextContent(moreLabel);
+  await act(async () => { fireEvent.click(b!); });
+};
+const hasText = (s: string) => Array.from(log().querySelectorAll("li")).some((li) => li.textContent?.includes(s));
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -106,16 +115,16 @@ test("M13: снимок обрезан — «Показать более ран�
   vi.mocked(getChat).mockResolvedValue({ messages: older, seq: 300 });
   render(<Host />);
   load(many, 300);
-  await userEvent.click(screen.getByRole("button", { name: "Показать более ранние сообщения" }));
+  await clickMore();
   expect(getChat).toHaveBeenCalledWith(ep, HISTORY_LIMIT);
-  expect(await within(log()).findByText("Самое первое")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Показать более ранние сообщения" })).toBeNull();
+  await vi.waitFor(() => expect(hasText("Самое первое")).toBe(true));
+  expect(more()).toBeNull();
 });
 
 test("M13: короткая лента — кнопки нет", () => {
   render(<Host />);
   load([agentMsg("m1")]);
-  expect(screen.queryByRole("button", { name: "Показать более ранние сообщения" })).toBeNull();
+  expect(more()).toBeNull();
 });
 
 test("M14: миниатюр вставленных картинок не больше PREVIEW_MAX — старые отзываются", async () => {
@@ -199,11 +208,11 @@ test("M13 (ревью after-chat M6): после переподключения 
   vi.mocked(getChat).mockResolvedValue({ messages: [agentMsg("m1", { text: "Самое первое" }), ...many], seq: 300 });
   render(<Host />);
   load(many, 300);
-  await userEvent.click(screen.getByRole("button", { name: "Показать более ранние сообщения" }));
-  expect(await within(log()).findByText("Самое первое")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Показать более ранние сообщения" })).toBeNull();
+  await clickMore();
+  await vi.waitFor(() => expect(hasText("Самое первое")).toBe(true));
+  expect(more()).toBeNull();
   load(many, 301);          // переподключение: снова последние 200
-  expect(screen.getByRole("button", { name: "Показать более ранние сообщения" })).toBeInTheDocument();
+  expect(more()).toHaveTextContent(moreLabel);
 });
 
 test("M13: дочитанный снимок старее учтённого — не применяется, кнопка остаётся", async () => {
@@ -211,7 +220,7 @@ test("M13: дочитанный снимок старее учтённого —
   vi.mocked(getChat).mockResolvedValue({ messages: [agentMsg("m1", { text: "Самое первое" }), ...many], seq: 250 });
   render(<Host />);
   load(many, 300);
-  await userEvent.click(screen.getByRole("button", { name: "Показать более ранние сообщения" }));
-  expect(within(log()).queryByText("Самое первое")).toBeNull();
-  expect(screen.getByRole("button", { name: "Показать более ранние сообщения" })).toBeInTheDocument();
+  await clickMore();
+  expect(hasText("Самое первое")).toBe(false);
+  expect(more()).toHaveTextContent(moreLabel);
 });
