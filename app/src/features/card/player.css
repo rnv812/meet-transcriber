@@ -135,7 +135,7 @@
   height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--text) var(--vol), var(--line-2) var(--vol));
 }
 .pvol__slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: 50%; background: #fff;
+  -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: 50%; background: var(--ink);
 }
 .pvol__slider:focus-visible { outline: none; }
 .pvol__slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent); }

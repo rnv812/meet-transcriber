@@ -77,7 +77,7 @@ button.chip:hover { background: var(--surface-hover); }
   height: 28px; border: 0; border-radius: var(--r-md); background: none; color: var(--text-2);
   font: inherit; cursor: pointer; transition: background var(--t), color var(--t);
 }
-.player__play { width: 28px; border-radius: 50%; background: var(--accent); color: #fff; }
+.player__play { width: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .player__play:hover { background: var(--accent-hover); }
 .player__mute { width: 28px; }
 .player__speed { min-width: 44px; padding: 0 6px; font-size: 12px; }
@@ -101,7 +101,7 @@ button.chip:hover { background: var(--surface-hover); }
 }
 .player__seek::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4px;
-  border-radius: 50%; background: #fff; border: 0; box-shadow: 0 0 0 2px var(--accent);
+  border-radius: 50%; background: var(--ink); border: 0; box-shadow: 0 0 0 2px var(--accent);
 }
 .player__seek:focus-visible { outline: none; }
 .player__seek:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-hover); }
@@ -227,7 +227,7 @@ mark.hit {
   padding: 0 1px; border-radius: 3px; color: inherit;
   background: rgba(94, 106, 210, 0.28); box-shadow: 0 0 0 1px rgba(94, 106, 210, 0.35);
 }
-mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent); color: #fff; box-shadow: 0 0 0 1px var(--accent-hover); }
+mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent); color: var(--on-accent); box-shadow: 0 0 0 1px var(--accent-hover); }
 /* Текущее совпадение: полоса левее текста, сам текст не сдвигается. */
 .turn__text.hit--current { box-shadow: -3px 0 0 var(--accent); margin-left: -6px; padding-left: 6px; }
 .tmenu__quote { padding: 4px 6px; border-radius: var(--r-sm); background: var(--surface); line-height: 1.45; }
@@ -270,7 +270,7 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
 /* «Исправить…» (TextFix): кнопка у выделения, окно исправления, итог над репликами. */
 .tfix-float {
   position: fixed; z-index: 40; height: 24px; padding: 0 10px;
-  background: var(--accent); color: #fff; border: 1px solid var(--accent-hover); border-radius: var(--r-md);
+  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-hover); border-radius: var(--r-md);
   box-shadow: 0 4px 14px #0006; font: inherit; font-size: 12px; cursor: pointer;
 }
 .tfix-float:hover { background: var(--accent-hover); }

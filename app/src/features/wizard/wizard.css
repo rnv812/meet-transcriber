@@ -22,10 +22,10 @@
   border: 1px solid var(--line-2); font-size: 11px; font-variant-numeric: tabular-nums;
 }
 .wizard__steps li.is-done .wizard__num { border-color: transparent; background: var(--surface-2); color: var(--ok); }
-.wizard__steps li.is-current .wizard__num { border-color: var(--accent); background: var(--accent); color: #fff; }
+.wizard__steps li.is-current .wizard__num { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 
 .wizard__step { padding-top: 20px; display: flex; flex-direction: column; gap: 12px; }
-.wizard__step h1 { margin: 0; font-size: 18px; font-weight: 600; color: #fff; }
+.wizard__step h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--ink); }
 .wizard__step p { margin: 0; }
 .wizard__lead { font-size: 14px; color: var(--text); }
 .wizard__hint { color: var(--text-3); font-size: 12px; }

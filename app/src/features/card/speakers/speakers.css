@@ -68,7 +68,7 @@
   background: var(--surface-2); color: var(--text-2); font-size: 9px; cursor: pointer;
   transition: background var(--t), color var(--t);
 }
-.spk-phrase__play:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.spk-phrase__play:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 .spk-phrase__play:disabled { opacity: 0.4; cursor: default; }
 .spk-phrase__time { font-size: 11px; }
 .spk-phrase__text {
