@@ -96,3 +96,54 @@ def test_a_command_that_cannot_be_parsed_is_a_card_without_a_grant(env, tool, co
     assert d.outcome == ASK and d.why == consent.UNPARSED and d.card["grant"] is None, d
     assert d.label == "спрашиваю вас: непонятная команда"
     assert env["gate"].grant_for(tool, {"command": command}) is None
+
+
+# --- I1: списки путей PowerShell и нормализация путей --------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "Get-Content {rec}/a.txt,{home}/./.ssh/id_rsa",
+    "Get-Content {rec}/a.txt, {home}/.ssh/id_rsa",
+    "Get-Content -Path {rec}/a.txt,{home}/.ssh/id_rsa",
+    "gc {rec}/a.txt,{home}/x/../.ssh/id_rsa",
+    "Get-ChildItem {rec},{home}/.ssh",
+    "Select-String -Pattern x -Path {rec}/a.txt,{home}/.ssh/id_rsa",
+])
+def test_powershell_path_lists_never_read_a_sensitive_file(env, command):
+    cmd = _cmd(env, command)
+    assert consent.read_plan("PowerShell", cmd) is None, cmd
+    for level in (READ, USER):
+        d = _decide(env, level, "PowerShell", command)
+        assert d.outcome == DENY, (level, cmd, d)
+    assert _decide(env, USER, "PowerShell", command).why == "sensitive"
+
+
+@pytest.mark.parametrize("command", [
+    "Get-Content {rec}/a.txt,{rec}/b.txt", "Get-Content @args", "Get-Content {rec}/a.txt {rec}/b.txt",
+    "Get-Content -Path {rec}/a.txt -Path {rec}/b.txt", "Get-Content {rec}/a.txt -Path {rec}/b.txt",
+    "Get-Content -LiteralPath {rec}/a.txt -Path {rec}/b.txt", "Get-ChildItem {rec} {rec}",
+])
+def test_powershell_read_takes_one_literal_path_per_parameter(env, command):
+    assert consent.read_plan("PowerShell", _cmd(env, command)) is None
+
+
+def test_one_powershell_path_is_still_a_read(env):
+    for command in ("Get-Content {rec}/a.txt", "Get-Content -Path {rec}/a.txt -TotalCount 5",
+                    "Get-ChildItem -Path {rec} -Filter x.md", "Select-String -Pattern x -Path {rec}/a.txt"):
+        d = _decide(env, READ, "PowerShell", command)
+        assert d.outcome == ALLOW and d.kind == "shell-read", (command, d)
+
+
+@pytest.mark.parametrize("tool,command", [
+    ("Bash", "cat {home}/./.ssh/id_rsa"), ("PowerShell", "Get-Content {home}/./.ssh/id_rsa"),
+    ("PowerShell", r"Get-Content {home}\.\.ssh\id_rsa"), ("Bash", "cat {home}/x/../.ssh/id_rsa"),
+    # не команда чтения — та же проверка по тексту, после нормализации пути
+    ("Bash", "cp {home}/./.ssh/id_rsa {out}/k"), ("Bash", "cp {home}//.ssh//id_rsa {out}/k"),
+    ("Bash", "cp {home}/x/../.ssh/id_rsa {out}/k"), ("PowerShell", "Copy-Item {home}/./.ssh/id_rsa {out}/k"),
+    ("PowerShell", r"Copy-Item {home}\.ssh\id_rsa {out}/k"), ("Bash", "cp {home}/.ss''h/id_rsa {out}/k"),
+    ("Bash", "cp \"{home}\"/.ssh/id_rsa {out}/k"), ("Bash", "cp {home}/.ssh./id_rsa {out}/k"),
+    ("PowerShell", "Copy-Item {rec}/a.txt,{home}/./.ssh/id_rsa {out}"),
+])
+def test_sensitive_paths_are_found_after_normalising(env, tool, command):
+    for level in (READ, USER):
+        d = _decide(env, level, tool, command)
+        assert d.outcome == DENY and d.why == "sensitive", (level, command, d)

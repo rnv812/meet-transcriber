@@ -46,6 +46,7 @@
 import ipaddress
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -381,8 +382,19 @@ def shell_plan(command: str):
 
 def _path_ok(arg: str) -> bool:
     """Путь в команде чтения: только абсолютный и буквальный (без `$`,
-    шаблонов, `~` и обратных кавычек) — иначе не знаем, что прочтётся."""
-    return _abs_path(arg) and not any(ch in arg for ch in "$*?[]~`")
+    шаблонов, `~` и обратных кавычек) — иначе не знаем, что прочтётся.
+    Без `,` и `;` (в PowerShell `a,b` — два файла: проверялся бы один путь,
+    а читались бы оба, I1) и `@` (развёртка аргументов PowerShell)."""
+    return _abs_path(arg) and not any(ch in arg for ch in "$*?[]~`,;@")
+
+
+def _ps_paths(positional: list[str], values: dict, *, positional_max: int = 1) -> list[str] | None:
+    """Пути командлета PowerShell — по одному на параметр: один позиционный
+    или один `-Path`, или один `-LiteralPath` (несколько — карточкой, I1)."""
+    given = [positional, values.get("-path", []), values.get("-literalpath", [])]
+    if len(positional) > positional_max or any(len(v) > 1 for v in given[1:]) or sum(bool(v) for v in given) > 1:
+        return None
+    return [p for v in given for p in v]
 
 
 def _paths_only(args, *, need=0, recursive=False):
@@ -526,9 +538,8 @@ def _plan_get_content(args, piped=False):
                     fold=True)
     if scanned is None:
         return None
-    positional, values = scanned
-    paths = positional + values.get("-path", []) + values.get("-literalpath", [])
-    return _paths_only(paths, need=1)
+    paths = _ps_paths(*scanned)
+    return None if paths is None else _paths_only(paths, need=1)
 
 
 def _plan_gci(args, piped=False):
@@ -537,10 +548,9 @@ def _plan_gci(args, piped=False):
                            "-include": True, "-exclude": True}, fold=True)
     if scanned is None:
         return None
-    positional, values = scanned
-    paths = positional + values.get("-path", []) + values.get("-literalpath", [])
+    paths = _ps_paths(*scanned)
     recursive = any(a.lower() in ("-recurse", "-depth") for a in args)
-    return _paths_only(paths, recursive=recursive)
+    return None if paths is None else _paths_only(paths, recursive=recursive)
 
 
 def _plan_select_string(args, piped=False):
@@ -554,8 +564,8 @@ def _plan_select_string(args, piped=False):
         if not positional:
             return None
         positional = positional[1:]
-    paths = positional + values.get("-path", []) + values.get("-literalpath", [])
-    return _paths_only(paths, need=0 if piped else 1)
+    paths = _ps_paths(positional, values)
+    return None if paths is None else _paths_only(paths, need=0 if piped else 1)
 
 
 _GIT_SUBS = {
@@ -1358,6 +1368,39 @@ def _norm_text(text: str) -> str:
     return text.lower() if sys.platform == "win32" else text
 
 
+# Чем делятся слова-пути в тексте вызова (списки PowerShell через `,` — тоже).
+_PATH_SPLIT = re.compile(r"[\s,;|&()<>{}\"'=`]+")
+
+
+def _lex_path(word: str, base: str | None = None) -> str:
+    """Путь без обращения к диску: `\\` → `/`, без `.`, `..` и повторных
+    `/`; на Windows — без точек и пробелов в конце частей (`.ssh.` — это
+    `.ssh`); относительный с `..` — от `base`."""
+    p = word.replace("\\", "/")
+    if base and ".." in p and not re.match(r"^(?:[A-Za-z]:)?/", p):
+        p = base.replace("\\", "/").rstrip("/") + "/" + p
+    if sys.platform == "win32":
+        p = "/".join(s if s in (".", "..") else s.rstrip(". ") for s in p.split("/"))
+    return posixpath.normpath(p) if p else p
+
+
+def _path_words(text: str, base: str | None = None) -> str:
+    """Слова текста, похожие на пути, — нормализованными (`_lex_path`) и с
+    раскрытыми кавычками (`.ss''h` — `.ssh`, `"$HOME"/.ssh` — `$HOME/.ssh`):
+    чтобы проверка закрытых путей по тексту видела то же, что оболочка (I1)."""
+    words = set(_PATH_SPLIT.split(text))
+    try:
+        words.update(shlex.split(text.replace("\\", "/"), posix=True))
+    except ValueError:
+        pass
+    found = []
+    for w in words:
+        if "/" in w or "\\" in w:
+            found += [_lex_path(x, base) for x in _PATH_SPLIT.split(w) if x] if _PATH_SPLIT.search(w) else \
+                [_lex_path(w, base)]
+    return " ".join(found)
+
+
 def resolve(path, cwd=None) -> str | None:
     """Путь для сравнения: `~` и переменные среды раскрыты, относительный —
     от `cwd` (рабочей папки CLI), без префикса `\\\\?\\`, через `realpath`
@@ -2085,8 +2128,10 @@ class ConsentGate:
     def _mentions(self, text: str, *, parents: bool = True) -> str:
         """Команда упоминает закрытую папку (или папку над ней — корень базы;
         `parents=False` — у команды чтения с буквальными путями, их проверяет
-        `_protected`), чувствительный путь, токен Meet, `.env` или локальный адрес."""
-        low = _norm_text(str(text or ""))
+        `_protected`), чувствительный путь, токен Meet, `.env` или локальный адрес.
+        Пути сверяются и как написаны, и нормализованными (`_path_words`)."""
+        raw = str(text or "")
+        low = _norm_text(raw + " " + _path_words(raw, self._cwd))
         home = _norm_text(str(_home()))
 
         def forms(p: str) -> list[str]:
