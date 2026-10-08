@@ -15,5 +15,8 @@ export default defineConfig({
     // попадал в следующий тест.
     testTimeout: 20_000,
     hookTimeout: 20_000,
+    // Не больше 8 процессов (0.5): по процессу jsdom на ядро (19 на 20 ядрах) при занятой
+    // памяти машины (локальная модель, WSL) падали «JavaScript heap out of memory».
+    maxWorkers: 8,
   },
 });
