@@ -147,27 +147,29 @@ test("«Как часто писать» уходит setAgentFrequency и ср�
   width(600);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
-  await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
-  const group = screen.getByRole("radiogroup", { name: "Как часто писать" });
-  await userEvent.click(within(group).getByRole("radio", { name: "реже" }));
+  // 0.5: частота — список в шапке (не в «Что я знаю»).
+  const select = screen.getByRole("combobox", { name: "Как часто писать" });
+  await userEvent.click(select);
+  await userEvent.click(screen.getByRole("option", { name: "Пишет реже" }));
   expect(setAgentFrequency).toHaveBeenCalledWith(ep, "реже");
-  expect(within(group).getByRole("radio", { name: "реже" })).toHaveAttribute("aria-checked", "true");
+  expect(select).toHaveTextContent("Пишет реже");
 });
 
-test("«Профиль» уходит setAgentProfile, чип и выбор меняются сразу; отказ — пометка и прежний профиль", async () => {
+test("«Профиль» уходит setAgentProfile, выбор меняется сразу; отказ — пометка и прежний профиль", async () => {
   width(600);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
-  await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
-  const group = screen.getByRole("radiogroup", { name: "Профиль" });
-  await userEvent.click(within(group).getByRole("radio", { name: "личный" }));
+  // 0.5: профиль — список в шапке.
+  const select = screen.getByRole("combobox", { name: "Профиль" });
+  await userEvent.click(select);
+  await userEvent.click(screen.getByRole("option", { name: /Личный/ }));
   expect(setAgentProfile).toHaveBeenCalledWith(ep, "personal");
-  expect(within(group).getByRole("radio", { name: "личный" })).toHaveAttribute("aria-checked", "true");
-  expect(document.querySelector(".session-bar__profile")).toHaveTextContent("Личный");
+  expect(select).toHaveTextContent("Личный");
   vi.mocked(setAgentProfile).mockRejectedValueOnce(new Error("ассистент не запущен"));
-  await userEvent.click(within(group).getByRole("radio", { name: "рабочая встреча" }));
+  await userEvent.click(select);
+  await userEvent.click(screen.getByRole("option", { name: /Рабочая встреча/ }));
   expect(await screen.findByText(/Профиль не удалось сменить: ассистент не запущен/)).toBeInTheDocument();
-  expect(document.querySelector(".session-bar__profile")).toHaveTextContent("Рабочая встреча");
+  expect(select).toHaveTextContent("Рабочая встреча");
 });
 
 test("нет связи — писать нельзя, причина видна", () => {

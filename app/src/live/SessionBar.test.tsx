@@ -26,22 +26,23 @@ test("модель, что видит, состояние", async () => {
   expect(pop).not.toHaveTextContent(DENY_NOTE);
 });
 
-test("шапка сессии — одна строка: состояние · модель · профиль · кнопка «Что я знаю»; остальное — в поповере", async () => {
+test("0.5: шапка — состояние · модель · профиль и частота списками · «Разрешено: N» · «Что я знаю» (справка)", async () => {
   render(<SessionBar agent={agentInfo({ grants: [{ id: "m5", label: "Bash npm" }], vision: false, deny_enforced: false,
     can: { mode: "consent", mcp: ["team-jira"] } })} summary={summary} onFrequency={() => {}} onProfile={() => {}}
     onRevokeGrant={() => {}} />);
-  for (const gone of ["видит:", "может:", "Разрешено", NO_VISION, DENY_NOTE]) expect(bar()).not.toHaveTextContent(gone);
-  expect(within(bar()).queryByRole("radiogroup")).toBeNull();
+  for (const gone of ["видит:", "может:", "Bash npm", NO_VISION, DENY_NOTE]) expect(bar()).not.toHaveTextContent(gone);
+  expect(within(bar()).getByRole("combobox", { name: "Профиль" })).toHaveTextContent("Рабочая встреча");
+  expect(within(bar()).getByRole("combobox", { name: "Как часто писать" })).toHaveTextContent("Пишет чаще");
+  expect(within(bar()).getByRole("button", { name: "Разрешено: 1" })).toBeInTheDocument();
   const button = within(bar()).getByRole("button", { name: "Что я знаю" });
   expect(button).toHaveClass("btn", "btn--outline", "btn--sm");
-  expect(button).toHaveTextContent("Что я знаю");
   expect(button).toHaveAttribute("aria-expanded", "false");
   const pop = await know();
   expect(button).toHaveAttribute("aria-expanded", "true");
-  expect(within(pop).getByRole("radiogroup", { name: "Как часто писать" })).toBeInTheDocument();
-  expect(within(pop).getByRole("radiogroup", { name: "Профиль" })).toBeInTheDocument();
+  // «Что я знаю» — только справка: без переключателей и списка разрешений.
+  expect(within(pop).queryByRole("radiogroup")).toBeNull();
+  expect(pop).not.toHaveTextContent("Bash npm");
   expect(pop).toHaveTextContent("Может: файлы, MCP (team-jira), веб — по вашему согласию");
-  expect(pop).toHaveTextContent("Bash npm");
   expect(pop).toHaveTextContent(NO_VISION);
   expect(pop).toHaveTextContent(DENY_NOTE);
 });
@@ -84,21 +85,22 @@ test("живая область объявляет только ошибку и 
   expect(within(bar()).getByRole("status")).toBeEmptyDOMElement();
 });
 
-test("«Как часто писать»: реже / обычно / чаще, щелчок и стрелки", async () => {
+test("0.5: «Как часто писать» — список в шапке: пишет реже / обычно / чаще", async () => {
   const onFrequency = vi.fn();
   render(<SessionBar agent={agentInfo({ frequency: "обычно" })} summary={summary} onFrequency={onFrequency} />);
-  const group = within(await know()).getByRole("radiogroup", { name: "Как часто писать" });
-  expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["реже", "обычно", "чаще"]);
-  expect(within(group).getByRole("radio", { name: "обычно" })).toHaveAttribute("aria-checked", "true");
-  await userEvent.click(within(group).getByRole("radio", { name: "реже" }));
+  const select = within(bar()).getByRole("combobox", { name: "Как часто писать" });
+  expect(select).toHaveTextContent("Пишет обычно");
+  await userEvent.click(select);
+  const list = screen.getByRole("listbox");
+  expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual(["Пишет реже", "Пишет обычно", "Пишет чаще"]);
+  expect(within(list).getByRole("option", { name: "Пишет обычно" })).toHaveAttribute("aria-selected", "true");
+  await userEvent.click(within(list).getByRole("option", { name: "Пишет реже" }));
   expect(onFrequency).toHaveBeenLastCalledWith("реже");
-  within(group).getByRole("radio", { name: "обычно" }).focus();
-  await userEvent.keyboard("{ArrowRight}");
-  expect(onFrequency).toHaveBeenLastCalledWith("чаще");
 });
 
-test("частота и профиль — сегменты Aurora (.tabs--sm), роли радио сохранены", async () => {
-  render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} onProfile={() => {}} />);
+test("узкая шапка: частота и профиль — сегменты Aurora (.tabs--sm) в «Что я знаю», роли радио сохранены", async () => {
+  render(<SessionBar agent={agentInfo()} summary={summary} compact onFrequency={() => {}} onProfile={() => {}} />);
+  expect(within(bar()).queryByRole("combobox")).toBeNull();
   const pop = await know();
   for (const name of ["Как часто писать", "Профиль"]) {
     const group = within(pop).getByRole("radiogroup", { name });
@@ -173,20 +175,16 @@ test("профиль: чип виден всегда (и в компактной
   expect(chip()).toHaveTextContent("Рабочая встреча");
 });
 
-test("«Профиль» рядом с «Как часто писать»: щелчок и стрелки зовут onProfile", async () => {
+test("0.5: «Профиль» — список в шапке с пояснением пунктов; выбор зовёт onProfile, тот же — нет", async () => {
   const onProfile = vi.fn();
   render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} onProfile={onProfile} />);
-  const group = within(await know()).getByRole("radiogroup", { name: "Профиль" });
-  expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["рабочая встреча", "личный"]);
-  expect(within(group).getByRole("radio", { name: "рабочая встреча" })).toHaveAttribute("aria-checked", "true");
-  await userEvent.click(within(group).getByRole("radio", { name: "личный" }));
+  const select = within(bar()).getByRole("combobox", { name: "Профиль" });
+  await userEvent.click(select);
+  const list = screen.getByRole("listbox");
+  expect(within(list).getAllByRole("option")).toHaveLength(2);
+  expect(within(list).getByRole("option", { name: /Рабочая встреча/ })).toHaveAttribute("aria-selected", "true");
+  await userEvent.click(within(list).getByRole("option", { name: /Личный/ }));
   expect(onProfile).toHaveBeenLastCalledWith("personal");
-  within(group).getByRole("radio", { name: "рабочая встреча" }).focus();
-  await userEvent.keyboard("{ArrowRight}");
-  expect(onProfile).toHaveBeenCalledTimes(2);
-  // Выбранный не зовёт повторно.
-  await userEvent.click(within(group).getByRole("radio", { name: "рабочая встреча" }));
-  expect(onProfile).toHaveBeenCalledTimes(2);
 });
 
 test("компактная: переключатель профиля — в поповере, с профилем в «Что я знаю»", async () => {
@@ -260,16 +258,24 @@ test("может: Codex/OpenCode со свободой — только чтен
     .toHaveTextContent(/MCP, веб и действия — только с Claude Code/);
 });
 
-test("разрешено до конца встречи: список в «Что я знаю» и «Отозвать»", async () => {
+test("0.5: разрешено до конца встречи — кнопка «Разрешено: N» в шапке, список и «Отозвать»", async () => {
   const onRevoke = vi.fn();
   render(<SessionBar agent={agentInfo({ grants: [{ id: "m5", label: "Bash npm" }, { id: "m6", label: "MCP team-jira: jira_create_issue" }] })}
     summary={summary} onFrequency={() => {}} onRevokeGrant={onRevoke} />);
-  const grants = (await know()).querySelector(".session-bar__grants")!;
-  expect(grants).toHaveTextContent("Разрешено до конца встречи");
-  expect(grants).toHaveTextContent("Bash npm");
-  expect(grants).toHaveTextContent("MCP team-jira: jira_create_issue");
-  await userEvent.click(screen.getByRole("button", { name: "Отозвать: Bash npm" }));
+  await userEvent.click(within(bar()).getByRole("button", { name: "Разрешено: 2" }));
+  const pop = screen.getByRole("dialog", { name: "Разрешено до конца встречи" });
+  expect(pop).toHaveTextContent("Bash npm");
+  expect(pop).toHaveTextContent("MCP team-jira: jira_create_issue");
+  await userEvent.click(within(pop).getByRole("button", { name: "Отозвать: Bash npm" }));
   expect(onRevoke).toHaveBeenCalledWith("m5");
+});
+
+test("узкая шапка: разрешения — в «Что я знаю»", async () => {
+  render(<SessionBar agent={agentInfo({ grants: [{ id: "m5", label: "Bash npm" }] })} summary={summary} compact
+    onFrequency={() => {}} onRevokeGrant={() => {}} />);
+  expect(within(bar()).queryByRole("button", { name: /Разрешено/ })).toBeNull();
+  const grants = (await know()).querySelector(".session-bar__grants")!;
+  expect(grants).toHaveTextContent("Bash npm");
 });
 
 test("как действует ассистент — «Действует сам» / «Спрашивает каждое» / сам не может (0.5: без слова «автомод»)", async () => {

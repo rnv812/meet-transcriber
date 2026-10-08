@@ -25,6 +25,7 @@ import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Popover } from "../ui/Popover";
 import { Segmented } from "../ui/Segmented";
+import { Select } from "../ui/Select";
 import { Tip } from "../ui/Tip";
 import { LiveSummary } from "./LiveSummary";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "./profiles";
@@ -194,6 +195,31 @@ export function ProfileSelect({ value, onChange, disabled = false }: {
   );
 }
 
+/** Пункты списков шапки (0.5): частота и профиль — короткие подписи, пояснение под пунктом. */
+const FREQUENCY_OPTIONS = FREQUENCIES.map((f) => ({ value: f, label: `Пишет ${f}` }));
+const PROFILE_OPTIONS = PROFILES.map((p) => ({ value: p, label: PROFILE_LABELS[p], detail: PROFILE_NOTES[p] }));
+
+/** Разрешено до конца встречи: список и «Отозвать» (в шапке — по кнопке, в узкой — в «Что я знаю»). */
+function Grants({ grants, onRevoke }: { grants: NonNullable<AgentInfo["grants"]>; onRevoke?: (id: string) => void }) {
+  return (
+    <section className="session-know__section session-bar__grants">
+      <h4 className="session-know__title">Разрешено до конца встречи</h4>
+      <p className="session-know__hint">Такие действия ассистент выполняет без карточки.</p>
+      <ul className="session-know__grants">
+        {grants.map((g) => (
+          <li key={g.id} className="session-bar__grant">
+            <span className="session-know__grant-label">{g.label}</span>
+            {onRevoke && (
+              <IconButton icon={X} size="xs" variant="danger" label={`Отозвать: ${g.label}`}
+                tooltip={`Отозвать: ${g.label} — дальше снова с карточкой`} onClick={() => onRevoke(g.id)} />
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Подсказка чипа профиля. */
 export function profileTitle(profile: AgentProfile): string {
   return `Профиль сессии «${PROFILE_LABELS[profile]}»: ${PROFILE_NOTES[profile]}. Меняется по ходу встречи`;
@@ -216,6 +242,7 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
   onRevokeGrant?: (id: string) => void;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [grantsAnchor, setGrantsAnchor] = useState<HTMLElement | null>(null);
   const state = stateOf(agent, writing);
   const notes = agentNotes(agent);
   const warning = modelWarning(agent);
@@ -250,11 +277,21 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
           {compact && warning && <span className="sr-only"> ({warning})</span>}
         </span>
       </Tip>
-      <Tip content={profileTitle(profile)}>
-        <span className={`${profile === "personal" ? BADGE_CLASS.run : "badge"} session-bar__profile session-bar__profile--${profile}`}>
-          {PROFILE_LABELS[profile]}
-        </span>
-      </Tip>
+      {/* Управление сессией — в шапке (0.5): профиль и частота списками; в узкой — в «Что я знаю». */}
+      {!compact && onProfile ? (
+        <Select size="sm" aria-label="Профиль" className="session-bar__select" options={PROFILE_OPTIONS}
+          value={profile} onChange={onProfile} disabled={disabled} />
+      ) : (
+        <Tip content={profileTitle(profile)}>
+          <span className={`${profile === "personal" ? BADGE_CLASS.run : "badge"} session-bar__profile session-bar__profile--${profile}`}>
+            {PROFILE_LABELS[profile]}
+          </span>
+        </Tip>
+      )}
+      {!compact && (
+        <Select size="sm" aria-label="Как часто писать" className="session-bar__select" options={FREQUENCY_OPTIONS}
+          value={frequency} onChange={onFrequency} disabled={disabled} />
+      )}
       {/* Как действует по просьбе (0.4): в узкой — только «автомод недоступен». */}
       {mode && (!compact || mode.warn) && (
         <Tip content={canTitle}>
@@ -272,6 +309,12 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
         </Tip>
       )}
       <span className="session-bar__end">
+        {!compact && grants.length > 0 && (
+          <Button size="sm" variant="ghost" aria-expanded={!!grantsAnchor}
+            onClick={(e) => { const b = e.currentTarget; setGrantsAnchor((cur) => (cur ? null : b)); }}>
+            Разрешено: {grants.length}
+          </Button>
+        )}
         {compact ? (
           <IconButton icon={BookOpen} label="Что я знаю" variant="secondary" aria-expanded={!!anchor} onClick={toggle} />
         ) : (
@@ -301,32 +344,25 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
                 <p className="session-know__note">{n.text}</p>
               </Tip>
             ))}
-            {grants.length > 0 && (
-              <section className="session-know__section session-bar__grants">
-                <h4 className="session-know__title">Разрешено до конца встречи</h4>
-                <p className="session-know__hint">Такие действия ассистент выполняет без карточки.</p>
-                <ul className="session-know__grants">
-                  {grants.map((g) => (
-                    <li key={g.id} className="session-bar__grant">
-                      <span className="session-know__grant-label">{g.label}</span>
-                      {onRevokeGrant && (
-                        <IconButton icon={X} size="xs" variant="danger" label={`Отозвать: ${g.label}`}
-                          tooltip={`Отозвать: ${g.label} — дальше снова с карточкой`} onClick={() => onRevokeGrant(g.id)} />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </section>
+            {/* «Что я знаю» — справка (0.5); управление — в шапке. В узкой шапке места нет — оно здесь. */}
+            {compact && grants.length > 0 && <Grants grants={grants} onRevoke={onRevokeGrant} />}
+            {compact && (
+              <div className="session-know__controls">
+                {onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
+                <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />
+              </div>
             )}
-            <div className="session-know__controls">
-              {onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
-              <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />
-            </div>
             <section className="session-know__section">
               <h4 className="session-know__title">Сводка на сейчас</h4>
               <div className="session-know__summary"><LiveSummary summary={summary} fresh={NO_FRESH} /></div>
             </section>
           </div>
+        </Popover>
+      )}
+      {grantsAnchor && !compact && grants.length > 0 && (
+        <Popover anchor={grantsAnchor} onClose={() => setGrantsAnchor(null)} label="Разрешено до конца встречи"
+          width={320} align="end" anchorToggles>
+          <Grants grants={grants} onRevoke={onRevokeGrant} />
         </Popover>
       )}
     </div>

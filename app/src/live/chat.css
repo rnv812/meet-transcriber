@@ -67,6 +67,8 @@
 .chat-ws--panel .session-bar__state:not(.session-bar__state--error) { display: none; }
 .session-bar__state--error { color: var(--danger); }
 .session-bar__model { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Профиль и частота — списки в шапке (0.5): по содержимому, не сжимаются. */
+.session-bar__select { flex: none; }
 .session-bar__model--warn { color: var(--warning); }
 .session-bar__profile { flex: none; }
 /* Предупреждение (не та модель) — бейдж Aurora «устарело»; длинный текст — с многоточием. */
