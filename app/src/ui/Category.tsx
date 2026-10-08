@@ -1,6 +1,7 @@
 /**
- * Категория встречи: цветная метка (`CategoryChip`) и меню выбора
- * (`CategoryMenu`) — в карточке оно открывается по метке под названием.
+ * Категория встречи: точка цвета (`CategoryDot`), метка в узком списке
+ * (`CategoryMark`) и меню выбора (`CategoryMenu`) — в карточке оно
+ * открывается по кнопке категории в шапке (features/card/CardHeader).
  *
  * Меню — обычное меню с одиночным выбором: фокус на текущей категории,
  * ↑/↓/Home/End — по пунктам, Enter или пробел — выбрать, Esc — закрыть
@@ -13,7 +14,6 @@ import { NO_CATEGORY_NAME } from "../lib/categories";
 import type { Category } from "../lib/types";
 import "./category.css";
 import { Icon } from "./Icon";
-import { Truncate } from "./Truncate";
 
 /** Цветная точка категории; без цвета — пустой кружок «Без категории». */
 export function CategoryDot({ color }: { color?: string | null }) {
@@ -25,16 +25,6 @@ export function CategoryDot({ color }: { color?: string | null }) {
 
 /** Подсказка к метке: имя, а за ним — описание, если оно есть. */
 const hintOf = (category: Category) => category.name + (category.description ? ` — ${category.description}` : "");
-
-/** Метка категории (имя с точкой цвета) — в карточке. */
-export function CategoryChip({ category }: { category: Category | null }) {
-  return (
-    <span className={`cat-chip${category ? "" : " cat-chip--none"}`}>
-      <CategoryDot color={category?.color} />
-      <Truncate className="cat-chip__name">{category?.name ?? NO_CATEGORY_NAME}</Truncate>
-    </span>
-  );
-}
 
 /**
  * Категория в узком списке записей — одна точка цвета: имя целиком в подсказке

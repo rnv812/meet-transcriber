@@ -29,30 +29,33 @@ test("палитры — только переменные: классов ко�
   expect(css).not.toMatch(/(^|[\s,}])\.[a-z][\w-]*/m);
 });
 
-test("окно не переопределяет токены Aurora: свои имена — только псевдонимы", () => {
+test("окно не переопределяет токены Aurora: объявляет только свои имена", () => {
   const aurora = new Set([...declared(read("aurora", "tokens.css")), ...declared(read("aurora", "palettes.css"))]);
-  for (const file of ["legacy-aliases.css", "tokens.css"]) {
+  for (const file of ["scrollbars.css", "tokens.css"]) {
     const own = [...declared(read(file))].filter((name) => aurora.has(name));
     expect(own, file).toEqual([]);
   }
 });
 
-test("псевдонимы перехода 0.4 — в legacy-aliases.css, не в tokens.css", () => {
+test("значения тем у окна — только ползунки прокрутки в scrollbars.css; tokens.css тем не объявляет", () => {
   const tokens = read("tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
   expect(tokens).not.toMatch(/(?:^|\n)(:root|\[data-theme="light"\])\s*\{/);
-  const aliases = declared(read("legacy-aliases.css"));
-  for (const name of ["--bg", "--text", "--sb-thumb"]) expect(aliases.has(name), name).toBe(true);
+  const bars = declared(read("scrollbars.css"));
+  for (const name of ["--sb-thumb", "--sb-thumb-area", "--sb-thumb-hover", "--sb-thumb-active"]) {
+    expect(bars.has(name), name).toBe(true);
+  }
 });
 
 const cssImports = (src: string) => [...src.matchAll(/import "([^"]+\.css)";/g)].map((m) => m[1]!);
 
-test("все три окна подключают основу Aurora раньше своих стилей, псевдонимы — сразу после неё", () => {
+test("все три окна подключают основу Aurora раньше своих стилей, ползунки — сразу после неё", () => {
   for (const entry of ["main.tsx", join("live", "main.tsx"), join("tray", "main.tsx")]) {
     const css = cssImports(readFileSync(join(process.cwd(), "src", entry), "utf8"));
     expect(css[0], entry).toMatch(/theme\/aurora\/index\.css$/);
-    // Панель трея — только на токенах Aurora, прежних имён не знает.
-    if (entry.startsWith("tray")) expect(css.some((c) => c.endsWith("legacy-aliases.css")), entry).toBe(false);
-    else expect(css[1], entry).toMatch(/theme\/legacy-aliases\.css$/);
+    // Псевдонимов прежних имён (до этапа 7) нет ни в одном окне.
+    expect(css.some((c) => c.endsWith("legacy-aliases.css")), entry).toBe(false);
+    // Панель трея — без полос прокрутки окна (своих стилей окна она не берёт).
+    if (!entry.startsWith("tray")) expect(css[1], entry).toMatch(/theme\/scrollbars\.css$/);
   }
 });
 
@@ -62,17 +65,28 @@ test("шрифт Onest из npm больше не подключается", () 
   expect(readdirSync(join(theme, "aurora", "fonts")).filter((f) => f.endsWith(".woff2"))).toHaveLength(13);
 });
 
-test("псевдонимы окна ссылаются только на объявленные переменные", () => {
-  const own = read("legacy-aliases.css").replace(/\/\*[\s\S]*?\*\//g, "");
-  const known = new Set([
-    ...declared(read("aurora", "tokens.css")),
-    ...declared(read("aurora", "palettes.css")),
-    ...declared(own),
-  ]);
-  const blocks = [...own.matchAll(/(?:^|\n)(:root|\[data-theme="light"\])\s*\{([^}]*)\}/g)];
-  expect(blocks.length).toBeGreaterThanOrEqual(2);
-  const missing = blocks.flatMap((b) => [...b[2]!.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]!)).filter((n) => !known.has(n));
-  expect(missing).toEqual([]);
+type Theme = ":root" | '[data-theme="light"]';
+
+/** Яркость `--ink-3` темы в токенах Aurora: блок с `:root` (тёмная) или `[data-theme="light"]` в списке селекторов. */
+function ink3(theme: Theme): string | undefined {
+  const css = read("aurora", "tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...css.matchAll(/(?:^|\n)([^{}\n]+)\{([^}]*)\}/g)]
+    .filter((b) => b[1]!.split(",").some((s) => s.trim() === theme))
+    .map((b) => /--ink-3:\s*oklch\(([\d.]+%) 0 0\)/.exec(b[2]!)?.[1])
+    .find(Boolean);
+}
+
+test("ползунки прокрутки — серый яркости --ink-3 своей темы с прозрачностью; в обеих темах те же имена", () => {
+  const css = read("scrollbars.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const blocks = [...css.matchAll(/(?:^|\n)(:root|\[data-theme="light"\])\s*\{([^}]*)\}/g)];
+  expect(blocks.map((b) => b[1])).toEqual([":root", '[data-theme="light"]']);
+  for (const [, theme, body] of blocks) {
+    const decls = [...body!.matchAll(/(--[\w-]+):\s*oklch\(([\d.]+%) 0 0 \/ ([\d.]+)\)/g)];
+    expect(decls.map((d) => d[1]), theme).toEqual(["--sb-thumb", "--sb-thumb-area", "--sb-thumb-hover", "--sb-thumb-active"]);
+    const l = ink3(theme as Theme);
+    expect(l, theme).toBeTruthy();
+    for (const d of decls) expect(d[2], `${theme} ${d[1]}`).toBe(l);
+  }
 });
 
 test("компоненты Aurora: base, aurora, controls, feedback, overlays и data перенесены скриптом и подключены после палитр", () => {

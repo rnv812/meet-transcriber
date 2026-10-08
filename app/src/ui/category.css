@@ -1,26 +1,11 @@
-/* Категория встречи: точка цвета и имя. Тихая метка — не спорит с названием. */
+/* Категория встречи: точка цвета, метка в узком списке, меню выбора и фильтр списка. */
 .cat-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .cat-dot--none { background: none; border: 1px solid var(--ink-3); }
-
-.cat-chip {
-  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; height: 20px; padding: 0 8px;
-  font-size: 12px; line-height: 1; color: var(--ink-2);
-  background: var(--surface-1); border: 1px solid var(--hairline-strong); border-radius: 10px;
-}
-.cat-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-chip--none { color: var(--ink-3); border-style: dashed; }
 
 /* В узком списке записей — только точка цвета; имя — в подсказке и для экранного диктора. */
 .cat-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 12px; height: 12px; }
 .cat-mark .cat-dot { width: 8px; height: 8px; }
 .cat-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-
-/* Метка-кнопка в карточке. */
-.cat-button {
-  display: inline-flex; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; border-radius: 10px;
-}
-.cat-button:hover .cat-chip { background: var(--surface-3); color: var(--ink); }
-.cat-button[aria-expanded="true"] .cat-chip { border-color: var(--accent); }
 
 .cat-menu { display: flex; flex-direction: column; gap: 1px; }
 /* Длинный список прокручивается, «Настроить категории…» всегда видно. */

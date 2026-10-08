@@ -1,0 +1,34 @@
+/* Тонкие полосы прокрутки главного окна и панели ассистента (и .xterm-viewport терминала).
+   Ползунок — нейтральный серый яркости --ink-3 своей темы с прозрачностью. Токена с альфой у
+   Aurora нет, а color-mix() и относительного цвета нет в WebKit macOS 13.0 (Safari 16.1), поэтому
+   значения — литералами: единственное исключение стража theme/noColors.test.ts; совпадение яркости
+   с --ink-3 обеих тем проверяет theme/aurora.test.ts. */
+:root {
+  --sb-thumb: oklch(66% 0 0 / 0.28);
+  --sb-thumb-area: oklch(66% 0 0 / 0.42);
+  --sb-thumb-hover: oklch(66% 0 0 / 0.62);
+  --sb-thumb-active: oklch(66% 0 0 / 0.8);
+}
+[data-theme="light"] {
+  --sb-thumb: oklch(50% 0 0 / 0.28);
+  --sb-thumb-area: oklch(50% 0 0 / 0.42);
+  --sb-thumb-hover: oklch(50% 0 0 / 0.62);
+  --sb-thumb-active: oklch(50% 0 0 / 0.8);
+}
+
+/* WebView2/Chromium: свойства scrollbar-color/width перекрывают ::-webkit-scrollbar и не умеют
+   hover, поэтому стандартные заданы только там, где ::-webkit-scrollbar не поддерживается. */
+::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--sb-thumb); background-clip: padding-box; border: 1px solid transparent; border-radius: 4px;
+}
+:hover::-webkit-scrollbar-thumb { background-color: var(--sb-thumb-area); }
+:hover::-webkit-scrollbar-thumb:hover { background-color: var(--sb-thumb-hover); }
+::-webkit-scrollbar-thumb:active { background-color: var(--sb-thumb-active); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; }
+}
+/* Основные области прокрутки (.pane-list, .card__body, .settings__body, .spk__body) резервируют место под полосу
+   через scrollbar-gutter: stable в своих файлах: содержимое не прыгает, когда она появляется. */

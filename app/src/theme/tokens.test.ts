@@ -22,6 +22,7 @@ function walk(dir: string, ext: RegExp, out: string[] = []): string[] {
   }
   return out;
 }
+const IS_TEST = /\.test\.[jt]sx?$/;
 /** Комментарии вырезаются, переводы строк остаются: номера строк в сообщении верны. */
 const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ""));
 
@@ -31,7 +32,8 @@ function declaredNames(): Set<string> {
     // (?<![\w-]) — не модификатор класса вроде `.btn--primary:hover`.
     for (const m of strip(readFileSync(f, "utf8")).matchAll(/(?<![\w-])(--[\w-]+)\s*:/g)) names.add(m[1]!);
   }
-  for (const f of walk(SRC, /\.tsx?$/)) {
+  // Тесты не в счёт: имя в образце теста (`"--x"`) не объявляет переменную окна.
+  for (const f of walk(SRC, /\.tsx?$/).filter((p) => !IS_TEST.test(p))) {
     const src = readFileSync(f, "utf8");
     // Имя в строковом литерале кода: `style={{ "--a": … }}`, `["--a" as string]`, `setProperty("--a"`,
     // `cssVar="--spk-w"` у PaneResizer — во всех случаях переменную ставит код.
@@ -43,6 +45,13 @@ function declaredNames(): Set<string> {
 test("разбор: объявление и использование переменных находятся", () => {
   expect([...strip("a { --x: 1 } /* var(--no) */ b { c: var(--x) }").matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]))
     .toEqual(["--x"]);
+});
+
+test("разбор: имя из тестового файла не считается объявленным", () => {
+  expect(IS_TEST.test(join("src", "theme", "tokens.test.ts"))).toBe(true);
+  expect(IS_TEST.test(join("src", "ui", "Button.test.tsx"))).toBe(true);
+  expect(IS_TEST.test(join("src", "app", "ShellResize.tsx"))).toBe(false);
+  expect(IS_TEST.test(join("src", "lib", "testing.ts"))).toBe(false);
 });
 
 test("все var(--…) в CSS окна объявлены в CSS или заданы из кода", () => {

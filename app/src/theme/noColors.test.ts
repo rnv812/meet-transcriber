@@ -1,13 +1,21 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 
 /**
- * Примитивы окна и общие стили — только на токенах Atlas Aurora: свой цвет
- * не меняется вместе с темой и палитрой. Литерал цвета — ошибка; если он
- * нужен, — исключение ниже с причиной.
+ * Все стили окна — только на токенах Atlas Aurora: свой цвет не меняется
+ * вместе с темой и палитрой. Литерал цвета в CSS окна вне скопированной
+ * дизайн-системы (theme/aurora/) и запасных значений без color-mix()
+ * (theme/aurora-fallbacks.css) — ошибка; если он нужен, — исключение ниже с причиной.
  */
 const SRC = join(process.cwd(), "src");
-const EXCEPTIONS: Record<string, string> = {};
+/** Путь от src через «/» → причина. */
+const EXCEPTIONS: Record<string, string> = {
+  "theme/scrollbars.css":
+    "ползунки прокрутки — серый яркости --ink-3 с прозрачностью: токена с альфой у Aurora нет, а color-mix() " +
+    "и относительного цвета нет в WebKit macOS 13.0 (Safari 16.1)",
+};
+/** Не окна: копия дизайн-системы и её запасные значения для WebKit без color-mix(). */
+const isAurora = (rel: string) => rel.startsWith("theme/aurora/") || rel === "theme/aurora-fallbacks.css";
 const COLOR = /#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(/i;
 
 function css(dir: string, out: string[] = []): string[] {
@@ -18,16 +26,38 @@ function css(dir: string, out: string[] = []): string[] {
   }
   return out;
 }
+/** Путь от src с «/» на любой ОС: ключи исключений одинаковы на Windows и macOS. */
+const relOf = (f: string) => relative(SRC, f).split(sep).join("/");
+const readRel = (rel: string) => readFileSync(join(SRC, ...rel.split("/")), "utf8");
+/** Комментарии вырезаются, переводы строк остаются: номера строк в сообщении верны. */
+const strip = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ""));
 
-test("ui/*.css и theme/tokens.css — без литералов цвета", () => {
-  const files = [...css(join(SRC, "ui")), join(SRC, "theme", "tokens.css")];
+function offending(re: RegExp, rel: string, text: string): string[] {
   const bad: string[] = [];
-  for (const f of files) {
-    const rel = relative(SRC, f);
-    if (EXCEPTIONS[rel]) continue;
-    const lines = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").split("\n");
-    lines.forEach((line, i) => { if (COLOR.test(line)) bad.push(`${rel}:${i + 1}: ${line.trim()}`); });
+  strip(text).split("\n").forEach((line, i) => { if (re.test(line)) bad.push(`${rel}:${i + 1}: ${line.trim()}`); });
+  return bad;
+}
+
+test("разбор: литерал после многострочного комментария — с верным номером строки, в комментарии — не литерал", () => {
+  const text = "/* #fff\n   rgb(0 0 0) */\na { color: var(--ink); }\nb { color: #123456; }\n";
+  expect(offending(COLOR, "x.css", text)).toEqual(["x.css:4: b { color: #123456; }"]);
+  expect(offending(COLOR, "x.css", "a { white-space: nowrap; color: var(--ink-2) }")).toEqual([]);
+});
+
+test("исключения — существующие файлы окна, не дизайн-системы, путь через «/»", () => {
+  for (const rel of Object.keys(EXCEPTIONS)) {
+    expect(rel, rel).not.toContain("\\");
+    expect(isAurora(rel), rel).toBe(false);
+    expect(existsSync(join(SRC, ...rel.split("/"))), rel).toBe(true);
   }
+});
+
+test("CSS окна вне theme/aurora/ и aurora-fallbacks.css — без литералов цвета", () => {
+  const files = css(SRC).map(relOf).filter((rel) => !isAurora(rel));
+  // Проверка видит всё окно, а не только ui/: тему, карточку, настройки, живую панель, панель трея.
+  expect(files).toEqual(expect.arrayContaining(["theme/tokens.css", "ui/category.css", "features/settings/ownv.css",
+    "live/chat.css", "tray/tray.css"]));
+  const bad = files.filter((rel) => !EXCEPTIONS[rel]).flatMap((rel) => offending(COLOR, rel, readRel(rel)));
   expect(bad).toEqual([]);
 });
 
@@ -47,10 +77,6 @@ test("разбор: цвет текста --accent / --accent-hover находи
 });
 
 test("ui/*.css — текст акцентного цвета только через --accent-line", () => {
-  const bad: string[] = [];
-  for (const f of css(join(SRC, "ui"))) {
-    const lines = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").split("\n");
-    lines.forEach((line, i) => { if (ACCENT_TEXT.test(line)) bad.push(`${relative(SRC, f)}:${i + 1}: ${line.trim()}`); });
-  }
+  const bad = css(join(SRC, "ui")).map(relOf).flatMap((rel) => offending(ACCENT_TEXT, rel, readRel(rel)));
   expect(bad).toEqual([]);
 });
