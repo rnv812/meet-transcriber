@@ -503,3 +503,14 @@ def test_merge_refuses_broken_new_sums(tmp_path):
     new.write_text(f"{B}  Meet_0.3.0_aarch64.dmg\n", encoding="utf-8")
     assert module.main([str(published), str(new), str(out)]) == 0
     assert out.read_bytes() == (f"{A}  meet_0.3.0_x64-setup.exe\n{B}  Meet_0.3.0_aarch64.dmg\n").encode()
+
+
+def test_macos_ci_runs_the_full_python_suite_and_a_smoke_test():
+    """0.5: живого Mac нет — весь набор Python (сведения, отчёт в сводке и артефактах)
+    и смоук собранного приложения (резидент отвечает, окно живёт, снимок экрана)."""
+    flow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "Python tests (full suite on macOS, informational)" in flow and "--junitxml=build/macos-report/pytest.xml" in flow
+    assert "GITHUB_STEP_SUMMARY" in flow and "name: macos-python-report" in flow
+    assert "bash scripts/macos_smoke.sh .venv-ci/bin/python \"$APP\" build/macos-smoke" in flow
+    smoke = (ROOT / "scripts" / "macos_smoke.sh").read_text(encoding="utf-8")
+    assert "--headless" in smoke and "/state" in smoke and "screencapture" in smoke and "MEET_DATA_DIR" in smoke

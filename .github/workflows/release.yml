@@ -222,18 +222,33 @@ jobs:
             tests/test_macos_build.py tests/test_no_network.py \
             tests/test_llm_detect.py tests/test_gigaam_asr.py
 
-      # Остальное ядро на macOS ещё не прогонялось: сведения для пробного
-      # прогона, сборку не останавливают.
-      - name: Python tests (platform-neutral core, informational)
+      # Весь Python-набор на macOS (0.5): живого Mac нет — это главный способ
+      # увидеть, что ломается. Пока сведения (сборку не останавливает): итог и
+      # список упавших — в сводке прогона, отчёт JUnit — в артефактах.
+      - name: Python tests (full suite on macOS, informational)
         continue-on-error: true
         run: |
-          PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider \
-            tests/test_align.py tests/test_analysis.py tests/test_asr_backend.py \
-            tests/test_asr_segments.py tests/test_events.py tests/test_export.py \
-            tests/test_hotwords.py tests/test_interleave.py tests/test_library.py \
-            tests/test_netproxy.py tests/test_output.py tests/test_search.py \
-            tests/test_textfix.py tests/test_translit.py tests/test_voices.py \
-            tests/test_credentials.py tests/test_release_notes.py
+          mkdir -p build/macos-report
+          set +e
+          PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider -n auto \
+            --junitxml=build/macos-report/pytest.xml > build/macos-report/pytest.txt 2>&1
+          code=$?
+          set -e
+          tail -n 40 build/macos-report/pytest.txt
+          {
+            echo "### Python на macOS (весь набор)"
+            echo '```'
+            grep -E "passed|failed|error" build/macos-report/pytest.txt | tail -n 1
+            grep -E "^(FAILED|ERROR) " build/macos-report/pytest.txt | head -n 60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-python-report
+          path: build/macos-report/
 
       - name: Window tests
         working-directory: app
@@ -282,6 +297,20 @@ jobs:
           # администратора проверяет новую версию.
           MEET_SIGNING_SHA1: ${{ env.MACOS_CERT_SHA1 }}
         run: bash scripts/build_release_macos.sh "$VERSION"
+
+      # Смоук на раннере (0.5): резидент из движка CI поднимается в пустой папке
+      # данных и отвечает на /state и /settings; собранное окно живёт 20 с; снимок
+      # экрана и журналы — в артефактах. Звук и разрешения не проверяются.
+      - name: Smoke test (resident and Meet.app)
+        env:
+          APP: ${{ steps.build.outputs.app }}
+        run: bash scripts/macos_smoke.sh .venv-ci/bin/python "$APP" build/macos-smoke
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-smoke
+          path: build/macos-smoke/
 
       # Ключ — только здесь и только программам Apple: импорт во временную
       # связку, codesign с явным requirement, удаление связки, затем образ
