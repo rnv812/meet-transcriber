@@ -1,0 +1,16 @@
+/* Правки порядка каскада Atlas Aurora со стороны окна. Скопированные файлы дизайн-системы
+   (theme/aurora/*, scripts/vendor_aurora.py) не правятся: здесь — только то, что в связке
+   файлов перебивается не тем правилом. Подключается в theme/aurora/index.css после всех
+   скопированных файлов, до запасных значений WebKit.
+
+   Размеры кнопки-списка: `.select-btn--md` и `.select-btn--sm` объявлены в controls.css, а
+   `.select-btn` (высота 48, свои отступы и шрифт) — в overlays.css, который подключается позже
+   и при равной специфичности побеждает. Два класса — значения controls.css снова в силе. */
+.select-btn.select-btn--md {
+  height: var(--control); border-radius: var(--r-control); font-size: var(--text-ui);
+  padding-left: 12px; padding-right: 10px;
+}
+.select-btn.select-btn--sm {
+  height: var(--control-sm); border-radius: var(--r-control-sm); font-size: var(--text-sm);
+  padding-left: 10px; padding-right: 8px; gap: 6px;
+}

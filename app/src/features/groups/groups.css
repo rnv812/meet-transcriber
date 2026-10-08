@@ -22,9 +22,6 @@
 
 /* Кнопка-список: значок области, имя, число встреч и стрелка. У Aurora `.select-btn span { flex: 1 }` —
    здесь растягивается только имя. */
-/* Высота md: у Aurora `.select-btn` (overlays.css) объявлена позже `.select-btn--md` (controls.css) и
-   перебивает её — здесь два класса. */
-.select-btn.group-pick { height: var(--control); border-radius: var(--r-control); font-size: var(--text-ui); }
 .select-btn.group-pick > span { flex: none; }
 .select-btn.group-pick > .group-pick__name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;

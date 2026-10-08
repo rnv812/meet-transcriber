@@ -121,6 +121,8 @@ const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "ran
 
 function keepsCtrlK(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
+  // Дерево групп (поповер кнопки-списка над списком) — не модальное окно: Ctrl+K уводит к поиску.
+  if (target.closest("[data-groups-tree]")) return false;
   if (target instanceof HTMLInputElement && !NOT_TEXT.has(target.type)) return true;
   return target.closest(KEEP_CTRL_K) !== null;
 }
@@ -425,8 +427,12 @@ export function RecordingsList({
   };
 
   return (
-    <div className="rec-list" ref={root} onPointerDown={move ? (e) => groupsUi?.drag.begin(e.nativeEvent,
-      () => dragPayload(e.target, pickRef.current)) : undefined}>
+    <div className="rec-list" ref={root} onPointerDown={move ? (e) => {
+      // Только строка записи: нажатие на группу в раскрытом дереве (оно — в этом же дереве React)
+      // уже начало перетаскивание группы, второе begin() его бы сбросило.
+      if (!(e.target instanceof Element) || !e.target.closest(".rec-item__main")) return;
+      groupsUi?.drag.begin(e.nativeEvent, () => dragPayload(e.target, pickRef.current));
+    } : undefined}>
       {/* Сверху — кнопка-список групп (область списка и поиска), под ней импорт и поиск (макет LIBRARY). */}
       {groupsUi && <GroupHeader ui={groupsUi} />}
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />

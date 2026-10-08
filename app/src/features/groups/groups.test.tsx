@@ -834,6 +834,41 @@ test("открытая группа: рядом с кнопкой-списком
   expect(picker()).toHaveAccessibleName("Группа встреч: Все записи");
 });
 
+test("порядок групп перетаскиванием в раскрытом дереве: нажатие на группу не перехватывает список записей", async () => {
+  await setup(INFO, { nav: false });
+  await userEvent.click(picker());
+  const beta = () => pickerTree().getByRole("button", { name: /^Бета,/ }).closest("li")!;
+  const alpha = () => pickerTree().getByRole("button", { name: /^Проект Альфа,/ });
+  hover(beta);
+  beta().getBoundingClientRect = () => ({ top: 100, bottom: 126, left: 0, right: 180, height: 26, width: 180, x: 0, y: 100,
+    toJSON: () => ({}) });
+  pointer(alpha(), "pointerdown", 40, 80);
+  pointer(window, "pointermove", 40, 120);
+  expect(beta()).toHaveClass("nav-group--insert-after");
+  expect(document.querySelector(".drag-ghost")).toHaveTextContent("Проект Альфа");
+  pointer(window, "pointerup", 40, 120);
+  fireEvent.click(alpha());
+  await act(async () => {});
+  expect(api.orderGroups).toHaveBeenCalledWith(ep, ["g-b", "g-a"]);
+  expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", "null");
+  expect(pickerBox()).toBeInTheDocument();
+});
+
+test("Ctrl+K из раскрытого дерева — к поиску, дерево закрывается", async () => {
+  await setup(INFO, { nav: false });
+  await userEvent.click(picker());
+  expect(pickerTree().getByRole("button", { name: /^Все записи,/ })).toHaveFocus();
+  await userEvent.keyboard("{Control>}k{/Control}");
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveFocus();
+  expect(screen.queryByRole("dialog", { name: "Группы" })).toBeNull();
+  // Дерево открыто, фокус на кнопке-списке — так же.
+  await userEvent.click(picker());
+  picker().focus();
+  await userEvent.keyboard("{Control>}k{/Control}");
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveFocus();
+  expect(screen.queryByRole("dialog", { name: "Группы" })).toBeNull();
+});
+
 test("старый резидент без /groups — кнопки-списка нет", async () => {
   await setup(new api.ApiError(404, "нет такого адреса"), { nav: false });
   expect(screen.queryByRole("button", { name: /^Группа встреч/ })).toBeNull();

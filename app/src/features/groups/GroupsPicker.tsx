@@ -7,7 +7,7 @@
  *
  * Клавиатура: Enter, Пробел или ↓ — открыть (фокус — на выбранной области в
  * дереве), Esc — закрыть и вернуть фокус на кнопку. Выбрали область — поповер
- * закрывается, фокус на кнопке.
+ * закрывается, фокус на кнопке. Ctrl+K (к поиску списка) закрывает дерево.
  *
  * Пока дерево открыто, нажатие на строку записи его не закрывает: с неё
  * начинают перетаскивание на группу. Обычный щелчок по строке (не после
@@ -48,6 +48,16 @@ export function GroupsPicker({ ui }: { ui: GroupsUi }) {
   useLayoutEffect(() => {
     if (open) tree.current?.querySelector<HTMLElement>('[data-scope-key][tabindex="0"]')?.focus();
   }, [open]);
+
+  // Фокус ушёл в поиск списка (Ctrl+K, щелчок) — дерево закрывается, фокус остаётся в поиске.
+  useEffect(() => {
+    if (!open) return;
+    const focus = (e: FocusEvent) => {
+      if (e.target instanceof Element && e.target.matches(".rec-list input[type=search]")) close(false);
+    };
+    document.addEventListener("focusin", focus);
+    return () => document.removeEventListener("focusin", focus);
+  }, [open, close]);
 
   // Обычный щелчок по записи — открыть её и закрыть дерево (фокус остаётся у записи).
   useEffect(() => {
@@ -93,7 +103,7 @@ export function GroupsPicker({ ui }: { ui: GroupsUi }) {
       {open && button.current && (
         <Popover anchor={button.current} label="Группы" anchorToggles keepOpen={keepOpen}
           width={Math.max(MIN_W, button.current.offsetWidth)} onClose={onPopoverClose}>
-          <div ref={tree}>
+          <div ref={tree} data-groups-tree="">
             <GroupsNav ui={ui} active onOpen={(apply) => { apply(); close(); }} />
           </div>
         </Popover>

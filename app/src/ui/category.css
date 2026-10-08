@@ -35,17 +35,9 @@
 .cat-menu__item--action { color: var(--accent-line); }
 .cat-menu__sep { height: 1px; margin: 3px 4px; background: var(--hairline-strong); }
 
-/* Фильтр списка по категориям. */
+/* Фильтр списка по категориям; число условий — значком поверх кнопки «Фильтры»
+   (features/recordings, обёртка .rec-filter). */
 .cat-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.cat-filter__button {
-  position: relative;
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; flex: none;
-  background: var(--surface-1); color: var(--ink-2); border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
-  font: inherit; cursor: pointer;
-}
-.cat-filter__button:hover { color: var(--ink); background: var(--surface-3); }
-.cat-filter__button[aria-expanded="true"] { border-color: var(--accent); }
-.cat-filter__button--active { color: var(--ink); border-color: var(--accent); }
 .cat-filter__count {
   position: absolute; top: -7px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
   background: var(--accent); color: var(--on-accent); font-size: 10px; line-height: 16px; text-align: center;

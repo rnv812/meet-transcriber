@@ -1,6 +1,6 @@
 /* Основа Atlas Aurora для всех окон Meet: токены, палитры и перенесённые
-   компоненты (копия дизайн-системы, см. SOURCE.md), затем запасные значения
-   окна для WebKit без color-mix(). */
+   компоненты (копия дизайн-системы, см. SOURCE.md), затем правки порядка каскада
+   со стороны окна (aurora-fixes.css) и запасные значения окна для WebKit без color-mix(). */
 @import "./tokens.css";
 @import "./palettes.css";
 @import "./base.css";
@@ -8,4 +8,5 @@
 @import "./controls.css";
 @import "./feedback.css";
 @import "./overlays.css";
+@import "../aurora-fixes.css";
 @import "../aurora-fallbacks.css";
