@@ -48,7 +48,7 @@ test("без подключённой модели временная встре
   expect(start).not.toHaveBeenCalled();
 });
 
-test("«Остановить без сохранения…»: вопрос, фокус на «Отмена», Esc — ничего не удаляет", async () => {
+test("«Остановить без сохранения…»: вопрос, фокус на «Продолжить запись», Esc — ничего не удаляет", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const command = vi.spyOn(api, "recordingCommand");
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
@@ -58,7 +58,7 @@ test("«Остановить без сохранения…»: вопрос, ф�
   expect(dialog).toHaveTextContent("Остановить без сохранения?");
   expect(dialog).toHaveTextContent(
     "Запись и всё, что с ней связано, будут удалены без возможности восстановления.");
-  expect(screen.getByRole("button", { name: "Отмена" })).toHaveFocus();
+  expect(screen.getByRole("button", { name: "Продолжить запись" })).toHaveFocus();
   expect(screen.getByRole("button", { name: "Удалить запись" })).toBeInTheDocument();
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("alertdialog")).toBeNull();

@@ -90,8 +90,9 @@ pub const ATTACH_LABEL: &str = "Включить ассистента";
 pub const DETACH_LABEL: &str = "Выключить ассистента";
 /// Автоматическая выгрузка встречи в базу знаний не удалась (`/state.kb_export_failed`).
 pub const KB_EXPORT_FAILED: &str = "Не удалось выгрузить встречу в базу знаний";
-/// Раздел настроек, куда ведёт отказ `/live/start` без провайдера (409).
-pub const ASSISTANT_SECTION: &str = "assistant";
+/// Раздел настроек, куда ведёт отказ `/live/start` без провайдера (409):
+/// «Модели ИИ» — там подключают Claude Code, Codex или OpenCode.
+pub const MODELS_SECTION: &str = "models";
 /// Что проходит при `ui.notifications = "important"`: ошибки и автоматический
 /// старт записи (спека: «важное — ошибки и автостарт»).
 const IMPORTANT: &[&str] = &[
@@ -1288,7 +1289,8 @@ pub const CANCEL_TITLE: &str = "Остановить без сохранения
 pub const CANCEL_QUESTION: &str = "Остановить без сохранения? Запись и всё, что с ней связано, \
                                    будут удалены без возможности восстановления.";
 pub const CANCEL_CONFIRM: &str = "Удалить запись";
-pub const CANCEL_KEEP: &str = "Отмена";
+/// Безопасная кнопка вопроса — одна везде (окно, панели, меню значка).
+pub const CANCEL_KEEP: &str = "Продолжить запись";
 /// Временная встреча с ассистентом: пункт простоя, пометка и действия.
 pub const TEMP_LABEL: &str = "Временная встреча с ассистентом";
 pub const TEMP_BADGE_LABEL: &str = "Временная — не сохранится";
@@ -1424,7 +1426,7 @@ pub fn cancel_still_meant(asked: Option<&str>, now: Option<&str>) -> bool {
 }
 
 /// Ответ на вопрос «Остановить без сохранения?»: удаляем только по явной
-/// кнопке «Удалить запись». Esc, закрытие окна и «Отмена» запись не трогают.
+/// кнопке «Удалить запись». Esc, закрытие окна и «Продолжить запись» её не трогают.
 pub fn cancel_confirmed_by(answer: &rfd::MessageDialogResult) -> bool {
     matches!(answer, rfd::MessageDialogResult::Custom(label) if label == CANCEL_CONFIRM)
 }
@@ -1673,13 +1675,13 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
 }
 
 /// «Остановить без сохранения…»: системный вопрос, кнопка по умолчанию —
-/// «Отмена» (Enter запись не удаляет). Отмена уходит резиденту, только если
+/// «Продолжить запись» (Enter запись не удаляет). Отмена уходит резиденту, только если
 /// нажато «Удалить запись» (`cancel_confirmed_by`): удаляются запись, чат
 /// ассистента, вложения и сеансы агента у провайдера.
 ///
 /// rfd напрямую, а не плагин диалогов: плагин выдаёт Esc и закрытие окна за
 /// нажатие второй кнопки, а вторая здесь — «Удалить запись». Кнопка по
-/// умолчанию — первая (и на Windows, и на macOS), поэтому «Отмена» идёт первой.
+/// умолчанию — первая (и на Windows, и на macOS), поэтому «Продолжить запись» идёт первой.
 /// Вызывается из обработчика меню — главного потока, как требует macOS.
 fn confirm_cancel(app: &AppHandle) {
     let Some(state) = app.try_state::<TrayState>() else {
@@ -1825,7 +1827,7 @@ fn command(app: &AppHandle, action: Action) {
         if needs_provider(action, reply.as_ref()) {
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
-                windows::open_main(&handle, None, Some(ASSISTANT_SECTION))
+                windows::open_main(&handle, None, Some(MODELS_SECTION))
             });
         }
     });
@@ -3660,7 +3662,9 @@ mod tests {
         assert!(cancel_confirmed_by(&Answer::Custom(
             "Удалить запись".into()
         )));
-        assert!(!cancel_confirmed_by(&Answer::Custom("Отмена".into())));
+        assert!(!cancel_confirmed_by(&Answer::Custom(
+            "Продолжить запись".into()
+        )));
         assert!(!cancel_confirmed_by(&Answer::Cancel)); // Esc, крестик
         assert!(!cancel_confirmed_by(&Answer::Ok));
         assert_eq!(
@@ -3668,8 +3672,11 @@ mod tests {
             "Остановить без сохранения? Запись и всё, что с ней связано, будут удалены \
              без возможности восстановления."
         );
-        // Кнопка по умолчанию — первая: «Отмена».
-        assert_eq!((CANCEL_KEEP, CANCEL_CONFIRM), ("Отмена", "Удалить запись"));
+        // Кнопка по умолчанию — первая, безопасная: та же, что в окне и панелях.
+        assert_eq!(
+            (CANCEL_KEEP, CANCEL_CONFIRM),
+            ("Продолжить запись", "Удалить запись")
+        );
         assert_eq!(CANCEL_LABEL, "Остановить без сохранения…");
     }
 
@@ -3820,6 +3827,8 @@ mod tests {
             "Идёт обычная запись — сначала остановите её"
         );
         assert!(!needs_provider(Action::LiveStart, None));
+        // Подключение провайдера — в разделе «Модели ИИ», не «Ассистент».
+        assert_eq!(MODELS_SECTION, "models");
     }
 
     #[test]

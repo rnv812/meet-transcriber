@@ -25,7 +25,7 @@ pub const MEDIA_EXTS: &[&str] = &[
 ];
 
 /// Адрес страницы окна; `recording` — запись, которую нужно открыть сразу,
-/// `section` — раздел (`assistant` — настройки ассистента).
+/// `section` — раздел настроек (`models` — «Модели ИИ»).
 pub fn main_url(recording: Option<&str>, section: Option<&str>) -> String {
     let mut query = Vec::new();
     if let Some(id) = recording {
@@ -775,13 +775,10 @@ mod tests {
 
     #[test]
     fn main_url_carries_section() {
+        assert_eq!(main_url(None, Some("models")), "index.html?section=models");
         assert_eq!(
-            main_url(None, Some("assistant")),
-            "index.html?section=assistant"
-        );
-        assert_eq!(
-            main_url(Some("rec"), Some("assistant")),
-            "index.html?recording=rec&section=assistant"
+            main_url(Some("rec"), Some("models")),
+            "index.html?recording=rec&section=models"
         );
     }
 

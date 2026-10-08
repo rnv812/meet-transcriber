@@ -183,7 +183,7 @@ def choice_error(cfg: "Settings", name: str) -> str | None:
     if name not in PROVIDERS:
         return f"неизвестная модель: {name}"
     if name not in cfg.llm.enabled:
-        return f"модель «{LABELS[name]}» не включена в настройках (раздел «Ассистент» → «Модели»)"
+        return f"модель «{LABELS[name]}» не включена в настройках («Настройки → Модели ИИ»)"
     if provider_ready(name, cfg, need_login=False):
         return None
     return not_found(name, cfg)

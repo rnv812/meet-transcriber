@@ -104,6 +104,8 @@ const COPIED_MS = 1500;
 /** «Показать в ленте»: сколько ждать, пока сообщение появится в ленте, и сколько его подсвечивать. */
 const REVEAL_MS = 1500;
 const FLASH_MS = 1600;
+/** «Повторить» отказали ответом `ok:false` без причины — тот же текст, что у кнопки записи. */
+const RETRY_FAILED = "Не удалось запустить ассистента";
 
 /**
  * Знак агента по слову его состояния: слушает, ищет (думает, догоняет),
@@ -285,7 +287,10 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
     const profile: AgentProfile | undefined = chat.agent?.profile ?? live.agent?.profile;
     const opts = { ...(wasTemporary.current ? { temporary: true } : {}), ...(profile ? { profile } : {}) };
     const call = status?.recording ? liveAttach(endpoint, profile) : liveStart(endpoint, opts);
-    return call.catch((e) => setRetryError(errorText(e)));
+    // Отказ приходит и ответом 200 с `ok:false` (как у кнопки записи) — не терять его молча.
+    return call
+      .then((r) => { if (!r.ok) setRetryError(r.error || RETRY_FAILED); })
+      .catch((e) => setRetryError(errorText(e)));
   };
   // Раздел «Модели ИИ» главного окна (оболочка откроет окно Meet на нём).
   const openModels = () => { void trayPanelOpen({ section: "models" }); };
@@ -460,8 +465,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
                 tooltip={`${TEMP_STOP_LABEL} — она будет удалена`} onClick={() => askStop("temp-end")}
                 disabled={stopping} />
             ) : (
+              // Одно имя в обоих режимах: и ассистент, что пишет сам, на «Стоп» дописывает и сохраняет запись.
               <Button variant="danger" icon={Square} className="btn--icon live-head__stop"
-                aria-label={withAssistant ? "Остановить и сохранить" : "Стоп"} title="Остановить и сохранить запись"
+                aria-label="Остановить и сохранить" title="Остановить и сохранить запись"
                 onClick={() => stop(false)} disabled={stopping} />
             )
           )}

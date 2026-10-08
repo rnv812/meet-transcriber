@@ -41,7 +41,7 @@ test("подключённый к записи: «Выключить ассис�
   vi.mocked(liveDetach).mockReturnValue(new Promise(() => {}));
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status())));
-  expect(screen.queryByRole("button", { name: "Стоп" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Остановить и сохранить" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Выключить ассистента" }));
   expect(liveDetach).toHaveBeenCalledWith(ep);
   expect(liveStop).not.toHaveBeenCalled();
@@ -73,7 +73,7 @@ test("обычный ассистент (не подключён к записи
   vi.mocked(liveStop).mockReturnValue(new Promise(() => {}));
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status({ attached: false }))));
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
   expect(liveStop).toHaveBeenCalledWith(ep);
   expect(liveDetach).not.toHaveBeenCalled();
 });

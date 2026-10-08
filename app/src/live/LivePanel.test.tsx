@@ -76,10 +76,10 @@ test("Стоп вызывает liveStop и сразу показывает «О
   vi.mocked(liveStop).mockReturnValue(new Promise(() => {}));
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status())));
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
   expect(liveStop).toHaveBeenCalledWith(ep);
   expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
-  expect(screen.getByRole("button", { name: "Стоп" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Остановить и сохранить" })).toBeDisabled();
 });
 
 test("остановка снаружи (трей): снимок stopping — «Останавливаю…», Стоп неактивен", async () => {
@@ -89,16 +89,16 @@ test("остановка снаружи (трей): снимок stopping — «
   await act(async () => { bus().emit("live.stopping", { kind: "live.stopping", at: 1 }); });
   expect(getState).toHaveBeenCalledWith(ep);
   expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
-  expect(screen.getByRole("button", { name: "Стоп" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Остановить и сохранить" })).toBeDisabled();
 });
 
 test("ошибка остановки видна, Стоп снова доступен", async () => {
   vi.mocked(liveStop).mockRejectedValue(new Error("резидент не отвечает"));
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status())));
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("резидент не отвечает");
-  expect(screen.getByRole("button", { name: "Стоп" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Остановить и сохранить" })).toBeEnabled();
 });
 
 test("Развернуть и Свернуть просят оболочку сменить вид, высоту она помнит сама", async () => {
@@ -204,7 +204,7 @@ test("шапка: нажатие тащит окно, двойной щелчо�
   // Правая кнопка и кнопки шапки окно не таскают.
   vi.mocked(invoke).mockClear();
   fireEvent.mouseDown(title, { button: 2, detail: 1 });
-  fireEvent.mouseDown(screen.getByRole("button", { name: "Стоп" }), { button: 0, detail: 1 });
+  fireEvent.mouseDown(screen.getByRole("button", { name: "Остановить и сохранить" }), { button: 0, detail: 1 });
   fireEvent.mouseDown(screen.getByRole("button", { name: "Развернуть" }), { button: 0, detail: 2 });
   expect(calls("live_start_drag")).toEqual([]);
   expect(calls("live_set_maximized")).toEqual([]);
@@ -238,7 +238,7 @@ test("кнопки шапки — одинаковые значки с подп�
   await act(async () => {});
   const buttons = within(screen.getByRole("banner")).getAllByRole("button");
   expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(
-    ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Стоп"]);
+    ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Остановить и сохранить"]);
   for (const b of buttons) {
     expect(b).toHaveClass("btn--icon");
     expect(b.textContent).toBe(""); // только значок, подпись — title
@@ -307,9 +307,9 @@ test("LiveWindow: ищет резидента, пока не найдёт, за�
   render(<LiveWindow />);
   await act(async () => { await vi.advanceTimersByTimeAsync(10); });
   expect(screen.getByText("Ассистент слушает…")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Стоп" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Остановить и сохранить" })).toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
-  expect(screen.getByRole("button", { name: "Стоп" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Остановить и сохранить" })).toBeInTheDocument();
 });
 
 test("время начала неизвестно — вместо таймера прочерк", () => {

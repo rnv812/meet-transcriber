@@ -194,6 +194,8 @@ test("провайдер не подключён заранее — «С асс�
   panel({ assistant: provider(null) });
   expect(screen.getByRole("button", { name: "С ассистентом" })).toBeDisabled();
   expect(screen.getByText(new RegExp(NO_PROVIDER))).toBeInTheDocument();
+  // Тот же текст, что у кнопки записи окна: OpenCode тоже годится.
+  expect(screen.getByText(/Подключите Claude Code, Codex или OpenCode в настройках/)).toBeInTheDocument();
 });
 
 test("резидента нет — так и сказано, кнопок записи нет, окно открыть можно", () => {

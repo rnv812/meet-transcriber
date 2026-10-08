@@ -63,14 +63,14 @@ test("«Остановить и сохранить» — команда stop", a
   expect(command).toHaveBeenCalledWith(ep, "stop");
 });
 
-test("«Остановить без сохранения…»: тот же вопрос, фокус на «Отмена», «Удалить запись» — cancel", async () => {
+test("«Остановить без сохранения…»: тот же вопрос, фокус на «Продолжить запись», «Удалить запись» — cancel", async () => {
   const command = vi.spyOn(api, "recordingCommand").mockResolvedValue(reply(snap({ status: "idle" }), "cancel"));
   render(<RecordingNow endpoint={ep} snapshot={snap({ forget_gaps: ["Codex"] })} />);
   await userEvent.click(screen.getByRole("button", { name: "Остановить без сохранения…" }));
   const dialog = await screen.findByRole("alertdialog");
   expect(dialog).toHaveTextContent("Остановить без сохранения?");
   expect(dialog).toHaveTextContent("История ассистента в Codex останется в самом Codex.");
-  expect(within(dialog).getByRole("button", { name: "Отмена" })).toHaveFocus();
+  expect(within(dialog).getByRole("button", { name: "Продолжить запись" })).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(command).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "Остановить без сохранения…" }));

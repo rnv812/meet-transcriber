@@ -85,7 +85,7 @@ test("конец временной встречи спрашивает: «Пр�
   expect(head()).toHaveTextContent("Останавливаю…");
 });
 
-test("«Остановить без сохранения»: вопрос, «Отмена» по умолчанию, «Удалить запись» — /recording/cancel", async () => {
+test("«Остановить без сохранения»: вопрос, «Продолжить запись» по умолчанию, «Удалить запись» — /recording/cancel", async () => {
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap()));
   expect(screen.queryByText("Временная — не сохранится")).toBeNull();
@@ -93,8 +93,8 @@ test("«Остановить без сохранения»: вопрос, «От
   const dialog = await screen.findByRole("alertdialog");
   expect(dialog).toHaveTextContent("Остановить без сохранения?");
   expect(dialog).toHaveTextContent("будут удалены без возможности восстановления");
-  expect(screen.getByRole("button", { name: "Отмена" })).toHaveFocus();
-  await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(screen.getByRole("button", { name: "Продолжить запись" })).toHaveFocus();
+  await userEvent.click(screen.getByRole("button", { name: "Продолжить запись" }));
   expect(recordingCommand).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "Остановить без сохранения" }));
   await userEvent.click(await screen.findByRole("button", { name: "Удалить запись" }));
@@ -107,5 +107,5 @@ test("ассистент, который пишет сам (не к записи
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap({ status: "idle", live: live({ attached: false }) })));
   expect(screen.queryByRole("button", { name: "Остановить без сохранения" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Стоп" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Остановить и сохранить" })).toBeInTheDocument();
 });

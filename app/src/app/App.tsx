@@ -94,9 +94,10 @@ export function App() {
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
   // Совсем пустая библиотека (макет EMPTY): ни записей, ни групп, ни поиска, ни условий (категории —
   // тоже метки `query.chips`), ни пустой группы — сияние на всё окно вместо списка и «Выберите запись».
-  // Группы есть, ещё не прочитаны или не прочитались («Группы недоступны» с повтором) — список остаётся.
+  // Группы есть, ещё не прочитаны или не прочитались («Группы недоступны» с повтором) — список остаётся;
+  // библиотека не загрузилась — тоже список: там ошибка, а «Записей пока нет» было бы неправдой.
   const bareLibrary = section === "recordings" && !offline && !!resident.endpoint && !selected
-    && !library.loading && library.items.length === 0 && !q && query.chips.length === 0
+    && !library.loading && !library.error && library.items.length === 0 && !q && query.chips.length === 0
     && groupsUi.supported !== null && !groupRefs?.length && groupEmptyState(groupsUi, q) === null;
 
   /** Несохранённое в настройках: SettingsPane кладёт сюда список разделов и save. */

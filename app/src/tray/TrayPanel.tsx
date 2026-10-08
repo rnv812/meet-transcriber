@@ -19,12 +19,10 @@ import { elapsedOf, phaseOf } from "./trayModel";
 
 const TICK_MS = 1000;
 const ERROR_MS = 6000;
-export const NO_PROVIDER = "Подключите Claude Code или Codex в настройках";
+export const NO_PROVIDER = "Подключите Claude Code, Codex или OpenCode в настройках";
 const START_FAILED = "Не удалось запустить ассистента";
-/** Подключение модели — раздел «Модели» настроек. */
+/** Подключение модели — раздел «Модели ИИ» настроек. */
 const MODELS_SECTION = "models";
-/** В панели вопрос о записи, которая идёт: безопасный ответ — продолжить её. */
-const DISCARD_CANCEL = "Продолжить запись";
 
 /** Куда ведут ссылки панели: окно Meet, его запись или раздел настроек. */
 export type OpenTarget = { recording?: string; section?: string };
@@ -161,7 +159,7 @@ export function TrayPanel({
         {asking ? (
           <ConfirmDialog inline className="tp__confirm"
             {...(asking === "discard"
-              ? { ...discardConfirm(snapshot.forget_gaps), cancelLabel: DISCARD_CANCEL }
+              ? discardConfirm(snapshot.forget_gaps)
               : TEMP_END_CONFIRM)}
             onCancel={() => setAsking(null)}
             onConfirm={() => {

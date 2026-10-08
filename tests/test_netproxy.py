@@ -305,4 +305,5 @@ def test_hint_not_added(error):
 
 def test_hint_text_is_russian():
     assert "Прокси для подключения к моделям" in netproxy.HINT
-    assert "«Ассистент»" in netproxy.HINT
+    assert "«Настройки → Модели ИИ»" in netproxy.HINT
+    assert "«Ассистент»" not in netproxy.HINT

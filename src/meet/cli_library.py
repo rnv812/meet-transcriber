@@ -439,13 +439,13 @@ def _voices_avatar(args, cfg) -> None:
 
 
 def _check_enabled(provider: str | None, cfg) -> None:
-    """`--provider` — только из включённых в настройках моделей («Ассистент» →
-    «Модели»): отказ с понятным текстом, а не тихое включение выключенной."""
+    """`--provider` — только из включённых в настройках моделей («Настройки →
+    Модели ИИ»): отказ с понятным текстом, а не тихое включение выключенной."""
     from meet import llm
 
     if provider and provider != "auto" and provider not in cfg.llm.enabled:
         raise CliError(f"Модель «{llm.LABELS.get(provider, provider)}» не включена в настройках "
-                       "(«Ассистент» → «Модели»): включите её или выберите другую")
+                       "(«Настройки → Модели ИИ»): включите её или выберите другую")
 
 
 def _chosen_body(args, cfg) -> dict:

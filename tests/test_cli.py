@@ -1203,7 +1203,9 @@ def test_disabled_provider_is_refused_not_enabled(env, capsys, monkeypatch, comm
     _llm_config(env, provider="openai-compatible", enabled=["openai-compatible"])
     _fake_llm(monkeypatch, ["не должно понадобиться"])
     assert _main([command, RID, "--provider", "claude-code"]) == 1
-    assert "не включена в настройках" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "не включена в настройках" in err
+    assert "«Настройки → Модели ИИ»" in err
     calls = []
     _app_running(monkeypatch, calls, [])
     if command != "summary":

@@ -66,7 +66,7 @@ function ProfilesRemoved({ endpoint }: { endpoint: Endpoint }) {
   );
 }
 
-/** «Мой голос» над таблицей: тот же ряд, что в настройках «Звук». Без `device` резидент берёт сохранённый
+/** «Мой голос» над таблицей: тот же ряд, что в настройках «Спикеры». Без `device` резидент берёт сохранённый
  * `recording.mic_device` (микрофон из черновика настроек здесь неизвестен). */
 function MyVoice({ endpoint }: { endpoint: Endpoint }) {
   return (

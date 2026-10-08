@@ -70,7 +70,7 @@ test("шапка: точка записи, таймер, знак агента �
     act(() => liveStream().emit("state", liveState));
     expect(head()).toHaveTextContent("12:34 Слушает");
     expect(mark()).toHaveAttribute("data-state", "listen");
-    const stop = within(head()).getByRole("button", { name: "Стоп" });
+    const stop = within(head()).getByRole("button", { name: "Остановить и сохранить" });
     expect(stop).toHaveClass("btn", "btn--danger", "btn--icon", "btn--sm");
     expect(stop).not.toHaveClass("btn--ghost");
   } finally {
@@ -224,6 +224,22 @@ test("не подключился к идущей записи: «Повтори
   expect(liveAttach).toHaveBeenCalledWith(ep, undefined);
   expect(liveStart).not.toHaveBeenCalled();
   expect(await screen.findByText(/резидент занят/)).toBeInTheDocument();
+});
+
+test("«Повторить» с ответом ok:false — причина видна, а не теряется молча", async () => {
+  vi.mocked(liveStart).mockResolvedValue({ ok: false, ...status({ active: false, error: "Идёт обычная запись" }) });
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ active: false, error: "упал", ended_by: "crash" }))));
+  await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Повторить" }));
+  expect(await screen.findByText(/Повтор не удался: Идёт обычная запись/)).toBeInTheDocument();
+});
+
+test("«Повторить» с ответом ok:false без причины — общий текст, как у кнопки записи", async () => {
+  vi.mocked(liveStart).mockResolvedValue({ ok: false, ...status({ active: false, error: null }) });
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ active: false, error: "упал", ended_by: "crash" }))));
+  await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Повторить" }));
+  expect(await screen.findByText(/Повтор не удался: Не удалось запустить ассистента/)).toBeInTheDocument();
 });
 
 test("startFailed: только кончившийся сбоем запуск с причиной", () => {

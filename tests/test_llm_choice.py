@@ -127,6 +127,7 @@ def test_explicit_choice_must_be_enabled(monkeypatch):
     cfg = _cfg("openai-compatible", ["openai-compatible"])
     assert llm.resolve(cfg, "claude-code") == (None, None)
     assert "не включена" in llm.choice_error(cfg, "claude-code")
+    assert "«Настройки → Модели ИИ»" in llm.choice_error(cfg, "claude-code")
     assert "неизвестная модель" in llm.choice_error(cfg, "gpt")
     assert llm.resolve(cfg, "auto") == (None, None)
 
@@ -216,8 +217,9 @@ def test_assist_provider_flag_does_not_enable_a_disabled_model():
     from meet.assist import app
 
     cfg = _cfg("openai-compatible", ["openai-compatible"])
-    with pytest.raises(SystemExit, match="не включена"):
+    with pytest.raises(SystemExit, match="не включена") as refused:
         app._pick_runner("claude-code", cfg)
+    assert "«Настройки → Модели ИИ»" in str(refused.value)
     assert app._pick_runner("openai-compatible", cfg)[0] == "openai-compatible"
 
 

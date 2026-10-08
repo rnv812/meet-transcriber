@@ -413,6 +413,17 @@ test("пустая библиотека — на всё окно (без спи�
   expect(screen.queryByText("Выберите запись")).toBeNull();
 });
 
+test("библиотека не загрузилась — список с ошибкой, а не «Записей пока нет» на всё окно", async () => {
+  noGroups();
+  residentState.current = online();
+  useLibrarySpy.mockReturnValue({ items: [], jobs: [], loading: false, error: "Резидент не отвечает", refresh: async () => {} });
+  const { container } = render(<App />);
+  const list = container.querySelector<HTMLElement>('[data-pane="list"]');
+  expect(list).not.toBeNull();
+  expect(await within(list!).findByText("Резидент не отвечает")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Записей пока нет" })).toBeNull();
+});
+
 test("пустая библиотека: «Начать запись» — ответ команды сразу становится снимком, плашка автозаписи", async () => {
   noGroups();
   const applySnapshot = vi.fn();
