@@ -4,7 +4,7 @@
  * нужен — после установки оболочка поднимает его сама, мастер ждёт до 90 с.
  *
  * «Пропустить мастер» есть на каждом шаге: сам он больше не откроется (флаг
- * пишет `onClose`), снова — из Настройки → Движок и модели.
+ * пишет `onClose`), снова — из Настройки → Приложение → «Мастер первого запуска».
  */
 
 import { useEffect, useId, useState } from "react";
@@ -12,7 +12,10 @@ import { type Endpoint, getState, resolveEndpoint } from "../../lib/api";
 import type { Profile } from "../../lib/estimate";
 import { IS_MAC } from "../../lib/platform";
 import { type EngineStatus, openLogs, residentStatus } from "../../lib/shell";
+import { X, Check } from "lucide-react";
 import { Button } from "../../ui/Button";
+import { Icon } from "../../ui/Icon";
+import { MeetMark } from "../../ui/MeetMark";
 import { StepDevices } from "./StepDevices";
 import { StepDone } from "./StepDone";
 import { type InstallPhase, StepEngine } from "./StepEngine";
@@ -21,6 +24,7 @@ import { StepHf } from "./StepHf";
 import { StepModels } from "./StepModels";
 import { StepVoice } from "./StepVoice";
 import type { WizardStep } from "./useWizardGate";
+// Переключатели, запись голоса и «?» шагов живут в настройках и берут их стили.
 import "../settings/settings.css";
 import "./wizard.css";
 
@@ -117,7 +121,7 @@ export function Wizard({
   if (NEEDS_RESIDENT.includes(step) && !service.endpoint) {
     body = service.failed === "crashed" ? (
       <>
-        <p className="error">Служба записи не запустилась</p>
+        <p className="wizard__error">Служба записи не запустилась</p>
         <p className="muted">
           Причина указана в журнале. Перезапустить службу можно из меню значка в области уведомлений.
         </p>
@@ -130,7 +134,7 @@ export function Wizard({
       </>
     ) : service.failed ? (
       <>
-        <p className="error">Служба записи не запустилась за 90 секунд.</p>
+        <p className="wizard__error">Служба записи не запустилась за 90 секунд.</p>
         <div className="wizard__bar">
           <Button variant="primary" onClick={service.retry}>Подождать ещё</Button>
         </div>
@@ -165,29 +169,39 @@ export function Wizard({
   }
 
   return (
-    <div className="wizard">
+    <div className="wizard aurora">
       <div className="wizard__frame">
-        <header className="wizard__head">
-          <span className="eyebrow">Первый запуск</span>
+        <aside className="wizard__side aurora-wash" aria-label="Первый запуск">
+          <div className="wizard__brand">
+            <MeetMark size={22} />
+            <b>Первый запуск</b>
+          </div>
+          <ol className="wizard__steps" aria-label="Шаги мастера">
+            {STEPS.map((s, i) => (
+              <li key={s.id} aria-current={i === index ? "step" : undefined}
+                className={i < index ? "is-done" : i === index ? "is-current" : undefined}>
+                <span className="wizard__num">
+                  {i < index ? <Icon as={Check} size="sm" /> : i + 1}
+                </span>
+                {s.title}
+                {i < index && <span className="wizard__sr">пройден</span>}
+              </li>
+            ))}
+          </ol>
           {step !== "done" && (
-            <Button aria-label="Пропустить мастер" onClick={onClose} disabled={installing}
+            <Button className="wizard__skip-all" variant="ghost" icon={X} aria-label="Пропустить мастер"
+              onClick={onClose} disabled={installing}
               title={installing ? "Дождитесь окончания установки"
-                : "Мастер можно запустить снова: Настройки → Движок и модели"}>
-              Пропустить
+                : "Мастер можно запустить снова: Настройки → Приложение → «Мастер первого запуска»"}>
+              Пропустить мастер
             </Button>
           )}
-        </header>
-        <ol className="wizard__steps" aria-label="Шаги мастера">
-          {STEPS.map((s, i) => (
-            <li key={s.id} aria-current={i === index ? "step" : undefined} title={s.title}
-              className={i < index ? "is-done" : i === index ? "is-current" : undefined}>
-              <span className="wizard__num">{i + 1}</span>
-              <span className="wizard__name">{s.title}</span>
-            </li>
-          ))}
-        </ol>
+        </aside>
         <section className="wizard__step" aria-labelledby={headingId}>
-          <h1 id={headingId}>{STEPS[index]!.title}</h1>
+          <header className="wizard__title">
+            <span className="wizard__count">Шаг {index + 1} из {STEPS.length}</span>
+            <h1 id={headingId}>{STEPS[index]!.title}</h1>
+          </header>
           {body}
         </section>
       </div>

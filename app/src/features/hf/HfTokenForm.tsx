@@ -69,7 +69,7 @@ export function HfTokenForm({ endpoint, label, submitLabel, onSaved }: {
     <div className="hf-form">
       <div className="hf-form__row">
         <label htmlFor={id} className="hf-form__label">{label}</label>
-        <input id={id} type="password" autoComplete="off" spellCheck={false} placeholder="hf_…"
+        <input id={id} className="field field--md" type="password" autoComplete="off" spellCheck={false} placeholder="hf_…"
           value={token} onChange={(e) => setToken(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} />
         <Button variant="primary" onClick={() => void submit()} disabled={busy || !token.trim()}>

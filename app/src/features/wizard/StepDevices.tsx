@@ -64,8 +64,8 @@ export function StepDevices({ endpoint, onNext }: { endpoint: Endpoint; onNext: 
       <div className="wizard__devices">
         {devices?.available ? (
           <>
-            <code className="path">Собеседники: {devices.system?.name}</code>
-            <code className="path">Микрофон: {devices.mic?.name}</code>
+            <code className="wizard__path">Собеседники: {devices.system?.name}</code>
+            <code className="wizard__path">Микрофон: {devices.mic?.name}</code>
           </>
         ) : <span className="muted">{devices?.error ?? "Устройства не определены"}</span>}
       </div>
@@ -77,17 +77,17 @@ export function StepDevices({ endpoint, onNext }: { endpoint: Endpoint; onNext: 
         <span className="wizard__hint">
           Отметьте программы, в которых вы созваниваетесь. Применится после перезапуска приложения
         </span>
-        <div className="checks wizard__checks">
+        <div className="wizard__checks">
           {names.length === 0 && <span className="muted">Нет запущенных программ</span>}
           {names.map((n) => (
-            <label key={n} className="checks__item">
-              <input type="checkbox" checked={selected.includes(n)} onChange={() => void toggleProcess(n)} />
+            <label key={n} className="check-row">
+              <input type="checkbox" className="cb" checked={selected.includes(n)} onChange={() => void toggleProcess(n)} />
               {n}
             </label>
           ))}
         </div>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="wizard__error">{error}</p>}
       <div className="wizard__bar">
         <Button variant="primary" onClick={onNext}>Далее</Button>
       </div>

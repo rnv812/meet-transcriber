@@ -522,3 +522,41 @@ test("«Ваш голос» без модели или токена — толь
   await userEvent.click(screen.getByRole("button", { name: "Позже, в настройках" }));
   expect(screen.getByRole("heading", { name: "Готово" })).toBeInTheDocument();
 });
+
+test("левая колонка: «Шаг N из 7», семь шагов с отметкой текущего и «Пропустить мастер» внизу", async () => {
+  show({ endpoint: ep });
+  const side = screen.getByRole("complementary", { name: "Первый запуск" });
+  const list = within(side).getByRole("list", { name: "Шаги мастера" });
+  const items = within(list).getAllByRole("listitem");
+  expect(items).toHaveLength(7);
+  expect(items.map((li) => li.getAttribute("aria-current"))).toEqual(["step", null, null, null, null, null, null]);
+  expect(within(items[0]!).getByText("Ваш компьютер")).toBeInTheDocument();
+  expect(screen.getByText("Шаг 1 из 7")).toBeInTheDocument();
+  expect(within(side).getByRole("button", { name: "Пропустить мастер" })).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "Далее" }));
+  expect(screen.getByText("Шаг 2 из 7")).toBeInTheDocument();
+  const after = within(screen.getByRole("list", { name: "Шаги мастера" })).getAllByRole("listitem");
+  expect(after.map((li) => li.getAttribute("aria-current"))).toEqual([null, "step", null, null, null, null, null]);
+  // Пройденный шаг помечен для диктора, не только значком.
+  expect(within(after[0]!).getByText("пройден")).toBeInTheDocument();
+});
+
+test("«Далее» — главная кнопка шага, «Переустановить с нуля» — обычная", () => {
+  show({ start: "engine", engine: engine({ installed: true, profile: "cuda" }) });
+  expect(screen.getByRole("button", { name: "Далее" })).toHaveClass("btn--primary");
+  expect(screen.getByRole("button", { name: "Переустановить с нуля" })).not.toHaveClass("btn--primary");
+});
+
+test("поле токена Hugging Face — поле Aurora", async () => {
+  show({ start: "hf", endpoint: ep });
+  expect(await screen.findByPlaceholderText("hf_…")).toHaveClass("field");
+});
+
+test("подсказки про повторный запуск называют нынешние разделы настроек", async () => {
+  const done = show({ start: "done", endpoint: ep });
+  expect(screen.getByText(/Настройки → Приложение → «Мастер первого запуска»/)).toBeInTheDocument();
+  done.unmount();
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(voiceStatus({ ready: false, reason: "Нужен токен Hugging Face" }));
+  show({ start: "voice", endpoint: ep });
+  expect(await screen.findByText(/Настройки → Спикеры → «Мой голос»/)).toBeInTheDocument();
+});

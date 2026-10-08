@@ -27,7 +27,7 @@ function ModelItem({ model, job, canDownload, onDownload }: {
       <div className="wizard__model-text">
         <span>
           {model.title}
-          {model.recommended && <span className="tag tag--live">рекомендуется</span>}
+          {model.recommended && <span className="badge badge--fresh badge--plain">рекомендуется</span>}
         </span>
         <span className="wizard__hint">
           {KIND[model.kind] ?? model.kind} · {gb(model.size_gb)} ГБ
@@ -37,7 +37,7 @@ function ModelItem({ model, job, canDownload, onDownload }: {
           <JobProgress job={mine} size="sm" label={mine.state === "queued" ? "В очереди" : "Скачивается"}
             detail={downloadDetail(mine)} ariaLabel={`Загрузка модели ${model.title}`} />
         )}
-        {mine?.state === "failed" && <span className="error">{mine.error}</span>}
+        {mine?.state === "failed" && <span className="wizard__error">{mine.error}</span>}
       </div>
       {mine && jobActive(mine) ? null : (
         <Button onClick={onDownload} disabled={model.blocked || !canDownload || model.downloaded}>
@@ -79,7 +79,7 @@ export function StepModels({ endpoint, onNext }: { endpoint: Endpoint; onNext: (
         Модели можно скачать сейчас, чтобы первая расшифровка не ждала загрузки. Окно можно
         закрыть — скачивание продолжится.
       </p>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="wizard__error">{error}</p>}
       {!models && !error && <Loading label="Загружаю каталог моделей…" />}
       {models && !models.can_download && (
         <p className="muted">Загрузчик моделей ещё не готов — модели скачаются при первой расшифровке.</p>

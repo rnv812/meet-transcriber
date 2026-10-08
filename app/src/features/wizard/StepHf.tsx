@@ -37,7 +37,7 @@ export function StepHf({ endpoint, onNext, onSkip }: {
         можно только после принятия условий на huggingface.co — для этого нужны учётная запись и токен.
       </p>
       {status?.configured && !saved && (
-        stored?.ok ? <p className="notice">Токен уже сохранён — доступ есть</p>
+        stored?.ok ? <p className="wizard__ok">Токен уже сохранён — доступ есть</p>
           : stored ? <CheckFailure check={stored} />
           : <p className="muted">Токен уже сохранён, но ещё не проверен</p>
       )}

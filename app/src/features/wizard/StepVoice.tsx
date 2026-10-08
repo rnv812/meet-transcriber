@@ -22,7 +22,7 @@ export function StepVoice({ endpoint, onNext, pollMs, readyPollMs }: {
   if (!status) {
     return voice.error ? (
       <>
-        <p className="error">{voice.error}</p>
+        <p className="wizard__error">{voice.error}</p>
         <div className="wizard__bar">{later}</div>
       </>
     ) : <p className="muted wizard__wait">Загрузка…</p>;
@@ -35,7 +35,7 @@ export function StepVoice({ endpoint, onNext, pollMs, readyPollMs }: {
           Сейчас его не записать.
         </p>
         <p className="muted">{sentence(status.reason ?? "Нет модели разделения на спикеров")}</p>
-        <p className="wizard__hint">Записать его можно позже: Настройки → Звук → «Мой голос».</p>
+        <p className="wizard__hint">Записать его можно позже: Настройки → Спикеры → «Мой голос».</p>
         <div className="wizard__bar">{later}</div>
       </>
     );

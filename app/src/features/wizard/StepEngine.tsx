@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Check, TriangleAlert } from "lucide-react";
 import type { Profile } from "../../lib/estimate";
 import { errorText } from "../../lib/format";
 import {
@@ -20,6 +21,7 @@ import {
 import { elapsedText, stageText } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { Disclosure } from "../../ui/Disclosure";
+import { Icon } from "../../ui/Icon";
 import { ETA_TICK_MS } from "../../ui/JobProgress";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { driveOf, freeSpaceShortfall, gb } from "./gate";
@@ -78,7 +80,7 @@ function InstallProgress({ progress }: { progress: Progress }) {
       </ol>
       {progress.lines.length > 0 && (
         <Disclosure title="Подробности" className="wizard__log">
-          <pre className="log">{progress.lines.join("\n")}</pre>
+          <pre className="wizard__code">{progress.lines.join("\n")}</pre>
         </Disclosure>
       )}
     </div>
@@ -215,18 +217,21 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
   if (installed) {
     return (
       <>
-        <p className="notice wizard__lead">Движок установлен</p>
-        <p className="muted">
-          Версия {engine.version}{engine.profile ? ` · ${ENGINE_PROFILE[engine.profile]}` : ""}
-        </p>
+        <div className="wizard__alert wizard__alert--ok" role="status">
+          <Icon as={Check} size="md" />
+          <b>Движок установлен</b>
+          <span className="muted">
+            · версия {engine.version}{engine.profile ? ` · ${ENGINE_PROFILE[engine.profile]}` : ""}
+          </span>
+        </div>
         {recordingHint}
         <div className="wizard__bar">
-          <Button variant="primary" onClick={onNext}>Далее</Button>
           {phase === "idle" && (
-            <Button onClick={() => void run(true, engine.profile ?? profile)} disabled={recording}>
+            <Button variant="ghost" onClick={() => void run(true, engine.profile ?? profile)} disabled={recording}>
               Переустановить с нуля
             </Button>
           )}
+          <Button variant="primary" onClick={onNext}>Далее</Button>
         </div>
       </>
     );
@@ -246,17 +251,25 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
           {/* Хвост лога говорит больше строки оболочки: показываем что-то одно. */}
           {failure ? (
             <>
-              <p className="error">
-                Шаг {failure.step} не удался{progress.titles[failure.step] ? `: ${progress.titles[failure.step]}` : ""}
-              </p>
-              <pre className="log">{failure.tail}</pre>
+              <div className="wizard__alert wizard__alert--bad" role="alert">
+                <Icon as={TriangleAlert} size="md" />
+                <b>
+                  Шаг {failure.step} не удался{progress.titles[failure.step] ? `: ${progress.titles[failure.step]}` : ""}
+                </b>
+              </div>
+              <pre className="wizard__code">{failure.tail}</pre>
             </>
-          ) : error && <p className="error">{error}</p>}
+          ) : error && (
+            <div className="wizard__alert wizard__alert--bad" role="alert">
+              <Icon as={TriangleAlert} size="md" />
+              <b>{error}</b>
+            </div>
+          )}
         </div>
       )}
       {shortfall !== null && phase !== "running" && (
         <div className="wizard__space">
-          <span className="error">Освободите {gb(shortfall)} ГБ на диске{drive ? ` ${drive}` : ""}</span>
+          <span className="wizard__error">Освободите {gb(shortfall)} ГБ на диске{drive ? ` ${drive}` : ""}</span>
           <Button onClick={() => void recheck()} disabled={checking}>
             {checking ? "Проверяю…" : "Проверить снова"}
           </Button>
@@ -264,26 +277,26 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
       )}
       {recordingHint}
       <div className="wizard__bar">
-        {phase === "idle" && (
-          <Button variant="primary" onClick={() => void run(false, profile)} disabled={recording || shortfall !== null}>
-            Установить
-          </Button>
-        )}
-        {phase === "running" && <span className="muted">Это займёт несколько минут: скачиваются гигабайты</span>}
-        {phase === "failed" && (
-          <>
-            <Button variant="primary" onClick={() => void run(false, chosen)} disabled={recording || retryShort !== null}>
-              Повторить
-            </Button>
-            <Button onClick={() => void run(true, chosen)} disabled={recording}>Переустановить с нуля</Button>
-          </>
-        )}
         {offerCpu && (
           <button type="button" className="wizard__link" onClick={() => void run(false, "cpu")}
             disabled={recording || cpuShortfall !== null}
             title="Расшифровка на процессоре — медленнее, зато движок меньше">
             Установить CPU-версию ({gb(cpuNeeds)} ГБ)
           </button>
+        )}
+        {phase === "running" && <span className="muted">Это займёт несколько минут: скачиваются гигабайты</span>}
+        {phase === "failed" && (
+          <>
+            <Button onClick={() => void run(true, chosen)} disabled={recording}>Переустановить с нуля</Button>
+            <Button variant="primary" onClick={() => void run(false, chosen)} disabled={recording || retryShort !== null}>
+              Повторить
+            </Button>
+          </>
+        )}
+        {phase === "idle" && (
+          <Button variant="primary" onClick={() => void run(false, profile)} disabled={recording || shortfall !== null}>
+            Установить
+          </Button>
         )}
       </div>
     </>
