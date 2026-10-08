@@ -1,25 +1,20 @@
 /* Общие элементы окна: подтверждение, полоска прогресса, загрузка, строки
    состояния, обрезанный текст, раскрывающийся блок. Кнопки — в tokens.css. */
 
-/* --- Подтверждение ------------------------------------------------------ */
-.confirm-backdrop {
-  position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
-  padding: 16px; background: rgba(0, 0, 0, 0.5);
-}
-.confirm {
-  display: flex; flex-direction: column; gap: 8px; width: min(420px, 100%); padding: 16px;
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); color: var(--text);
-}
+/* --- Подтверждение (ui/ConfirmDialog) ------------------------------------ */
+/* Модальное: слой Aurora (.backdrop--modal) — по центру; окно — лист .sheet. */
+.confirm-layer { display: flex; align-items: center; justify-content: center; padding: var(--s-4); }
+.confirm { display: flex; flex-direction: column; gap: var(--s-2); width: min(440px, 100%); color: var(--ink); }
+.confirm:focus { outline: none; } /* фокус на самом окне — после щелчка по тексту */
 .confirm--inline {
-  width: auto; padding: 10px 12px; gap: 6px; box-shadow: none; background: var(--surface-2);
+  width: auto; gap: 6px; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--hairline);
   border-radius: var(--r-md);
 }
-.confirm:focus { outline: none; } /* фокус на самом окне — после щелчка по тексту */
-.confirm__title { font-weight: 600; }
+.confirm__title { font: 600 var(--text-ui)/1.4 var(--font-body); }
+.sheet .confirm__title { font-size: var(--text-lg); }
 .confirm--inline .confirm__title { font-weight: 500; }
-.confirm__text { color: var(--text-2); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.confirm__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.confirm__text { color: var(--ink-2); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
+.confirm__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s-2); margin-top: 4px; }
 .confirm--inline .confirm__actions { margin-top: 2px; }
 
 /* --- Полоска прогресса -------------------------------------------------- */
@@ -63,7 +58,9 @@
 @media (prefers-reduced-motion: reduce) {
   .progressbar__fill { transition: none; }
   .progressbar__track--working .progressbar__fill::after { display: none; }
-  .progressbar__track--indeterminate::after { animation-duration: 4s; }
+  /* Анимации здесь сняты совсем (Aurora, overlays.css): неподвижная полоса на 30 %
+     читалась бы как доля — вместо неё ровное приглушённое свечение по всей дорожке. */
+  .progressbar__track--indeterminate::after { width: 100%; opacity: 0.3; }
 }
 
 /* --- Загрузка, заготовки, строки состояния ------------------------------ */
@@ -94,23 +91,6 @@
 .disclosure--open > .disclosure__head .disclosure__chevron { transform: rotate(90deg); }
 .disclosure__body { padding: 0 0 4px; }
 
-/* --- Уведомление внизу окна (ui/Toast) ------------------------------------ */
-.toast {
-  position: fixed; z-index: 90; left: 50%; bottom: 16px; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px));
-  padding: 8px 8px 8px 14px; font-size: 13px; color: var(--text);
-  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-}
-.toast--error { color: var(--err); }
+/* --- Уведомление (ui/Toast): контейнер и вид — Aurora .toasts/.toast ----- */
 .toast__text { min-width: 0; overflow-wrap: anywhere; }
-.toast__action {
-  flex: none; padding: 3px 8px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--accent-hi); font: inherit; font-weight: 500; cursor: pointer;
-}
-.toast__action:hover { background: var(--surface-hover); }
-.toast__close {
-  display: inline-flex; flex: none; padding: 4px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--text-3); cursor: pointer;
-}
-.toast__close:hover { color: var(--text); background: var(--surface-hover); }
+.toast--error .toast__text { color: var(--danger); }

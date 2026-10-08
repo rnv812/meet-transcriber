@@ -1,0 +1,7 @@
+/* Всплывающая панель (ui/Popover): плотное стекло Aurora (.glass--dense),
+   радиус и тень слоя; положение задаёт компонент. */
+.popover {
+  position: fixed; z-index: 50; max-height: calc(100vh - 16px); overflow-y: auto; max-width: calc(100vw - 16px);
+  padding: 10px;
+  border-radius: var(--r-lg); box-shadow: var(--elev-3); color: var(--ink);
+}

@@ -281,6 +281,8 @@ test("удаление: уведомление «Отменить» возвра
   expect(api.deleteGroup).toHaveBeenCalledWith(ep, "g-a");
   await said("Группа «Проект Альфа» удалена");
   const toast = toastBox();
+  // Уведомление — в контейнере Aurora .toasts: место у края окна задаёт он.
+  expect(document.querySelector(".toasts .toast")).not.toBeNull();
   // Открытую группу удалили — список ко всем записям.
   expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", "null");
   await userEvent.click(within(toast).getByRole("button", { name: "Отменить" }));

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { floatingStyle, useFloating, type Align } from "./floating";
+import "./popover.css";
 
 const W = 260;
 
@@ -42,7 +43,7 @@ export function Popover({ anchor, onClose, children, label, width = W, anchorTog
   }, [onClose, anchor, anchorToggles]);
 
   return (
-    <div ref={box} className="popover" role="dialog" aria-label={label}
+    <div ref={box} className="popover glass glass--dense" role="dialog" aria-label={label}
       style={{ ...floatingStyle(pos), width }}>
       {children}
     </div>

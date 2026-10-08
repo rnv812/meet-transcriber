@@ -16,7 +16,8 @@
 
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Icon } from "./Icon";
+import { Button } from "./Button";
+import { IconButton } from "./IconButton";
 import "./primitives.css";
 
 /** Области для диктора: `n` — номер сообщения (новое — зачитать, даже если текст тот же). */
@@ -64,26 +65,26 @@ export function Toast({ text, error = false, action, onClose, onHold }: {
   }, []);
 
   return (
-    <div ref={box} className={`toast${error ? " toast--error" : ""}`} role="group" aria-label={text}
-      onMouseEnter={() => { hover.current = true; hold(); }}
-      onMouseLeave={() => { hover.current = false; hold(); }}
-      onFocus={(e) => {
-        const before = e.relatedTarget as HTMLElement | null;
-        if (!focus.current && before && !box.current?.contains(before)) from.current = before;
-        focus.current = true;
-        hold();
-      }}
-      onBlur={(e) => {
-        if (box.current?.contains(e.relatedTarget as Node | null)) return;
-        focus.current = false;
-        hold();
-      }}>
-      {/* Для диктора текст — в ToastAnnouncer и в имени группы; здесь он только виден. */}
-      <span className="toast__text" aria-hidden="true">{text}</span>
-      {action && <button type="button" className="toast__action" onClick={action.onClick}>{action.label}</button>}
-      <button type="button" className="toast__close" aria-label="Закрыть уведомление" onClick={onClose}>
-        <Icon as={X} size="sm" />
-      </button>
+    <div className="toasts">
+      <div ref={box} className={`toast${error ? " toast--error" : ""}`} role="group" aria-label={text}
+        onMouseEnter={() => { hover.current = true; hold(); }}
+        onMouseLeave={() => { hover.current = false; hold(); }}
+        onFocus={(e) => {
+          const before = e.relatedTarget as HTMLElement | null;
+          if (!focus.current && before && !box.current?.contains(before)) from.current = before;
+          focus.current = true;
+          hold();
+        }}
+        onBlur={(e) => {
+          if (box.current?.contains(e.relatedTarget as Node | null)) return;
+          focus.current = false;
+          hold();
+        }}>
+        {/* Для диктора текст — в ToastAnnouncer и в имени группы; здесь он только виден. */}
+        <span className="toast__text" aria-hidden="true">{text}</span>
+        {action && <Button variant="ghost" size="xs" className="toast__action" onClick={action.onClick}>{action.label}</Button>}
+        <IconButton icon={X} label="Закрыть уведомление" size="xs" className="toast__close" onClick={onClose} />
+      </div>
     </div>
   );
 }

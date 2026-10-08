@@ -1,18 +1,19 @@
-/* «?» с пояснением (ui/HelpTip.tsx): общий для настроек, мастера и карточки. */
+/* «?» с пояснением (ui/HelpTip.tsx): общий для настроек, мастера и карточки.
+   Облачко — цвета и форма подсказки Atlas Aurora; положение — fixed, задаёт компонент. */
 .helptip { position: relative; display: inline-flex; flex: none; vertical-align: middle; }
 .helptip__button {
-  width: 18px; height: 18px; padding: 0; border: 1px solid var(--line-2); border-radius: 50%;
-  background: var(--surface); color: var(--text-2); font: inherit; font-size: 11px; line-height: 1; cursor: pointer;
+  width: 18px; height: 18px; padding: 0; border: 1px solid var(--hairline-strong); border-radius: 50%;
+  background: transparent; color: var(--ink-3); font: inherit; font-size: 11px; line-height: 1; cursor: pointer;
 }
-.helptip__button:hover, .helptip__button:focus-visible, .helptip__button[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
-.helptip__button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.helptip__button:hover, .helptip__button:focus-visible, .helptip__button[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
+.helptip__button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .helptip__tip {
   position: fixed; z-index: 50; width: 300px; max-width: calc(100vw - 16px);
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
-  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
-  color: var(--text-2); font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left;
+  background: var(--surface-3); border: 1px solid var(--hairline-strong); border-radius: var(--r-sm);
+  color: var(--ink); font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left;
   text-transform: none; letter-spacing: normal; white-space: normal;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--elev-2);
 }
-.helptip__title { color: var(--text); font-weight: 600; }
-.helptip__line code { color: var(--text); font-size: 11px; }
+.helptip__title { color: var(--ink); font-weight: 600; }
+.helptip__line code { color: var(--ink); font-size: 11px; }

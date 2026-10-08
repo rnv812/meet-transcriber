@@ -55,7 +55,7 @@ test("clicking the backdrop cancels; clicking inside does not", () => {
   render(<ConfirmDialog {...base} onConfirm={() => {}} onCancel={onCancel} />);
   fireEvent.mouseDown(screen.getByRole("alertdialog"));
   expect(onCancel).not.toHaveBeenCalled();
-  fireEvent.mouseDown(document.querySelector(".confirm-backdrop")!);
+  fireEvent.mouseDown(document.querySelector(".backdrop--modal")!);
   expect(onCancel).toHaveBeenCalledTimes(1);
 });
 
@@ -81,7 +81,7 @@ test("focus returns to the opener after closing", async () => {
 test("inline variant: no backdrop, Esc inside cancels, safe button focused", () => {
   const onCancel = vi.fn();
   render(<ConfirmDialog {...base} inline onConfirm={() => {}} onCancel={onCancel} />);
-  expect(document.querySelector(".confirm-backdrop")).toBeNull();
+  expect(document.querySelector(".backdrop--modal")).toBeNull();
   const dialog = screen.getByRole("alertdialog");
   expect(dialog).not.toHaveAttribute("aria-modal");
   expect(screen.getByRole("button", { name: "Отмена" })).toHaveFocus();
@@ -99,7 +99,7 @@ test("modal: the rest of the page is inert while it is open, focus can rest on t
   try {
     const { unmount } = render(<ConfirmDialog {...base} onConfirm={() => {}} onCancel={() => {}} />);
     expect(outside).toHaveAttribute("inert");
-    expect(document.querySelector(".confirm-backdrop")).not.toHaveAttribute("inert");
+    expect(document.querySelector(".backdrop--modal")).not.toHaveAttribute("inert");
     expect(screen.getByRole("alertdialog")).toHaveAttribute("tabindex", "-1");
     unmount();
     expect(outside).not.toHaveAttribute("inert");
@@ -225,4 +225,19 @@ test("stacked modals: Esc closes only the top one, the page stays inert until th
   expect(container).not.toHaveAttribute("inert");
   fireEvent.keyDown(document.body, { key: "Escape" });
   expect(bottomCancel).not.toHaveBeenCalled();
+});
+
+test("модальное подтверждение — слой Aurora и окно-лист", () => {
+  render(<ConfirmDialog title="Удалить запись?" confirmLabel="Удалить" onConfirm={() => {}} onCancel={() => {}} />);
+  const dlg = screen.getByRole("alertdialog", { name: "Удалить запись?" });
+  expect(dlg).toHaveClass("sheet", "confirm");
+  expect(dlg.closest(".backdrop")).toHaveClass("backdrop--modal");
+});
+
+test("встроенное подтверждение — без листа и слоя: вид задаёт место (панель трея)", () => {
+  render(<ConfirmDialog {...base} inline className="tp__confirm" onConfirm={() => {}} onCancel={() => {}} />);
+  const dlg = screen.getByRole("alertdialog");
+  expect(dlg).toHaveClass("confirm", "confirm--inline", "tp__confirm");
+  expect(dlg).not.toHaveClass("sheet");
+  expect(dlg.closest(".backdrop")).toBeNull();
 });

@@ -75,13 +75,13 @@ test("псевдонимы окна ссылаются только на объ�
   expect(missing).toEqual([]);
 });
 
-test("компоненты Aurora: base, aurora, controls и feedback перенесены скриптом и подключены после палитр", () => {
-  for (const name of ["base", "aurora", "controls", "feedback"]) {
+test("компоненты Aurora: base, aurora, controls, feedback и overlays перенесены скриптом и подключены после палитр", () => {
+  for (const name of ["base", "aurora", "controls", "feedback", "overlays"]) {
     const css = read("aurora", `${name}.css`);
     expect(css.split("\n")[0]).toMatch(new RegExp(`^/\\* Atlas Aurora v2\\.6 — ${name}: `));
   }
   const index = read("aurora", "index.css");
-  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "feedback.css", "../aurora-fallbacks.css"]
+  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "feedback.css", "overlays.css", "../aurora-fallbacks.css"]
     .map((f) => index.indexOf(`"./${f}"`.replace("./../", "../")));
   expect(order.every((i) => i >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -100,6 +100,12 @@ test("запасные значения покрывают кнопки с color
   for (const sel of [".btn--primary {", ".btn--primary:hover", ".btn--aurora", ".btn--tonal:hover", ".btn--deep:hover", ".btn--danger {"]) {
     expect(css, sel).toContain(sel);
   }
+});
+
+test("запасные значения покрывают фон под слоями", () => {
+  const css = read("aurora-fallbacks.css");
+  expect(css).toContain("dialog::backdrop");
+  expect(css).toContain(".backdrop {");
 });
 
 test("прозрачные окна (live, tray) сбрасывают фон body из «Базы» Aurora", () => {

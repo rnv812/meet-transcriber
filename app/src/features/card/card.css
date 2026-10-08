@@ -157,11 +157,6 @@ button.turn__speaker:hover { text-decoration: underline; }
 .turn__text { grid-column: 3; margin: 0; color: var(--text); line-height: 1.55; }
 /* Без строки имени (текст до спикеров) текст — на строке времени. */
 .turn__mark + .turn__text { margin-top: 0; }
-.popover {
-  position: fixed; z-index: 50; max-height: calc(100vh - 16px); overflow-y: auto; max-width: calc(100vw - 16px);
-  padding: 10px; background: var(--surface-2);
-  border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 8px 24px #0008;
-}
 
 /* Правка спикера в расшифровке: выбранные реплики, полоса выбора, меню «Кому отдать». */
 .turn--selected { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); background: rgba(94, 106, 210, 0.14);

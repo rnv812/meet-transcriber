@@ -24,6 +24,11 @@
 .ownv-dialog__title { margin: 0; font-size: 15px; font-weight: 600; }
 .ownv-dialog__lead { margin: 0; }
 .ownv-dialog__bar { display: flex; justify-content: flex-end; gap: 8px; }
+/* Окно — лист Aurora (.sheet): его «.sheet p» красит абзацы в ink-2, «.sheet h3» —
+   20 px. Ошибка и пояснения сохраняют свой цвет, заголовок — как у подтверждений. */
+.ownv-dialog .ownv-dialog__title { font-size: var(--text-lg); }
+.ownv-dialog .error { color: var(--danger); }
+.ownv-dialog .muted { color: var(--ink-3); }
 
 /* Предложение записать образец (без него микрофон не делится на голоса):
    заметная строка, а не приглушённая заметка; скрывается до перезапуска окна. */

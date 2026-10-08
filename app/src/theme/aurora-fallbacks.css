@@ -10,4 +10,7 @@
   .btn--tonal:hover { background: var(--accent-soft); }
   .btn--deep:hover { background: var(--surface-2); }
   .btn--danger { border-color: var(--danger); }
+  /* Фон под модалкой и боковыми слоями: затемнение без color-mix(). */
+  dialog::backdrop, .backdrop { background: oklch(8% 0 0 / 0.45); }
+  [data-theme="light"] dialog::backdrop, [data-theme="light"] .backdrop { background: oklch(8% 0 0 / 0.3); }
 }

@@ -105,8 +105,8 @@ export function GroupDialog({ state, groups, onSubmit, onClose }: {
   };
 
   return createPortal(
-    <div className="confirm-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={box} className="confirm group-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <div className="backdrop backdrop--modal confirm-layer" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={box} className="sheet confirm group-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <form onSubmit={(e) => { e.preventDefault(); void submit(); }}>
           <div className="confirm__title" id={titleId}>{title}</div>
           {state.mode === "name" && (

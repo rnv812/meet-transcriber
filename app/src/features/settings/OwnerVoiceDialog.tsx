@@ -118,8 +118,8 @@ export function OwnerVoiceDialog({ endpoint, onClose, onDone, pollMs = POLL_MS, 
   }, []);
 
   return createPortal(
-    <div className="confirm-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={box} className="confirm ownv-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}
+    <div className="backdrop backdrop--modal confirm-layer" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={box} className="sheet confirm ownv-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}
         tabIndex={-1}>
         <div className="ownv-dialog__head">
           <h3 className="ownv-dialog__title" id={titleId}>Мой голос</h3>

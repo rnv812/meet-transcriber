@@ -140,7 +140,7 @@ export function ConfirmDialog({
     <div ref={box} role="alertdialog" aria-modal={inline ? undefined : true} aria-labelledby={titleId}
       tabIndex={-1}
       aria-describedby={message ? textId : undefined} onKeyDown={onKey}
-      className={`confirm${inline ? " confirm--inline" : ""} ${className}`.trim()}>
+      className={`${inline ? "confirm confirm--inline" : "sheet confirm"} ${className}`.trim()}>
       <div className="confirm__title" id={titleId}>{title}</div>
       {message && <div className="confirm__text" id={textId}>{message}</div>}
       <div className="confirm__actions">
@@ -156,7 +156,7 @@ export function ConfirmDialog({
   );
   if (inline) return dialog;
   return createPortal(
-    <div ref={backdrop} className="confirm-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+    <div ref={backdrop} className="backdrop backdrop--modal confirm-layer" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       {dialog}
     </div>,
     document.body,

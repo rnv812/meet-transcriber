@@ -275,12 +275,9 @@
 /* Свёрнутая панель: подпись «Ассистент» у последнего сообщения агента. */
 .live-last__kind--agent { --kind: var(--accent-hover); }
 
-/* Поповер «Что я знаю»: окно панели не грузит card.css, где общий `.popover`. */
-.session-bar > .popover {
-  position: fixed; z-index: 50; max-height: calc(100vh - 16px); overflow-y: auto; max-width: calc(100vw - 16px);
-  padding: 0; background: var(--surface-2);
-  border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 8px 24px #0008;
-}
+/* Поповер «Что я знаю»: вид — общий `.popover` (ui/popover.css, стекло Aurora);
+   здесь — без внутренних полей, их задаёт содержимое. */
+.session-bar > .popover { padding: 0; }
 
 /* Источники: документы, которые упомянул агент, — щелчок открывает. */
 .chat-msg__sources { display: flex; flex-wrap: wrap; gap: 4px; }

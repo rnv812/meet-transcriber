@@ -172,6 +172,9 @@ test("a known bar's shimmer lives inside the fill, never over the empty track", 
   // «Меньше движения»: блика на заливке нет.
   const reduced = /prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
   expect(reduced).toMatch(/\.progressbar__track--working \.progressbar__fill::after \{ display: none; \}/);
+  // «Меньше движения» Aurora (overlays.css) снимает анимации совсем: полоса неизвестной
+  // шкалы встала бы слева на 30 % дорожки, как доля. Вместо неё — ровное свечение по всей дорожке.
+  expect(reduced).toMatch(/\.progressbar__track--indeterminate::after \{[^}]*width: 100%;/);
   // Неизвестная шкала — своя, приглушённая полоса по дорожке (заливки нет).
   const unknown = /\.progressbar__track--indeterminate::after \{([^}]*)\}/.exec(css)?.[1] ?? "";
   expect(unknown).toMatch(/opacity: 0\.\d+/);
