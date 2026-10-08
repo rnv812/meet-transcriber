@@ -25,7 +25,7 @@
 карточкой.
 
 **Всегда запрещено:** закрытые папки (`kb_exclude`), чувствительные пути
-(`sensitive_paths`: ключи SSH и облаков, настройки Claude Code и Codex,
+(`sensitive_paths`: ключи SSH и облаков, секреты Claude Code и Codex — `CLI_SECRETS`,
 профили браузеров, хранилища паролей ОС, служебная папка Meet с его токеном,
 `.env` вне встречи), фоновое выполнение (подагенты Task/Agent, Bash с
 `run_in_background`, расписания), обращения к локальным адресам (API Meet),
@@ -1502,6 +1502,19 @@ def _glob_root(pattern: str) -> tuple[str, bool]:
     return "/".join(keep), False
 
 
+# Секреты Claude Code и Codex (0.5 — вместо их папок целиком): ключи входа, настройки
+# (в `env` бывают ключи API), связь с редактором (токен в .lock), снимки окружения
+# оболочки, история сессий и резервные копии файлов. Навыки, плагины, команды,
+# агенты, промпты — читать можно (навык берёт из своей папки шаблон).
+CLI_SECRETS = (
+    ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json", ".claude/ide",
+    ".claude/shell-snapshots", ".claude/session-env", ".claude/projects", ".claude/history.jsonl",
+    ".claude/file-history", ".claude/todos", ".claude/debug",
+    ".codex/auth.json", ".codex/config.toml", ".codex/sessions", ".codex/archived_sessions",
+    ".codex/history.jsonl", ".codex/log",
+)
+
+
 def sensitive_paths(*, data_dir=None, library_root=None, home=None) -> list[Path]:
     """Закрытые всегда (кроме `.env` — он по имени): ключи и настройки
     программ, профили браузеров, хранилища паролей ОС, служебные файлы Meet
@@ -1509,7 +1522,7 @@ def sensitive_paths(*, data_dir=None, library_root=None, home=None) -> list[Path
     home = Path(home or _home())
     out = [home / x for x in (
         ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".netrc", ".git-credentials",
-        ".npmrc", ".pypirc", ".claude", ".claude.json", ".codex", ".config/gcloud", ".config/gh",
+        ".npmrc", ".pypirc", ".claude.json", *CLI_SECRETS, ".config/gcloud", ".config/gh",
         ".config/opencode", ".local/share/opencode", ".mozilla", ".config/google-chrome",
         ".config/chromium", ".config/BraveSoftware", ".local/share/keyrings", "Library/Keychains",
         "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",

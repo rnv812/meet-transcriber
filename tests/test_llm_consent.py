@@ -236,6 +236,46 @@ def test_sensitive_paths_are_closed_even_on_request(dirs, target):
     assert gate.decide("Bash", {"command": f'cat "{path}"'}).outcome == DENY
 
 
+@pytest.mark.parametrize("target", [
+    "{home}/.claude/.credentials.json", "{home}/.claude/settings.json", "{home}/.claude/settings.local.json",
+    "{home}/.claude/ide/1234.lock", "{home}/.claude/shell-snapshots/snap.sh", "{home}/.claude/projects/p/s.jsonl",
+    "{home}/.codex/config.toml", "{home}/.codex/sessions/2026/x.jsonl",
+])
+def test_real_secrets_of_claude_code_and_codex_stay_closed(dirs, target):
+    """0.5: закрыты настоящие секреты CLI — ключи входа, настройки с ключами API,
+    связь с редактором, снимки окружения, история сессий."""
+    gate = _gate(dirs, CONFIRM)
+    path = target.format(**{k: str(v) for k, v in dirs.items()})
+    assert gate.decide("Read", {"file_path": path}).why == "sensitive", path
+    assert gate.decide("Bash", {"command": f'cat "{path}"'}).outcome == DENY, path
+
+
+@pytest.mark.parametrize("target", [
+    "{home}/.claude/skills/newdoc/SKILL.md", "{home}/.claude/skills/newdoc/assets/template.docx",
+    "{home}/.claude/plugins/cache/team/newdoc/1.0/skills/newdoc/assets/template.docx",
+    "{home}/.claude/commands/review.md", "{home}/.claude/agents/helper.md", "{home}/.codex/prompts/x.md",
+])
+def test_skills_plugins_and_commands_are_readable(dirs, target):
+    """0.5: папки навыков, плагинов, команд и агентов Claude Code (и промптов Codex)
+    читать можно — навык вроде newdoc берёт из своей папки шаблон."""
+    gate = _gate(dirs, CONFIRM)
+    path = target.format(**{k: str(v) for k, v in dirs.items()})
+    assert _out(gate, "Read", {"file_path": path}) == ALLOW, path
+
+
+def test_a_newdoc_like_skill_runs_with_its_template(dirs):
+    """Навык с шаблоном: команда читает файлы из папки навыка — не «закрытые данные»."""
+    gate = _gate(dirs, USER)
+    skill = dirs["home"] / ".claude" / "plugins" / "cache" / "team" / "newdoc" / "1.0" / "skills" / "newdoc"
+    cmd = (f'python "{skill / "scripts" / "build.py"}" --template "{skill / "assets" / "template.docx"}" '
+           f'--out "{dirs["meeting"] / "doc.docx"}"')
+    d = gate.decide("Bash", {"command": cmd})
+    assert d.why != "sensitive" and d.outcome != DENY, d
+    # Хитрость через «..» из папки навыка к ключам — по-прежнему закрыта.
+    sneaky = f'cat "{dirs["home"] / ".claude" / "skills" / ".." / ".credentials.json"}"'
+    assert gate.decide("Bash", {"command": sneaky}).outcome == DENY
+
+
 def test_env_example_and_env_inside_the_meeting_are_fine(dirs):
     gate = _gate(dirs, CONFIRM)
     assert _out(gate, "Read", {"file_path": str(dirs["downloads"] / ".env.example")}) == ALLOW
