@@ -1,5 +1,5 @@
 /* Бегунок (ui/Slider.tsx) по макету Atlas Aurora («Ждать возвращения после звонка»):
-   родной input[type=range] без системного вида. Дорожка 4 px --data-empty, заливка до
+   родной input[type=range] без системного вида. Дорожка 4 px --hairline-strong, заливка до
    значения --primary (--slider-fill ставит компонент), бегунок 18 px --primary с кольцом
    цвета фона; sm — бегунок 12 px. Рамка фокуса — общая Aurora (base.css) вокруг всего
    бегунка, скругленная. Значение справа — Geist Mono. */
@@ -10,7 +10,7 @@
 }
 .slider__input::-webkit-slider-runnable-track {
   height: 4px; border-radius: var(--r-full);
-  background: linear-gradient(to right, var(--primary) 0 var(--slider-fill), var(--data-empty) var(--slider-fill) 100%);
+  background: linear-gradient(to right, var(--primary) 0 var(--slider-fill), var(--hairline-strong) var(--slider-fill) 100%);
 }
 .slider__input::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none; width: 18px; height: 18px; margin-top: -7px;
