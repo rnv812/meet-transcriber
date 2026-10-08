@@ -28,6 +28,7 @@ import { GroupsPanel } from "../features/groups/GroupsNav";
 import { useGroupsUi } from "../features/groups/useGroupsUi";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
+import { useAppearance } from "../theme/useAppearance";
 import { ShellResize } from "./ShellResize";
 
 export function App() {
@@ -45,6 +46,9 @@ export function App() {
   /** Запись изменили в списке (название, выгрузка): открытая карточка перечитывается. */
   const [cardTick, setCardTick] = useState(0);
   const resident = useResident();
+  // Оформление (тема, палитра, северное сияние): кеш → настройки резидента → другие окна.
+  // TODO(Task 6): сохранить результат (look) и передать в SettingsPane.
+  useAppearance(resident.endpoint ?? null);
   // Категории правят в настройках: из них вернулись — список перечитывается.
   const categories = useCategories(resident.endpoint ?? null, section === "settings");
   /** Фильтр списка по категориям (запоминается в этом окне); пусто — все записи. */

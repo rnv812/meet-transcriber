@@ -58,6 +58,7 @@ import { useLiveStatus } from "./useLiveStatus";
 import { useLiveWindow } from "./useLiveWindow";
 import { useWide } from "./useWide";
 import { LIVE_NUDGE_LEAD, OwnerVoiceNudge, wantsOwnerSample } from "../features/settings/OwnerVoiceDialog";
+import { useAppearance } from "../theme/useAppearance";
 import "./live.css";
 
 const TICK_MS = 1000;
@@ -399,6 +400,7 @@ function dragWindow() {
 /** Страница окна: находит резидента (адрес и токен от оболочки) и показывает панель. */
 export function LiveWindow() {
   const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
+  useAppearance(endpoint);
   useEffect(() => {
     let gone = false;
     let timer: ReturnType<typeof setTimeout> | undefined;

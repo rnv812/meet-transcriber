@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { trayPanelFit, trayPanelHide, trayPanelOpen } from "../lib/shell";
+import { useAppearance } from "../theme/useAppearance";
 import { type OpenTarget, TrayPanel } from "./TrayPanel";
 import { isJustStopped } from "./trayModel";
 import { recentOf, useTrayPanel } from "./useTrayPanel";
@@ -15,6 +16,7 @@ const STALE_CHECK_MS = 30_000;
  */
 export function TrayWindow() {
   const data = useTrayPanel();
+  useAppearance(data.endpoint);
   const box = useRef<HTMLDivElement>(null);
   const [glass] = useState(() =>
     new URLSearchParams(window.location.search).get("glass") === "native" ? "native" : "css");
