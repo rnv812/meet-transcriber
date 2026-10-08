@@ -39,6 +39,10 @@ test("простой: «Начать запись» — тот же /recording/s
   const spy = vi.spyOn(api, "recordingCommand").mockResolvedValue(started);
   const { onSnapshot } = panel();
   expect(screen.getByText("Запись не идёт")).toBeInTheDocument();
+  // Главное действие панели — главная кнопка Aurora, остальные — тише.
+  expect(screen.getByRole("button", { name: "Начать запись" })).toHaveClass("btn", "btn--primary");
+  expect(screen.getByRole("button", { name: "С ассистентом" })).toHaveClass("btn--outline");
+  expect(screen.getByRole("button", { name: "Временная встреча с ассистентом" })).toHaveClass("btn--ghost");
   await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
   expect(spy).toHaveBeenCalledWith(ep, "start");
   expect(onSnapshot).toHaveBeenCalledWith(started);
@@ -64,7 +68,10 @@ test("запись: большой таймер тикает, название �
       snapshotAt: Date.now(),
     });
     expect(screen.getByRole("timer")).toHaveTextContent("12:34");
+    expect(screen.getByRole("timer")).toHaveClass("tp__timer");
     expect(screen.getByText("Google Meet — Планёрка")).toBeInTheDocument();
+    // Остановка — красная кнопка Aurora; запись без сохранения — тише, но тоже «опасная».
+    expect(screen.getByRole("button", { name: "Остановить" })).toHaveClass("btn", "btn--danger");
     expect(screen.getByText("авто")).toBeInTheDocument();
     expect(screen.queryByText("с ассистентом")).toBeNull();
     act(() => { vi.advanceTimersByTime(2000); });
@@ -128,6 +135,7 @@ test("ассистент дописывает запись — «Останов�
   panel({ snapshot: snap({ live: live({ active: true, stopping: true }) }) });
   expect(screen.getByText("Сохраняю запись…")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Остановить" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Остановить" })).toHaveClass("btn--danger");
 });
 
 test("только что остановлена: «Открыть запись» открывает окно на её карточке", async () => {
@@ -136,9 +144,10 @@ test("только что остановлена: «Открыть запись�
   expect(screen.getByText("Запись сохранена")).toBeInTheDocument();
   expect(screen.getByText("42:17")).toBeInTheDocument();
   expect(screen.getByText("Планёрка отдела")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Открыть запись" })).toHaveClass("btn--primary");
   await userEvent.click(screen.getByRole("button", { name: "Открыть запись" }));
   expect(onOpen).toHaveBeenCalledWith({ recording: "2026-10-05_14-05" });
-  expect(screen.getByRole("button", { name: "Начать новую запись" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Начать новую запись" })).toHaveClass("btn--outline");
 });
 
 test("простой: последняя запись видна строкой и открывается щелчком", async () => {
@@ -171,14 +180,14 @@ test("ассистент не запустился сразу (ok: false) — е
   expect(await screen.findByRole("alert")).toHaveTextContent("нет интерпретатора");
 });
 
-test("нет провайдера (409) — подсказка и ссылка в настройки ассистента", async () => {
+test("нет провайдера (409) — подсказка и ссылка в раздел «Модели» настроек", async () => {
   vi.spyOn(api, "liveStart").mockRejectedValue(new api.ApiError(409, "no provider"));
   const { onOpen } = panel();
   await userEvent.click(screen.getByRole("button", { name: "С ассистентом" }));
   expect(await screen.findByText(new RegExp(NO_PROVIDER))).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "С ассистентом" })).toBeDisabled();
   await userEvent.click(screen.getByRole("button", { name: "Открыть настройки" }));
-  expect(onOpen).toHaveBeenCalledWith({ section: "assistant" });
+  expect(onOpen).toHaveBeenCalledWith({ section: "models" });
 });
 
 test("провайдер не подключён заранее — «С ассистентом» недоступна сразу", () => {

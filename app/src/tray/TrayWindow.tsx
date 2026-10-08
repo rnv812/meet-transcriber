@@ -11,8 +11,9 @@ const STALE_CHECK_MS = 30_000;
 
 /**
  * Окно `tray-panel` оболочки: стекло (на macOS — системное, `?glass=native`;
- * иначе страница рисует фон сама), Esc прячет панель, высота окна следует за
- * содержимым (`tray_panel_fit`).
+ * иначе страница рисует фон сама — плотное стекло Aurora), Esc прячет панель,
+ * высота окна следует за содержимым (`tray_panel_fit`). Тема и палитра — те
+ * же, что у окна Meet (useAppearance ставит data-theme / data-aurora на <html>).
  */
 export function TrayWindow() {
   const data = useTrayPanel();
@@ -57,10 +58,10 @@ export function TrayWindow() {
   const recent = recentOf(data);
 
   return (
-    <div ref={box} className="tp" data-glass={glass} role="dialog" aria-label="Запись Meet" tabIndex={-1}
-      // Сияние дышит и точка пульсирует только на экране.
+    <div ref={box} className={glass === "native" ? "tp" : "tp glass glass--dense"} data-glass={glass}
+      role="dialog" aria-label="Запись Meet" tabIndex={-1}
+      // Точка записи пульсирует только на экране.
       data-recording={(data.visible && (data.snapshot?.status === "recording" || !!data.snapshot?.live?.active)) || undefined}>
-      <div className="tp__aura" aria-hidden="true" />
       {/* Ключ — номер показа: появление проигрывается при каждом открытии. */}
       <div key={data.shownTick} className="tp__body">
         <TrayPanel

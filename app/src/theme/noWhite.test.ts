@@ -8,9 +8,7 @@ import { join, relative, sep } from "node:path";
  * ползунки — `--ink`. Исключение — с причиной.
  */
 const SRC = join(process.cwd(), "src");
-const EXCEPTIONS: Record<string, string> = {
-  "tray/tray.css": "панель трея — собственная фиксированная тёмная палитра, белый на её градиентных кнопках",
-};
+const EXCEPTIONS: Record<string, string> = {};
 const WHITE = /#fff(?:fff)?(?![0-9a-z])|(^|[^\w-])white(?![\w-])/i;
 
 function css(dir: string, out: string[] = []): string[] {

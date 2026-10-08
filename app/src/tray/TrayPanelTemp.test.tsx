@@ -51,7 +51,7 @@ test("без подключённой модели временная встре
   expect(screen.getByRole("button", { name: "Временная встреча с ассистентом" })).toBeDisabled();
 });
 
-test("запись: «Остановить без сохранения…» спрашивает; «Отмена» по умолчанию, Esc панель не прячет", async () => {
+test("запись: «Остановить без сохранения…» спрашивает; «Продолжить запись» по умолчанию, Esc панель не прячет", async () => {
   const command = vi.spyOn(api, "recordingCommand").mockResolvedValue(done(snap(), "cancelled"));
   // Как у окна панели (TrayWindow): Esc на документе прячет панель.
   const hide = vi.fn();
@@ -63,12 +63,17 @@ test("запись: «Остановить без сохранения…» сп
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("Остановить без сохранения?");
     expect(dialog).toHaveTextContent("Запись и всё, что с ней связано, будут удалены без возможности восстановления.");
-    expect(screen.getByRole("button", { name: "Отмена" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Продолжить запись" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Удалить запись" })).toHaveClass("btn", "btn--danger");
     // Вопрос — вместо кнопок: «Остановить» сейчас не нажать по ошибке.
     expect(screen.queryByRole("button", { name: "Остановить" })).toBeNull();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(hide).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /Остановить без сохранения/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Продолжить запись" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(command).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: /Остановить без сохранения/ }));
     await userEvent.click(screen.getByRole("button", { name: "Удалить запись" }));
@@ -94,4 +99,19 @@ test("временная встреча: пометка, «Закончить» 
   await userEvent.click(screen.getByRole("button", { name: "Закончить" }));
   await userEvent.click(screen.getByRole("button", { name: "Закончить" }));
   expect(command).toHaveBeenLastCalledWith(ep, "stop");
+});
+
+test("панель спрятали (окно закрыто) посреди вопроса — запись не удаляется", async () => {
+  const command = vi.spyOn(api, "recordingCommand").mockResolvedValue(done(snap(), "cancelled"));
+  const onSnapshot = vi.fn();
+  const props = {
+    endpoint: ep, snapshot: recording(), snapshotAt: Date.now(), online: true, recent: null,
+    justStopped: false, assistant: null, onSnapshot, onOpen: vi.fn(),
+  };
+  const { rerender } = render(<TrayPanel {...props} />);
+  await userEvent.click(screen.getByRole("button", { name: /Остановить без сохранения/ }));
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  rerender(<TrayPanel {...props} visible={false} />);
+  rerender(<TrayPanel {...props} visible />);
+  expect(command).not.toHaveBeenCalled();
 });

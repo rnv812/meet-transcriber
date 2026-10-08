@@ -35,6 +35,24 @@ test("панель — диалог с фокусом; Esc прячет её, в
   expect(shell.hide).toHaveBeenCalledTimes(1);
 });
 
+test("тема и палитра — из оформления окна (data-theme / data-aurora на корне документа)", () => {
+  localStorage.setItem("meet.appearance", JSON.stringify({ theme: "light", aurora: "green", auroraStyle: "glow", motion: true }));
+  try {
+    render(<TrayWindow />);
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.dataset.aurora).toBe("green");
+  } finally {
+    localStorage.removeItem("meet.appearance");
+  }
+});
+
+test("без системного стекла фон рисует сама панель — плотное стекло Aurora", () => {
+  render(<TrayWindow />);
+  const dialog = screen.getByRole("dialog", { name: "Запись Meet" });
+  expect(dialog).toHaveAttribute("data-glass", "css");
+  expect(dialog).toHaveClass("glass", "glass--dense");
+});
+
 test("«Открыть Meet» уходит оболочке", async () => {
   render(<TrayWindow />);
   await userEvent.click(screen.getByRole("button", { name: "Открыть Meet" }));

@@ -50,7 +50,7 @@ test("все три окна подключают основу Aurora раньш
   for (const entry of ["main.tsx", join("live", "main.tsx"), join("tray", "main.tsx")]) {
     const css = cssImports(readFileSync(join(process.cwd(), "src", entry), "utf8"));
     expect(css[0], entry).toMatch(/theme\/aurora\/index\.css$/);
-    // Панель трея рисует себя своими --tp-* и прежних имён не знает.
+    // Панель трея — только на токенах Aurora, прежних имён не знает.
     if (entry.startsWith("tray")) expect(css.some((c) => c.endsWith("legacy-aliases.css")), entry).toBe(false);
     else expect(css[1], entry).toMatch(/theme\/legacy-aliases\.css$/);
   }
