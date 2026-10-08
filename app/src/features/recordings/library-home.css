@@ -1,8 +1,8 @@
-/* Ничего не выбрано (LibraryHome.tsx): колонка от левого верхнего угла карточки — те же поля,
-   что у шапки встречи (24), по ширине чтения; «Записи» и счётчик, «Новая встреча» на тихом
+/* Ничего не выбрано (LibraryHome.tsx): колонка по ширине чтения, по центру по горизонтали
+   (0.5; сверху — от верхнего края, как шапка встречи, поля 24); «Записи» и счётчик, «Новая встреча» на тихом
    сиянии (card aurora-wash), «Последняя». Сетка 8/16/24. */
 .lib-home {
-  box-sizing: border-box; max-width: 760px; padding: var(--s-5) var(--s-5) var(--s-6);
+  box-sizing: border-box; width: 100%; max-width: 760px; margin-inline: auto; padding: var(--s-5) var(--s-5) var(--s-6);
   display: flex; flex-direction: column; gap: var(--s-5);
 }
 .lib-home__head { display: flex; align-items: baseline; gap: var(--s-3); }

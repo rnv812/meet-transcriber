@@ -4,6 +4,14 @@ import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import type { CommandResult, LibraryItem, Snapshot } from "../../lib/types";
 import { LibraryHome, latestOf } from "./LibraryHome";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+test("пустой экран (ничего не выбрано) — по центру по горизонтали, сверху — от верхнего края (0.5)", () => {
+  const css = readFileSync(join(process.cwd(), "src", "features", "recordings", "library-home.css"), "utf8");
+  expect(css).toMatch(/\.lib-home \{[^}]*margin-inline: auto/);
+  expect(css).not.toMatch(/\.lib-home \{[^}]*justify-content: center/);
+});
 
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({ onDragDropEvent: vi.fn(async () => () => {}) }),
