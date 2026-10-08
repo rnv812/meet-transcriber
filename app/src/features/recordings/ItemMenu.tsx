@@ -6,12 +6,17 @@
  * `onClose`). Клик снаружи закрывает. Положение — fixed, по общему правилу
  * (ui/floating): под кнопкой (или под указателем), у края окна — с другой
  * стороны, всегда целиком в окне; пересчитывается при прокрутке и смене размера.
+ *
+ * `portal` — меню выносится в body: внутри стекла (поповер, панель — backdrop-filter)
+ * `position: fixed` считается от стекла, а не от окна. Для событий React меню по-прежнему
+ * внутри вызывающего (поповер вокруг не считает нажатие в нём «снаружи»).
  */
 
 import { Check, ChevronRight } from "lucide-react";
 import {
   Fragment, useEffect, useId, useMemo, useRef, type KeyboardEvent, type ReactNode, type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import { floatingStyle, pointAnchor, useFloating, type Align } from "../../ui/floating";
 import { Icon } from "../../ui/Icon";
 
@@ -47,7 +52,7 @@ export type MenuItem = {
   detail?: string;
 };
 
-export function ItemMenu({ at, align = "start", label, items, note, anchor, onClose }: {
+export function ItemMenu({ at, align = "start", label, items, note, anchor, onClose, portal = false }: {
   /** Точка под указателем (контекстное меню). Нет — меню раскрывается под кнопкой `anchor`. */
   at?: { x: number; y: number } | null;
   /** У кнопки: "start" — левым краем к её левому краю, "end" — правым к правому (раскрытие влево). */
@@ -59,6 +64,8 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
   /** Кнопка, открывшая меню: нажатие на неё закрывает меню само (повторным кликом), а не как «снаружи». */
   anchor?: RefObject<HTMLElement | null>;
   onClose: () => void;
+  /** Вынести меню в body (вызывающий — внутри стекла). */
+  portal?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const noteId = useId();
@@ -106,8 +113,8 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
     }
   };
 
-  return (
-    <div ref={box} className="item-menu" role="menu" aria-label={label} onKeyDown={onKeyDown}
+  const menu = (
+    <div ref={box} className="item-menu glass glass--dense" role="menu" aria-label={label} onKeyDown={onKeyDown}
       aria-describedby={note ? noteId : undefined} style={floatingStyle(pos)}>
       {note && <div className="item-menu__note" id={noteId}>{note}</div>}
       {items.map((item, i) => {
@@ -145,4 +152,5 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
       })}
     </div>
   );
+  return portal ? createPortal(menu, document.body) : menu;
 }

@@ -17,11 +17,6 @@
 .rail .btn--lg svg { width: var(--icon-lg); height: var(--icon-lg); }
 /* Выбранный раздел — «глубокая» заливка и контур (контур — outline: box-shadow занят рамкой фокуса). */
 .rail__item[aria-current="page"] { outline: 1px solid var(--control-line); outline-offset: -1px; }
-/* Группы встреч под «Записи» — значками во всю ширину рейки (features/groups, режим полосы). */
-.rail .nav-groups { align-self: stretch; }
-.rail .nav__label {
-  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
-}
 
 /* Подсказки рейки — справа от кнопки, по центру по высоте (Aurora ставит их сверху). */
 .rail__tip { flex: none; }

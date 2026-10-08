@@ -78,6 +78,33 @@ test("бейджи статусов: у готовой нет, у идущей �
   expect(opts[2]!).toHaveTextContent("Ошибка");
 });
 
+test("строка: идёт запись — «Идёт запись» в мете; расшифровка — полоса хода внутри строки", () => {
+  setup({ resident: { ...resident, snapshot: { status: "recording", folder: "C:/rec/a" } as never } });
+  const live = mains()[0]!.closest("li")!;
+  expect(live).toHaveTextContent("Идёт запись");
+  expect(within(live).queryByRole("progressbar")).toBeNull();
+  // Доля задачи — полосой в строке, то же число, что в бейдже.
+  const bar = within(mains()[1]!.closest("li")!).getByRole("progressbar", { name: "Ход расшифровки" });
+  expect(bar).toHaveAttribute("aria-valuenow", "50");
+  expect(mains()[1]!).toHaveTextContent("Распознавание 50%");
+  // Упавшая — без полосы.
+  expect(within(mains()[2]!.closest("li")!).queryByRole("progressbar")).toBeNull();
+});
+
+test("строка: агент записи работает — метка «агент» со звездой в строке названия", () => {
+  const impl = vi.mocked(useAgentLive).getMockImplementation()!;
+  vi.mocked(useAgentLive).mockImplementation((id: string) => id === "a");
+  try {
+    setup();
+    const mark = within(mains()[0]!).getByTitle("Агент работает");
+    expect(mark).toHaveTextContent("агент работает");
+    expect(mark.querySelector(".agent-mark")).toHaveAttribute("aria-hidden", "true");
+    expect(within(mains()[1]!).queryByTitle("Агент работает")).toBeNull();
+  } finally {
+    vi.mocked(useAgentLive).mockImplementation(impl);
+  }
+});
+
 test("клик по элементу вызывает onSelect(id)", async () => {
   const { onSelect } = setup();
   await userEvent.click(mains()[1]!);
@@ -112,7 +139,7 @@ test("ввод в поиск передаётся наверх", async () => {
 
 test("зона импорта: выбрать файл в браузере — сообщение, без пути", async () => {
   setup();
-  expect(screen.getByText(/Перетащите аудио или видео сюда/)).toBeInTheDocument();
+  expect(screen.getByText(/^Перетащите аудио или видео ·/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "выбрать файл" }));
   expect(await screen.findByText("Импорт — из приложения или перетаскиванием в окно приложения")).toBeInTheDocument();
 });

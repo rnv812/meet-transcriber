@@ -24,7 +24,6 @@ import { useWizardGate } from "../features/wizard/useWizardGate";
 import { STORAGE_MISSING_TITLE, StorageMissing } from "../features/settings/StorageMissing";
 import { StorageNotices } from "../features/settings/StorageNotices";
 import { GroupsLayer } from "../features/groups/GroupsLayer";
-import { GroupsPanel } from "../features/groups/GroupsNav";
 import { useGroupsUi } from "../features/groups/useGroupsUi";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge, RecordingWarnings } from "./RecordingBadge";
@@ -58,8 +57,8 @@ export function App() {
     ? catFilter.filter((k) => k === NO_CATEGORY || categories.list.some((c) => c.id === k)) : catFilter),
   [catFilter, categories.loaded, categories.list]);
   // Поиск: текст строки и метки условий (lib/libraryQuery). Метки — на сеанс; категории
-  // запоминаются (выше). Группы — одно состояние (features/groups/useGroupsUi): левая панель,
-  // область списка (withGroupScope), меню, перетаскивание; их список — и для меток `группа:`.
+  // запоминаются (выше). Группы — одно состояние (features/groups/useGroupsUi): кнопка-список над
+  // списком записей, область списка (withGroupScope), меню, перетаскивание; их список — и для меток `группа:`.
   const [chips, setChips] = useState<Chip[]>([]);
   // «Сегодня» — как у списка (useToday): после полуночи и метки «Сегодня», «Эта неделя» — заново.
   const today = useToday();
@@ -80,7 +79,7 @@ export function App() {
   const query = useMemo(() => effectiveQuery(q, chips, activeFilter,
     { categories: categories.list, groups: groupRefs ?? [], now: today }),
   [q, chips, activeFilter, categories.list, groupRefs, today]);
-  // Список — в области группы из левой панели; метки `группа:` сужают внутри неё.
+  // Список — в области группы из кнопки-списка над ним; метки `группа:` сужают внутри неё.
   const libraryFilter = useMemo(() => withGroupScope(query.filter, groupsUi.libraryScope),
     [query.filter, groupsUi.libraryScope]);
   // С задержкой — только набор текста (`q`); область, метки и «Фильтры» — сразу.
@@ -200,20 +199,15 @@ export function App() {
   ) : <OfflineState />;
 
   return (
-    // Шапки нет (0.4): кнопка записи и предупреждения — в рейке. `data-nav-rail` — группы встреч
-    // в рейке значками (features/groups/groups.css), пока они не переехали в список (этап 3, Task 2).
-    <div className="app" data-nav-rail="">
+    // Шапки нет (0.4): кнопка записи и предупреждения — в рейке, группы встреч — кнопкой-списком
+    // над списком записей (features/groups/GroupsPicker).
+    <div className="app">
       <Nav section={section} onSelect={select}
         record={<RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
           snapshotAt={resident.snapshotAt} online={resident.status === "online"}
           onSnapshot={resident.applySnapshot} />}
         alerts={<RecordingWarnings endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
-          online={resident.status === "online"} />}
-        groups={offline ? undefined : (
-          // Область меняется, только если уход к записям состоялся (несохранённые настройки — вопрос).
-          <GroupsPanel ui={groupsUi} active={section === "recordings"}
-            onOpen={(apply) => leaveSettings(() => { apply(); setSettingsPart(undefined); setSection("recordings"); })} />
-        )} />
+          online={resident.status === "online"} />} />
       <div className="panes">
         {section === "recordings" && (
           <div className="pane-list" data-pane="list">

@@ -7,6 +7,7 @@ import { jobStageKey } from "../../ui/JobProgress";
 import { useSmoothProgress } from "../../ui/ProgressBar";
 import { stageLabel, type RecStatus } from "../../lib/status";
 import type { Category, LibraryItem } from "../../lib/types";
+import { AgentMark } from "../../ui/AgentMark";
 import { AiBadge } from "../../ui/AiBadge";
 import { BADGE_CLASS } from "../../ui/badge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
@@ -133,6 +134,10 @@ export const RecordingItem = memo(function RecordingItem({
   const shown = useSmoothProgress(job ? jobFraction(job) : null, job ? jobStageKey(job) : null,
     { extrapolate: job?.state === "running", cap: job?.cap ?? null });
   const badge = badgeOf(status, job ? shown : null);
+  /** Идёт запись: точка и слово в мете (макет LIBRARY), без бейджа. */
+  const live = status.kind === "recording";
+  /** Ход расшифровки известен: полоса внизу строки, этап и доля — словами в мете, а не бейджем. */
+  const progress = job !== null && shown !== null;
   const meta = [whenShort, rec.duration_s ? duration(rec.duration_s) : ""].filter(Boolean).join(" · ");
   const title = rec.title ?? (when || rec.id);
   const hits = rec.hits ?? [];
@@ -277,29 +282,47 @@ export const RecordingItem = memo(function RecordingItem({
             else onSelect(rec.id);
           }}
           onKeyDown={(e) => { if (e.key === "F2" && actions) { e.preventDefault(); begin(); } }}>
-          <span className="rec-item__title"
-            // Подсказка: полное название, если оно обрезано, и как переименовать.
-            onMouseEnter={(e) => {
-              const el = e.currentTarget;
-              const clipped = el.scrollWidth > el.clientWidth + 1;
-              const tip = [clipped ? title : null, actions ? RENAME_HINT : null].filter(Boolean).join("\n");
-              if (tip) el.title = tip; else el.removeAttribute("title");
-            }}
-            onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
-            {rec.title && rec.title_ranges?.length
-              // Подсветка — по названию в NFC (так считает резидент).
-              ? <Highlight text={nfc(rec.title)} ranges={rec.title_ranges} /> : title}
-            {rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
-          </span>
-          <span className="rec-item__meta">
-            <span className="rec-item__when">
-              <span className="muted num">{meta}</span>
-              {category && <CategoryMark category={category} />}
-              {agentLive && <span className="rec-item__agent" role="img" aria-label="агент работает" title="Агент работает" />}
+          <span className="rec-item__head">
+            <span className="rec-item__title"
+              // Подсказка: полное название, если оно обрезано, и как переименовать.
+              onMouseEnter={(e) => {
+                const el = e.currentTarget;
+                const clipped = el.scrollWidth > el.clientWidth + 1;
+                const tip = [clipped ? title : null, actions ? RENAME_HINT : null].filter(Boolean).join("\n");
+                if (tip) el.title = tip; else el.removeAttribute("title");
+              }}
+              onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
+              {rec.title && rec.title_ranges?.length
+                // Подсветка — по названию в NFC (так считает резидент).
+                ? <Highlight text={nfc(rec.title)} ranges={rec.title_ranges} /> : title}
             </span>
-            {badge && <span className={BADGE_CLASS[badge.tone || "plain"]}>{badge.text}</span>}
+            {rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
+            {/* Агент этой записи работает (вкладка «Агент») — и когда открыта другая запись. */}
+            {agentLive && (
+              <span className="rec-item__agent" title="Агент работает">
+                <AgentMark size={12} />агент<span className="sr-only"> работает</span>
+              </span>
+            )}
+          </span>
+          <span className={`rec-item__meta${progress ? " rec-item__meta--progress" : ""}`}>
+            <span className="rec-item__when">
+              {live && <span className="rec-item__live" aria-hidden="true" />}
+              <span className="num">{live ? ["Идёт запись", meta].filter(Boolean).join(" · ") : meta}</span>
+              {category && <CategoryMark category={category} />}
+            </span>
+            {badge && progress && <span className="rec-item__status" title={badge.text}>{badge.text}</span>}
+            {badge && !live && !progress && (
+              <span className={`${BADGE_CLASS[badge.tone || "plain"]} rec-item__badge`}>{badge.text}</span>
+            )}
           </span>
         </button>
+      )}
+      {/* Ход расшифровки — полосой 4 px внизу строки; то же число, что в бейдже. */}
+      {progress && !editing && (
+        <div className="progress rec-item__progress" role="progressbar" aria-label="Ход расшифровки"
+          aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(shown! * 100)}>
+          <i style={{ width: `${Math.round(shown! * 1000) / 10}%` }} />
+        </div>
       )}
       {actions && !editing && (
         <button ref={more_} type="button" className="rec-item__more" aria-label={`Действия с записью «${title}»`}

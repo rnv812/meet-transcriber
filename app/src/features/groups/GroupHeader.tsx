@@ -1,49 +1,64 @@
 /**
- * Над списком, когда открыта группа: «Проект Альфа · 12 встреч», папка базы
- * знаний группы (если задана), меню группы («⋯») и «×» — назад ко всем
- * записям. Пустая группа — EmptyState.
+ * Над списком записей: кнопка-список групп (GroupsPicker — имя области, по
+ * нажатию дерево групп). Открыта группа — рядом её меню («⋯») и «×» — назад ко
+ * всем записям; заголовок «Проект Альфа · 12 встреч» — для диктора (глазам
+ * его показывает кнопка), папка базы знаний группы (если задана) — строкой ниже.
+ * `/groups` не ответил — вместо кнопки «Группы недоступны» с повтором. Пустая
+ * группа — EmptyState (ниже).
  */
 
-import { Ellipsis, Folder, X } from "lucide-react";
+import { Ellipsis, Folder, RotateCw, TriangleAlert, X } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { meetingsText, NO_GROUP } from "../../lib/groups";
 import { Button } from "../../ui/Button";
-import { CategoryDot } from "../../ui/Category";
 import { EmptyState } from "../../ui/EmptyState";
+import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
 import { GroupMenu } from "./GroupMenu";
+import { GroupsPicker } from "./GroupsPicker";
 import type { GroupsUi } from "./useGroupsUi";
 import "./groups.css";
 
 export function GroupHeader({ ui }: { ui: GroupsUi }) {
   const [menu, setMenu] = useState(false);
   const more = useRef<HTMLButtonElement>(null);
-  if (!ui.shown || !ui.scope || ui.scopeName === null) return null;
+  if (!ui.shown) {
+    if (!ui.unavailable) return null;
+    return (
+      <p className="group-head__note" role="note" title="Группы недоступны: служба записи не ответила">
+        <Icon as={TriangleAlert} size="sm" className="group-head__note-icon" />
+        <span className="group-head__note-text">Группы недоступны</span>
+        <IconButton icon={RotateCw} size="xs" label="Повторить" onClick={ui.retry} />
+      </p>
+    );
+  }
   const scope = ui.scope;
-  const color = scope === NO_GROUP ? null : ui.groups.find((g) => g.id === scope)?.color ?? null;
-  const kbFolder = scope === NO_GROUP ? null : ui.groups.find((g) => g.id === scope)?.kb_folder ?? null;
+  const named = scope !== null && ui.scopeName !== null;
+  const kbFolder = named && scope !== NO_GROUP ? ui.groups.find((g) => g.id === scope)?.kb_folder ?? null : null;
   // Только для чтения меню — лишь у неизвестной группы («Убрать из встреч»).
-  const editable = scope !== NO_GROUP && (!ui.readOnly || !ui.groups.some((g) => g.id === scope));
+  const editable = named && scope !== NO_GROUP && (!ui.readOnly || !ui.groups.some((g) => g.id === scope));
   const close = (focusBack = true) => { setMenu(false); if (focusBack) more.current?.focus(); };
   return (
     <div className="group-head">
-      <CategoryDot color={color} />
-      <h2 className="group-head__title">
-        <span className="group-head__name">{ui.scopeName}</span>
-        {ui.scopeCount !== null && <span className="group-head__count muted"> · {meetingsText(ui.scopeCount)}</span>}
-      </h2>
-      {kbFolder && (
-        <span className="group-head__kb muted" title="Папка базы знаний группы: на её встречах она в карте ассистента целиком">
-          <Folder size={14} strokeWidth={1.75} aria-hidden="true" />
-          <span className="sr-only">Папка базы знаний: </span>{kbFolder}
-        </span>
+      <GroupsPicker ui={ui} />
+      {named && (
+        <h2 className="sr-only">
+          {ui.scopeName}{ui.scopeCount !== null && ` · ${meetingsText(ui.scopeCount)}`}
+        </h2>
       )}
       {editable && (
-        <IconButton ref={more} icon={Ellipsis} size="xs" label={`Действия с группой «${ui.scopeName}»`}
+        <IconButton ref={more} icon={Ellipsis} label={`Действия с группой «${ui.scopeName}»`}
           aria-haspopup="menu" aria-expanded={menu} onClick={() => (menu ? close() : setMenu(true))} />
       )}
-      <IconButton icon={X} size="xs" label="Показать все записи" onClick={() => ui.setScope(null)} />
-      {menu && <GroupMenu ui={ui} id={scope} anchor={more} align="end" onClose={close} />}
+      {named && <IconButton icon={X} label="Показать все записи" onClick={() => ui.setScope(null)} />}
+      {kbFolder && (
+        <span className="group-head__kb" title="Папка базы знаний группы: на её встречах она в карте ассистента целиком">
+          <Icon as={Folder} size="sm" />
+          <span className="sr-only">Папка базы знаний: </span>
+          <span className="group-head__kb-path">{kbFolder}</span>
+        </span>
+      )}
+      {menu && scope && <GroupMenu ui={ui} id={scope} anchor={more} align="end" onClose={close} />}
     </div>
   );
 }
@@ -63,7 +78,7 @@ export function groupEmptyState(ui: GroupsUi, q: string): ReactNode {
   if (ui.scope === NO_GROUP) return <EmptyState title="Все встречи уже в группах" action={all} />;
   return (
     <EmptyState title="В группе пока нет встреч"
-      hint="Перетащите встречи на группу в левой панели или выберите «Переместить в группу» в меню встречи"
+      hint="Перетащите встречи на группу в списке групп над поиском или выберите «Переместить в группу» в меню встречи"
       action={all} />
   );
 }

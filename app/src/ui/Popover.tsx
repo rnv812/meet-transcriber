@@ -11,8 +11,14 @@ const W = 260;
  * нажатие на неё окно «снаружи» не закрывает (иначе mousedown закрыл бы его, а
  * следующий click открыл снова). Без флага якорь — обычное «снаружи»: у
  * некоторых окон якорь — вся расшифровка, и щелчок по ней должен закрывать.
+ *
+ * `keepOpen` — нажатия, которые окно не закрывают, хоть они и снаружи: модальное
+ * окно, открытое из поповера (переименовать группу), или строка, которую из-под
+ * открытого окна перетаскивают в него.
  */
-export function Popover({ anchor, onClose, children, label, width = W, anchorToggles = false, align = "start" }: {
+export function Popover({
+  anchor, onClose, children, label, width = W, anchorToggles = false, align = "start", keepOpen,
+}: {
   anchor: HTMLElement;
   onClose: () => void;
   children: ReactNode;
@@ -22,6 +28,8 @@ export function Popover({ anchor, onClose, children, label, width = W, anchorTog
   anchorToggles?: boolean;
   /** "end" — правым краем к правому краю якоря (кнопка у правого края: окно раскрывается влево). */
   align?: Align;
+  /** Нажатие на этот элемент окно не закрывает (хоть он и снаружи). */
+  keepOpen?: (target: Element) => boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   // Положение — общее правило (ui/floating): в пределах окна, с переворотом и пересчётом.
@@ -34,6 +42,7 @@ export function Popover({ anchor, onClose, children, label, width = W, anchorTog
       const target = e.target as Node;
       if (anchorToggles && anchor.contains(target)) return;
       if (inside(e)) return;
+      if (keepOpen && target instanceof Element && keepOpen(target)) return;
       if (box.current && !box.current.contains(target)) onClose();
     };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -43,7 +52,7 @@ export function Popover({ anchor, onClose, children, label, width = W, anchorTog
       document.removeEventListener("mousedown", down);
       document.removeEventListener("keydown", key);
     };
-  }, [onClose, anchor, anchorToggles, inside]);
+  }, [onClose, anchor, anchorToggles, inside, keepOpen]);
 
   return (
     <div ref={box} className="popover glass glass--dense" role="dialog" aria-label={label}

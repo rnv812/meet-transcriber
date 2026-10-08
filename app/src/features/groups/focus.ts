@@ -47,10 +47,16 @@ export function focusWhenReady(target: () => HTMLElement | null): void {
 
 /** Фокус — в строке панели с ключом `key` (у удалённой группы со встречами строка остаётся «без названия»). */
 export const focusInRow = (key: string) => Boolean(document.activeElement?.closest(`[data-row-key="${key}"]`));
-/** «Все записи» в левой панели (есть и в полосе значков). */
-export const allRow = () => document.querySelector<HTMLElement>('[data-scope-key="all"]');
-/** Строка группы в левой панели. */
-export const groupRow = (id: string) => document.querySelector<HTMLElement>(`[data-scope-key="${id}"]`);
+/**
+ * Кнопка-список групп над списком — когда дерева групп в документе нет (поповер закрыт). Дерево
+ * открыто, а строки ещё нет (группа возвращается) — null: ждём строку, а не уводим фокус на кнопку.
+ */
+const picker = () => (document.querySelector(".nav-groups") ? null
+  : document.querySelector<HTMLElement>("[data-groups-picker]"));
+/** «Все записи» в дереве групп; дерево закрыто — кнопка-список групп. */
+export const allRow = () => document.querySelector<HTMLElement>('[data-scope-key="all"]') ?? picker();
+/** Строка группы в дереве групп; дерево закрыто — кнопка-список групп. */
+export const groupRow = (id: string) => document.querySelector<HTMLElement>(`[data-scope-key="${id}"]`) ?? picker();
 /** Строка встречи в списке. */
 export const meetingRow = (id: string) =>
   document.querySelector<HTMLElement>(`[data-rec-id="${id}"] > .rec-item__main`);

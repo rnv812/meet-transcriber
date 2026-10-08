@@ -12,7 +12,7 @@
  * скрыты — их условия он молча пропустил бы.
  */
 
-import { ChevronDown } from "lucide-react";
+import { ListFilter } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, getCategoriesInfo, getFacets, libraryFilterKey, type Endpoint } from "../../lib/api";
 import { NO_CATEGORY, NO_CATEGORY_NAME } from "../../lib/categories";
@@ -24,7 +24,7 @@ import { searchable } from "../../lib/search";
 import type { Category, Facets, LibraryFilter, LibraryHas } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { CategoryDot } from "../../ui/Category";
-import { Icon } from "../../ui/Icon";
+import { IconButton } from "../../ui/IconButton";
 import { Popover } from "../../ui/Popover";
 import { Truncate } from "../../ui/Truncate";
 
@@ -53,7 +53,7 @@ export function FiltersButton({
   endpoint, q, filter, chips, categories, groups, now, onToggle, onReplace, onClear, onMorePeople, onOpen, scopeName,
 }: {
   endpoint: Endpoint | null;
-  /** Область группы из левой панели (её имя): числа — в ней, а не по всей библиотеке. */
+  /** Область группы из кнопки-списка над списком (её имя): числа — в ней, а не по всей библиотеке. */
   scopeName?: string | null;
   /** Текст поиска: при поиске числа — среди найденного. */
   q: string;
@@ -176,16 +176,15 @@ export function FiltersButton({
 
   return (
     <>
-      <button ref={button} type="button" aria-haspopup="dialog" aria-expanded={open}
-        className={`cat-filter__button${active ? " cat-filter__button--active" : ""}`}
-        title="Категория, группа, участник, период, длительность"
-        aria-label={active ? `Фильтры · ${active}` : "Фильтры"}
-        onClick={() => { if (!open) onOpen?.(); setOpen((v) => !v); }}>
-        Фильтры
-        <Icon as={ChevronDown} size="sm" />
-        {/* Число условий — значком поверх кнопки: ширина кнопки не меняется, поиск не сжимается. */}
+      {/* Кнопка-значок с контуром (макет LIBRARY) — высотой с поле поиска. Число условий — значком
+          поверх неё: ширина кнопки не меняется, поиск не сжимается. */}
+      <span className={`rec-filter${active ? " rec-filter--active" : ""}`}>
+        <IconButton ref={button} icon={ListFilter} variant="secondary" size="md" aria-haspopup="dialog"
+          aria-expanded={open} label={active ? `Фильтры · ${active}` : "Фильтры"}
+          tooltip="Фильтры: категория, группа, участник, период, длительность"
+          onClick={() => { if (!open) onOpen?.(); setOpen((v) => !v); }} />
         {active > 0 && <span className="cat-filter__count num" aria-hidden="true">{active}</span>}
-      </button>
+      </span>
       {open && button.current && (
         <Popover anchor={button.current} label="Фильтры" width={290} align="end" onClose={close} anchorToggles>
           <div className="filters">
@@ -229,7 +228,7 @@ export function FiltersButton({
                 () => onReplace(["date"], dateChip && sameChip(dateChip, p.chip) ? [] : [p.chip])))}
               {customDate && option("t:custom", chipText(customDate, ctx), true, null, () => onReplace(["date"], []))}
               <div className="filters__period">
-                <input type="text" className="search-field filters__period-input" aria-label="Выбрать период"
+                <input type="text" className="field field--sm filters__period-input" aria-label="Выбрать период"
                   placeholder="Выбрать… 5 окт, сентябрь" title="5 окт, сентябрь, с 1.09 по 15.09, прошлая неделя"
                   value={period}
                   onChange={(e) => setPeriod(e.target.value)}

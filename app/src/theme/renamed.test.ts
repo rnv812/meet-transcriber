@@ -110,6 +110,8 @@ test("CSS окна не оставляет элементов прежних б�
 const AURORA_IN_MARKUP = new Map<string, string[]>([
   // Подгруппа настроек — `.card` Aurora (feedback.css), этап 4.
   [join("features", "settings", "Section.tsx"), ["card"]],
+  // Строка поиска по записям — `.search` Aurora (controls.css): значок слева в поле, этап 3.
+  [join("features", "recordings", "SearchSuggest.tsx"), ["search"]],
 ]);
 
 test("разметка не использует прежние классы tabs/card/search/help/empty", () => {

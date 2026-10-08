@@ -59,14 +59,15 @@ const RESIDENT = { endpoint: ep, snapshot: null };
 const onSelect = vi.fn();
 const refresh = vi.fn(async () => {});
 
-function Harness({ items = ITEMS, q: initial = "" }: { items?: Recording[]; q?: string }) {
+/** `nav: false` — как в окне 0.4: дерева рядом нет, группы — в кнопке-списке над поиском. */
+function Harness({ items = ITEMS, q: initial = "", nav = true }: { items?: Recording[]; q?: string; nav?: boolean }) {
   const [q, setQ] = useState(initial);
   const ui = useGroupsUi(ep, 0, q, NO_FILTER);
   // Как useLibrary в App: те же данные — тот же список задач (строки сравнивают статус по ссылке).
   const library = useMemo(() => ({ items, jobs: NO_JOBS, loading: false, error: null, refresh }), [items]);
   return (
     <div className="app">
-      <nav className="nav">{ui.shown && <GroupsNav ui={ui} active onOpen={(apply) => { onOpen(); apply(); }} />}</nav>
+      {nav && <nav className="nav">{ui.shown && <GroupsNav ui={ui} active onOpen={(apply) => { onOpen(); apply(); }} />}</nav>}
       <div className="pane-list" data-testid="scope" data-scope={JSON.stringify(ui.libraryScope ? [ui.libraryScope] : null)}>
         <RecordingsList selected={null} onSelect={onSelect} q={q} onQ={setQ} groupsUi={ui}
           searchPlaceholder={ui.scopeName ? `Поиск в «${ui.scopeName}»` : undefined}
@@ -92,7 +93,7 @@ const recordMenu = async (title: string) => userEvent.click(screen.getByRole("bu
 const recordMain = (title: string) => [...document.querySelectorAll<HTMLButtonElement>(".rec-item__main")]
   .find((b) => b.querySelector(".rec-item__title")?.textContent === title)!;
 
-async function setup(info: GroupsInfo | Error = INFO, props: { items?: Recording[]; q?: string } = {}) {
+async function setup(info: GroupsInfo | Error = INFO, props: { items?: Recording[]; q?: string; nav?: boolean } = {}) {
   if (info instanceof Error) vi.mocked(api.getGroups).mockRejectedValue(info);
   else vi.mocked(api.getGroups).mockResolvedValue(info);
   const view = render(<Harness {...props} />);
@@ -694,6 +695,148 @@ test("«Отменить» удаление пустой открытой гру
   expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", '["g-d"]');
   expect(window.localStorage.getItem("meet.groupScope")).toBe('"g-d"');
   expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Пустая · 0 встреч");
+});
+
+// --- кнопка-список групп над поиском (0.4) ---------------------------------------------------
+
+/** Кнопка-список над поиском: имя текущей группы. */
+const picker = () => screen.getByRole("button", { name: /^Группа встреч: / });
+const pickerBox = () => screen.getByRole("dialog", { name: "Группы" });
+const pickerTree = () => within(pickerBox());
+
+test("над поиском — кнопка-список с текущей группой; дерево с «Новая группа» — в поповере; выбор — область", async () => {
+  await setup(INFO, { nav: false });
+  // Дерева рядом нет: группы — только в кнопке-списке.
+  expect(screen.queryByRole("list", { name: "Группы встреч" })).toBeNull();
+  const button = picker();
+  expect(button).toHaveAccessibleName("Группа встреч: Все записи");
+  expect(button).toHaveAttribute("aria-haspopup", "dialog");
+  expect(button).toHaveAttribute("aria-expanded", "false");
+  // Кнопка — над поиском.
+  const search = screen.getByRole("combobox", { name: "Поиск по записям" });
+  expect(button.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await userEvent.click(button);
+  expect(button).toHaveAttribute("aria-expanded", "true");
+  expect(pickerTree().getByRole("list", { name: "Группы встреч" })).toBeInTheDocument();
+  expect(pickerTree().getByRole("button", { name: "Новая группа" })).toBeInTheDocument();
+  // Фокус — на выбранной области в дереве.
+  expect(pickerTree().getByRole("button", { name: /^Все записи,/ })).toHaveFocus();
+  await userEvent.click(pickerTree().getByRole("button", { name: /^Проект Альфа,/ }));
+  expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", '["g-a"]');
+  expect(screen.queryByRole("dialog", { name: "Группы" })).toBeNull();
+  expect(picker()).toHaveAccessibleName("Группа встреч: Проект Альфа");
+  expect(picker()).toHaveFocus();
+  expect(search).toHaveAttribute("placeholder", "Поиск в «Проект Альфа»");
+  expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Проект Альфа · 2 встречи");
+  // Повторно — выбранная группа отмечена; «Без группы» — тоже область.
+  await userEvent.click(picker());
+  expect(pickerTree().getByRole("button", { name: /^Проект Альфа,/ })).toHaveAttribute("aria-current", "true");
+  await userEvent.click(pickerTree().getByRole("button", { name: /^Без группы,/ }));
+  expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", '["_none"]');
+  expect(picker()).toHaveAccessibleName("Группа встреч: Без группы");
+});
+
+test("кнопка-список с клавиатуры: ↓, Enter, Пробел открывают; Esc закрывает и возвращает фокус", async () => {
+  await setup(INFO, { nav: false });
+  picker().focus();
+  await userEvent.keyboard("{ArrowDown}");
+  expect(pickerTree().getByRole("button", { name: /^Все записи,/ })).toHaveFocus();
+  // Внутри — клавиатура дерева.
+  await userEvent.keyboard("{ArrowDown}");
+  expect(pickerTree().getByRole("button", { name: /^Проект Альфа,/ })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "Группы" })).toBeNull();
+  expect(picker()).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  expect(pickerBox()).toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  expect(picker()).toHaveFocus();
+  await userEvent.keyboard(" ");
+  expect(pickerBox()).toBeInTheDocument();
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", "null");
+  expect(picker()).toHaveFocus();
+});
+
+test("меню группы в поповере — вне стекла (порталом); Esc закрывает только меню; пункт меню работает", async () => {
+  await setup(INFO, { nav: false });
+  await userEvent.click(picker());
+  const box = pickerBox();
+  await userEvent.click(within(box).getByRole("button", { name: "Действия с группой «Бета»" }));
+  const menu = screen.getByRole("menu", { name: "Действия с группой «Бета»" });
+  // Стекло (backdrop-filter) сдвинуло бы fixed-меню: меню — не внутри поповера.
+  expect(box.contains(menu)).toBe(false);
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(pickerBox()).toBeInTheDocument();
+  expect(within(box).getByRole("button", { name: "Действия с группой «Бета»" })).toHaveFocus();
+  // Нажатие на пункт меню — не «снаружи» поповера.
+  await userEvent.click(within(box).getByRole("button", { name: "Действия с группой «Бета»" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Выше" }));
+  expect(api.orderGroups).toHaveBeenCalledWith(ep, ["g-b", "g-a"]);
+  expect(pickerBox()).toBeInTheDocument();
+});
+
+test("окно названия из раскрытого дерева: поповер не закрывается от щелчков в окне, фокус — обратно в дерево", async () => {
+  await setup(INFO, { nav: false });
+  await userEvent.click(picker());
+  await userEvent.click(pickerTree().getByRole("button", { name: "Действия с группой «Бета»" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Переименовать…" }));
+  const input = screen.getByRole("textbox", { name: "Название" });
+  await userEvent.click(input);
+  await userEvent.clear(input);
+  await userEvent.type(input, "Гамма");
+  expect(pickerBox()).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(pickerBox()).toBeInTheDocument();
+  expect(pickerTree().getByRole("button", { name: "Действия с группой «Бета»" })).toHaveFocus();
+  // «Новая группа» из дерева — то же окно.
+  await userEvent.click(pickerTree().getByRole("button", { name: "Новая группа" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Название" }), "Клиент{Enter}");
+  expect(api.createGroup).toHaveBeenCalledWith(ep, { name: "Клиент", color: "#3aa7b8" });
+});
+
+test("перетаскивание встречи на группу в раскрытом дереве: нажатие на строку поповер не закрывает", async () => {
+  await setup(INFO, { nav: false });
+  await userEvent.click(picker());
+  hover(() => pickerTree().getByRole("button", { name: /^Бета,/ }).closest("li"));
+  const row = recordMain("Созвон");
+  pointer(row, "pointerdown", 300, 200);
+  fireEvent.mouseDown(row); // браузер шлёт mousedown вслед за pointerdown
+  pointer(window, "pointermove", 120, 140);
+  expect(pickerBox()).toBeInTheDocument();
+  expect(document.querySelector(".drag-ghost")).toHaveTextContent("Созвон");
+  expect(pickerTree().getByRole("button", { name: /^Бета,/ }).closest("li")).toHaveClass("nav-group--drop");
+  pointer(window, "pointerup", 120, 140);
+  fireEvent.click(row); // щелчок за отпусканием гасится: ни открытия встречи, ни закрытия дерева
+  await act(async () => {});
+  expect(api.setGroupMembers).toHaveBeenCalledWith(ep, "g-b", { add: ["c"] });
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(pickerBox()).toBeInTheDocument();
+  // Простой щелчок по встрече — открыть её; дерево закрывается.
+  delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+  await userEvent.click(recordMain("Демо"));
+  expect(onSelect).toHaveBeenCalledWith("d");
+  expect(screen.queryByRole("dialog", { name: "Группы" })).toBeNull();
+});
+
+test("открытая группа: рядом с кнопкой-списком — меню группы и «Показать все записи»", async () => {
+  window.localStorage.setItem("meet.groupScope", '"g-b"');
+  await setup(INFO, { nav: false });
+  expect(picker()).toHaveAccessibleName("Группа встреч: Бета");
+  const head = screen.getByRole("heading", { level: 2 }).parentElement!;
+  expect(head).toContainElement(picker());
+  await userEvent.click(within(head).getByRole("button", { name: "Действия с группой «Бета»" }));
+  expect(screen.getByRole("menu", { name: "Действия с группой «Бета»" })).toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(within(head).getByRole("button", { name: "Показать все записи" }));
+  expect(screen.getByTestId("scope")).toHaveAttribute("data-scope", "null");
+  expect(picker()).toHaveAccessibleName("Группа встреч: Все записи");
+});
+
+test("старый резидент без /groups — кнопки-списка нет", async () => {
+  await setup(new api.ApiError(404, "нет такого адреса"), { nav: false });
+  expect(screen.queryByRole("button", { name: /^Группа встреч/ })).toBeNull();
 });
 
 // --- папка базы знаний группы ----------------------------------------------------------------

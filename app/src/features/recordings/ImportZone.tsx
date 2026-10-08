@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type Endpoint, importFile } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, overChatDrop, pickMedia } from "../../lib/shell";
-import { Icon } from "../../ui/Icon";
+import { IconButton } from "../../ui/IconButton";
 
 const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
 
@@ -85,7 +85,7 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
           setErrors([BROWSER_HINT]);
         }}
       >
-        Перетащите аудио или видео сюда · или{" "}
+        Перетащите аудио или видео ·{" "}
         <button type="button" className="link" onClick={() => void choose()}>
           выбрать файл
         </button>
@@ -97,8 +97,7 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
               <div key={line}>{line}</div>
             ))}
           </div>
-          <button type="button" className="import__close" aria-label="Скрыть ошибки импорта"
-            onClick={() => setErrors([])}><Icon as={X} size="sm" /></button>
+          <IconButton icon={X} size="xs" label="Скрыть ошибки импорта" onClick={() => setErrors([])} />
         </div>
       )}
     </div>

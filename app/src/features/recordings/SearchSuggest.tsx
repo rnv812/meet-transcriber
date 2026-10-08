@@ -15,11 +15,13 @@
  */
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Search } from "lucide-react";
 import { getParticipants, type Endpoint } from "../../lib/api";
 import {
   nameMatches, personQuery, suggestions, type PersonOption, type QueryContext, type Suggestion,
 } from "../../lib/libraryQuery";
 import { CategoryDot } from "../../ui/Category";
+import { Icon } from "../../ui/Icon";
 
 /** Значение на конце — префикс без значения («бюджет участник:»): фокус сразу открывает список. */
 const PREFIX_AT_END = /(?:^|\s)(?:участник|группа|категория|дата|после|до|есть|нет|дольше|короче):$/i;
@@ -136,11 +138,13 @@ export function SearchSuggest({ value, onChange, onApply, onBackspaceEmpty, endp
   };
 
   return (
-    <div className="rec-search">
+    // Поле — Aurora `.search` + `.field--md` (значок слева); рамка фокуса — одна, у `.field`.
+    <div className="rec-search search">
+      <Icon as={Search} />
       <input
         ref={input}
         type="search"
-        className="search-field"
+        className="field field--md rec-search__input"
         role="combobox"
         placeholder={placeholder}
         title="Поиск по названиям и тексту расшифровок. Префиксы: участник:, группа:, категория:, дата:, есть:, дольше:…"
@@ -158,7 +162,7 @@ export function SearchSuggest({ value, onChange, onApply, onBackspaceEmpty, endp
         onBlur={() => setOpen(false)}
       />
       {/* Список в разметке всегда (aria-controls указывает на существующее), пустой — скрыт. */}
-      <ul id={listId} role="listbox" aria-label="Подсказки поиска" className="rec-suggest" hidden={!shown}>
+      <ul id={listId} role="listbox" aria-label="Подсказки поиска" className="rec-suggest glass glass--dense" hidden={!shown}>
         {shown && options.map((o, i) => (
           <li key={o.id} id={optionId(i)} role="option" aria-selected={i === at} aria-disabled={o.disabled || undefined}
             className={`rec-suggest__option rec-suggest__option--${o.kind}${i === at ? " rec-suggest__option--active" : ""}`}

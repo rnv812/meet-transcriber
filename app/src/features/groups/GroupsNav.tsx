@@ -1,18 +1,18 @@
 /**
- * Группы в левой панели, под «Записи»: «Все записи», группы по порядку (цвет
- * и число встреч), неизвестные («Группа без названия»), «Без группы» и
- * «+ Новая группа». Щелчок — область списка (и поиска).
+ * Дерево групп (в поповере кнопки-списка над списком записей, GroupsPicker):
+ * «Все записи», группы по порядку (цвет и число встреч), неизвестные («Группа
+ * без названия»), «Без группы» и «+ Новая группа». Щелчок — область списка (и поиска).
  *
  * Клавиатура: ↑/↓/Home/End — по строкам, Enter/Пробел — выбрать область,
  * Alt+↑/↓ — переставить группу, Shift+F10 или клавиша меню — меню группы.
  * Мышью: «⋯» или правая кнопка — меню; группу можно перетащить на другое
  * место (линия вставки), а встречи из списка — на группу или «Без группы».
  *
- * Список — `<ul>` внутри `<nav>`: строки — кнопки с `aria-current` у
- * выбранной области (как разделы над ними), «⋯» — отдельная кнопка.
+ * Список — `<ul>`: строки — кнопки с `aria-current` у выбранной области,
+ * «⋯» — отдельная кнопка.
  */
 
-import { CircleDashed, Copy, Ellipsis, Layers, Plus, RotateCw, TriangleAlert, X } from "lucide-react";
+import { CircleDashed, Copy, Ellipsis, Layers, Plus, TriangleAlert, X } from "lucide-react";
 import {
   useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent,
   type PointerEvent,
@@ -44,24 +44,6 @@ type Row = {
   /** Куда можно отпустить встречи: id группы или NO_GROUP. */
   drop?: string;
 };
-
-/** Что видно в панели под «Записи»: группы; «Группы недоступны» с повтором; ничего (старый резидент, загрузка). */
-export function GroupsPanel(props: Parameters<typeof GroupsNav>[0]) {
-  const { ui } = props;
-  if (ui.shown) return <GroupsNav {...props} />;
-  if (!ui.unavailable) return null;
-  return (
-    <div className="nav-groups">
-      <p className="nav-groups__note" role="note" title="Группы недоступны: служба записи не ответила">
-        <Icon as={TriangleAlert} size="sm" />
-        <span className="nav__label">Группы недоступны</span>
-        <button type="button" className="nav-groups__close" aria-label="Повторить" title="Повторить" onClick={ui.retry}>
-          <Icon as={RotateCw} size="sm" />
-        </button>
-      </p>
-    </div>
-  );
-}
 
 /** Имя файла из пути (копия повреждённого файла групп): полный путь — в подсказке. */
 const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -184,7 +166,7 @@ export function GroupsNav({ ui, active, onOpen }: {
           const title = `${row.label} · ${meetingsText(row.count)}`;
           const onContext = menuId ? (e: MouseEvent<HTMLElement>) => {
             e.preventDefault();
-            // «⋯» скрыт в полосе значков — тогда меню у самой строки (и фокус вернётся на неё).
+            // «⋯» не виден (нет места) — меню у самой строки (и фокус вернётся на неё).
             const more = (e.currentTarget as HTMLElement).querySelector<HTMLButtonElement>(".nav-group__more");
             const button = more && more.getClientRects().length
               ? more : (e.currentTarget as HTMLElement).querySelector<HTMLButtonElement>(".nav-group__main");
@@ -207,7 +189,7 @@ export function GroupsNav({ ui, active, onOpen }: {
                 {row.scope === null ? <Icon as={Layers} size="sm" className="nav-group__icon" />
                   : row.scope === NO_GROUP ? <Icon as={CircleDashed} size="sm" className="nav-group__icon" />
                     : <span className="nav-group__icon"><CategoryDot color={row.color} /></span>}
-                <span className="nav__label nav-group__name">{row.label}</span>
+                <span className="nav-group__name">{row.label}</span>
                 <span className="nav-group__count num" aria-hidden="true">{row.count}</span>
                 <span className="sr-only">, {meetingsText(row.count)}</span>
               </button>
@@ -226,22 +208,22 @@ export function GroupsNav({ ui, active, onOpen }: {
         })}
       </ul>
       {editable && (
-        <button type="button" className="nav-group__add" title="Новая группа" onClick={() => ui.create()}>
+        <button type="button" className="nav-group__add" onClick={() => ui.create()}>
           <Icon as={Plus} size="sm" className="nav-group__icon" />
-          <span className="nav__label">Новая группа</span>
+          <span className="nav-group__name">Новая группа</span>
         </button>
       )}
       {ui.readOnly && (
         <p className="nav-groups__note" role="note" title="Группы записаны более новой версией Meet">
           <Icon as={TriangleAlert} size="sm" />
-          <span className="nav__label">Группы записаны более новой версией Meet — здесь их можно только смотреть.</span>
+          <span className="nav-groups__note-text">Группы записаны более новой версией Meet — здесь их можно только смотреть.</span>
         </p>
       )}
       {ui.broken && (
         <div className="nav-groups__note nav-groups__note--warn" role="alert"
           title={ui.broken.copy ? `Файл групп повреждён, копия: ${ui.broken.copy}` : "Файл групп повреждён"}>
           <Icon as={TriangleAlert} size="sm" />
-          <span className="nav__label nav-groups__note-text">
+          <span className="nav-groups__note-text">
             {/* Полный путь длинный: виден файл, весь путь — в подсказке, для диктора и кнопкой «Скопировать». */}
             {ui.broken.copy ? <>Файл групп повреждён, копия: <span className="nav-groups__path" aria-hidden="true">
               {splitCopyName(baseName(ui.broken.copy)).map((part, i) => (

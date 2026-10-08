@@ -1,4 +1,4 @@
-import { allRow, focusInRow, focusLost, focusWhenReady, rescueFocus } from "./focus";
+import { allRow, focusInRow, focusLost, focusWhenReady, groupRow, rescueFocus } from "./focus";
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); document.body.innerHTML = ""; });
@@ -40,4 +40,15 @@ test("focusWhenReady ждёт, пока элемент появится", () => 
   document.body.append(late);
   vi.advanceTimersByTime(1000);
   expect(late).toHaveFocus();
+});
+
+test("дерево групп закрыто — «Все записи» и строка группы — это кнопка-список; открыто — только его строки", () => {
+  document.body.innerHTML = `<button data-groups-picker="">Все записи</button>`;
+  const picker = document.querySelector<HTMLElement>("[data-groups-picker]")!;
+  expect(allRow()).toBe(picker);
+  expect(groupRow("g-a")).toBe(picker);
+  // Дерево открыто, строки группы ещё нет (возвращается после «Отменить») — ждём её, а не кнопку.
+  document.body.insertAdjacentHTML("beforeend", `<div class="nav-groups"><button data-scope-key="all">Все</button></div>`);
+  expect(allRow()).toHaveAttribute("data-scope-key", "all");
+  expect(groupRow("g-a")).toBeNull();
 });

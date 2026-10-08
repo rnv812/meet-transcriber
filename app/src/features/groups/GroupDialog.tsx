@@ -114,7 +114,7 @@ export function GroupDialog({ state, groups, onSubmit, onClose }: {
           )}
           <label className="group-dialog__label">
             Название
-            <input ref={input} className="search-field group-dialog__input" value={name} maxLength={GROUP_NAME_MAX}
+            <input ref={input} className="field field--md group-dialog__input" value={name} maxLength={GROUP_NAME_MAX}
               aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}
               placeholder="Например, Проект Альфа"
               onChange={(e) => { setName(e.target.value); setError(null); }} />

@@ -1,44 +1,75 @@
-/* Группы в левой панели (GroupsNav): под «Записи», с отступом; длинный список
-   прокручивается, «Голоса» и «Настройки» под ним остаются видны. */
-.nav-groups {
-  display: flex; flex-direction: column; gap: 1px; flex: 0 1 auto; min-height: 0; overflow-y: auto;
-  margin: 0 0 6px; padding: 2px 0 2px 10px;
+/* Группы встреч (0.4): кнопка-список над списком записей (GroupsPicker) и дерево групп в её
+   поповере (GroupsNav) — только токены Atlas Aurora. */
+
+/* Строка над списком: кнопка-список (select-btn--md), у открытой группы — «⋯» и «×»;
+   папка базы знаний группы — строкой ниже. */
+.group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.group-head > .group-pick { flex: 1; min-width: 0; }
+.group-head__kb {
+  display: flex; align-items: center; gap: 6px; flex-basis: 100%; min-width: 0; padding: 0 2px;
+  color: var(--ink-3); font-size: var(--text-xs);
 }
-.nav-groups__list { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 0; list-style: none; }
-.nav-group { position: relative; border-radius: var(--r-md); }
+.group-head__kb > svg { flex: none; }
+.group-head__kb-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* `/groups` не ответил — вместо кнопки-списка. */
+.group-head__note {
+  display: flex; align-items: center; gap: 8px; min-height: var(--control); margin: 0; padding: 0 4px 0 12px;
+  border: 1px solid var(--hairline); border-radius: var(--r-control);
+  color: var(--ink-2); font-size: var(--text-sm);
+}
+.group-head__note-icon { flex: none; color: var(--warning); }
+.group-head__note-text { flex: 1; min-width: 0; }
+
+/* Кнопка-список: значок области, имя, число встреч и стрелка. У Aurora `.select-btn span { flex: 1 }` —
+   здесь растягивается только имя. */
+/* Высота md: у Aurora `.select-btn` (overlays.css) объявлена позже `.select-btn--md` (controls.css) и
+   перебивает её — здесь два класса. */
+.select-btn.group-pick { height: var(--control); border-radius: var(--r-control); font-size: var(--text-ui); }
+.select-btn.group-pick > span { flex: none; }
+.select-btn.group-pick > .group-pick__name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;
+}
+.group-pick__icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 14px; color: var(--ink-3); }
+.group-pick__count { color: var(--ink-3); font-size: var(--text-xs); }
+.group-pick__warn { display: inline-flex; color: var(--warning); }
+
+/* Дерево групп (в поповере). */
+.nav-groups { display: flex; flex-direction: column; gap: 2px; min-height: 0; max-height: min(60vh, 440px); overflow-y: auto; }
+.nav-groups__list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.nav-group { position: relative; border-radius: var(--r-control-sm); }
 .nav-group__main, .nav-group__add {
-  display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 8px;
-  border: 0; border-radius: var(--r-md); background: transparent;
-  color: var(--text-2); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
-  transition: background var(--t), color var(--t);
+  display: flex; align-items: center; gap: 8px; width: 100%; height: var(--control-sm); padding: 0 10px;
+  border: 0; border-radius: var(--r-control-sm); background: transparent;
+  color: var(--ink-2); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer;
+  transition: background var(--d), color var(--d);
 }
-.nav-group__main:hover, .nav-group__add:hover { background: var(--surface-hover); color: var(--text); }
-/* Выбранное — не только цветом: рамка и насыщенный шрифт. Рамка — outline:
+.nav-group__main:hover, .nav-group__add:hover { background: var(--surface-3); color: var(--ink); }
+/* Выбранное — не только цветом: контур и насыщенный шрифт. Контур — outline:
    box-shadow заменил бы рамку фокуса Aurora (theme/focus.test.ts). */
 .nav-group__main[aria-current="true"] {
   background: var(--surface-3); color: var(--ink); font-weight: 600;
   outline: 1px solid var(--control-line); outline-offset: -1px;
 }
 .nav-group__icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 14px; }
-.nav-group__name { flex: 1; }
-.nav-group__count { flex: none; margin-left: auto; color: var(--text-3); font-size: 11px; }
+.nav-group__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-group__count { flex: none; margin-left: auto; color: var(--ink-3); font-size: var(--text-xs); }
 /* «⋯» — поверх счётчика: виден при наведении, фокусе и открытом меню. */
 .nav-group__more {
-  position: absolute; top: 1px; right: 2px; display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--r-sm);
-  background: var(--surface-hover); color: var(--text-2); cursor: pointer; opacity: 0;
-  transition: opacity var(--t), color var(--t);
+  position: absolute; top: 4px; right: 4px; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--r-xs);
+  background: var(--surface-3); color: var(--ink-2); cursor: pointer; opacity: 0;
+  transition: opacity var(--d), color var(--d);
 }
 .nav-group:hover .nav-group__more, .nav-group__more:focus-visible, .nav-group__more[aria-expanded="true"] { opacity: 1; }
 .nav-group:hover:has(.nav-group__more) .nav-group__count,
 .nav-group--menu .nav-group__count { visibility: hidden; }
-.nav-group__more:hover { color: var(--text); }
-.nav-group__add { color: var(--text-3); }
+.nav-group__more:hover { color: var(--ink); }
+.nav-group__add { color: var(--ink-3); }
 
 /* Перетаскивание: куда можно отпустить встречи — пунктир; цель под указателем — подсветка;
    место группы — линия вставки; сама перетаскиваемая группа — бледнее. */
-.nav-group--droppable { outline: 1px dashed var(--line-2); outline-offset: -1px; }
-.nav-group--drop, .nav-group--drop .nav-group__main { background: rgba(94, 106, 210, 0.22); color: var(--text); }
+.nav-group--droppable { outline: 1px dashed var(--hairline-strong); outline-offset: -1px; }
+.nav-group--drop, .nav-group--drop .nav-group__main { background: var(--accent-soft); color: var(--ink); }
 .nav-group--drop { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
 .nav-group--insert-before::before, .nav-group--insert-after::after {
   content: ""; position: absolute; left: 4px; right: 4px; height: 2px; border-radius: 1px; background: var(--accent);
@@ -48,67 +79,43 @@
 .nav-group--insert-after::after { bottom: -2px; }
 .nav-group--dragging { opacity: 0.45; }
 
-/* Предупреждения панели: файл групп повреждён, записан более новой версией. */
+/* Предупреждения дерева: файл групп повреждён, записан более новой версией. */
 .nav-groups__note {
-  display: flex; align-items: flex-start; gap: 6px; margin: 4px 0 0; padding: 6px 8px;
-  font-size: 11px; line-height: 1.35; color: var(--text-2);
-  background: var(--surface-2); border-radius: var(--r-md);
+  display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; padding: 8px 10px;
+  font-size: var(--text-xs); line-height: 1.4; color: var(--ink-2);
+  background: var(--surface-2); border-radius: var(--r-control-sm);
 }
-.nav-groups__note > svg { flex: none; margin-top: 1px; color: var(--amber); }
-.nav-groups__note .nav__label { white-space: normal; overflow-wrap: anywhere; }
-.nav-groups__note--warn { color: var(--text); }
+.nav-groups__note > svg { flex: none; margin-top: 1px; color: var(--warning); }
+.nav-groups__note--warn { color: var(--ink); }
+.nav-groups__note-text { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 /* Имя копии повреждённого файла: длинное — в одну строку с многоточием, путь целиком — в подсказке. */
-.nav-groups__path { display: flex; max-width: 100%; min-width: 0; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.nav-groups__path { display: flex; max-width: 100%; min-width: 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 /* Многоточие — в середине: начало имени сжимается, время в конце видно всегда. */
 .nav-groups__path-head { min-width: 1ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-groups__path-tail { flex: none; white-space: nowrap; }
-.nav-groups__note-text { min-width: 0; }
 .nav-groups__close {
-  display: inline-flex; flex: none; margin-left: auto; padding: 1px; border: 0; border-radius: var(--r-sm);
-  background: none; color: var(--text-3); cursor: pointer;
+  display: inline-flex; flex: none; margin-left: auto; padding: 1px; border: 0; border-radius: var(--r-xs);
+  background: none; color: var(--ink-3); cursor: pointer;
 }
-.nav-groups__close:hover { color: var(--text); background: var(--surface-hover); }
-
-/* Полоса значков (узкое окно): группы — точками, без отступа, счётчиков и «⋯». */
-.app[data-nav-rail] .nav-groups { padding-left: 0; }
-.app[data-nav-rail] .nav-group__main, .app[data-nav-rail] .nav-group__add { justify-content: center; padding: 0; height: 30px; }
-.app[data-nav-rail] .nav-group__count, .app[data-nav-rail] .nav-group__more,
-.app[data-nav-rail] .nav-groups__close { display: none; }
-.app[data-nav-rail] .nav-groups__note { justify-content: center; padding: 6px 0; }
-
-/* Заголовок открытой группы над списком. */
-.group-head { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 2px 0 4px; }
-.group-head__title {
-  flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; font-weight: 600; color: var(--text);
-}
-.group-head__count { font-weight: 400; }
+.nav-groups__close:hover { color: var(--ink); background: var(--surface-3); }
 
 /* Окно названия группы (поверх .confirm из primitives.css). */
 .group-dialog form { display: flex; flex-direction: column; gap: 8px; }
-.group-dialog__label { display: flex; flex-direction: column; gap: 4px; color: var(--text-2); font-size: 12px; }
-.group-dialog__input { color: var(--text); }
-.group-dialog__input[aria-invalid="true"] { border-color: var(--err); }
-.group-dialog__error { color: var(--err); font-size: 12px; }
+.group-dialog__label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-2); font-size: var(--text-xs); }
+.group-dialog__error { color: var(--danger); font-size: var(--text-xs); }
 .group-dialog__palette { display: flex; flex-wrap: wrap; gap: 6px; }
 .group-dialog__color {
   width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer;
 }
-.group-dialog__color[aria-checked="true"] { border-color: var(--text); }
+.group-dialog__color[aria-checked="true"] { border-color: var(--ink); }
 
 /* Тень перетаскиваемого у указателя. */
 .drag-ghost {
-  position: fixed; z-index: 120; max-width: 240px; padding: 4px 10px; pointer-events: none;
+  position: fixed; z-index: var(--z-toast); max-width: 240px; padding: 4px 10px; pointer-events: none;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 12px; color: var(--text); background: rgba(26, 27, 33, 0.85);
-  border: 1px solid var(--line-2); border-radius: var(--r-md); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-size: var(--text-xs); color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); box-shadow: var(--elev-3);
 }
 .drag-ghost--over { border-color: var(--accent); }
 /* Пока тащат — без выделения текста и с курсором «тащу» везде. */
 html.group-dragging, html.group-dragging * { cursor: grabbing !important; user-select: none !important; }
-
-/* Папка базы знаний группы — в заголовке группы. */
-.group-head__kb {
-  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 40%;
-  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}

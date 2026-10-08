@@ -15,14 +15,13 @@ const ICON: Record<Section, LucideIcon> = { recordings: AudioLines, voices: User
  * Рейка разделов (60 px, по макету MeetApp): знак Meet, под ним — кнопка записи
  * (`record`, app/RecordingBadge), разделы «Записи» и «Голоса» кнопками-значками,
  * внизу — предупреждения записи (`alerts`) и «Настройки». Подписи — доступные
- * имена кнопок и подсказки справа. `groups` — группы встреч под «Записи»
- * (features/groups/GroupsNav; уходят в список записей на этапе 3, Task 2).
+ * имена кнопок и подсказки справа. Группы встреч — не здесь, а кнопкой-списком
+ * над списком записей (features/groups/GroupsPicker).
  * Пустое место рейки перетаскивает окно (атрибут — только у самой рейки).
  */
-export function Nav({ section, onSelect, groups, record, alerts }: {
+export function Nav({ section, onSelect, record, alerts }: {
   section: Section;
   onSelect: (s: Section) => void;
-  groups?: ReactNode;
   record?: ReactNode;
   alerts?: ReactNode;
 }) {
@@ -43,7 +42,6 @@ export function Nav({ section, onSelect, groups, record, alerts }: {
       {record}
       <div className="rail__sep" aria-hidden="true" />
       {item("recordings")}
-      {groups}
       {item("voices")}
       <div className="rail__foot">
         {alerts}

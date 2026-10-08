@@ -70,6 +70,15 @@ test("кнопка-значок: имя, подсказка, нажатая, п�
   expect(b()).toHaveClass("btn--ghost-danger");
 });
 
+test("кнопка-значок md — 40 px рядом с полем md: без класса малой кнопки, значок 16", () => {
+  render(<IconButton icon={X} label="Фильтры" size="md" variant="secondary" />);
+  const b = screen.getByRole("button", { name: "Фильтры" });
+  expect(b).toHaveClass("btn", "btn--icon", "btn--outline");
+  expect(b).not.toHaveClass("btn--sm");
+  expect(b).not.toHaveAttribute("data-density");
+  expect(b.querySelector("svg")).toHaveAttribute("width", "16");
+});
+
 test("недоступная кнопка-значок сохраняет подсказку с причиной", () => {
   render(<IconButton icon={X} label="Закрыть" tooltip="Причина" disabled />);
   const b = screen.getByRole("button", { name: "Закрыть" });

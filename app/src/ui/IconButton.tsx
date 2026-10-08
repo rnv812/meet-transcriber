@@ -5,17 +5,18 @@ import { Icon } from "./Icon";
 import "./button.css";
 
 /**
- * Кнопка-значок на Atlas Aurora: 32 px (`sm`, по умолчанию) или 28 px (`xs`,
- * плотный режим), значок 16 или 14 px. `label` обязателен — это и доступное
- * имя, и всплывающая подсказка. `ghost` — без рамки (по умолчанию),
- * `secondary` — с контуром, `danger` — краснеет при наведении. `pressed` —
+ * Кнопка-значок на Atlas Aurora: 32 px (`sm`, по умолчанию), 28 px (`xs`,
+ * плотный режим) или 40 px (`md` — рядом с полем `field--md`), значок 16 или
+ * 14 px. `label` обязателен — это и доступное имя, и всплывающая подсказка.
+ * `ghost` — без рамки (по умолчанию), `secondary` — с контуром, `danger` —
+ * краснеет при наведении. `pressed` —
  * кнопка-переключатель (aria-pressed): включённая — заливка и контур.
  */
 type Props = Omit<ComponentPropsWithRef<"button">, "onClick" | "children"> & {
   icon: LucideIcon;
   label: string;
   variant?: "ghost" | "secondary" | "danger";
-  size?: "xs" | "sm";
+  size?: "xs" | "sm" | "md";
   pressed?: boolean;
   busy?: boolean;
   /** Подсказка, если должна отличаться от `label` (например, причина недоступности). */
@@ -29,7 +30,7 @@ export function IconButton({
   icon, label, variant = "ghost", size = "sm", pressed, busy = false, tooltip, className = "", onClick, ...rest
 }: Props) {
   const { shown, click } = useAutoBusy(onClick, busy);
-  const cls = ["btn", "btn--icon", "btn--sm", VARIANT[variant], shown ? "btn--busy" : "", className]
+  const cls = ["btn", "btn--icon", size === "md" ? "" : "btn--sm", VARIANT[variant], shown ? "btn--busy" : "", className]
     .filter(Boolean).join(" ");
   return (
     <button type="button" className={cls} data-density={size === "xs" ? "compact" : undefined}

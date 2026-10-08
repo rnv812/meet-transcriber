@@ -9,7 +9,7 @@
  * - нажатие на строку только запоминает точку; перетаскивание начинается,
  *   когда указатель ушёл дальше порога (DRAG_THRESHOLD) — щелчки, выбор и
  *   клавиатура строк не меняются;
- * - цель — элемент под указателем: группа в левой панели (`data-drop-group`,
+ * - цель — элемент под указателем: группа в дереве групп (`data-drop-group`,
  *   «Без группы» — NO_GROUP) для встреч или строка группы (`data-group-row`)
  *   для порядка групп — верхняя или нижняя половина строки задаёт линию вставки;
  * - отпустили на цели — `onDrop`; вне цели, Esc, потеря указателя — отмена;
@@ -35,7 +35,7 @@ export const SCROLL_AREAS = ".pane-list, [data-drag-scroll]";
 
 /** Встречи (одна или все выбранные) и их группы до переноса — для «Отменить». */
 export type MeetingsPayload = { kind: "meetings"; ids: string[]; prev: Record<string, string | null>; label: string };
-/** Группа в левой панели — меняется её место в списке. */
+/** Группа в дереве групп — меняется её место в списке. */
 export type GroupPayload = { kind: "group"; id: string; label: string };
 export type DragPayload = MeetingsPayload | GroupPayload;
 

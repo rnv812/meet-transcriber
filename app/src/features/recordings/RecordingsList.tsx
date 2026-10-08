@@ -26,7 +26,7 @@ import { QueryChips } from "./QueryChips";
 import { ImportZone } from "./ImportZone";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchSuggest } from "./SearchSuggest";
-import { Icon } from "../../ui/Icon";
+import { IconButton } from "../../ui/IconButton";
 import { Skeleton } from "../../ui/Loading";
 import { GroupHeader, groupEmptyState } from "../groups/GroupHeader";
 import { dragPayload, GroupPickbar, useMoveToGroup, type PickState } from "../groups/listGroups";
@@ -233,7 +233,7 @@ export function RecordingsList({
   const ctx = useMemo(() => ({ categories, groups: groupList ?? [], now }), [categories, groupList, now]);
   /** Что ищется: текст, метки сеанса, запомненные категории, префиксы, ещё не ставшие метками. */
   const query = useMemo(() => effectiveQuery(q, chips, categoryFilter, ctx), [q, chips, categoryFilter, ctx]);
-  // Счётчики «Фильтров» — в области группы из левой панели, как и список. Внутри области
+  // Счётчики «Фильтров» — в области группы из кнопки-списка, как и список. Внутри области
   // измерения «Группа» в панели нет: другие группы дали бы пустое пересечение.
   const scopedFilter = useMemo(() => withGroupScope(query.filter, groupsUi?.libraryScope),
     [query.filter, groupsUi?.libraryScope]);
@@ -427,6 +427,8 @@ export function RecordingsList({
   return (
     <div className="rec-list" ref={root} onPointerDown={move ? (e) => groupsUi?.drag.begin(e.nativeEvent,
       () => dragPayload(e.target, pickRef.current)) : undefined}>
+      {/* Сверху — кнопка-список групп (область списка и поиска), под ней импорт и поиск (макет LIBRARY). */}
+      {groupsUi && <GroupHeader ui={groupsUi} />}
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />
       <div className="rec-list__search">
         <SearchSuggest value={q} onChange={onQ} onApply={applySuggestion} endpoint={endpoint} ctx={ctx}
@@ -440,12 +442,11 @@ export function RecordingsList({
         )}
       </div>
       <QueryChips chips={shownChips} ctx={ctx} onRemove={remove} onClear={clearChips} />
-      {groupsUi && <GroupHeader ui={groupsUi} />}
       {library.error && <div className="import__error">{library.error}</div>}
       {notice && (
         <div className={`rec-notice${notice.error ? " rec-notice--error" : ""}`} role={notice.error ? "alert" : "status"}>
           <span className="rec-notice__text">{notice.text}</span>
-          <button type="button" className="import__close" aria-label="Скрыть сообщение" onClick={() => setNotice(null)}><Icon as={X} size="sm" /></button>
+          <IconButton icon={X} size="xs" label="Скрыть сообщение" onClick={() => setNotice(null)} />
         </div>
       )}
       {picking && endpoint && (

@@ -210,11 +210,15 @@ test("без категорий в настройках в «Фильтрах» 
   expect(within(screen.getByRole("dialog", { name: "Фильтры" })).queryByRole("group", { name: "Категория" })).toBeNull();
 });
 
-test("число условий — значком поверх кнопки: подпись и ширина кнопки те же", () => {
+test("«Фильтры» — кнопка-значок; число условий — значком поверх неё: ширина кнопки та же", () => {
   render(<FiltersButton endpoint={null} q="" filter={{}} chips={[{ kind: "category", value: "daily" }]}
     categories={categories} groups={null} now={new Date()} onToggle={() => {}} onReplace={() => {}} onClear={() => {}}
     onMorePeople={() => {}} />);
   const button = screen.getByRole("button", { name: "Фильтры · 1" });
-  expect(button.firstChild?.textContent).toBe("Фильтры");
-  expect(button.querySelector(".cat-filter__count")).toHaveTextContent("1");
+  // Только значок: подпись — доступное имя и подсказка.
+  expect(button).toHaveTextContent(/^$/);
+  expect(button).toHaveAttribute("title", "Фильтры: категория, группа, участник, период, длительность");
+  const count = button.parentElement!.querySelector(".cat-filter__count");
+  expect(count).toHaveTextContent("1");
+  expect(button).not.toContainElement(count as HTMLElement);
 });
