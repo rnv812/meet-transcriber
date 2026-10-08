@@ -7,7 +7,7 @@ import {
   answerAnalysisOffer, ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
   kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
 } from "../../lib/api";
-import { clock, errorText } from "../../lib/format";
+import { clock, errorText, meetingEndOf } from "../../lib/format";
 import { jiraCard, JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
 import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPrefs";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
@@ -554,7 +554,7 @@ export function RecordingCard({
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
       agentContext={`${rec.transcript_phase ?? "final"}:${rec.transcript_at ?? ""}`}
       showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk} chatEvent={chatEvent}
-      onAskAgent={askAgent} onAgentTaken={agentTaken} />
+      onAskAgent={askAgent} onAgentTaken={agentTaken} meetingEnd={meetingEndOf(rec.started_at, rec.duration_s)} />
   );
 
   const actions = (

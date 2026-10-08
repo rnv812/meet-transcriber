@@ -43,6 +43,16 @@ export function dayLabel(iso: string, now: Date = new Date(), short = false): st
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${time}`;
 }
 
+/**
+ * Когда кончилась встреча: начало (`started_at`, местное без зоны) плюс
+ * длительность. Нет одного из них или не дата — null.
+ */
+export function meetingEndOf(startedAt: string | null | undefined, durationS: number | null | undefined): Date | null {
+  if (!startedAt || durationS == null || !Number.isFinite(durationS)) return null;
+  const start = parseLocal(startedAt) ?? parseZoned(startedAt);
+  return start ? new Date(start.getTime() + durationS * 1000) : null;
+}
+
 /** «2 записи», «5 записей», «21 запись»: форма слова по числу. */
 export function plural(n: number, one: string, few: string, many: string): string {
   const d = Math.abs(n) % 100;

@@ -1,4 +1,4 @@
-import { clock, duration, dayLabel, errorText, plural } from "./format";
+import { meetingEndOf, clock, duration, dayLabel, errorText, plural } from "./format";
 
 test("форматы", () => {
   expect(clock(65)).toBe("01:05");
@@ -45,4 +45,12 @@ test("plural: форма слова по числу", () => {
   const w = (n: number) => `${n} ${plural(n, "запись", "записи", "записей")}`;
   expect([1, 2, 5, 11, 12, 21, 22, 25, 111].map(w)).toEqual([
     "1 запись", "2 записи", "5 записей", "11 записей", "12 записей", "21 запись", "22 записи", "25 записей", "111 записей"]);
+});
+
+test("meetingEndOf: начало плюс длительность; без одного из них или не дата — null", () => {
+  const end = meetingEndOf("2026-10-06T11:00:00", 38 * 60);
+  expect(end && [end.getHours(), end.getMinutes()]).toEqual([11, 38]);
+  expect(meetingEndOf(null, 60)).toBeNull();
+  expect(meetingEndOf("2026-10-06T11:00:00", null)).toBeNull();
+  expect(meetingEndOf("не дата", 60)).toBeNull();
 });
