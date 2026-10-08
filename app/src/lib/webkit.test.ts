@@ -9,7 +9,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { findJira, jiraBaseError, jiraLinker } from "./jira";
 import { removeTerm } from "./textfix";
 
@@ -33,7 +33,7 @@ function sources(dir: string, out: string[] = []): string[] {
  * запрет.
  */
 const isVendored = (path: string) =>
-  relative(ROOT, path).startsWith(join("theme", "aurora")) &&
+  relative(ROOT, path).startsWith(join("theme", "aurora") + sep) &&
   readFileSync(path, "utf8").startsWith("/* Atlas Aurora");
 
 /** Запрос возможности `@supports not (color: color-mix(…))` — не использование color-mix(): так WebKit без него включает запасные правила. */
@@ -60,6 +60,8 @@ test("исключение для color-mix() — только скопиров�
   expect(isVendored(join(ROOT, "theme", "aurora", "palettes.css"))).toBe(true);
   expect(isVendored(join(ROOT, "theme", "aurora", "index.css"))).toBe(false);
   expect(isVendored(join(ROOT, "theme", "tokens.css"))).toBe(false);
+  expect(isVendored(join(ROOT, "theme", "aurora-fallbacks.css"))).toBe(false);
+  expect(isVendored(join(ROOT, "theme", "aurora.test.ts"))).toBe(false);
 });
 
 test("адрес Jira: узел не начинается и не кончается точкой или дефисом — как раньше", () => {
