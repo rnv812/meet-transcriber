@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 /**
  * Все стили окна попадают в одну таблицу: блок, объявленный в двух файлах
@@ -100,4 +100,120 @@ test("ссылка-кнопка — шрифтом окружающего тек
   // Обход прежнего размера в настройках больше не нужен.
   const settings = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
   expect(settings).not.toMatch(/\.asr-fallback \.btn--link/);
+});
+
+/*
+ * Системных контролов в окне нет (0.4, аудит доводки B9): список — ui/Select,
+ * бегунок — ui/Slider, флажок и радио — классы Aurora `.cb`/`.rd` (или `.switch`).
+ * Родной <select> рисует системную стрелку и список, `range` — синий бегунок,
+ * флажок без класса — 13 px системы.
+ *
+ * NATIVE_ALLOWED — места, которые ещё не переведены (пакеты B, C, D доводки 0.4).
+ * Перевёл место — убери строку: устаревшая строка роняет тест так же, как новое
+ * нарушение. Пустой список — цель.
+ */
+const NATIVE_ALLOWED = new Set<string>([
+  // Пакет B: карточка встречи и голоса.
+  "features/card/AgentTab.tsx: <select>",
+  "features/card/speakers/SplitView.tsx: <select>",
+  "features/voices/PersonCard.tsx: <select>",
+  "features/card/AudioPlayer.tsx: range",
+  "features/card/RediarizeDialog.tsx: range",
+  "features/card/speakers/ThresholdBox.tsx: range",
+  "features/card/TurnEdit.tsx: radio без .rd",
+
+  // Пакет C: настройки.
+  "features/settings/AsrChoice.tsx: <select>",
+  "features/settings/JiraSettings.tsx: <select>",
+  "features/settings/LiveHintsRows.tsx: <select>",
+  "features/settings/LocalModelRows.tsx: <select>",
+  "features/settings/SoundSection.tsx: <select>",
+  "features/settings/fields.tsx: range",
+  "features/settings/SpeakersSection.tsx: range",
+  "features/settings/AppearanceSection.tsx: radio без .rd",
+  "features/settings/BrowserCalls.tsx: checkbox без .cb",
+  "features/settings/CallPrograms.tsx: checkbox без .cb",
+  "features/settings/ExportSection.tsx: checkbox без .cb",
+  "features/settings/LocalModelRows.tsx: checkbox без .cb",
+  "features/settings/ModelsSection.tsx: checkbox без .cb",
+  "features/settings/ModelsSection.tsx: radio без .rd",
+
+  // Пакет D: главное окно, список записей.
+  "features/recordings/DateSections.tsx: checkbox без .cb",
+  "features/recordings/FilterPanel.tsx: checkbox без .cb",
+  "features/recordings/RecordingItem.tsx: checkbox без .cb",
+  "features/recordings/RecordingsList.tsx: checkbox без .cb",
+]);
+
+/** Сами компоненты: им родной элемент можно (внутри — со своим видом). */
+const NATIVE_OWNERS: Record<string, string> = { "ui/Select.tsx": "<select>", "ui/Slider.tsx": "range" };
+
+function tsxFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? tsxFiles(join(dir, e.name))
+      : e.name.endsWith(".tsx") && !e.name.endsWith(".test.tsx") ? [join(dir, e.name)] : [],
+  );
+}
+
+/** Открывающие JSX-теги `<name …>` целиком: `>` внутри `{…}` и строк — не конец тега. */
+function jsxTags(src: string, name: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(new RegExp(`<${name}(?![\\w-])`, "g"))) {
+    let depth = 0;
+    let quote = "";
+    let i = (m.index ?? 0) + m[0].length;
+    for (; i < src.length; i++) {
+      const c = src[i]!;
+      if (quote) { if (c === quote) quote = ""; continue; }
+      if (c === "\"" || c === "'" || c === "`") quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0) break;
+    }
+    out.push(src.slice(m.index, i + 1));
+  }
+  return out;
+}
+
+/** Нарушения в тексте .tsx: «<select>», «range», «checkbox без .cb», «radio без .rd». */
+function nativeControls(text: string): string[] {
+  // Комментарии («родной <select> заменён…») — не разметка.
+  const src = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const found = new Set<string>();
+  if (jsxTags(src, "select").length) found.add("<select>");
+  for (const tag of jsxTags(src, "input")) {
+    const type = /\btype="(\w+)"/.exec(tag)?.[1];
+    const cls = /\bclassName="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/) ?? [];
+    if (type === "range") found.add("range");
+    if (type === "checkbox" && !cls.some((c) => c === "cb" || c === "switch")) found.add("checkbox без .cb");
+    if (type === "radio" && !cls.includes("rd")) found.add("radio без .rd");
+  }
+  return [...found];
+}
+
+test("разбор системных контролов: теги со стрелочными функциями, классы Aurora — не нарушение", () => {
+  expect(jsxTags(`<input type="range" onChange={(e) => f(e.target.value > 1)} /> <inputx>`, "input"))
+    .toEqual([`<input type="range" onChange={(e) => f(e.target.value > 1)} />`]);
+  expect(nativeControls(`<select value={v}><option /></select>`)).toEqual(["<select>"]);
+  expect(nativeControls(`<input type="checkbox" className="cb" /> <input type="radio" className="rd x" />`)).toEqual([]);
+  expect(nativeControls(`<input type="checkbox" onChange={() => a > b} />`)).toEqual(["checkbox без .cb"]);
+  expect(nativeControls(`<input type="radio" name="r" />`)).toEqual(["radio без .rd"]);
+  expect(nativeControls(`<input type="text" />`)).toEqual([]);
+  // Тег в комментарии — не разметка.
+  expect(nativeControls(`{/* родной <select> заменён */}\n  // <input type="range">\n<b />`)).toEqual([]);
+});
+
+test("в окне нет системных списков, бегунков и флажков вне ui/Select и ui/Slider (кроме ещё не переведённых)", () => {
+  const src = join(process.cwd(), "src");
+  const found: string[] = [];
+  for (const file of tsxFiles(src)) {
+    const rel = relative(src, file).split(sep).join("/");
+    for (const kind of nativeControls(readFileSync(file, "utf8"))) {
+      if (NATIVE_OWNERS[rel] === kind) continue;
+      found.push(`${rel}: ${kind}`);
+    }
+  }
+  expect(found.filter((x) => !NATIVE_ALLOWED.has(x)).sort()).toEqual([]);
+  // Переведённое место — убрать из списка исключений.
+  expect([...NATIVE_ALLOWED].filter((x) => !found.includes(x)).sort()).toEqual([]);
 });

@@ -217,7 +217,9 @@ test("«Фильтры» — кнопка-значок; число услови�
   const button = screen.getByRole("button", { name: "Фильтры · 1" });
   // Только значок: подпись — доступное имя и подсказка.
   expect(button).toHaveTextContent(/^$/);
-  expect(button).toHaveAttribute("title", "Фильтры: категория, группа, участник, период, длительность");
+  // Подсказка — облачко Aurora (ui/Tip), для диктора — описание; системного title нет.
+  expect(button).toHaveAccessibleDescription("Фильтры: категория, группа, участник, период, длительность");
+  expect(button).not.toHaveAttribute("title");
   const count = button.parentElement!.querySelector(".cat-filter__count");
   expect(count).toHaveTextContent("1");
   expect(button).not.toContainElement(count as HTMLElement);

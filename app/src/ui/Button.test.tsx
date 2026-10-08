@@ -5,6 +5,7 @@ import { IconButton } from "./IconButton";
 import { Truncate } from "./Truncate";
 import { Disclosure } from "./Disclosure";
 import { Loading, StatusSlot } from "./Loading";
+import { TIP_DELAY_MS } from "./Tip";
 
 test("варианты Button — классы Atlas Aurora", () => {
   const { rerender } = render(<Button>Обычная</Button>);
@@ -62,7 +63,9 @@ test("кнопка-значок: имя, подсказка, нажатая, п�
   const { rerender } = render(<IconButton icon={X} label="Закрыть" />);
   const b = () => screen.getByRole("button", { name: "Закрыть" });
   expect(b()).toHaveClass("btn", "btn--icon", "btn--sm", "btn--ghost");
-  expect(b()).toHaveAttribute("title", "Закрыть");
+  // Подсказка — облачко Aurora (ui/Tip), не системный title; имя не повторяется описанием.
+  expect(b()).not.toHaveAttribute("title");
+  expect(b()).not.toHaveAccessibleDescription();
   rerender(<IconButton icon={X} label="Закрыть" pressed />);
   expect(b()).toHaveAttribute("aria-pressed", "true");
   rerender(<IconButton icon={X} label="Закрыть" size="xs" variant="danger" />);
@@ -83,13 +86,30 @@ test("недоступная кнопка-значок сохраняет под
   render(<IconButton icon={X} label="Закрыть" tooltip="Причина" disabled />);
   const b = screen.getByRole("button", { name: "Закрыть" });
   expect(b).toBeDisabled();
-  expect(b).toHaveAttribute("title", "Причина");
+  expect(b).not.toHaveAttribute("title");
+  expect(b).toHaveAccessibleDescription("Причина");
+  vi.useFakeTimers();
+  try {
+    fireEvent.mouseEnter(b);
+    act(() => { vi.advanceTimersByTime(TIP_DELAY_MS); });
+    expect(document.body.querySelector(".tooltip.tip")).toHaveTextContent("Причина");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("icon button: label is the accessible name and the tooltip", () => {
   render(<IconButton icon={Trash2} label="Удалить категорию" variant="danger" size="xs" />);
   const button = screen.getByRole("button", { name: "Удалить категорию" });
-  expect(button).toHaveAttribute("title", "Удалить категорию");
+  expect(button).not.toHaveAttribute("title");
+  vi.useFakeTimers();
+  try {
+    fireEvent.mouseEnter(button);
+    act(() => { vi.advanceTimersByTime(TIP_DELAY_MS); });
+    expect(document.body.querySelector(".tooltip.tip")).toHaveTextContent("Удалить категорию");
+  } finally {
+    vi.useRealTimers();
+  }
   expect(button).toHaveClass("btn", "btn--icon", "btn--ghost-danger");
   expect(button.querySelector("svg")).toHaveAttribute("width", "14");
 });

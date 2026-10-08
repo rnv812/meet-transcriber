@@ -31,7 +31,7 @@ test("две группы: главные действия с подписями
   const side = screen.getByRole("group", { name: "Другие действия" });
   expect(within(main).getAllByRole("button").map((b) => b.textContent)).toEqual(["Экспорт", "В базу знаний"]);
   for (const b of within(main).getAllByRole("button")) expect(b.querySelector("svg")).not.toBeNull();
-  expect(within(side).getByRole("button", { name: "Открыть папку" })).toHaveAttribute("title");
+  expect(within(side).getByRole("button", { name: "Открыть папку" })).toHaveAccessibleDescription("Открыть папку записи в проводнике");
   expect(within(side).getByRole("button", { name: "Ещё действия" })).toHaveAttribute("aria-haspopup", "menu");
   // Редкие и опасные действия — только в меню.
   expect(screen.queryByRole("button", { name: /Удалить|Перерасшифровать|Переразделить/ })).toBeNull();

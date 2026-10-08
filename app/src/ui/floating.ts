@@ -52,6 +52,40 @@ export function placeFloating(anchor: AnchorRect, box: Size, view: Size,
   };
 }
 
+/** Отступ подсказки (ui/Tip) от якоря — как у `.tooltip` Aurora (`bottom: calc(100% + 8px)`). */
+export const TIP_GAP = 8;
+export type TipSide = "top" | "bottom" | "right" | "left";
+
+const clamp = (x: number, size: number, view: number) =>
+  view - size - MARGIN <= MARGIN ? MARGIN : Math.max(MARGIN, Math.min(x, view - size - MARGIN));
+
+/**
+ * Где показать подсказку у якоря: по центру с нужной стороны (`top` — над ним,
+ * `right` — справа); с той стороны нет места — с противоположной; вдоль
+ * стороны — сдвиг внутрь окна с отступом 8 px. `side` в ответе — где оказалась.
+ */
+export function placeTooltip(anchor: AnchorRect, box: Size, view: Size, side: TipSide = "top",
+  gap = TIP_GAP): Placement & { side: TipSide } {
+  if (side === "top" || side === "bottom") {
+    const above = anchor.top - gap - box.height;
+    const below = anchor.bottom + gap;
+    const fitsAbove = above >= MARGIN;
+    const fitsBelow = below + box.height <= view.height - MARGIN;
+    const up = side === "top" ? fitsAbove || !fitsBelow : fitsAbove && !fitsBelow;
+    const left = clamp((anchor.left + anchor.right) / 2 - box.width / 2, box.width, view.width);
+    return up ? { left, top: clamp(above, box.height, view.height), side: "top" }
+      : { left, top: clamp(below, box.height, view.height), side: "bottom" };
+  }
+  const before = anchor.left - gap - box.width;
+  const after = anchor.right + gap;
+  const fitsBefore = before >= MARGIN;
+  const fitsAfter = after + box.width <= view.width - MARGIN;
+  const right = side === "right" ? fitsAfter || !fitsBefore : fitsAfter && !fitsBefore;
+  const top = clamp((anchor.top + anchor.bottom) / 2 - box.height / 2, box.height, view.height);
+  return right ? { left: clamp(after, box.width, view.width), top, side: "right" }
+    : { left: clamp(before, box.width, view.width), top, side: "left" };
+}
+
 /** Точка (указатель мыши) как якорь нулевого размера. */
 export const pointAnchor = (x: number, y: number): AnchorRect => ({ left: x, right: x, top: y, bottom: y });
 

@@ -320,14 +320,14 @@ test("панель — правая выдвижная панель Aurora: за
   expect(panel).toHaveAttribute("aria-modal", "false");
   expect(within(panel).getByRole("heading", { level: 3, name: "Спикеры встречи" })).toBeInTheDocument();
   const undo = within(panel).getByRole("button", { name: "Отменить" });
-  expect(undo).toHaveAttribute("title", "Отменить (Ctrl+Z)");
+  expect(undo).toHaveAccessibleDescription("Отменить (Ctrl+Z)");
   expect(undo).toHaveAttribute("aria-keyshortcuts", "Control+Z");
   expect(undo).toBeDisabled();
   const redo = within(panel).getByRole("button", { name: "Повторить" });
-  expect(redo).toHaveAttribute("title", "Повторить (Ctrl+Shift+Z)");
+  expect(redo).toHaveAccessibleDescription("Повторить (Ctrl+Shift+Z)");
   expect(redo).toBeDisabled();
   const close = within(panel).getByRole("button", { name: "Закрыть панель спикеров" });
-  expect(close).toHaveAttribute("title", "Закрыть (Esc)");
+  expect(close).toHaveAccessibleDescription("Закрыть (Esc)");
 
   // Карточки спикеров; подвал — только когда есть наметки.
   await screen.findByRole("region", { name: /^Спикер 2/ });

@@ -1,0 +1,13 @@
+/* Подсказка (ui/Tip.tsx): облачко `.tooltip` Atlas Aurora — его цвета, радиус и шрифт,
+   но в портале body: position: fixed, место задаёт компонент (ui/floating placeTooltip).
+   Два класса (`.tooltip.tip`) — сильнее `.tooltip`/`.tooltip.is-open` overlays.css при
+   любом порядке файлов: без absolute-раскладки и сдвига translate(-50%) от якоря. */
+.tip { pointer-events: none; }
+.tooltip.tip {
+  position: fixed; bottom: auto; transform: none;
+  width: max-content; max-width: min(320px, calc(100vw - 16px));
+  white-space: normal; line-height: 1.4; text-align: left; overflow-wrap: break-word;
+}
+.tooltip.tip.is-open { transform: none; }
+/* Мостик для курсора у облачка Aurora не нужен: облачко не принимает указатель. */
+.tooltip.tip::after { display: none; }

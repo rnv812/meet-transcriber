@@ -1,4 +1,4 @@
-import { placeFloating, pointAnchor, MARGIN } from "./floating";
+import { placeFloating, placeTooltip, pointAnchor, MARGIN, TIP_GAP } from "./floating";
 
 const view = { width: 1000, height: 700 };
 const box = { width: 260, height: 200 };
@@ -89,4 +89,35 @@ test("в любом углу и при любом выравнивании ок�
       }
     }
   }
+});
+
+describe("подсказка (placeTooltip)", () => {
+  const tip = { width: 120, height: 30 };
+  test("сверху — по центру над якорем", () => {
+    expect(placeTooltip(btn(400, 300), tip, view, "top")).toEqual({ left: 412 - 60, top: 300 - TIP_GAP - 30, side: "top" });
+  });
+  test("сверху нет места — под якорем", () => {
+    expect(placeTooltip(btn(400, 10), tip, view, "top")).toEqual({ left: 352, top: 30 + TIP_GAP, side: "bottom" });
+  });
+  test("снизу нет места — над якорем", () => {
+    expect(placeTooltip(btn(400, 680), tip, view, "bottom")).toEqual({ left: 352, top: 680 - TIP_GAP - 30, side: "top" });
+  });
+  test("справа — по центру по вертикали, у правого края — слева от якоря", () => {
+    expect(placeTooltip(btn(10, 300), tip, view, "right")).toEqual({ left: 34 + TIP_GAP, top: 310 - 15, side: "right" });
+    expect(placeTooltip(btn(950, 300), tip, view, "right")).toEqual({ left: 950 - TIP_GAP - 120, top: 295, side: "left" });
+  });
+  test("у края окна по центру не влезает — сдвиг внутрь с отступом", () => {
+    expect(placeTooltip(btn(0, 300), tip, view, "top").left).toBe(MARGIN);
+    expect(placeTooltip(btn(990, 300), tip, view, "top").left).toBe(1000 - MARGIN - 120);
+    expect(placeTooltip(btn(10, 0), tip, view, "right").top).toBe(MARGIN);
+  });
+  test("в любом месте подсказка целиком в окне", () => {
+    for (const x of [0, 4, 500, 976, 996]) {
+      for (const y of [0, 4, 300, 680, 696]) {
+        for (const side of ["top", "bottom", "right", "left"] as const) {
+          expect(inside(placeTooltip(btn(x, y), tip, view, side), tip)).toBe(true);
+        }
+      }
+    }
+  });
 });

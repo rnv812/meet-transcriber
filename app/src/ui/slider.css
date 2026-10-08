@@ -1,0 +1,28 @@
+/* Бегунок (ui/Slider.tsx) по макету Atlas Aurora («Ждать возвращения после звонка»):
+   родной input[type=range] без системного вида. Дорожка 4 px --data-empty, заливка до
+   значения --primary (--slider-fill ставит компонент), бегунок 18 px --primary с кольцом
+   цвета фона; sm — бегунок 12 px. Рамка фокуса — общая Aurora (base.css) вокруг всего
+   бегунка, скругленная. Значение справа — Geist Mono. */
+.slider { display: inline-flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; }
+.slider__input {
+  -webkit-appearance: none; appearance: none; flex: 1 1 auto; min-width: 80px; height: 18px;
+  margin: 0; padding: 0; border: 0; border-radius: var(--r-full); background: transparent; cursor: pointer;
+}
+.slider__input::-webkit-slider-runnable-track {
+  height: 4px; border-radius: var(--r-full);
+  background: linear-gradient(to right, var(--primary) 0 var(--slider-fill), var(--data-empty) var(--slider-fill) 100%);
+}
+.slider__input::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 18px; height: 18px; margin-top: -7px;
+  border: 0; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 3px var(--canvas);
+  transition: transform var(--d-fast) var(--ease-out);
+}
+.slider__input:active:not(:disabled)::-webkit-slider-thumb { transform: scale(1.1); }
+.slider__input:disabled { cursor: default; opacity: 0.5; }
+.slider--sm { gap: 8px; }
+.slider--sm .slider__input { height: 12px; min-width: 56px; }
+.slider--sm .slider__input::-webkit-slider-thumb { width: 12px; height: 12px; margin-top: -4px; box-shadow: 0 0 0 2px var(--canvas); }
+.slider__value {
+  flex: none; color: var(--ink-2); font-family: var(--font-code); font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+}
