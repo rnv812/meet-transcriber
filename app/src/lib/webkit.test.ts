@@ -27,16 +27,21 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * Единственное исключение — палитры сияния Atlas Aurora (0.4): копия дизайн-системы,
- * правке по месту не подлежит. На macOS 13.0 (Safari 16.1) её переменные с
- * `color-mix()` не вычисляются — пропадает только сияние, остальное окно работает.
- * В собственном коде окна (в том числе `theme/tokens.css`) `color-mix()` по-прежнему
- * запрещён.
+ * Скопированные файлы Atlas Aurora (theme/aurora/*, первая строка
+ * «/* Atlas Aurora»): в них color-mix() — как в дизайн-системе; на macOS 13
+ * их цвета подменяет theme/aurora-fallbacks.css. Во всех остальных файлах окна —
+ * запрет.
  */
-const COLOR_MIX_OK = new Set([join("theme", "aurora", "palettes.css")]);
+const isVendored = (path: string) =>
+  relative(ROOT, path).startsWith(join("theme", "aurora")) &&
+  readFileSync(path, "utf8").startsWith("/* Atlas Aurora");
+
+/** Запрос возможности `@supports not (color: color-mix(…))` — не использование color-mix(): так WebKit без него включает запасные правила. */
+const COLOR_MIX_QUERY = /@supports\s+not\s*\(\s*color:\s*color-mix\([^()]*\)\s*\)/g;
 
 /** Код без комментариев: в них о запретном можно писать. */
-const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const code = (text: string) =>
+  text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(COLOR_MIX_QUERY, "@supports not (…)");
 
 test("в коде окна нет просмотра назад в регулярках и color-mix() — их нет в WebKit macOS 13.0", () => {
   const bad: string[] = [];
@@ -46,9 +51,15 @@ test("в коде окна нет просмотра назад в регуля�
   for (const path of files) {
     const text = code(readFileSync(path, "utf8"));
     if (/\(\?<[=!]/.test(text)) bad.push(`${relative(ROOT, path)}: (?<= / (?<!`);
-    if (/color-mix\(/.test(text) && !COLOR_MIX_OK.has(relative(ROOT, path))) bad.push(`${relative(ROOT, path)}: color-mix()`);
+    if (/color-mix\(/.test(text) && !isVendored(path)) bad.push(`${relative(ROOT, path)}: color-mix()`);
   }
   expect(bad).toEqual([]);
+});
+
+test("исключение для color-mix() — только скопированные файлы Aurora", () => {
+  expect(isVendored(join(ROOT, "theme", "aurora", "palettes.css"))).toBe(true);
+  expect(isVendored(join(ROOT, "theme", "aurora", "index.css"))).toBe(false);
+  expect(isVendored(join(ROOT, "theme", "tokens.css"))).toBe(false);
 });
 
 test("адрес Jira: узел не начинается и не кончается точкой или дефисом — как раньше", () => {

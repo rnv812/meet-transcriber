@@ -75,6 +75,35 @@ test("псевдонимы окна ссылаются только на объ�
   expect(missing).toEqual([]);
 });
 
+test("компоненты Aurora: base и aurora перенесены скриптом и подключены после палитр", () => {
+  for (const name of ["base", "aurora"]) {
+    const css = read("aurora", `${name}.css`);
+    expect(css.split("\n")[0]).toMatch(new RegExp(`^/\\* Atlas Aurora v2\\.6 — ${name}: `));
+  }
+  const index = read("aurora", "index.css");
+  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "../aurora-fallbacks.css"]
+    .map((f) => index.indexOf(`"./${f}"`.replace("./../", "../")));
+  expect(order.every((i) => i >= 0)).toBe(true);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+});
+
+test("запасные значения без color-mix(): файл окна, под @supports not", () => {
+  const css = read("aurora-fallbacks.css");
+  expect(css).toContain("@supports not (color: color-mix(in oklab, red, blue))");
+  // Запрос возможности допустим, само значение с color-mix() в правилах — нет.
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, "").replace("@supports not (color: color-mix(in oklab, red, blue))", "");
+  expect(rules).not.toMatch(/color-mix\(/);
+});
+
+test("прозрачные окна (live, tray) сбрасывают фон body из «Базы» Aurora", () => {
+  const live = readFileSync(join(process.cwd(), "src", "live", "panel.css"), "utf8");
+  const tray = readFileSync(join(process.cwd(), "src", "tray", "tray.css"), "utf8");
+  for (const css of [live, tray]) {
+    // panel.css: «html, body { background: transparent; }»; tray.css: «html, body, #root { … background: transparent; }»
+    expect(css).toMatch(/\bbody\b[^{}]*\{[^}]*background:\s*transparent/);
+  }
+});
+
 test("сборка не встраивает шрифты в CSS: CSP окна не пускает data:-URI", async () => {
   const { default: config } = await import("../../vite.config");
   const limit = config.build?.assetsInlineLimit;

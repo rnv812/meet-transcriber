@@ -1,4 +1,8 @@
-/* Основа Atlas Aurora для всех окон Meet: токены (обе темы, шрифты) и палитры
-   сияния. Файлы рядом — копия дизайн-системы, см. SOURCE.md. */
+/* Основа Atlas Aurora для всех окон Meet: токены, палитры и перенесённые
+   компоненты (копия дизайн-системы, см. SOURCE.md), затем запасные значения
+   окна для WebKit без color-mix(). */
 @import "./tokens.css";
 @import "./palettes.css";
+@import "./base.css";
+@import "./aurora.css";
+@import "../aurora-fallbacks.css";

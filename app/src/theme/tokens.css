@@ -2,8 +2,6 @@
    окна (--bg, --text, --line…) — псевдонимы токенов Aurora на время перехода
    0.4, объявлены в theme/legacy-aliases.css. Палитра сияния — data-aurora на <html>. */
 
-* { box-sizing: border-box; }
-
 /* Тонкие полосы прокрутки во всём приложении (и в .xterm-viewport терминала).
    WebView2/Chromium: свойства scrollbar-color/width перекрывают ::-webkit-scrollbar и не умеют
    hover, поэтому стандартные заданы только там, где ::-webkit-scrollbar не поддерживается. */
@@ -24,18 +22,12 @@
 
 html, body, #root { height: 100%; margin: 0; }
 
-body {
-  background: var(--bg);
-  color: var(--text);
-  font: 13px/1.45 var(--font-body);
-  -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-}
+/* Фон, цвет и шрифт body, рамку фокуса и box-sizing даёт «База» Aurora (theme/aurora/base.css). */
+body { overflow: hidden; }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Фокус, поставленный программно (заголовок открытой панели, найденная реплика), — без рамки:
    туда не переходили с клавиатуры, рамка только сбивает. */
-:is(h1, h2, h3, h4, section, [role="alertdialog"])[tabindex="-1"]:focus-visible { outline: none; }
+:is(h1, h2, h3, h4, section, [role="alertdialog"])[tabindex="-1"]:focus-visible { box-shadow: none; }
 
 /* Кнопки (ui/Button): secondary — по умолчанию, primary, ghost, danger, link;
    размеры md 28 px и sm 24 px. Нажатие видно сразу (:active), занятость —
@@ -95,9 +87,6 @@ body {
   text-transform: uppercase; color: var(--text-3);
 }
 .num { font-variant-numeric: tabular-nums; }
-/* Только для экранного диктора. */
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.muted { color: var(--text-2); }
 
 .badge {
   display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
