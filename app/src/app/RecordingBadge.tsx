@@ -42,6 +42,9 @@ const ATTACH_GROUP = "Включить ассистента";
 const TEMP_ITEM_NOTE = "ни записи, ни расшифровки — только разговор с ассистентом";
 const IDLE_MENU = "Варианты записи";
 const RECORDING_MENU = "Действия с записью";
+/** Кнопка ассистента во время записи (0.5): своя, под кнопкой записи. */
+export const AGENT_ON_LABEL = "Включить ассистента";
+export const AGENT_LABEL = "Ассистент";
 
 /** Выбранное в настройках устройство не нашлось — с какого пишем вместо него. */
 export function fallbackText(f: { kind: "mic" | "output"; name: string }): string {
@@ -267,15 +270,18 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   }, [recording, liveActive]);
 
   // Меню: кто ответит — спрашиваем при каждом открытии, настройки могли смениться.
-  const [menu, setMenu] = useState(false);
+  // Открытое меню: кнопки записи или кнопки ассистента (0.5).
+  const [menu, setMenu] = useState<"rec" | "agent" | null>(null);
   const [assistant, setAssistant] = useState<AssistantInfo | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const main = useRef<HTMLButtonElement>(null);
+  const agentBtn = useRef<HTMLButtonElement>(null);
+  const agentAnchor = useRef<HTMLSpanElement>(null);
   const item = useRef<HTMLButtonElement>(null);
   const menuBox = useRef<HTMLDivElement>(null);
   // Справа от кнопки, верхом вровень с ней; всегда в пределах окна (ui/floating).
-  const menuPos = useFloating(menu ? anchor : null, menuBox, { gap: 0 });
+  const menuPos = useFloating(menu === "agent" ? agentAnchor : menu ? anchor : null, menuBox, { gap: 0 });
   const hintId = useId();
   const blocked = noProvider(assistant);
   // Профиль по умолчанию (`assist.profile`) — первым и с пометкой (ревью M5);
@@ -290,7 +296,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     </>
   );
   // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню и вопрос больше не к месту.
-  useEffect(() => { setMenu(false); setAsking(null); }, [mode]);
+  useEffect(() => { setMenu(null); setAsking(null); }, [mode]);
   // Открытое меню — фокус на первый пункт (прежнее действие кнопки: он всегда доступен).
   useEffect(() => {
     if (menu) item.current?.focus();
@@ -304,12 +310,12 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   useEffect(() => {
     if (!menu) return;
     const down = (e: globalThis.MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setMenu(false);
+      if (box.current && !box.current.contains(e.target as Node)) setMenu(null);
     };
     const key = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      setMenu(false);
-      main.current?.focus();
+      setMenu(null);
+      (menu === "agent" ? agentBtn : main).current?.focus();
     };
     document.addEventListener("mousedown", down);
     document.addEventListener("keydown", key);
@@ -322,7 +328,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   if (!endpoint || !snapshot || !online) return null;
   const since = Math.max(0, now - (snapshotAt ?? seenAt)) / 1000;
   const run = (cmd: "start" | "stop" | "cancel" | "keep") => {
-    setMenu(false);
+    setMenu(null);
     setError(null);
     recordingCommand(endpoint, cmd)
       .then((result) => onSnapshot?.(result))
@@ -330,7 +336,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   };
   /** `failed` — текст, если ответ 200 с ok:false (не запустился сразу: например, нет интерпретатора). */
   const runLive = (call: (ep: Endpoint) => Promise<{ ok: boolean } & LiveStatus>, failed?: string) => {
-    setMenu(false);
+    setMenu(null);
     setError(null);
     call(endpoint)
       .then((result) => {
@@ -341,7 +347,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   };
   const startTemporary = () => runLive((ep) => liveStart(ep, { temporary: true }), START_FAILED);
   const ask = (what: "discard" | "temp-end") => {
-    setMenu(false);
+    setMenu(null);
     setAsking(what);
   };
   // Ошибка прошлого ассистента — не поверх нового (запускается, слушает,
@@ -390,18 +396,19 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       .filter((x): x is string => !!x);
   }
   // Меню — в простое и во время обычной записи; у записи ассистента — одно действие, без меню.
-  const menuLabel = idle ? IDLE_MENU : recording ? RECORDING_MENU : null;
+  const recLabel = idle ? IDLE_MENU : recording ? RECORDING_MENU : null;
+  const menuLabel = menu === "agent" ? (attached ? AGENT_LABEL : AGENT_ON_LABEL) : recLabel;
   const openMenu = (e: MouseEvent) => {
-    if (!menuLabel) return;
+    if (!recLabel) return;
     e.preventDefault();
-    setMenu(true);
+    setMenu("rec");
   };
   // Клавиатура меню: ↑/↓/Home/End — по доступным пунктам, Tab — закрыть (Esc — общий обработчик выше).
   const menuKeys = (e: ReactKeyboardEvent) => {
     if (e.key === "Tab") {
       e.preventDefault();
-      setMenu(false);
-      main.current?.focus();
+      setMenu(null);
+      (menu === "agent" ? agentBtn : main).current?.focus();
       return;
     }
     const all = [...(menuBox.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)") ?? [])];
@@ -418,35 +425,39 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const noProviderHint = blocked ? hintId : undefined;
 
   let items: ReactNode = null;
-  if (menu && recording) {
+  // Ассистент во время записи — своя кнопка (0.5): выключен — «Включить ассистента» (профили),
+  // включён — показать окно и выключить. В меню «Стоп» только остановка.
+  const showWindow = liveActive && inTauri();
+  if (menu === "agent" && recording) {
+    items = attached ? (
+      <>
+        {/* Окно ассистента скрыли ✕ (0.5) — вернуть его; запись и ассистент всё это время работают. */}
+        {showWindow && (
+          <RecItem ref={item} icon={<Icon as={AppWindow} />} title="Показать окно ассистента"
+            note="если его скрыли — встреча и ассистент идут"
+            onClick={() => { setMenu(null); void invoke<void>("live_panel_show").catch(() => {}); }} />
+        )}
+        <RecItem ref={showWindow ? undefined : item} icon={<Icon as={Power} />} title="Выключить ассистента"
+          note="запись продолжится, сводка останется в карточке"
+          disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)} />
+      </>
+    ) : (
+      <MenuGroup label={ATTACH_GROUP}>
+        {profiles.map((p, k) => (
+          <RecItem key={p} ref={k === 0 ? item : undefined} icon={agentIcon} title={profileTitle(p)}
+            note={`догонит начало встречи; ${PROFILE_NOTES[p]}`}
+            disabled={blocked} aria-describedby={noProviderHint}
+            onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)} />
+        ))}
+        {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+      </MenuGroup>
+    );
+  } else if (menu === "rec" && recording) {
     items = (
       <>
         <RecItem ref={item} icon={<Icon as={Square} fill="currentColor" stroke="none" size="sm" />}
           title={temporary ? TEMP_STOP_LABEL : STOP_LABEL} note={temporary ? TEMP_STOP_NOTE : STOP_NOTE}
           onClick={() => act?.()} />
-        {attached ? (
-          <>
-            {/* Окно ассистента скрыли ✕ (0.5) — вернуть его; запись и ассистент всё это время работают. */}
-            {liveActive && inTauri() && (
-              <RecItem icon={<Icon as={AppWindow} />} title="Показать окно ассистента"
-                note="если его скрыли — встреча и ассистент идут"
-                onClick={() => { setMenu(false); void invoke<void>("live_panel_show").catch(() => {}); }} />
-            )}
-            <RecItem icon={<Icon as={Power} />} title="Выключить ассистента"
-              note="запись продолжится, сводка останется в карточке"
-              disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)} />
-          </>
-        ) : (
-          <MenuGroup label={ATTACH_GROUP}>
-            {profiles.map((p) => (
-              <RecItem key={p} icon={agentIcon} title={profileTitle(p)}
-                note={`догонит начало встречи; ${PROFILE_NOTES[p]}`}
-                disabled={blocked} aria-describedby={noProviderHint}
-                onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)} />
-            ))}
-            {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
-          </MenuGroup>
-        )}
         {temporary ? (
           <RecItem icon={<Icon as={Save} />} title={KEEP_LABEL}
             note="запись ляжет в библиотеку и расшифруется, как обычная" onClick={() => run("keep")} />
@@ -459,7 +470,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         )}
       </>
     );
-  } else if (menu && idle) {
+  } else if (menu === "rec" && idle) {
     items = (
       <>
         <RecItem ref={item} icon={<i className="rec-menu__dot" />} title={RECORD_ITEM} note={RECORD_NOTE}
@@ -480,6 +491,12 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     );
   }
   const open = !!items && !!menuLabel;
+  const recOpen = open && menu === "rec";
+  const agentOpen = open && menu === "agent";
+  const agentState = live?.starting ? "запускается…" : live?.stopping ? "выключается…" : "слушает встречу";
+  const agentTip = attached
+    ? [`Ассистент ${agentState}`, "Окно ассистента, выключить — по нажатию"]
+    : [AGENT_ON_LABEL, "Подключится к этой записи и догонит её начало"];
 
   return (
     <div className={`rail-rec${open ? " rail-rec--open" : ""}`} ref={box}>
@@ -489,8 +506,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         content={open ? null : lines.length ? <TipLines lines={lines} /> : label}>
         <Button ref={main} variant={idle ? "primary" : "danger"} size="lg" flat className="btn--icon" aria-label={label}
           disabled={!act}
-          aria-haspopup={menuLabel ? "menu" : undefined} aria-expanded={menuLabel ? open : undefined}
-          onClick={() => (menuLabel ? setMenu(!menu) : act?.())} onContextMenu={openMenu}>
+          aria-haspopup={recLabel ? "menu" : undefined} aria-expanded={recLabel ? recOpen : undefined}
+          onClick={() => (recLabel ? setMenu(menu === "rec" ? null : "rec") : act?.())} onContextMenu={openMenu}>
           {idle ? <i className="rail-rec__dot" aria-hidden="true" />
             : <Icon as={Square} fill="currentColor" stroke="none" />}
         </Button>
@@ -498,6 +515,21 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       {/* Часы записи — под кнопкой всё время записи (макет: «Идёт запись · 12:47»): не нужно наводить. */}
       {elapsed && <span className="rail-rec__time num" aria-hidden="true">{elapsed}</span>}
       <span ref={anchor} className="rail-rec__anchor" aria-hidden="true" />
+      {/* Ассистент во время записи — своя кнопка под кнопкой записи (0.5). */}
+      {recording && (
+        <div className="rail-rec__agent-box">
+          <Tip side="right" describe content={agentOpen ? null : <TipLines lines={agentTip} />}>
+            <Button ref={agentBtn} variant="ghost" size="lg" flat
+              className={`btn--icon rail-rec__agent${attached ? " is-on" : ""}`}
+              aria-label={attached ? AGENT_LABEL : AGENT_ON_LABEL} aria-haspopup="menu" aria-expanded={agentOpen}
+              onClick={() => setMenu(menu === "agent" ? null : "agent")}>
+              <AgentMark state={attached && liveActive ? "listen" : "rest"} size={20} />
+              {!attached && <span className="rail-rec__plus" aria-hidden="true">+</span>}
+            </Button>
+          </Tip>
+          <span ref={agentAnchor} className="rail-rec__anchor" aria-hidden="true" />
+        </div>
+      )}
       {open && (
         <div ref={menuBox} className="rec-menu glass glass--dense" role="menu" aria-label={menuLabel ?? undefined}
           style={floatingStyle(menuPos)} onKeyDown={menuKeys}>

@@ -27,6 +27,11 @@
 .rail-rec { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; }
 .rail-rec__dot { width: 12px; height: 12px; border-radius: 50%; background: var(--on-accent-strong); }
 .rail-rec__anchor { position: absolute; left: calc(100% + 8px); top: 0; width: 0; height: 0; }
+/* Ассистент во время записи (0.5): своя кнопка под кнопкой записи; включён — цвет акцента. */
+.rail-rec__agent-box { position: relative; margin-top: var(--s-2); }
+.btn.rail-rec__agent { position: relative; }
+.btn.rail-rec__agent.is-on { color: var(--accent-line); }
+.rail-rec__plus { position: absolute; right: 7px; bottom: 6px; color: var(--ink-2); font: 700 var(--text-xs)/1 var(--font-body); }
 /* Часы записи под кнопкой — Geist Mono, цветом записи: длительность видна без наведения. */
 .rail-rec__time {
   margin-top: 4px; color: var(--danger); font: 500 var(--text-xs)/1 var(--font-code); white-space: nowrap;

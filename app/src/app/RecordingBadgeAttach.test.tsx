@@ -39,8 +39,11 @@ const status = () => {
 const stopButton = () => screen.getByRole("button", { name: "Остановить и сохранить" });
 /** Меню «Действия с записью» открывает сама кнопка остановки. */
 const openMenu = () => userEvent.click(stopButton());
+/** Ассистент во время записи — своя кнопка под кнопкой записи (0.5). */
+const agentButton = () => screen.getByRole("button", { name: /^(Включить ассистента|Ассистент)$/ });
+const openAgent = () => userEvent.click(agentButton());
 
-test("во время записи меню кнопки «Действия с записью»: «Включить ассистента» — ответ применяется сразу", async () => {
+test("0.5: во время записи своя кнопка «Включить ассистента» под кнопкой записи — ответ применяется сразу", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
     { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
@@ -51,7 +54,7 @@ test("во время записи меню кнопки «Действия с �
   }
   render(<Harness />);
   expect(status()).toHaveTextContent("Идёт запись · 12:34");
-  await openMenu();
+  await openAgent();
   const item = await screen.findByRole("menuitem", { name: /^Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
   expect(item).toHaveTextContent("догонит начало встречи");
@@ -68,7 +71,7 @@ test("«Включить ассистента» → «Личный» — под�
   const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
     { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
-  await openMenu();
+  await openAgent();
   const item = await screen.findByRole("menuitem", { name: /^Личный/ });
   // Профили — пунктами группы «Включить ассистента» (подпись группы, а не в каждом пункте).
   expect(within(screen.getByRole("group", { name: "Включить ассистента" })).getAllByRole("menuitem")).toHaveLength(2);
@@ -82,7 +85,7 @@ test("без подключённой модели «Включить ассис
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null }));
   const attach = vi.spyOn(api, "liveAttach");
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
-  await openMenu();
+  await openAgent();
   const item = await screen.findByRole("menuitem", { name: /^Рабочая встреча/ });
   await waitFor(() => expect(item).toBeDisabled());
   expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code, Codex или OpenCode в настройках");
@@ -100,7 +103,7 @@ test("включён — «· ассистент» в подсказке и «В
   }
   render(<Harness />);
   expect(status()).toHaveTextContent("Идёт запись · 12:34 · ассистент");
-  await openMenu();
+  await openAgent();
   const item = await screen.findByRole("menuitem", { name: /Выключить ассистента/ });
   expect(item).toHaveTextContent("запись продолжится");
   await userEvent.click(item);
@@ -109,13 +112,13 @@ test("включён — «· ассистент» в подсказке и «В
   expect(stopButton()).toBeEnabled(); // запись можно остановить
 });
 
-test("0.5: окно ассистента скрыли ✕ — «Показать окно ассистента» в меню записи (только в приложении)", async () => {
+test("0.5: окно ассистента скрыли ✕ — «Показать окно ассистента» в меню кнопки ассистента (только в приложении)", async () => {
   vi.mocked(shell.inTauri).mockReturnValue(true);
   vi.mocked(shell.invoke).mockResolvedValue(undefined);
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true, folder: "D:/rec/f" }))}
     onSnapshot={() => {}} />);
-  await openMenu();
+  await openAgent();
   await userEvent.click(await screen.findByRole("menuitem", { name: /^Показать окно ассистента/ }));
   expect(shell.invoke).toHaveBeenCalledWith("live_panel_show");
   expect(screen.queryByRole("menu")).toBeNull();
@@ -125,7 +128,7 @@ test("0.5: окно ассистента скрыли ✕ — «Показать
 test("вне приложения (браузер) пункта «Показать окно ассистента» нет", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true, folder: "D:/rec/f" }))} />);
-  await openMenu();
+  await openAgent();
   await screen.findByRole("menuitem", { name: /Выключить ассистента/ });
   expect(screen.queryByRole("menuitem", { name: /Показать окно ассистента/ })).toBeNull();
 });
@@ -134,7 +137,7 @@ test("отказ резидента виден рядом с кнопкой", as
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   vi.spyOn(api, "liveAttach").mockRejectedValue(new Error("Ассистент ещё запускается или останавливается"));
   render(<RecordingBadge endpoint={ep} snapshot={recording()} />);
-  await openMenu();
+  await openAgent();
   const item = await screen.findByRole("menuitem", { name: /^Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
   await userEvent.click(item);
@@ -147,8 +150,9 @@ test("«Остановить и сохранить» во время запис�
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true }))} />);
   await openMenu();
+  // 0.5: в меню «Стоп» — только остановка; ассистент — своей кнопкой.
   expect(screen.getAllByRole("menuitem").map((i) => i.querySelector(".rec-menu__title")?.textContent)).toEqual([
-    "Остановить и сохранить", "Выключить ассистента", "Остановить без сохранения…",
+    "Остановить и сохранить", "Остановить без сохранения…",
   ]);
   await userEvent.click(screen.getByRole("menuitem", { name: /^Остановить и сохранить/ }));
   expect(stop).toHaveBeenCalledWith(ep, "stop");
@@ -221,4 +225,20 @@ test("ошибка ассистента своей записи видна (па
     error: "Ассистент упал — запись продолжается: сбой", error_at: 400,
     error_folder: "D:\\rec\\f", ended_by: "crash" }))} />);
   expect(screen.getByRole("alert")).toHaveTextContent("запись продолжается: сбой");
+});
+
+test("0.5: кнопка ассистента — только во время записи; включён — «Ассистент», выключен — «Включить ассистента»", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  const idle = { ...recording(), status: "idle" as const, folder: null };
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={idle} />);
+  expect(screen.queryByRole("button", { name: /ассистент/i })).toBeNull();
+  rerender(<RecordingBadge endpoint={ep} snapshot={recording()} />);
+  expect(agentButton()).toHaveAccessibleName("Включить ассистента");
+  expect(agentButton()).toHaveAttribute("aria-haspopup", "menu");
+  rerender(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true, folder: "D:/rec/f" }))} />);
+  expect(agentButton()).toHaveAccessibleName("Ассистент");
+  expect(agentButton()).toHaveClass("is-on");
+  // Меню «Стоп» про ассистента ничего не знает.
+  await openMenu();
+  expect(screen.queryByRole("menuitem", { name: /ассистент/i })).toBeNull();
 });
