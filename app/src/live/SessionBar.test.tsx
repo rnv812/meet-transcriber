@@ -272,15 +272,15 @@ test("разрешено до конца встречи: список в «Чт�
   expect(onRevoke).toHaveBeenCalledWith("m5");
 });
 
-test("0.4: как действует ассистент — «Автомод» / «Спрашиваю каждое действие» / автомод недоступен", async () => {
+test("как действует ассистент — «Действует сам» / «Спрашивает каждое» / сам не может (0.5: без слова «автомод»)", async () => {
   const consent = (o: object) => agentInfo({ freedom: true, can: { mode: "consent", mcp: ["team-jira"], ...o } });
-  expect(modeOf(consent({ agent_mode: "auto", auto: true }))).toEqual({ text: "Автомод" });
-  expect(modeOf(consent({ agent_mode: "auto", auto: null }))).toEqual({ text: "Автомод" });
-  expect(modeOf(consent({ agent_mode: "confirm" }))).toEqual({ text: "Спрашиваю каждое действие" });
+  expect(modeOf(consent({ agent_mode: "auto", auto: true }))).toEqual({ text: "Действует сам" });
+  expect(modeOf(consent({ agent_mode: "auto", auto: null }))).toEqual({ text: "Действует сам" });
+  expect(modeOf(consent({ agent_mode: "confirm" }))).toEqual({ text: "Спрашивает каждое" });
   expect(modeOf(consent({ agent_mode: "auto", auto: false })))
-    .toEqual({ text: "Автомод недоступен — спрашиваю каждое действие", warn: true });
+    .toEqual({ text: "Сам действовать не может — спрашивает каждое", warn: true });
   expect(modeOf(agentInfo({ provider: "codex", can: { mode: "act", mcp: null, agent_mode: "auto" } })))
-    .toEqual({ text: "Автомод" });
+    .toEqual({ text: "Действует сам" });
   expect(modeOf(consent({}))).toBeNull();                         // старый ребёнок
   expect(modeOf(agentInfo({ can: { mode: "read", mcp: null } }))).toBeNull();
   // «Личный» — только промпт: подпись «может» та же.
@@ -292,10 +292,10 @@ test("0.4: как действует ассистент — «Автомод» /
 
   const { rerender } = render(<SessionBar agent={consent({ agent_mode: "auto", auto: true })} summary={summary}
     onFrequency={() => {}} />);
-  expect(bar()).toHaveTextContent("Автомод");
+  expect(bar()).toHaveTextContent("Действует сам");
   const pop = await know();
-  expect(pop).toHaveTextContent("Действия: Автомод");
-  expect(pop).toHaveTextContent("Спрашивает только рискованное");
+  expect(pop).toHaveTextContent("Действия: Действует сам");
+  expect(pop).toHaveTextContent("рискованные — после вашего разрешения");
   rerender(<SessionBar agent={consent({ agent_mode: "auto", auto: false })} summary={summary} onFrequency={() => {}} compact />);
-  expect(bar().querySelector(".session-bar__mode--warn")).toHaveTextContent("Автомод недоступен — спрашиваю каждое действие");
+  expect(bar().querySelector(".session-bar__mode--warn")).toHaveTextContent("Сам действовать не может — спрашивает каждое");
 });

@@ -196,15 +196,15 @@ test("расширенные возможности по согласию: вк�
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { agent_freedom: false } }));
 });
 
-test("0.4: «Действия ассистента» — автомод по умолчанию, «Спрашивать каждое» сохраняется; без возможностей строки нет", async () => {
+test("0.4: «Действия ассистента» — «Действует сам» по умолчанию, «Спрашивает каждое» сохраняется; без возможностей строки нет", async () => {
   open();
   const group = await screen.findByRole("radiogroup", { name: AGENT_MODE_LABEL });
-  const auto = within(group).getByRole("radio", { name: "Сам, рискованное — спрашивает" });
+  const auto = within(group).getByRole("radio", { name: "Действует сам" });
   expect(auto).toHaveAttribute("aria-checked", "true");
   const row = group.closest(".srow")!;
   expect(row).toHaveTextContent(AGENT_MODE_HINTS.auto);
   expect(row).toHaveTextContent("Ход по одной речи встречи ничего не меняет");
-  await userEvent.click(within(group).getByRole("radio", { name: "Спрашивать каждое" }));
+  await userEvent.click(within(group).getByRole("radio", { name: "Спрашивает каждое" }));
   expect(screen.getByRole("radiogroup", { name: AGENT_MODE_LABEL }).closest(".srow")!).toHaveTextContent(AGENT_MODE_HINTS.confirm);
   await userEvent.click(screen.getByRole("switch", { name: FREEDOM_LABEL }));
   expect(screen.queryByRole("radiogroup", { name: AGENT_MODE_LABEL })).toBeNull();
@@ -219,6 +219,6 @@ test("расширенные возможности у Codex: в автомод�
   open();
   const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
   await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_ACT_NOTE));
-  await userEvent.click(screen.getByRole("radio", { name: /Спрашивать каждое/ }));
+  await userEvent.click(screen.getByRole("radio", { name: /Спрашивает каждое/ }));
   await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_FILES_NOTE));
 });

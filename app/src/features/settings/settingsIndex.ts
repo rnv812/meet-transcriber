@@ -125,7 +125,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: ["mcp", "веб", "свобода", "согласие"],
   },
   {
-    section: "assistant", label: "Действия ассистента", hint: "Сам, как автомод, или спрашивать каждое действие",
+    section: "assistant", label: "Действия ассистента", hint: "Действует сам или спрашивает каждое действие",
     keywords: ["автомод", "разрешить", "подтверждение", "agent_mode"],
   },
   { section: "assistant", label: "База знаний для ассистента", hint: "Папка с материалами", keywords: ["obsidian", "папка", "kb"] },

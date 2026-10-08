@@ -1362,7 +1362,7 @@ def test_a_card_answer_on_the_hook_is_allow_not_auto(dirs):
 def test_decision_row_for_the_tool_line_in_the_chat(dirs):
     gate = _auto(dirs)
     assert gate.decide("Bash", {"command": "npm test"}).row() == {"outcome": AUTO, "why": "",
-                                                                   "label": "решает автомод"}
+                                                                   "label": "действует сам"}
     assert gate.decide("Read", {"file_path": str(dirs["meeting"] / "a.md")}).label == "разрешено автоматически"
     deny = gate.decide("Read", {"file_path": str(dirs["home"] / ".ssh" / "id_rsa")})
     assert deny.row() == {"outcome": DENY, "why": "sensitive", "label": "запрещено: закрытые данные"}
