@@ -22,6 +22,12 @@
   `src/meet/assist/` (см. «Ассистент-участник» ниже; сводка — `digester.py`,
   прежние подсказки и вопросы — `digester.py`, `qa.py`, промпты — `prompts.py`),
   живое распознавание — `live_asr.py`.
+- Системный звук без звука самого Meet (0.5): Windows 10 2004+ —
+  `process_loopback.py` (WASAPI process loopback, исключает дерево процессов
+  оболочки; pid — `MEET_EXCLUDE_PID` от `meet-tray --headless --parent-pid`;
+  сбой — прежний loopback), macOS — помощник `--exclude-pid`;
+  `MEET_PROCESS_LOOPBACK=0` выключает. Копия настроек перед откатом версии —
+  `backup.py` (`POST /backup`, «О программе» → «Другие версии»).
 - `app/` — окно приложения: React + TypeScript (Vite, тесты — Vitest).
 - `app/src-tauri/` — оболочка на Tauri 2 (Rust): трей, уведомления, запуск
   резидента, установка движка, обновления, установщик NSIS.
@@ -100,6 +106,15 @@ git не попадают.
   (`send(on_event=…)`), Codex/OpenCode — после вызова (`AgentReply.tools`).
   Карточка согласия с тем же `tool_use_id` — в строке. В журнал процесса — ничего
   из вызова. Окно — `live/ToolRows.tsx`.
+- **Инструменты Meet (0.5):** свой MCP-сервер `meet` для Claude Code
+  (`assist/meet_mcp.py`, проверки — `assist/meet_tools.py`): открыть файл,
+  показать в папке, открыть ссылку — сразу в ходе `USER`; запустить приложение —
+  карточкой; `meet_settings` — настройки без секретов. Согласие «до конца
+  встречи» — действие + объект (`consent.grant_for`), удаление и отправка
+  наружу не запоминаются.
+- **Кнопки голосом (0.5):** своя реплика почти дословно совпала с надписью
+  кнопки под последним сообщением (30 с) — «Засчитано голосом» с «Отменить» 10 с,
+  потом обычное нажатие (`participant.voice_match`, `assist.voice_buttons`).
 - **Слэш-команды** (`assist/slash.py`, из `post_user_message` и `queue_existing`,
   `via: "command"`): Meet — `/help`, `/mcp [reconnect|enable|disable имя]`,
   `/clear` (новый сеанс, затравка без переписки), `/model [имя]`, `/compact`;

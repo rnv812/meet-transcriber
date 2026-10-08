@@ -49,6 +49,9 @@ def test_snapshot_reports_the_package_version(control_state):
     # Оболочка сверяет её со своей: резидент прежней версии после обновления
     # она штатно гасит и поднимает свой.
     import importlib.metadata
+    # Версия запоминается на процесс; метаданные пакета в src/*.egg-info могли
+    # обновиться посреди прогона (смена версии) — сравниваем свежие с свежими.
+    tray_control.app_version.cache_clear()
     try:
         expected = importlib.metadata.version("meet-transcriber")
     except importlib.metadata.PackageNotFoundError:
