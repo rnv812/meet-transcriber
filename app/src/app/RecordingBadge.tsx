@@ -18,12 +18,13 @@ import { IconButton } from "../ui/IconButton";
 import { RailTip } from "./RailTip";
 import "./rail.css";
 
-const LOW_DISK_GB = 5;
+/** Меньше стольких ГБ на диске записей — предупреждение «Мало места» (рейка и страница «Идёт запись»). */
+export const LOW_DISK_GB = 5;
 const ERROR_MS = 6000;
 const TICK_MS = 1000;
 const NO_PROVIDER = "Подключите Claude Code, Codex или OpenCode в настройках";
 const START_FAILED = "Не удалось запустить ассистента";
-const ATTACH_FAILED = "Не удалось включить ассистента";
+export const ATTACH_FAILED = "Не удалось включить ассистента";
 const START_LABEL = "Начать запись";
 const STOP_LABEL = "Остановить и сохранить";
 const CANCEL_START_LABEL = "Отменить запуск";

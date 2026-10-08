@@ -1,0 +1,46 @@
+/* Страница «Идёт запись» (RecordingNow.tsx, макет MeetApp «идёт запись»): состояние и большой
+   таймер, выноски предупреждений, уровни дорожек карточкой, действия, «Позвать ассистента». */
+.rec-now { display: flex; flex-direction: column; gap: 20px; padding: 12px 0 8px; max-width: 760px; }
+
+.rec-now__head { display: flex; flex-direction: column; gap: 6px; }
+.rec-now__state {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0;
+  color: var(--ink-2); font-size: var(--text-sm);
+}
+.rec-now__clock {
+  margin: 0; color: var(--ink);
+  font: 500 56px/1 var(--font-display); letter-spacing: -0.03em;
+}
+.rec-now__note { margin: 0; color: var(--ink-3); font-size: var(--text-sm); }
+.rec-now__muted { color: var(--ink-3); }
+
+.rec-now__warnings { display: flex; flex-direction: column; gap: 8px; }
+
+/* Уровни: подпись · полоски последних отсчётов · доля. */
+.rec-now__levels { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; }
+.rec-now__level { display: grid; grid-template-columns: 150px minmax(0, 1fr) 48px; align-items: center; gap: 14px; }
+.rec-now__level-name { display: flex; flex-direction: column; min-width: 0; }
+.rec-now__level-name b { font-weight: 600; }
+.rec-now__level-note { color: var(--ink-3); font-size: var(--text-xs); }
+.rec-now__level-note--warn { color: var(--warning); }
+.rec-now__bars { display: flex; align-items: center; gap: 2px; height: 32px; min-width: 0; }
+.rec-now__bars i { display: block; flex: 1; min-width: 1px; border-radius: 1px; background: var(--data-1); }
+.rec-now__bars--mic i { background: var(--data-4); }
+.rec-now__level-value { color: var(--ink-3); font: 400 var(--text-xs)/1 var(--font-code); text-align: right; }
+
+.rec-now__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.rec-now__error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
+
+/* «Позвать ассистента» — карточка на «акварели» (знак ИИ), не полное сияние. */
+.rec-now__invite { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; max-width: 640px; padding: 16px 18px; }
+.rec-now__invite-text { flex: 1 1 300px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rec-now__invite-text b { font-weight: 600; }
+.rec-now__invite-text > span { color: var(--ink-2); font-size: var(--text-sm); }
+.rec-now__invite-text > .rec-now__muted { color: var(--ink-3); }
+
+/* Узкая карточка: подпись дорожки над полосками. */
+@container (max-width: 520px) {
+  .rec-now__clock { font-size: 44px; }
+  .rec-now__level { grid-template-columns: minmax(0, 1fr) 40px; }
+  .rec-now__level-name { grid-column: 1 / -1; }
+}

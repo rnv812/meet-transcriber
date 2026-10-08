@@ -20,15 +20,13 @@ import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
-import { JobProgress } from "../../ui/JobProgress";
 import { Loading } from "../../ui/Loading";
-import { ProgressBar } from "../../ui/ProgressBar";
 import type { AgentInsert } from "./AgentTab";
 import {
   AnalysisOffer, AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
 } from "./analysis";
 import { noModelText, noProvider, useAssistant } from "./assistant";
-import { modelChoices, modelReady } from "../../lib/llm";
+import { modelChoices, modelReady, PROVIDER_LABELS } from "../../lib/llm";
 import { useImprove } from "./improve";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { Callout } from "./Callout";
@@ -36,6 +34,8 @@ import { CardActions } from "./CardActions";
 import { CardTabs, type CardStage } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
+import { RecordingNow } from "./RecordingNow";
+import { Transcribing } from "./Transcribing";
 import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
 import { TranscriptView, type FindRequest, type SeekRequest } from "./TranscriptView";
@@ -79,7 +79,7 @@ const CHAPTER_REFS = 6;
  * Панель «Спикеры встречи»: на широкой карточке (от 880 px) расшифровка видна
  * рядом и не уже 400 px; на узкой панель — поверх карточки, не шире её.
  */
-const SPEAKERS_PANE = { def: 440, min: 320, max: 760, reserve: (room: number) => (room >= 880 ? 400 : 0) };
+const SPEAKERS_PANE = { def: 420, min: 320, max: 760, reserve: (room: number) => (room >= 880 ? 400 : 0) };
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
@@ -133,6 +133,8 @@ export function RecordingCard({
   const [jira, setJira] = useState<JiraLinker | null>(null);
   /** Ответ на предложение включить авто-анализ (`analysis.consent`): "pending" — ещё не спрашивали. */
   const [consent, setConsent] = useState<string>("");
+  /** `recording.auto_transcribe` и `analysis.auto` — что будет после записи и после расшифровки. */
+  const [after, setAfter] = useState({ transcribe: true, analysis: false });
   /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
   /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
@@ -162,6 +164,9 @@ export function RecordingCard({
       setJira(jiraLinker(s));
       const answer = (s.analysis as { consent?: unknown } | undefined)?.consent;
       setConsent(typeof answer === "string" ? answer : "");
+      const recording = s.recording as { auto_transcribe?: unknown } | undefined;
+      const auto = (s.analysis as { auto?: unknown } | undefined)?.auto;
+      setAfter({ transcribe: recording?.auto_transcribe !== false, analysis: auto === true });
     }).catch(() => {}).finally(() => { if (live) setSettingsRead(true); });
     return () => { live = false; };
   }, [endpoint]);
@@ -428,6 +433,10 @@ export function RecordingCard({
     </Button>
   ) : null;
   const retranscribeFailed = status.kind === "ready" ? failedRetranscribe(rec, jobs) : null;
+  // Колонка «Анализ» страницы «Расшифровывается»: кто и когда сделает анализ встречи.
+  const provider = assistantInfo?.provider ? PROVIDER_LABELS[assistantInfo.provider] ?? assistantInfo.provider : null;
+  const analysisWhen = !after.analysis ? "по кнопке, после расшифровки"
+    : provider ? `${provider}, после расшифровки` : "после расшифровки, когда подключите модель";
   /** Строка хода над текстом до спикеров: спокойно, без полосы — текст уже можно читать. */
   const textNote = (st: Extract<typeof status, { kind: "text" }>) => (
     <div className="card__textfirst" role="status" aria-label="Ход расшифровки">
@@ -510,17 +519,14 @@ export function RecordingCard({
         action={<Button variant="primary" onClick={doTranscribe} disabled={busy}>Расшифровать</Button>} />;
       break;
     case "queued":
-      first = <EmptyState title="В очереди на расшифровку" action={cancelButton} />;
-      break;
     case "running":
+      // Карточка этапов из задачи; предупреждение задачи (процессор вместо видеокарты) — выноской.
       first = (
-        <div className="card__progress">
-          {status.job ? <JobProgress job={status.job} />
-            : <ProgressBar value={null} label={status.label} />}
-          {/* Например, распознаёт процессор вместо видеокарты — и почему. */}
-          {status.job?.warning && <p className="muted card__note" role="note">{status.job.warning}</p>}
-          {cancelButton && <div>{cancelButton}</div>}
-        </div>
+        <Transcribing job={active} queued={status.kind === "queued"}
+          stage={status.kind === "running" ? status.stage : undefined}
+          label={status.kind === "running" ? status.label : undefined}
+          durationS={rec.duration_s ?? spokenUntil} tracks={Object.keys(rec.tracks).length}
+          analysis={analysisWhen} actions={cancelButton} />
       );
       break;
     case "failed":
@@ -537,8 +543,11 @@ export function RecordingCard({
       break;
     case "recording":
       first = live && snapshot?.live
-        ? <LiveCard endpoint={endpoint} live={snapshot.live} onAskAgent={askHint} />
-        : <EmptyState title="Идёт запись…" />;
+        ? <LiveCard endpoint={endpoint} live={snapshot.live} snapshot={snapshot} onAskAgent={askHint} />
+        : snapshot ? (
+          <RecordingNow endpoint={endpoint} snapshot={snapshot} startedAt={rec.started_at}
+            autoTranscribe={after.transcribe} noModel={noModel ? noModelText(assistantInfo) : null} />
+        ) : <EmptyState title="Идёт запись…" />;
       break;
   }
   const body = (

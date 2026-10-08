@@ -6,7 +6,7 @@ import { errorText } from "../../lib/format";
 import { inTauri, overChatDrop, pickMedia } from "../../lib/shell";
 import { IconButton } from "../../ui/IconButton";
 
-const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
+export const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
 
 export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null; onImported?: () => void }) {
   const [errors, setErrors] = useState<string[]>([]);

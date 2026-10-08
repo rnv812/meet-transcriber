@@ -1,0 +1,27 @@
+/* Страница «Расшифровывается» (Transcribing.tsx, макет MeetApp «расшифровывается»): бейдж,
+   карточка этапов в четыре колонки, общий ход строкой, строки текста скелетом. */
+.transcribing { display: flex; flex-direction: column; gap: 16px; padding: 8px 0; max-width: 820px; }
+.transcribing__head { display: flex; align-items: center; gap: 10px; }
+
+.transcribing__stages {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
+  margin: 0; padding: 14px 16px; list-style: none;
+}
+.transcribing__stage { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.transcribing__title { display: flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 600; }
+.transcribing__check { flex: none; color: var(--success); }
+.transcribing__pct { margin-left: auto; color: var(--ink-2); font: 500 var(--text-xs)/1 var(--font-code); }
+.transcribing__sub { color: var(--ink-3); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.transcribing__stage--pending .transcribing__title { color: var(--ink-3); }
+.transcribing__bar { width: 100%; }
+
+.transcribing__total { margin: 0; color: var(--ink-2); font-size: var(--text-sm); }
+.transcribing__skel { gap: 10px; padding-left: 70px; }
+.transcribing__hint { margin: 0; color: var(--ink-3); font-size: var(--text-sm); }
+.transcribing__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Узкая карточка: этапы в две колонки, скелет без отступа под время. */
+@container (max-width: 560px) {
+  .transcribing__stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .transcribing__skel { padding-left: 0; }
+}

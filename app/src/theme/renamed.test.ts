@@ -121,6 +121,11 @@ const AURORA_IN_MARKUP = new Map<string, string[]>([
   [join("features", "card", "markup.tsx"), ["card"]],
   // «Мой голос» и таблица людей — `.card`, «Найти человека» — `.search` Aurora, этап 3.
   [join("features", "voices", "VoicesPane.tsx"), ["card", "search"]],
+  // «Идёт запись» (уровни, «Позвать ассистента»), «Расшифровывается» (этапы) — `.card` Aurora;
+  // пустая библиотека — `.empty` Aurora на сиянии, этап 3.
+  [join("features", "card", "RecordingNow.tsx"), ["card"]],
+  [join("features", "card", "Transcribing.tsx"), ["card"]],
+  [join("features", "recordings", "LibraryEmpty.tsx"), ["empty"]],
   // Живая панель: вкладки узкой области и сегменты частоты и профиля — `.tabs` Aurora, этап 5.
   [join("live", "LiveWorkspace.tsx"), ["tabs"]],
   [join("live", "SessionBar.tsx"), ["tabs"]],

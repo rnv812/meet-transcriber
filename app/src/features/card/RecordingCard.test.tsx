@@ -176,11 +176,33 @@ test("untranscribed: пустое состояние и «Расшифроват
   expect(api.transcribe).toHaveBeenCalledWith(ep, "r1");
 });
 
-test("recording: «Идёт запись…»", async () => {
+test("recording: страница «Идёт запись» — таймер, уровни, «Позвать ассистента»", async () => {
   load({ has_transcript: false }, null);
-  const snapshot = { status: "recording", folder: "C:/rec/r1" } as never;
+  const snapshot = {
+    status: "recording", source: "auto", folder: "C:/rec/r1", elapsed_s: 767, levels: { "mic.opus": 0.3 },
+    disk_free_gb: 100,
+  } as never;
   render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot} />);
-  expect(await screen.findByText("Идёт запись…")).toBeInTheDocument();
+  const page = await screen.findByRole("region", { name: "Идёт запись" });
+  expect(within(page).getByRole("timer")).toHaveTextContent("12:47");
+  expect(within(page).getByText("Идёт запись · автозапись")).toBeInTheDocument();
+  expect(within(page).getByRole("meter", { name: "Микрофон" })).toHaveAttribute("aria-valuenow", "30");
+  expect(within(page).getByRole("region", { name: "Позвать ассистента" })).toBeInTheDocument();
+  // Без подключённой модели позвать нельзя — причина рядом.
+  await waitFor(() => expect(within(page).getByRole("button", { name: "Включить ассистента" })).toBeDisabled());
+});
+
+test("расшифровывается: бейдж и этапы, анализ — по настройкам", async () => {
+  load({ has_transcript: false }, null);
+  vi.mocked(api.getSettings).mockResolvedValue({ analysis: { auto: true } });
+  vi.mocked(api.getAssistant).mockResolvedValue({
+    provider: "claude-code", setting: "auto", available: {}, knowledge_dir: null, checking: false,
+  });
+  render(<RecordingCard id="r1" endpoint={ep} jobs={[job({ done: 0.5, total: 1 })]} />);
+  expect(await screen.findByText("Расшифровывается")).toBeInTheDocument();
+  const stages = within(screen.getByRole("list", { name: "Этапы расшифровки" })).getAllByRole("listitem");
+  expect(stages[1]).toHaveTextContent("50 %");
+  await waitFor(() => expect(stages[3]).toHaveTextContent("Claude Code, после расшифровки"));
 });
 
 const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({

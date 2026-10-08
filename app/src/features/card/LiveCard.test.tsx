@@ -48,3 +48,21 @@ test("до первого состояния ассистента — «Подк
   act(() => streams()[0]!.emit("state", { digest: "", hints: [], status: null }));
   expect(screen.getByRole("tablist")).toBeInTheDocument();
 });
+
+test("часы записи в шапке: обычная запись — elapsed_s снимка, живой режим — от started_at", () => {
+  const snapshot = { status: "recording", elapsed_s: 125, temporary: false } as never;
+  const { rerender } = render(<LiveCard endpoint={ep} live={live({ attached: true })} snapshot={snapshot} />);
+  expect(screen.getByRole("timer", { name: "Время записи" })).toHaveTextContent("02:05");
+  const started = Date.now() / 1000 - 61;
+  rerender(<LiveCard endpoint={ep} live={live({ started_at: started })}
+    snapshot={{ status: "idle", elapsed_s: 0 } as never} />);
+  expect(screen.getByRole("timer", { name: "Время записи" })).toHaveTextContent("01:01");
+  // Дописывает дорожки — часов нет.
+  rerender(<LiveCard endpoint={ep} live={live({ active: false, stopping: true })} />);
+  expect(screen.queryByRole("timer")).toBeNull();
+});
+
+test("временная встреча — пометка «не сохранится» в шапке", () => {
+  render(<LiveCard endpoint={ep} live={live()} snapshot={{ status: "idle", elapsed_s: 0, temporary: true } as never} />);
+  expect(screen.getByText("Временная — не сохранится")).toBeInTheDocument();
+});

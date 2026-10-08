@@ -1,0 +1,24 @@
+/* Пустая библиотека (LibraryEmpty.tsx, макет MeetApp EMPTY): полное сияние `.empty.aurora`
+   в тёмной теме блока, текст снизу, кнопки и стеклянная плашка автозаписи. Занимает
+   остаток колонки списка. */
+.lib-empty {
+  flex: 1 1 auto; min-height: 320px; box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; gap: 14px;
+  padding: 32px 24px;
+}
+.lib-empty__title { margin: 0; font: 500 var(--text-h2)/1.15 var(--font-display); letter-spacing: var(--track-display); }
+.lib-empty__text { font-size: var(--text-ui); line-height: 1.5; }
+.lib-empty__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.lib-empty__dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--on-accent-strong); }
+/* «Импортировать файл» — контурная на стекле, как в макете. */
+.btn.lib-empty__import { background: var(--glass-1); border-color: var(--glass-line); color: var(--ink); }
+.lib-empty .lib-empty__error {
+  margin: 0; padding: 6px 10px; border-radius: var(--r-sm);
+  background: var(--danger-soft); color: var(--ink); font-size: var(--text-sm);
+}
+.lib-empty__auto {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-radius: var(--r-sm); color: var(--ink-2); font-size: var(--text-sm);
+}
+.lib-empty__auto-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--ink-3); }
+.lib-empty__auto-dot--on { background: var(--accent); }
