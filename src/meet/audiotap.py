@@ -5,8 +5,9 @@
 маленькая программа на Swift (`mac/audiotap/main.swift`), которая лежит в
 ресурсах приложения рядом с ffmpeg:
 
-* `meet-audiotap --stream --rate 48000 --channels 1` — ScreenCaptureKit (macOS
-  13+, разрешение «Запись экрана»), только звук. Первая строка stdout —
+* `meet-audiotap --stream --rate 48000 --channels 1 [--exclude-pid N]` —
+  ScreenCaptureKit (macOS 13+, разрешение «Запись экрана»), только звук, без
+  звука приложения с процессом N (оболочка Meet). Первая строка stdout —
   рукопожатие JSON (`{"meet_audiotap": 1, "rate", "channels", "format":
   "s16le"}`), дальше — сырой PCM s16le до закрытия stdin или SIGTERM;
 * `meet-audiotap --mic-users` — одна строка JSON: процессы, которые сейчас
@@ -157,8 +158,14 @@ def parse_handshake(line: bytes) -> dict:
     return {"rate": rate, "channels": channels}
 
 
-def stream_command(helper: str, rate: int, channels: int) -> list[str]:
-    return [helper, "--stream", "--rate", str(int(rate)), "--channels", str(int(channels))]
+def stream_command(helper: str, rate: int, channels: int,
+                   exclude_pid: "int | None" = None) -> list[str]:
+    """`exclude_pid` — приложение, чей звук не писать (оболочка Meet с плеером, 0.5);
+    прежний помощник незнакомый ключ пропускает."""
+    argv = [helper, "--stream", "--rate", str(int(rate)), "--channels", str(int(channels))]
+    if exclude_pid:
+        argv += ["--exclude-pid", str(int(exclude_pid))]
+    return argv
 
 
 def parse_mic_users(text: str) -> "list[dict] | None":

@@ -101,6 +101,9 @@ def test_helper_speaks_the_python_protocol():
     assert f"let protocolVersion = {audiotap.PROTOCOL}" in swift
     for mode in ('"--stream"', '"--mic-users"', '"--self-test"', '"--preflight"'):
         assert mode in swift
+    # Звук самого Meet исключается: приложение оболочки — в фильтре захвата (0.5).
+    assert '"--exclude-pid"' in swift and "excludingApplications: excluded" in swift
+    assert '"exclude_pid": true' in swift
     assert '"format": "s16le"' in swift
     # Помощник дописывает тишину раньше резидента: иначе дописали бы оба.
     from meet import recorder

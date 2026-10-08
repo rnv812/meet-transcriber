@@ -233,8 +233,11 @@ class TapStream:
             raise audiotap.TapError(audiotap.MISSING_NOTICE, kind=audiotap.KIND_HELPER)
         self._stopping.clear()
         self.stalled = False
+        from meet import process_loopback
+
         self._proc = self._popen(
-            audiotap.stream_command(helper, self.rate, self.channels),
+            audiotap.stream_command(helper, self.rate, self.channels,
+                                    exclude_pid=process_loopback.exclude_target()),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         self._drainer = threading.Thread(target=self._drain, name="meet-audiotap-stderr",

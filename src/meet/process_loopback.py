@@ -41,16 +41,24 @@ def exclude_pid() -> int | None:
     return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 
+def exclude_target() -> int | None:
+    """Кого исключать из системного звука на любой ОС (на macOS — помощнику
+    `--exclude-pid`): выключено (`MEET_PROCESS_LOOPBACK=0`) или некого — None."""
+    if os.environ.get(ENV_OFF, "").strip() == "0":
+        return None
+    return exclude_pid()
+
+
 def available() -> bool:
     """Windows 10 2004+, не выключено (`MEET_PROCESS_LOOPBACK=0`) и известно, кого исключать."""
-    if sys.platform != "win32" or os.environ.get(ENV_OFF, "").strip() == "0":
+    if sys.platform != "win32":
         return False
     try:
         if sys.getwindowsversion().build < MIN_BUILD:
             return False
     except AttributeError:
         return False
-    return exclude_pid() is not None
+    return exclude_target() is not None
 
 
 def pseudo_device() -> dict | None:

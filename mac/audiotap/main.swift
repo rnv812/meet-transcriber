@@ -5,8 +5,9 @@
 // они здесь — в маленькой программе без зависимостей, которую резидент
 // запускает подпроцессом (`meet/audiotap.py`, `meet/mac_audio.py`):
 //
-//   meet-audiotap --stream [--rate 48000] [--channels 1]
-//       ScreenCaptureKit (macOS 13+), только звук. Первая строка stdout —
+//   meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N]
+//       ScreenCaptureKit (macOS 13+), только звук; --exclude-pid — без звука
+//       приложения с этим процессом (оболочка Meet: плеер записи, 0.5). Первая строка stdout —
 //       рукопожатие JSON {"meet_audiotap": 1, "rate", "channels", "format":
 //       "s16le"}, дальше — сырой PCM s16le, пока не закрыт stdin или не
 //       пришёл SIGTERM/SIGINT. Нужно разрешение «Запись экрана». Поток не
@@ -39,7 +40,7 @@ import Foundation
 import ScreenCaptureKit
 
 let protocolVersion = 1
-let helperVersion = "0.3.0"
+let helperVersion = "0.5.0"
 
 let exitOK: Int32 = 0
 let exitUsage: Int32 = 64
@@ -101,6 +102,7 @@ func selfTest() -> Never {
         "macos": "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)",
         "stream": stream,
         "mic_users": micUsers,
+        "exclude_pid": true,
         "format": "s16le",
     ])
     exit(exitOK)
@@ -216,6 +218,8 @@ func micUsers() -> Never {
 final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     let rate: Int
     let channels: Int
+    /// Процесс приложения, чей звук не писать (0 — писать всё).
+    let excludePid: Int
     var stream: SCStream?
     private var samples: [Int16] = []
     /// Очередь звука: последовательная, на ней же печатается рукопожатие —
@@ -236,16 +240,19 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Пауза длиннее этого (секунды) тишиной не заполняется — см. fillSilence.
     private let fillLimit = 0.75
 
-    init(rate: Int, channels: Int) {
+    init(rate: Int, channels: Int, excludePid: Int) {
         self.rate = rate
         self.channels = channels
+        self.excludePid = excludePid
     }
 
     func start() async {
         let content: SCShareableContent
         do {
+            // Все приложения, а не только с окнами на экране: окно Meet может быть
+            // свёрнуто в трей, а плеер — звучать.
             content = try await SCShareableContent.excludingDesktopWindows(
-                false, onScreenWindowsOnly: true)
+                false, onScreenWindowsOnly: false)
         } catch {
             AudioTap.fail(error)
         }
@@ -253,7 +260,12 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
             printError("нет дисплея для захвата")
             exit(exitFailed)
         }
-        let filter = SCContentFilter(display: display, excludingApplications: [],
+        let excluded = excludePid > 0
+            ? content.applications.filter { Int($0.processID) == excludePid } : []
+        if excludePid > 0 && excluded.isEmpty {
+            printError("приложение \(excludePid) не найдено — пишу весь системный звук")
+        }
+        let filter = SCContentFilter(display: display, excludingApplications: excluded,
                                      exceptingWindows: [])
         let config = SCStreamConfiguration()
         config.capturesAudio = true
@@ -409,6 +421,7 @@ var signalSources: [DispatchSourceSignal] = []
 func runStream(_ args: [String]) -> Never {
     let rate = option("--rate", in: args, default: 48000)
     let channels = option("--channels", in: args, default: 1)
+    let excludePid = option("--exclude-pid", in: args, default: 0)
     guard [8000, 16000, 24000, 48000].contains(rate), channels == 1 || channels == 2 else {
         printError("поддерживаются частоты 8000/16000/24000/48000 и 1–2 канала")
         exit(exitUsage)
@@ -425,7 +438,7 @@ func runStream(_ args: [String]) -> Never {
         exit(exitPermission)
     }
     signal(SIGPIPE, SIG_IGN)
-    let tap = AudioTap(rate: rate, channels: channels)
+    let tap = AudioTap(rate: rate, channels: channels, excludePid: excludePid)
     tapHolder = tap
     for sig in [SIGTERM, SIGINT] {
         signal(sig, SIG_IGN)
@@ -457,6 +470,6 @@ case "--mic-users"?:
 case "--stream"?:
     runStream(arguments)
 default:
-    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] | --mic-users | --preflight | --self-test")
+    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] | --mic-users | --preflight | --self-test")
     exit(exitUsage)
 }

@@ -45,6 +45,25 @@ def test_exit_codes_become_russian_notices():
 def test_stream_command():
     assert audiotap.stream_command("/r/meet-audiotap", 48000, 1) == [
         "/r/meet-audiotap", "--stream", "--rate", "48000", "--channels", "1"]
+    # Звук самого Meet (окно с плеером записи) — мимо захвата (0.5).
+    assert audiotap.stream_command("/r/meet-audiotap", 48000, 1, exclude_pid=4242)[-2:] == [
+        "--exclude-pid", "4242"]
+
+
+def test_tap_stream_excludes_the_shell_unless_switched_off(monkeypatch):
+    monkeypatch.setenv("MEET_EXCLUDE_PID", "4242")
+    popen, calls = _popen_factory(HANDSHAKE)
+    stream = mac_audio.TapStream(48000, 1, lambda *a: (None, mac_audio.paContinue), 1024,
+                                 popen=popen, helper="/r/meet-audiotap")
+    stream.start_stream()
+    stream.close()
+    assert calls[0][-2:] == ["--exclude-pid", "4242"]
+    monkeypatch.setenv("MEET_PROCESS_LOOPBACK", "0")
+    stream = mac_audio.TapStream(48000, 1, lambda *a: (None, mac_audio.paContinue), 1024,
+                                 popen=popen, helper="/r/meet-audiotap")
+    stream.start_stream()
+    stream.close()
+    assert "--exclude-pid" not in calls[1]
 
 
 def test_mic_users_fixture_is_parsed():
