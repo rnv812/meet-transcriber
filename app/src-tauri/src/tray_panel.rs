@@ -438,6 +438,7 @@ pub fn hide(app: &AppHandle) {
 
 fn build(app: &AppHandle) -> Option<WebviewWindow> {
     let native_glass = cfg!(target_os = "macos");
+    let theme = crate::appearance::startup_theme();
     let builder = WebviewWindowBuilder::new(
         app,
         PANEL_LABEL,
@@ -457,10 +458,11 @@ fn build(app: &AppHandle) -> Option<WebviewWindow> {
     .visible(false)
     .focused(true)
     .transparent(true)
+    // Тема окна — та же, что у страницы: на macOS по ней рисуется системное
+    // стекло под страницей (иначе оно следует теме ОС, а текст — теме Meet).
+    .theme(theme)
     // Тема — странице до её скриптов: кеша оформления может ещё не быть.
-    .initialization_script(crate::appearance::theme_hint_script(
-        crate::appearance::startup_theme(),
-    ));
+    .initialization_script(crate::appearance::theme_hint_script(theme));
     #[cfg(target_os = "macos")]
     let builder = {
         use tauri::window::{Effect, EffectState, EffectsBuilder};

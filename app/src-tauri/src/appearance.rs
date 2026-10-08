@@ -103,8 +103,9 @@ pub fn paint_canvas<R: Runtime>(window: &WebviewWindow<R>, theme: Option<Theme>)
     }
 }
 
-/// Окно настроек сменило оформление: рамка главного окна — в новую тему,
-/// остальным окнам — событие (панель ассистента и панель трея применят сами).
+/// Окно настроек сменило оформление: рамка главного окна и системное стекло
+/// панели трея — в новую тему, остальным окнам — событие (панель ассистента и
+/// панель трея применят сами).
 #[tauri::command]
 pub fn set_appearance(app: AppHandle, appearance: Value) {
     // Окно настроек шлёт только допустимые значения; мусор — «как в системе».
@@ -114,6 +115,12 @@ pub fn set_appearance(app: AppHandle, appearance: Value) {
             shell_log!("тема окна не сменилась: {error}");
         }
         paint_canvas(&main, theme);
+    }
+    // Панель трея: на macOS системное стекло под ней следует теме окна.
+    if let Some(panel) = app.get_webview_window(crate::tray_panel::PANEL_LABEL) {
+        if let Err(error) = panel.set_theme(theme) {
+            shell_log!("тема панели трея не сменилась: {error}");
+        }
     }
     if let Err(error) = app.emit(EVENT, appearance) {
         shell_log!("оформление не разослано окнам: {error}");
