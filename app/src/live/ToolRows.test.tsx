@@ -150,6 +150,35 @@ test("однократная строка об автомоде и ответ х
   expect(screen.getAllByText("команда")).toHaveLength(2);
 });
 
+test("0.5: итог под блоком действий — «Выполнено N из M · не удалось: … — причина», щелчок — к строке", async () => {
+  const scrolled: string[] = [];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = vi.fn(function (this: Element) { scrolled.push(this.getAttribute("data-tool") ?? ""); });
+  try {
+    render(<Host />);
+    load([agentMsg("m2", { mode: "reply", text: "Готово" }),
+      row({ status: "done" }), row({ status: "done", summary: "npm test" }),
+      row({ status: "error", summary: "npm run build", error: "Error: vite не найден\nat x", tool_use_id: "toolu_bad" }),
+      row({ status: "denied", summary: "rm -rf build", gate: { decision: "denied", label: "запрещено: удаление" } })]);
+    const result = screen.getByRole("button", { name: /^Выполнено 2 из 4/ });
+    expect(result).toHaveTextContent("Выполнено 2 из 4 · не удалось: Bash npm run build — Error: vite не найден · ещё 1");
+    await userEvent.click(result);
+    expect(scrolled).toEqual(["toolu_bad"]);
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
+});
+
+test("0.5: итог — когда вызовов два и больше и ни один не выполняется; всё удалось — без «не удалось»", () => {
+  render(<Host />);
+  load([agentMsg("m2", { mode: "reply", status: "writing", text: "" }), row({ status: "done" }), row({ status: "running" })]);
+  expect(screen.queryByText(/^Выполнено/)).toBeNull();
+  load([agentMsg("m2", { mode: "reply", text: "Ок" }), row({ status: "done" }), row({ status: "done" })], 60);
+  expect(screen.getByText("Выполнено 2 из 2")).toBeInTheDocument();
+  load([agentMsg("m2", { mode: "reply", text: "Ок" }), row({ status: "done" })], 70);
+  expect(screen.queryByText(/^Выполнено/)).toBeNull();
+});
+
 test("время и строки вывода", () => {
   expect(duration(400)).toBe("400 мс");
   expect(duration(1200)).toBe("1,2 с");

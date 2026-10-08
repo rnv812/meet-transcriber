@@ -19,7 +19,7 @@
  */
 
 import { Ban, Check, ChevronRight, X } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import { AgentMark } from "../ui/AgentMark";
 import { Button } from "../ui/Button";
@@ -136,12 +136,48 @@ function ToolRow({ row, card, chat, disabled }: ToolItem & { chat: Chat; disable
   );
 }
 
-/** Вызовы инструментов одного хода (под сообщением агента). */
+/**
+ * Итог хода (0.5): «Выполнено 5 из 6 · не удалось: Bash npm run build — причина · ещё 1».
+ * Только когда вызовов два и больше и ни один не выполняется; первая неудача — её
+ * вид, суть и первая строка ошибки (или решение ворот у отклонённого).
+ */
+export function toolResult(items: ToolItem[]): { text: string; failed?: string } | null {
+  const rows = items.map((it) => it.row);
+  if (rows.length < 2 || rows.some((r) => r.status === "running" || !r.status)) return null;
+  const done = rows.filter((r) => r.status === "done").length;
+  const bad = rows.filter((r) => r.status === "error" || r.status === "denied");
+  let text = `Выполнено ${done} из ${rows.length}`;
+  const first = bad[0];
+  if (first) {
+    const what = [String(first.label ?? first.name ?? "Инструмент"), String(first.summary ?? "")].filter(Boolean).join(" ");
+    const why = typeof first.error === "string" && first.error.trim()
+      ? first.error.split("\n")[0]!.trim()
+      : first.gate && typeof first.gate === "object" ? first.gate.label : "";
+    text += ` · не удалось: ${what}${why ? ` — ${why}` : ""}${bad.length > 1 ? ` · ещё ${bad.length - 1}` : ""}`;
+  }
+  return { text, failed: typeof first?.tool_use_id === "string" ? first.tool_use_id : undefined };
+}
+
+/** Вызовы инструментов одного хода (под сообщением агента) и их итог. */
 export function ToolRows({ items, chat, disabled }: { items: ToolItem[]; chat: Chat; disabled: boolean }) {
+  const list = useRef<HTMLUListElement>(null);
   if (!items.length) return null;
+  const result = toolResult(items);
+  const toFailed = () => {
+    const at = result?.failed ? list.current?.querySelector<HTMLElement>(`[data-tool="${CSS.escape(result.failed)}"]`) : null;
+    at?.scrollIntoView?.({ block: "nearest" });
+    at?.querySelector<HTMLElement>("button.chat-tool__line")?.focus({ preventScroll: true });
+  };
   return (
-    <ul className="chat-tools" aria-label="Ход работы ассистента">
-      {items.map((it) => <ToolRow key={it.row.id} {...it} chat={chat} disabled={disabled} />)}
-    </ul>
+    <>
+      <ul ref={list} className="chat-tools" aria-label="Ход работы ассистента">
+        {items.map((it) => <ToolRow key={it.row.id} {...it} chat={chat} disabled={disabled} />)}
+      </ul>
+      {result && (result.failed ? (
+        <button type="button" className="chat-tools__result chat-tools__result--failed" onClick={toFailed}>
+          {result.text}
+        </button>
+      ) : <div className="chat-tools__result">{result.text}</div>)}
+    </>
   );
 }

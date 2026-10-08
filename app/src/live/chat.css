@@ -330,6 +330,13 @@
    Строка — одна моноширинная линия: состояние · вид · суть (многоточие) · «+N −M» · время.
    Раскрытая — блок кода (аргументы, вывод), карточка согласия вызова — в самой строке. */
 .chat-tools { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* Итог хода (0.5): под блоком вызовов, тихо; с неудачей — кнопка к её строке. */
+.chat-tools__result {
+  align-self: flex-start; max-width: 100%; margin: 2px 0 0; padding: 0; border: 0; background: none;
+  color: var(--ink-2); font: inherit; font-size: var(--text-xs); text-align: left; overflow-wrap: anywhere;
+}
+button.chat-tools__result { cursor: pointer; }
+button.chat-tools__result:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--hairline-strong); }
 .chat-tool { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .chat-tool__line {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: var(--control-sm); padding: 0 6px;
