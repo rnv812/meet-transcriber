@@ -656,29 +656,22 @@ class _Track:
                 self.writer.close()  # ffmpeg финализируется даже при сбое паддинга
 
     def _open(self, p, dev) -> None:
+        if dev.get("process_loopback"):
+            try:
+                self._open_process_loopback(dev)
+                return
+            except Exception as e:
+                # Не вышло исключить звук Meet — пишем, как раньше, весь системный звук.
+                self._log(f"системный звук без Meet недоступен ({e}) — пишу весь системный звук")
+                dev = _find_loopback(p)
         if _MAC and self.role == 0:
             from meet import mac_audio
 
             self.is_tap = int(dev["index"]) == mac_audio.TAP_INDEX
         src_rate = int(dev["defaultSampleRate"])
         src_ch = max(1, int(dev["maxInputChannels"]))
-        convert = _make_converter(src_rate, src_ch, self.rate, self.channels)
-
-        def cb(in_data, frame_count, time_info, status):
-            try:
-                data = convert(in_data)
-                with self._lock:
-                    self.writer.write(data)
-                    self._to_tap(data, False)
-                    self.bytes_written += len(data)
-                self._stalled = False
-                peak = _peak(data)
-                if peak > self.level:
-                    self.level = peak
-            except Exception as e:
-                self._log(f"ошибка в аудио-callback: {e!r} — стрим будет переоткрыт")
-                return (None, pyaudio.paAbort)
-            return (None, pyaudio.paContinue)
+        cb = self._callback(_make_converter(src_rate, src_ch, self.rate, self.channels),
+                            pyaudio.paContinue, pyaudio.paAbort)
 
         # start=False: тишина дописывается ДО старта стрима, иначе латентность
         # переоткрытия (энумерация устройств ~0.5 с) выпадала бы из таймлайна.
@@ -698,6 +691,43 @@ class _Track:
         self.src_rate, self.src_channels = src_rate, src_ch
         self.had_audio = True
         self.stream = stream  # последним: до этой строки дорожка «не открыта»
+
+    def _callback(self, convert, cont: int, abort: int):
+        """Аудио-callback дорожки: привести к формату записи, дописать, уровень;
+        сбой — `abort` (стрим переоткроется)."""
+        def cb(in_data, frame_count, time_info, status):
+            try:
+                data = convert(in_data)
+                with self._lock:
+                    self.writer.write(data)
+                    self._to_tap(data, False)
+                    self.bytes_written += len(data)
+                self._stalled = False
+                peak = _peak(data)
+                if peak > self.level:
+                    self.level = peak
+            except Exception as e:
+                self._log(f"ошибка в аудио-callback: {e!r} — стрим будет переоткрыт")
+                return (None, abort)
+            return (None, cont)
+        return cb
+
+    def _open_process_loopback(self, dev) -> None:
+        """Системный звук без дерева процессов оболочки Meet (0.5): тот же callback,
+        поток — `ProcessLoopbackStream`; сбой активации — исключение (у вызывающего —
+        прежний loopback)."""
+        from meet import process_loopback as pl
+
+        cb = self._callback(_make_converter(pl.RATE, pl.CHANNELS, self.rate, self.channels),
+                            pl.PA_CONTINUE, pl.PA_ABORT)
+
+        stream = pl.ProcessLoopbackStream(cb, pl.exclude_pid() or 0)
+        self._pad_silence()
+        stream.start_stream()
+        self.device_name = dev["name"]
+        self.src_rate, self.src_channels = pl.RATE, pl.CHANNELS
+        self.had_audio = True
+        self.stream = stream
 
     def _pad_silence(self) -> None:
         """Дописать тишину до стенных часов. Кусками ≤1 с и под локом: пауза
@@ -860,7 +890,19 @@ def list_devices(p: "pyaudio.PyAudio") -> dict:
 # вывода, записываемое через его loopback (звук собеседников).
 _FIND = {"mic": lambda p, name: _find_mic(p, name),
          "output": lambda p, name: _loopback_for(p, name)}
-_SYSTEM = {"mic": lambda p: _default_mic(p), "output": lambda p: _find_loopback(p)}
+_SYSTEM = {"mic": lambda p: _default_mic(p), "output": lambda p: _system_output(p)}
+
+
+def _system_output(p: "pyaudio.PyAudio") -> dict:
+    """Системный звук: на Windows 10 2004+ под оболочкой Meet — без звука самого Meet
+    (`meet.process_loopback`, 0.5), иначе — loopback устройства вывода по умолчанию."""
+    if not _MAC:
+        from meet import process_loopback
+
+        dev = process_loopback.pseudo_device()
+        if dev is not None:
+            return dev
+    return _find_loopback(p)
 
 
 def resolve_device(p: "pyaudio.PyAudio", kind: str, wanted: "str | None") -> tuple[dict, bool]:

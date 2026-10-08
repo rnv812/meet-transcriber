@@ -1228,6 +1228,10 @@ def main() -> None:
             print(text, file=sys.stderr)
             watch.WatchLog(watch.default_log_path())(text)
             sys.exit(EXIT_ALREADY_RUNNING)
+        if parent:
+            # Запись системного звука исключает дерево процессов оболочки — окно и
+            # WebView2 с плеером (0.5, `meet.process_loopback`).
+            os.environ.setdefault("MEET_EXCLUDE_PID", str(parent))
         TrayApp(start_now=False).run_headless(parent_pid=parent)
         return
     start_now = "--watch" not in args
