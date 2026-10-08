@@ -9,6 +9,35 @@ const snap = (messages: ReturnType<typeof agentMsg>[], seq = 10) =>
 const ids = (s: ChatState, now = 0) =>
   feedItems(s, now).map((it) => (it.type === "message" ? it.message.id : `out:${it.out.client_id}`));
 
+test("0.5: ход, который допишется к прошлому сообщению (merge_into), — не своей карточкой, а продолжением под ним", () => {
+  let s = snap([agentMsg("m1"), agentMsg("m2", { status: "writing", text: "", merge_into: "m1" })]);
+  s = chatReducer(s, { type: "partial", partial: { id: "m2", text: "Ещё одно" } });
+  const items = feedItems(s, 0);
+  expect(ids(s)).toEqual(["m1"]);
+  const first = items[0]!;
+  expect(first.type === "message" && first.more?.id).toBe("m2");
+  // Склеили: продолжения нет, текст — в самом m1; карточка m2 так и не появлялась.
+  s = chatReducer(s, { type: "event", event: { seq: 11, op: "patch", id: "m2", set: { status: "superseded", merged_into: "m1" } }, now: 0 });
+  s = chatReducer(s, { type: "event", event: { seq: 12, op: "patch", id: "m1", set: { text: "Сообщение m1\n\nЕщё одно" } }, now: 0 });
+  expect(ids(s)).toEqual(["m1"]);
+  const after = feedItems(s, 0)[0]!;
+  expect(after.type === "message" && after.more).toBeFalsy();
+});
+
+test("0.5: строки вызовов склеенного хода остаются — под сообщением, к которому дописали", () => {
+  const row = (id: string, reply: string) =>
+    ({ ...agentMsg(id), kind: "tool" as const, event: "call", reply, tool_use_id: `u-${id}`, status: "done" as const });
+  const s = snap([agentMsg("m1"), agentMsg("m2", { status: "superseded", merged_into: "m1" }), row("t1", "m2")]);
+  const item = feedItems(s, 0)[0]!;
+  expect(item.type === "message" && item.tools?.map((t) => t.row.id)).toEqual(["t1"]);
+});
+
+test("0.5: прошлого сообщения в ленте нет — ход с merge_into виден своей карточкой", () => {
+  let s = snap([agentMsg("m2", { status: "writing", text: "", merge_into: "gone" })]);
+  s = chatReducer(s, { type: "partial", partial: { id: "m2", text: "Текст" } });
+  expect(ids(s)).toEqual(["m2"]);
+});
+
 test("свёртка: события не новее снимка отбрасываются, новые добавляют и правят", () => {
   let s = snap([agentMsg("m1"), userMsg("m2")], 10);
   s = chatReducer(s, { type: "event", event: { seq: 9, op: "add", message: agentMsg("m0") }, now: 0 });

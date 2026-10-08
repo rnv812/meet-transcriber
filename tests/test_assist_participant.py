@@ -827,6 +827,63 @@ def test_several_says_become_messages_when_the_window_allows(tmp_path):
     assert shown[1]["buttons"] == ["Да"]
 
 
+def test_merge_is_decided_when_the_turn_starts_and_marked_on_the_draft(tmp_path):
+    """0.5, «пропадающее сообщение»: ход, который допишется к прошлому сообщению,
+    помечен с самого начала (`merge_into` у реплики `writing`) — окно пишет его
+    текст под прошлым сообщением, а не отдельной карточкой, что потом исчезла бы.
+    Склейка решается по началу хода: долгий ход, начатый в окне, не выпадает в
+    отдельное сообщение посреди показа."""
+    h = _make(tmp_path, script=[say("Первое"), say("Второе"), say("Третье")])
+    began = []
+    h.p.add_listener(lambda name, data: began.append(data) if name == "chat" and data.get("op") == "add"
+                     and (data.get("message") or {}).get("status") == "writing" else None)
+
+    async def main():
+        publish(h, 1, "Олег", "раз")
+        h.clock.t = 5
+        await h.p.tick()                      # сообщение в 5 с
+        publish(h, 6, "Олег", "два", at=6)
+        h.clock.t = 13
+        await h.p.tick()                      # начат в 13 с: 13 − 5 < 15 — допишется
+        publish(h, 14, "Олег", "три", at=14)
+        h.clock.t = 25
+        await h.p.tick()                      # 25 − 5 ≥ 15 — своё
+        await h.p.shutdown()
+
+    run(main())
+    first, merged, third = agents(h)
+    drafts = [d["message"] for d in began]
+    assert "merge_into" not in drafts[0]
+    assert drafts[1]["merge_into"] == first["id"] and drafts[1]["id"] == merged["id"]
+    assert "merge_into" not in drafts[2]
+    assert merged["status"] == "superseded" and first["text"] == "Первое\n\nВторое"
+    assert third["status"] == "shown"
+
+
+def test_a_long_turn_started_in_the_window_still_merges(tmp_path):
+    """Ход начат в окне склейки, а ответ пришёл позже окна: склейка — как
+    решено в начале (окно уже писало текст под прошлым сообщением)."""
+    def slow(agent, text):
+        h.clock.t = 40                        # модель думала долго
+        return say("Второе")
+
+    h = _make(tmp_path, script=[say("Первое"), slow])
+
+    async def main():
+        publish(h, 1, "Олег", "раз")
+        h.clock.t = 5
+        await h.p.tick()
+        publish(h, 6, "Олег", "два", at=6)
+        h.clock.t = 13
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    first, merged = agents(h)
+    assert merged["status"] == "superseded" and merged["merged_into"] == first["id"]
+    assert first["text"] == "Первое\n\nВторое"
+
+
 def test_several_says_in_one_reply_are_merged_within_the_window(tmp_path):
     two = AgentReply(text='{"say": "Первое", "buttons": ["А"]}\n{"say": "Второе", "buttons": ["Б"]}')
     h = _make(tmp_path, script=[two])

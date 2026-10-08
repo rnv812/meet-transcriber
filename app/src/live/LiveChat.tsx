@@ -259,12 +259,16 @@ function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; co
   );
 }
 
-function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }: {
-  m: ChatMessage; tools?: ToolItem[]; chat: Chat; onTime?: (t: number) => void; onShow: (id: string) => void;
+function AgentMessage({ m, tools = [], more, chat, onTime, onShow, compact, disabled }: {
+  m: ChatMessage; tools?: ToolItem[];
+  /** Ход, который допишется к этому сообщению (0.5): его текст — продолжением под ним. */
+  more?: ChatMessage;
+  chat: Chat; onTime?: (t: number) => void; onShow: (id: string) => void;
   compact: boolean; disabled: boolean;
 }) {
   const writing = m.status === "writing";
   const partial = chat.state.partial[m.id];
+  const continuing = more ? chat.state.partial[more.id]?.trim() : undefined;
   const text = m.text ?? "";
   const time = typeof m.t === "number" ? clock(m.t) : null;
   const reacted = REACTIONS.some((r) => m.reactions?.[r.emoji]);
@@ -286,6 +290,7 @@ function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }
         {typeof m.explains === "string" && <ExplainsRef id={m.explains} chat={chat} onShow={onShow} />}
         {m.via === "command" && <span className={`${BADGE_CLASS.plain} chat-msg__tag`}>команда</span>}
         {writing && partial?.trim() && <span className="chat-msg__writing">пишет…</span>}
+        {continuing && <span className="chat-msg__writing">дописывает…</span>}
       </div>
       {/* Ход работы (0.4): вызовы инструментов этого хода — строками, как в Claude CLI. */}
       <ToolRows items={tools} chat={chat} disabled={disabled} />
@@ -297,6 +302,7 @@ function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }
       ) : text.trim() ? (
         <Markdown source={text} className="chat-msg__text" onTime={onTime} />
       ) : null}
+      {continuing && <div className="chat-msg__text chat-msg__text--streaming chat-msg__more">{continuing}</div>}
       {m.status === "cancelled" && <div className="chat-msg__note">Остановлено</div>}
       {m.status === "failed" && <div className="chat-msg__error">{m.error || "Ассистент не смог ответить"}</div>}
       {/* Низ карточки (макет MeetLive) — одна строка: источники, промежуток, реакции и копирование.
@@ -401,7 +407,7 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
   const m = it.message;
   if (m.kind === "agent") {
     return (
-      <AgentMessage m={m} tools={it.tools} chat={chat} onTime={onTime} onShow={onShow} compact={compact}
+      <AgentMessage m={m} tools={it.tools} more={it.more} chat={chat} onTime={onTime} onShow={onShow} compact={compact}
         disabled={disabled} />
     );
   }

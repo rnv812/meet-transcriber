@@ -288,7 +288,7 @@ export type ToolItem = { row: ChatMessage; card?: ChatMessage };
  * сообщение человека, которое ещё отправляется.
  */
 export type FeedItem =
-  | { type: "message"; message: ChatMessage; tools?: ToolItem[] }
+  | { type: "message"; message: ChatMessage; tools?: ToolItem[]; more?: ChatMessage }
   | { type: "outgoing"; out: Outgoing };
 
 /** Строка хода работы (`kind: "tool"`, `event: "call"`); запросы запасного пути — служебные. */
@@ -320,19 +320,40 @@ export function feedItems(state: ChatState, now: number): FeedItem[] {
     const m = state.byId[id];
     if (m?.card === "confirm" && typeof m.tool_use_id === "string") cards.set(m.tool_use_id, m);
   }
+  // Ход, который допишется к прошлому сообщению (0.5, `merge_into` у `writing`), пишется
+  // продолжением под ним, а не своей карточкой (она исчезала бы при склейке); строки вызовов
+  // такого хода и уже склеенного (`merged_into`) — под тем же сообщением.
+  const shownAgent = new Set<string>();
+  for (const id of state.order) {
+    const m = state.byId[id];
+    if (m?.kind === "agent" && m.status !== "writing" && shownInFeed(state, m, now, rows)) shownAgent.add(m.id);
+  }
+  const more = new Map<string, ChatMessage>();
+  const folded = new Map<string, ChatMessage[]>();
+  for (const id of state.order) {
+    const m = state.byId[id];
+    if (m?.kind !== "agent") continue;
+    const into = m.status === "writing" ? m.merge_into : m.status === "superseded" ? m.merged_into : undefined;
+    if (typeof into !== "string" || !shownAgent.has(into)) continue;
+    if (m.status === "writing") more.set(into, m);
+    if (rows.has(m.id)) folded.set(into, [...(folded.get(into) ?? []), ...rows.get(m.id)!]);
+  }
+  const intoOther = new Set([...more.values()].map((m) => m.id));
   const nested = new Set<string>();
   const items: FeedItem[] = [];
   for (const id of state.order) {
     const m = state.byId[id];
-    if (!m || m.kind === "tool" || !shownInFeed(state, m, now, rows)) continue;
-    if (m.kind === "agent" && rows.has(m.id)) {
-      const tools = rows.get(m.id)!.map((row) => {
+    if (!m || m.kind === "tool" || intoOther.has(m.id) || !shownInFeed(state, m, now, rows)) continue;
+    const own = m.kind === "agent" ? [...(rows.get(m.id) ?? []), ...(folded.get(m.id) ?? [])] : [];
+    const extra = more.get(m.id);
+    if (own.length) {
+      const tools = own.map((row) => {
         const card = typeof row.tool_use_id === "string" ? cards.get(row.tool_use_id) : undefined;
         if (card) nested.add(card.id);
         return card ? { row, card } : { row };
       });
-      items.push({ type: "message", message: m, tools });
-    } else items.push({ type: "message", message: m });
+      items.push({ type: "message", message: m, tools, ...(extra ? { more: extra } : {}) });
+    } else items.push({ type: "message", message: m, ...(extra ? { more: extra } : {}) });
   }
   const out = nested.size
     ? items.filter((it) => !(it.type === "message" && nested.has(it.message.id)))

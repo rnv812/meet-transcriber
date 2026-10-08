@@ -121,6 +121,8 @@
 .chat-msg__text ul, .chat-msg__text ol { margin: 2px 0 6px; padding-left: 20px; }
 .chat-msg__note { color: var(--ink-3); font-size: var(--text-xs); }
 .chat-msg__writing { color: var(--ink-3); font-size: var(--text-xs); font-weight: 500; }
+/* Продолжение (0.5): ход по расшифровке дописывает это сообщение — абзацем под его текстом. */
+.chat-msg__more { margin-top: 6px; }
 .chat-msg__error { color: var(--danger); font-size: var(--text-sm); }
 .chat-msg__via { color: var(--ink-3); font-size: var(--text-xs); }
 

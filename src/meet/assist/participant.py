@@ -384,6 +384,9 @@ class _Turn:
     explained: set = field(default_factory=set)
     silent_noted: bool = False         # «нечего добавить» к `re` уже записано
     reply_id: str | None = None
+    # Допишется к этому сообщению (0.5): решено в начале хода — окно пишет текст
+    # под ним, а не отдельной карточкой, которая потом исчезла бы при склейке.
+    merge_into: str | None = None
     raw: list = field(default_factory=list)
     shown: str = ""
     partial_at: float = -1e9
@@ -1566,6 +1569,13 @@ class Participant:
         t = self._now_t()
         if t is not None:
             fields["t"] = t
+        # Страховка «одно новое сообщение за merge_window_s» решается в начале хода
+        # (0.5): иначе ход, видимый в ленте по ходу, при склейке пропадал из неё.
+        last = self._last_shown
+        if (not turn.addressed and not turn.implicit and last is not None
+                and self._clock() - last[1] < self._merge_window
+                and (self._shown.get(last[0]) or {}).get("explains") is None):
+            turn.merge_into = fields["merge_into"] = last[0]
         began = await self._io(self._chatlog.begin_reply, **fields)
         turn.reply_id = began.message["id"]
         self._emit_chat([began.event])
@@ -2100,6 +2110,10 @@ class Participant:
         Ответ пользователю всегда начинается своим сообщением."""
         now = self._clock()
         target = None if turn.addressed else self._last_shown
+        # Первое сообщение хода склеивается, только если так решено в начале хода
+        # (`merge_into`); следующие сообщения того же хода — по окну, как прежде.
+        if target is not None and turn.merge_into != target[0]:
+            target = None
         first = True
         tags = _explain_tags(turn, says)
         for action, tag in zip(says, tags):
@@ -2111,7 +2125,10 @@ class Participant:
                 fields["explains"] = None      # с начала хода стояло — пояснение в другом say
             # Пояснение — всегда своим сообщением: не склеивается ни с ответом, ни с другим пояснением.
             same = target is not None and (self._shown.get(target[0]) or {}).get("explains") == (tag or None)
-            if target is not None and same and now - target[1] < self._merge_window:
+            # Первое — как решено в начале хода (`merge_into`), следующие — по окну от только что показанного.
+            in_window = target is not None and (
+                (first and turn.merge_into == target[0]) or now - target[1] < self._merge_window)
+            if target is not None and same and in_window:
                 await self._merge(target[0], fields)
                 if first:
                     self._emit_chat([await self._io(

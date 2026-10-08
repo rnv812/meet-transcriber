@@ -166,6 +166,23 @@ test("0.5: превью вставленной картинки — кнопка
   URL.createObjectURL = real;
 });
 
+test("0.5 (пропадающее сообщение): ход, что допишется к прошлому, пишется под ним — своей карточки нет и пропадать нечему", () => {
+  render(<Host />);
+  load([agentMsg("m1", { text: "Первое" }), agentMsg("m2", { status: "writing", text: "", merge_into: "m1" })]);
+  act(() => chat.sink.onChatPartial({ id: "m2", text: "Второе" }));
+  expect(rows().map((r) => r.dataset.key)).toEqual(["m1"]);
+  const first = rows()[0]!;
+  expect(first).toHaveTextContent("дописывает…");
+  expect(first.querySelector(".chat-msg__more")).toHaveTextContent("Второе");
+  // Склейка: тот же ряд, текст — уже в нём.
+  act(() => chat.sink.onChat({ seq: 60, op: "patch", id: "m2", set: { status: "superseded", merged_into: "m1" } }));
+  act(() => chat.sink.onChat({ seq: 61, op: "patch", id: "m1", set: { text: "Первое\n\nВторое" } }));
+  expect(rows().map((r) => r.dataset.key)).toEqual(["m1"]);
+  expect(rows()[0]).toBe(first);
+  expect(first.querySelector(".chat-msg__more")).toBeNull();
+  expect(first).toHaveTextContent("Второе");
+});
+
 test("M15: «Не отвлекать» — лента молчит, но вопрос к вам объявляется", () => {
   render(<Host quiet />);
   load([agentMsg("m1", { text: "Сказать про **срок**?", pin: true })]);
