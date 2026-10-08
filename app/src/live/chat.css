@@ -53,9 +53,9 @@
 .chat-ws .chat__scroll { padding: 10px 0; }
 .chat-ws .chat > .chat-pin { margin-top: 10px; }
 
-/* Док строки ввода: во всю ширину под колонками, линия сверху; лента под ним не видна. */
-.chat-dock { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--hairline); }
-.chat-ws--card > .chat-dock { padding: 10px 0 0; }
+/* Док строки ввода (0.5): внизу колонки чата, линия сверху; лента чата над ним прокручивается своя. */
+.chat-dock { flex: none; padding: 10px 0 12px; border-top: 1px solid var(--hairline); }
+.chat-ws--card .chat-dock { padding-bottom: 0; }
 
 /* --- Шапка сессии (одна строка): состояние · модель · профиль · предупреждение … «Что я знаю» --- */
 .session-bar {

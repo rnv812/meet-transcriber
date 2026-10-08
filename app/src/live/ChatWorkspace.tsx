@@ -182,16 +182,17 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
           <PaneResizer name={name} cssVar="--chat-side" spec={CHAT_PANES.side} panel="before"
             label="Ширина расшифровки" className="chat-ws__split" />
         )}
+        {/* Колонка чата (0.5): своя прокрутка ленты, строка ввода закреплена внизу колонки —
+            новые реплики растят прокрутку, а не сдвигают поле. Расшифровка слева — до самого низа. */}
         <div ref={column} className="chat-ws__main">
           <LiveChat chat={chat} onTime={view.jump} quiet={view.quiet} compact={compact} disabled={!!block} />
+          <div className="chat-dock">
+            {notice ?? (
+              <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
+                quick={profileOf(agent?.profile) === "personal" ? PERSONAL_LIVE_QUESTIONS : undefined} />
+            )}
+          </div>
         </div>
-      </div>
-      {/* Док строки ввода: во всю ширину под колонками, сплошной, с линией сверху. */}
-      <div className="chat-dock">
-        {notice ?? (
-          <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
-            quick={profileOf(agent?.profile) === "personal" ? PERSONAL_LIVE_QUESTIONS : undefined} />
-        )}
       </div>
     </div>
   );

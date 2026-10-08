@@ -129,14 +129,18 @@ test("узкая панель (уже 560): по умолчанию только
   expect(screen.queryByText(/видит:/)).toBeNull();
 });
 
-test("строка ввода — в доке под чатом и расшифровкой, вне колонок", () => {
+test("0.5: две колонки на всю высоту — строка ввода внизу колонки чата, расшифровка слева до низа", () => {
   width(600);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   const field = screen.getByRole("combobox", { name: "Сообщение ассистенту" });
   const dock = field.closest(".chat-dock")!;
   expect(dock).not.toBeNull();
-  expect(dock.parentElement).toHaveClass("chat-ws");
-  expect(dock.closest(".chat-ws__body")).toBeNull();
+  expect(dock.parentElement).toHaveClass("chat-ws__main");
+  // Док — последним в колонке, после ленты чата: растёт прокрутка ленты, а не сдвигается поле.
+  expect(dock.parentElement!.lastElementChild).toBe(dock);
+  expect(dock.previousElementSibling).toHaveClass("chat");
+  // Под расшифровкой дока нет.
+  expect(screen.getByRole("region", { name: "Расшифровка" }).querySelector(".chat-dock")).toBeNull();
 });
 
 test("«Как часто писать» уходит setAgentFrequency и сразу видно выбранное", async () => {

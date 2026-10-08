@@ -95,7 +95,7 @@ test("A2: строка ввода — своя плотная поверхнос
   // Подсветка «несут файл» сильнее светлой темы: объявлена позже.
   expect(css.lastIndexOf(".chat-compose.is-over"))
     .toBeGreaterThan(css.indexOf("[data-theme='light'] .chat-compose"));
-  expect(css).toMatch(/\.chat-dock \{[^}]*padding: 10px 12px 12px[^}]*border-top: 1px solid var\(--hairline\)/);
+  expect(css).toMatch(/\.chat-dock \{[^}]*flex: none; padding: 10px 0 12px;[^}]*border-top: 1px solid var\(--hairline\)/);
 });
 
 test("A3: кегль панели и чата — только по шкале Aurora (--text-*), без 10.5 / 11 / 11.5 / 12.5 px", () => {
@@ -118,4 +118,15 @@ test("A7: самодельных контролов панели нет — кн
   const all = FILES.filter((f) => f.startsWith("live")).map(clean).join("\n");
   expect(all).not.toMatch(/\.live-chip\b|\.chat-ws__toggle\b|\.session-bar__know\b|\.live-ask__input:focus\b/);
   expect(all).not.toMatch(/\.live-head__quiet-tag \{[^}]*background/);
+});
+
+test("0.5: живая встреча в карточке — вкладка не растёт по содержимому, у колонок своя прокрутка", () => {
+  const card = clean(join("features", "card", "card.css"));
+  expect(card).toMatch(/\.card-tabs__panel:has\(> \.live-card\) \{ min-height: 0; \}/);
+  expect(card).toMatch(/\.live-card \{ flex: 1; min-height: 240px;/);
+  const chat = clean(join("live", "chat.css"));
+  expect(chat).toMatch(/\.chat__scroll \{ flex: 1; min-height: 0; overflow-y: auto; \}/);
+  const live = clean(join("live", "live.css"));
+  expect(live).toMatch(/\.live-feed \{[^}]*overflow-y: auto;/);
+  expect(live).toMatch(/\.live-feed__more \{ position: sticky; bottom: 8px;/);
 });

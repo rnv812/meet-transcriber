@@ -187,7 +187,10 @@ button.turn__speaker:hover { text-decoration: underline; }
 .tpick { padding: 4px; }
 
 /* Запись с ассистентом: шапка и рабочая область ассистента (live/live.css). */
-.live-card { height: 100%; min-height: 240px; display: flex; flex-direction: column; gap: 12px; }
+/* Живая встреча в карточке (0.5): вкладка не растёт по содержимому — колонки расшифровки и чата
+   прокручиваются каждая сама, строка ввода закреплена внизу (а не одна общая прокрутка тела). */
+.card-tabs__panel:has(> .live-card) { min-height: 0; }
+.live-card { flex: 1; min-height: 240px; display: flex; flex-direction: column; gap: 12px; }
 .live-card__head { display: flex; align-items: center; gap: 8px; }
 .live-card__title { color: var(--ink); font-weight: 500; }
 .live-card__quiet { margin-left: auto; }

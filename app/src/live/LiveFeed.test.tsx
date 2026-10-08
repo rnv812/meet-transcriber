@@ -53,6 +53,34 @@ test("автопрокрутка к новой строке, пока польз
   expect(feed.scrollTop).toBe(560);
 });
 
+test("0.5: прокрутил вверх и пришли новые реплики — «↓ N новых»; щелчок — вниз и снова следим", () => {
+  const { rerender } = render(<LiveFeed lines={[line(0)]} />);
+  const feed = screen.getByRole("log");
+  const box = fakeScroll(feed, { scrollHeight: 500, clientHeight: 200 });
+  expect(screen.queryByRole("button", { name: /нов/ })).toBeNull();
+  feed.scrollTop = 100;
+  fireEvent.scroll(feed);
+  box.grow(40);
+  rerender(<LiveFeed lines={[line(0), line(1), line(2)]} />);
+  expect(feed.scrollTop).toBe(100);
+  fireEvent.click(screen.getByRole("button", { name: "↓ 2 новых" }));
+  expect(feed.scrollTop).toBe(540);
+  expect(screen.queryByRole("button", { name: /нов/ })).toBeNull();
+  box.grow(20);
+  rerender(<LiveFeed lines={[line(0), line(1), line(2), line(3)]} />);
+  expect(feed.scrollTop).toBe(560); // снова следит
+  expect(screen.queryByRole("button", { name: /нов/ })).toBeNull();
+  // Сам докрутил вниз — кнопка уходит.
+  feed.scrollTop = 0;
+  fireEvent.scroll(feed);
+  box.grow(20);
+  rerender(<LiveFeed lines={[line(0), line(1), line(2), line(3), line(4)]} />);
+  expect(screen.getByRole("button", { name: "↓ 1 новая" })).toBeInTheDocument();
+  feed.scrollTop = 580 - 200;
+  fireEvent.scroll(feed);
+  expect(screen.queryByRole("button", { name: /нов/ })).toBeNull();
+});
+
 test("строки ключуются по номеру: обрезка начала ленты не пересоздаёт остальные", () => {
   const withId = (i: number) => ({ ...line(i), id: i });
   const { rerender } = render(<LiveFeed lines={[withId(0), withId(1), withId(2)]} />);

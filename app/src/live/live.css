@@ -16,6 +16,10 @@
   display: flex; flex-direction: column; gap: 6px;
   margin: 0; padding: 0; list-style: none; overflow-y: auto;
 }
+/* «↓ Новые» (0.5): последний пункт ленты, прилипает к низу видимой части. */
+.live-feed__more { position: sticky; bottom: 8px; z-index: 1; align-self: center; margin-top: auto; }
+.live-feed__new { box-shadow: var(--elev-2); }
+.live-feed__new:focus-visible { box-shadow: var(--focus-ring), var(--elev-2); }
 .live-feed__line { display: flex; gap: 8px; line-height: 1.45; }
 .live-feed__t { flex: none; color: var(--ink-3); font-family: var(--font-code); font-size: var(--text-xs); padding-top: 1px; }
 .live-feed__text { color: var(--ink); overflow-wrap: anywhere; }
