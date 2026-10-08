@@ -11,6 +11,7 @@ import { choiceHint } from "../../lib/llm";
 import type { ModelChoice } from "../../lib/types";
 import { Button, type ButtonVariant } from "../../ui/Button";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
+import "./card.css";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 

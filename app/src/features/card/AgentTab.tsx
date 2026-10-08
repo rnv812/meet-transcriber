@@ -188,7 +188,7 @@ function UnsentNote({ text, reason, onOpenSettings, onClose }: {
       <div className="agent__unsent-row">
         <Button ref={copyBtn} onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>
         {onOpenSettings && reason === "none" && (
-          <Button onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>
+          <Button onClick={() => onOpenSettings("models")}>Открыть настройки</Button>
         )}
         <button type="button" className="link-btn" onClick={onClose}>Скрыть</button>
       </div>
@@ -376,7 +376,7 @@ export function AgentTab({
         <EmptyState title="Подключите Claude Code, Codex или OpenCode в настройках"
           hint={codexNote ? CODEX_SCRIPT_NOTE : opencodeNote ? OPENCODE_SCRIPT_NOTE
             : "Во вкладке запускается агент, установленный на компьютере."}
-          action={onOpenSettings && <Button onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>} />
+          action={onOpenSettings && <Button onClick={() => onOpenSettings("models")}>Открыть настройки</Button>} />
         {past}
       </div>
     );

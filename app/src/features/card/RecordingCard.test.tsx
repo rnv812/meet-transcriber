@@ -251,6 +251,8 @@ test("переименование: Enter сохраняет, Esc отменяе
   render(<RecordingCard id="r1" endpoint={ep} />);
   await userEvent.click(await screen.findByRole("heading", { name: "Встреча" }));
   let input = screen.getByRole("textbox", { name: "Название записи" });
+  // Поле Aurora: рамка фокуса — одна, у .field.
+  expect(input).toHaveClass("field");
   await userEvent.clear(input);
   await userEvent.type(input, "Acme{Enter}");
   await waitFor(() => expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Acme" }));
@@ -461,6 +463,7 @@ test("упавшая перерасшифровка готовой записи 
   expect(await screen.findByText("Привет всем")).toBeInTheDocument();
   const banner = screen.getByRole("status");
   expect(banner).toHaveTextContent("Перерасшифровка не удалась: диск переполнен");
+  expect(banner).toHaveClass("callout", "callout--err");
   await userEvent.click(within(banner).getByRole("button", { name: "Повторить" }));
   expect(api.transcribe).toHaveBeenCalledWith(ep, "r1");
 });
@@ -525,12 +528,60 @@ test("готовая запись: вкладки «Расшифровка · И
   expect(await screen.findByText("Итогов пока нет")).toBeVisible();
   expect(screen.getByRole("tab", { name: "Итоги" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText("Привет всем")).not.toBeVisible();
-  // Без провайдера — ссылка в настройки, раздел «Ассистент».
+  // Без провайдера — ссылка в настройки, раздел «Модели ИИ».
   await userEvent.click(await screen.findByRole("button", { name: "Открыть настройки" }));
-  expect(onOpenSettings).toHaveBeenCalledWith("assistant");
+  expect(onOpenSettings).toHaveBeenCalledWith("models");
   expect(api.getSummary).toHaveBeenCalledWith(ep, "r1");
   // Прошлые вопросы (qa.jsonl) — во вкладке «Агент»: пока её не открывали, не запрашиваются.
   expect(api.getQa).not.toHaveBeenCalled();
+});
+
+// --- шапка, вкладки и выноски по макету (0.4) ---------------------------------
+
+test("шапка: название — h1 встречи, в одной строке с ним «Экспорт», «В базу знаний», «Открыть папку», «Ещё действия»", async () => {
+  load();
+  vi.mocked(api.getSettings).mockResolvedValue({ export: { meetings_dir: "D:/kb" } });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  const title = await screen.findByRole("heading", { level: 1, name: "Встреча" });
+  const row = title.parentElement!;
+  for (const name of ["Экспорт", "В базу знаний", "Открыть папку", "Ещё действия"]) {
+    expect(within(row).getByRole("button", { name })).toBeInTheDocument();
+  }
+  // Действия — малые кнопки Aurora: контурные с подписью, значки — без рамки.
+  expect(within(row).getByRole("button", { name: "Экспорт" })).toHaveClass("btn", "btn--outline", "btn--sm");
+  expect(within(row).getByRole("button", { name: "Ещё действия" })).toHaveClass("btn", "btn--ghost", "btn--icon");
+});
+
+test("строка под названием: дата · длительность, категория, участники и «Спикеры (N)»", async () => {
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} categories={[]}
+    people={[{ name: "Демьян Петров", color: "#4c8bf5", has_avatar: false }]} />);
+  await screen.findByText("Привет всем");
+  const row = screen.getByRole("button", { name: "Спикеры (2)" }).parentElement!;
+  expect(row).toHaveTextContent(/30 сен 10:00 · 30 мин/);
+  expect(within(row).getByRole("button", { name: "Категория: Без категории. Изменить" })).toBeInTheDocument();
+  // Участник — бейдж с инициалом в кольце цвета спикера; имя для диктора — без инициала.
+  const person = within(row).getByRole("button", { name: "Демьян Петров" });
+  expect(person).toHaveClass("badge", "badge--plain");
+  expect(person.querySelector<HTMLElement>("[aria-hidden=true]")!.style.getPropertyValue("--person")).toBe("#4c8bf5");
+  expect(within(row).getByRole("button", { name: "Спикер 2" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Спикеры (2)" })).toHaveAttribute("aria-expanded", "false");
+});
+
+test("вкладки — Aurora .tabs над областью прокрутки; выбранная — aria-selected, стрелки переключают", async () => {
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  const list = screen.getByRole("tablist", { name: "Содержимое записи" });
+  expect(list).toHaveClass("tabs");
+  // Полоса вкладок — не внутри прокрутки: тело карточки начинается под ней.
+  expect(list.closest(".card__body")).toBeNull();
+  expect(screen.getByRole("tabpanel", { name: "Расшифровка" }).closest(".card__body")).not.toBeNull();
+  const tab = screen.getByRole("tab", { name: "Расшифровка" });
+  tab.focus();
+  await userEvent.keyboard("{ArrowRight}");
+  expect(screen.getByRole("tab", { name: "Итоги" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "Итоги" })).toHaveFocus();
 });
 
 test("не расшифрованная запись — «Расшифровка · Агент», итогов нет", async () => {
@@ -542,13 +593,14 @@ test("не расшифрованная запись — «Расшифровк�
 });
 
 test.each(["skipped_no_token", "skipped_no_access"])(
-  "расшифровка без спикеров (%s) — подсказка и переход в настройки моделей", async (diarization) => {
+  "расшифровка без спикеров (%s) — подсказка и переход в раздел «Спикеры» (токен Hugging Face)", async (diarization) => {
     load({ diarization });
     const onOpenSettings = vi.fn();
     render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
-    expect(await screen.findByText("Без разделения на спикеров — настройте Hugging Face")).toBeInTheDocument();
+    const text = await screen.findByText("Без разделения на спикеров — настройте Hugging Face");
+    expect(text.closest("[role=status]")).toHaveClass("callout", "callout--warn");
     await userEvent.click(screen.getByRole("button", { name: "Настроить" }));
-    expect(onOpenSettings).toHaveBeenCalledWith("engine");
+    expect(onOpenSettings).toHaveBeenCalledWith("speakers");
   });
 
 test("со спикерами — подсказки про Hugging Face нет", async () => {
@@ -563,6 +615,7 @@ test("запись не на русском — тихая пометка «ис
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
   const note = await screen.findByRole("note");
   expect(note).toHaveTextContent("Запись не на русском — использован Whisper");
+  expect(note).toHaveClass("callout", "callout--note");
   expect(within(note).queryByRole("button")).toBeNull();
 });
 
@@ -605,6 +658,7 @@ test("«В базу знаний» выгружает и показывает п
   expect(api.kbExport).toHaveBeenCalledWith(ep, "r1");
   const done = await screen.findByRole("status", { name: "Выгрузка в базу знаний" });
   expect(done).toHaveTextContent(`Выгружено: ${target}`);
+  expect(done).toHaveClass("callout", "callout--ok");
   await userEvent.click(within(done).getByRole("button", { name: "Открыть папку" }));
   expect(shell.openFolder).toHaveBeenCalledWith(target);
 });
@@ -613,8 +667,8 @@ test("ошибка прошлой выгрузки (kb_export.error) видна 
   load({ kb_export: { path: null, at: null, error: "Папка для встреч не найдена: E:/kb" } });
   withMeetingsDir("E:/kb");
   render(<RecordingCard id="r1" endpoint={ep} />);
-  expect(await screen.findByText(/Не удалось выгрузить в базу знаний: Папка для встреч не найдена/))
-    .toBeInTheDocument();
+  const text = await screen.findByText(/Не удалось выгрузить в базу знаний: Папка для встреч не найдена/);
+  expect(text.closest("[role=status]")).toHaveClass("callout", "callout--err");
 });
 
 test("заметка прежней версии упомянута после выгрузки", async () => {
@@ -663,7 +717,8 @@ test("«Переразделить на спикеров…» открывает
   load({ rediarize_ready: true });
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  expect(screen.getByText(/Новое разделение на спикеров готово/)).toBeInTheDocument();
+  expect(screen.getByText(/Новое разделение на спикеров готово/).closest("[role=status]"))
+    .toHaveClass("callout", "callout--note");
   await more("Переразделить на спикеров…");
   const dialog = await screen.findByRole("dialog", { name: "Переразделить на спикеров" });
   expect(screen.queryByText(/Новое разделение на спикеров готово/)).toBeNull();

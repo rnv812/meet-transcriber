@@ -27,12 +27,15 @@ test("метка категории под названием; от ИИ — п�
   setup({ id: "daily", source: "ai" });
   const chip = screen.getByRole("button", { name: "Категория: Дейлик. Изменить" });
   expect(chip).toHaveAttribute("title", "Категорию определил ИИ — нажмите, чтобы выбрать другую");
+  // Метка — малая контурная кнопка Aurora с точкой цвета и именем.
+  expect(chip).toHaveClass("btn", "btn--outline", "btn--sm");
+  expect(chip).toHaveTextContent("Дейлик");
 });
 
 test("неизвестная категория показывается как «Без категории»", () => {
   setup({ id: "gone", source: "user" });
   expect(screen.getByRole("button", { name: "Категория: Без категории. Изменить" })).toBeInTheDocument();
-  expect(document.querySelector(".cat-chip--none")).not.toBeNull();
+  expect(screen.getByRole("button", { name: /^Категория:/ })).toHaveTextContent("Без категории");
 });
 
 test("выбор с клавиатуры: фокус на текущей, стрелки, Enter; фокус возвращается на метку", async () => {

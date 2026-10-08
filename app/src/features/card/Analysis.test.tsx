@@ -209,7 +209,7 @@ test("«Предложить название»: окно «Применить /
   await userEvent.click(within(box).getByRole("button", { name: "Применить" }));
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Запуск беты", title_source: "ai" });
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Предложенное название" })).toBeNull());
-  expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Запуск беты");
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Запуск беты");
   expect(screen.getByTitle(/Название предложено ИИ/)).toBeInTheDocument();
   expect(onChanged).toHaveBeenCalled();
 });

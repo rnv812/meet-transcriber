@@ -216,7 +216,7 @@ test("без агентов — подсказка и «Открыть наст�
   await show(assistant({ available: { "claude-code": { found: false }, codex: { found: false } } }), { onOpenSettings });
   expect(screen.getByText("Подключите Claude Code, Codex или OpenCode в настройках")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Открыть настройки" }));
-  expect(onOpenSettings).toHaveBeenCalledWith("assistant");
+  expect(onOpenSettings).toHaveBeenCalledWith("models");
 });
 
 test("выбор агента: только установленные, запуск выбранного с размером терминала", async () => {
@@ -708,7 +708,7 @@ test("без установленного агента — ссылку можн
   await userEvent.click(within(note).getByRole("button", { name: "Копировать" }));
   expect(writeText).toHaveBeenCalledWith(REF.trimEnd());
   await userEvent.click(within(note).getByRole("button", { name: "Открыть настройки" }));
-  expect(onOpenSettings).toHaveBeenCalledWith("assistant");
+  expect(onOpenSettings).toHaveBeenCalledWith("models");
   expect(h.shell.agentSpawn).not.toHaveBeenCalled();
 });
 

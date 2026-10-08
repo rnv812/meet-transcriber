@@ -31,6 +31,7 @@ import { noModelText, noProvider, useAssistant } from "./assistant";
 import { modelChoices, modelReady } from "../../lib/llm";
 import { useImprove } from "./improve";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
+import { Callout } from "./Callout";
 import { CardActions } from "./CardActions";
 import { CardTabs, type CardStage } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
@@ -541,6 +542,33 @@ export function RecordingCard({
       onAskAgent={askAgent} onAgentTaken={agentTaken} />
   );
 
+  const actions = (
+    <CardActions
+      canExport={status.kind === "ready"}
+      canRetranscribe={status.kind === "ready" || (status.kind === "text" && !status.job)}
+      busy={busy}
+      onExport={doExport}
+      onKbExport={meetingsDir && status.kind === "ready" ? doKbExport : undefined}
+      kbPending={!settingsRead && status.kind === "ready"}
+      onOpenFolder={() => void openFolder(rec.path)}
+      onRetranscribe={doTranscribe}
+      onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
+      onReanalyze={status.kind === "ready" ? doReanalyze : undefined}
+      reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel, noModelText(assistantInfo))}
+      reanalyzePickBlocked={reanalyzeBlocked(analysis.state, false)}
+      reanalyzeLabel={reanalyzeLabel(analysis.state)}
+      onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
+      onImprove={status.kind === "ready" && turns.length ? (p) => void improve.start(p) : undefined}
+      models={modelChoices(assistantInfo)}
+      improveBlocked={improve.blocked}
+      onDelete={doDelete}
+    />
+  );
+  const asrNote = status.kind === "ready" ? asrNoteText(rec.asr_note) : null;
+  const systemAudio = systemAudioText(rec.system_audio, rec.system_audio_reason);
+
+  // Макет «карточка готовой встречи»: шапка (название и действия, строка о встрече),
+  // под ней — тихие строки и выноски, вкладки и тело карточки с границей сверху.
   return (
     <section className={`rec-card${panel.open && status.kind === "ready" ? " rec-card--with-spk" : ""}`} ref={cardEl}>
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil}
@@ -548,45 +576,26 @@ export function RecordingCard({
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
         onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
         categories={categories} onCategory={chooseCategory}
-        onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} />
-      <CardActions
-        canExport={status.kind === "ready"}
-        canRetranscribe={status.kind === "ready" || (status.kind === "text" && !status.job)}
-        busy={busy}
-        onExport={doExport}
-        onKbExport={meetingsDir && status.kind === "ready" ? doKbExport : undefined}
-        kbPending={!settingsRead && status.kind === "ready"}
-        onOpenFolder={() => void openFolder(rec.path)}
-        onRetranscribe={doTranscribe}
-        onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
-        onReanalyze={status.kind === "ready" ? doReanalyze : undefined}
-        reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel, noModelText(assistantInfo))}
-        reanalyzePickBlocked={reanalyzeBlocked(analysis.state, false)}
-        reanalyzeLabel={reanalyzeLabel(analysis.state)}
-        onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
-        onImprove={status.kind === "ready" && turns.length ? (p) => void improve.start(p) : undefined}
-        models={modelChoices(assistantInfo)}
-        improveBlocked={improve.blocked}
-        onDelete={doDelete}
-      />
-      {error && <div className="card__error" role="alert">{error}</div>}
-      {status.kind === "ready" && (
-        <AnalysisStatus state={analysis.state} busy={busy} durationS={rec.duration_s ?? spokenUntil}
-          onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
-            ? (p) => void doReanalyze(p) : undefined} />
-      )}
-      {offerAnalysis && (
-        <AnalysisOffer busy={busy} onAnswer={answerOffer}
-          onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
-      )}
-      {status.kind === "ready" && improve.status}
+        onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} actions={actions} />
       {titleSuggest.suggest && cardEl.current && (
         <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
           suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
       )}
-      {kbDone && (
-        <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">
-          <span>
+      <div className="card__notices">
+        {error && <div className="card__error" role="alert">{error}</div>}
+        {status.kind === "ready" && (
+          <AnalysisStatus state={analysis.state} busy={busy} durationS={rec.duration_s ?? spokenUntil}
+            onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
+              ? (p) => void doReanalyze(p) : undefined} />
+        )}
+        {offerAnalysis && (
+          <AnalysisOffer busy={busy} onAnswer={answerOffer}
+            onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
+        )}
+        {status.kind === "ready" && improve.status}
+        {kbDone && (
+          <Callout tone="ok" label="Выгрузка в базу знаний"
+            actions={inTauri() && <Button onClick={() => act(() => openFolder(kbDone.path))}>Открыть папку</Button>}>
             Выгружено: <code className="card__path">{kbDone.path}</code>
             {(kbDone.kept ?? []).map((name) => (
               <span key={name} className="card__kept">{name} изменён вручную — не перезаписан</span>
@@ -594,54 +603,39 @@ export function RecordingCard({
             {(kbDone.notes ?? []).map((line) => (
               <span key={line} className="card__kept">{line}</span>
             ))}
-          </span>
-          {inTauri() && <Button onClick={() => act(() => openFolder(kbDone.path))}>Открыть папку</Button>}
-        </div>
-      )}
-      {!kbDone && !error && kbError && (
-        <div className="card__banner" role="status">
-          <span>Не удалось выгрузить в базу знаний: {kbError}</span>
-        </div>
-      )}
-      {retranscribeFailed && (
-        <div className="card__banner" role="status">
-          <span>
+          </Callout>
+        )}
+        {!kbDone && !error && kbError && (
+          <Callout tone="err">Не удалось выгрузить в базу знаний: {kbError}</Callout>
+        )}
+        {retranscribeFailed && (
+          <Callout tone="err" actions={<><Button onClick={doTranscribe} disabled={busy}>Повторить</Button>{logsButton}</>}>
             Перерасшифровка не удалась: {retranscribeFailed.error || "без подробностей"}
             <span className="muted"> · показана прежняя расшифровка</span>
-          </span>
-          <span className="card__row">
-            <Button onClick={doTranscribe} disabled={busy}>Повторить</Button>
-            {logsButton}
-          </span>
-        </div>
-      )}
-      {status.kind === "ready" && !rediarizeOpen && (rec.rediarize_ready || rediarizing) && (
-        <div className="card__banner" role="status">
-          <span>{rediarizing ? "Идёт переразделение на спикеров…" : "Новое разделение на спикеров готово — посмотрите и примените или откажитесь"}</span>
-          <Button onClick={() => setRediarizeOpen(true)}>{rediarizing ? "Подробнее" : "Посмотреть"}</Button>
-        </div>
-      )}
-      {status.kind === "ready" && rec.diarization?.startsWith("skipped_") && (
-        // Без токена HF (или без доступа к модели) расшифровка идёт одним потоком.
-        <div className="card__banner" role="status">
-          <span>Без разделения на спикеров — настройте Hugging Face</span>
-          {onOpenSettings && <Button onClick={() => onOpenSettings("engine")}>Настроить</Button>}
-        </div>
-      )}
-      {status.kind === "ready" && asrNoteText(rec.asr_note) && (
-        <p className="muted card__note" role="note">{asrNoteText(rec.asr_note)}</p>
-      )}
-      {status.kind === "ready" && (
-        <MicSplitNote info={rec.mic_split} diarization={rec.diarization} endpoint={endpoint}
-          onOpenSettings={onOpenSettings}
-          onShowRemoved={showRemoved} />
-      )}
-      {systemAudioText(rec.system_audio, rec.system_audio_reason) && (
-        <p className="muted card__note" role="note">
-          {systemAudioText(rec.system_audio, rec.system_audio_reason)}
-        </p>
-      )}
-      <div className="card__body"><JiraLinks.Provider value={jiraLinks}>{body}</JiraLinks.Provider></div>
+          </Callout>
+        )}
+        {status.kind === "ready" && !rediarizeOpen && (rec.rediarize_ready || rediarizing) && (
+          <Callout tone="note"
+            actions={<Button onClick={() => setRediarizeOpen(true)}>{rediarizing ? "Подробнее" : "Посмотреть"}</Button>}>
+            {rediarizing ? "Идёт переразделение на спикеров…" : "Новое разделение на спикеров готово — посмотрите и примените или откажитесь"}
+          </Callout>
+        )}
+        {status.kind === "ready" && rec.diarization?.startsWith("skipped_") && (
+          // Без токена HF (или без доступа к модели) расшифровка идёт одним потоком; токен — в разделе «Спикеры».
+          <Callout tone="warn"
+            actions={onOpenSettings && <Button onClick={() => onOpenSettings("speakers")}>Настроить</Button>}>
+            Без разделения на спикеров — настройте Hugging Face
+          </Callout>
+        )}
+        {asrNote && <Callout tone="note" role="note">{asrNote}</Callout>}
+        {status.kind === "ready" && (
+          <MicSplitNote info={rec.mic_split} diarization={rec.diarization} endpoint={endpoint}
+            onOpenSettings={onOpenSettings}
+            onShowRemoved={showRemoved} />
+        )}
+        {systemAudio && <Callout tone="warn" role="note">{systemAudio}</Callout>}
+      </div>
+      <JiraLinks.Provider value={jiraLinks}>{body}</JiraLinks.Provider>
       {status.kind === "ready" && turnEdit.menu}
       {status.kind === "ready" && textFix.node}
       {status.kind === "ready" && improve.dialog}

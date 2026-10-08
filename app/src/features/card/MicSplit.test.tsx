@@ -228,13 +228,13 @@ describe("панель «Спикеры»", () => {
 describe("подсказки карточки", () => {
   test("текст по каждому статусу разделения", () => {
     expect(micSplitHint({ status: "no_profile" })?.text).toMatch(/^Микрофон не разделён на голоса/);
-    expect(micSplitHint({ status: "no_profile" })?.action).toBe("sound");
+    expect(micSplitHint({ status: "no_profile" })?.action).toBe("speakers");
     expect(micSplitHint({ status: "owner_not_found" })?.text).toMatch(/не найден/);
-    expect(micSplitHint({ status: "owner_not_found" })?.action).toBe("sound");
+    expect(micSplitHint({ status: "owner_not_found" })?.action).toBe("speakers");
     expect(micSplitHint({ status: "no_voice" })?.text).toMatch(/мало речи/);
     expect(micSplitHint({ status: "skipped_error" })?.text).toMatch(/ошибк/);
     expect(micSplitHint({ status: "skipped_no_token" })?.text).toMatch(/Hugging Face/);
-    expect(micSplitHint({ status: "skipped_no_token" })?.action).toBe("engine");
+    expect(micSplitHint({ status: "skipped_no_token" })?.action).toBe("speakers");
     // Без токена диаризации уже есть баннер «настройте Hugging Face» — второй раз не говорим,
     // и образец без него не записать.
     expect(micSplitHint({ status: "skipped_no_token" }, "skipped_no_token")).toBeNull();
@@ -258,7 +258,7 @@ describe("подсказки карточки", () => {
     // Без резидента (нечем открыть окно записи) — тихая строка и переход в настройки.
     expect(screen.getByRole("note")).toHaveTextContent(/Запишите образец своего голоса/);
     await userEvent.click(screen.getByRole("button", { name: "Записать образец" }));
-    expect(onOpenSettings).toHaveBeenCalledWith("sound");
+    expect(onOpenSettings).toHaveBeenCalledWith("speakers");
 
     rerender(<MicSplitNote info={{ status: "ok", room_speakers: 1, dropped: { neighbour: 2, echo: 0 } }}
       onOpenSettings={onOpenSettings} onShowRemoved={onShowRemoved} />);

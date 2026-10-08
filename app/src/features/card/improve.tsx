@@ -24,6 +24,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { JobProgress } from "../../ui/JobProgress";
 import { improvedText } from "./speakers/staging";
+import { Callout } from "./Callout";
 import "./improve.css";
 import { Icon } from "../../ui/Icon";
 
@@ -285,15 +286,12 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
       // Какая модель предложила замены (видно, уходил ли текст облачной модели).
       const by = llmLabel(originOf(state.proposal));
       return (
-        <div className="analysis-status" role="status">
-          <span className="muted">
-            {terms
-              ? `ИИ предлагает исправить ${terms} ${plural(terms, "термин", "термина", "терминов")}`
-              : `ИИ предлагает ${fixes} ${plural(fixes, "исправление", "исправления", "исправлений")} распознавания`}
-            {by && <span title="Какая модель предложила замены"> · {by}</span>}
-          </span>
-          <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Просмотреть</button>
-        </div>
+        <Callout tone="ai" actions={<Button onClick={onOpen} disabled={busy}>Просмотреть</Button>}>
+          {terms
+            ? `ИИ предлагает исправить ${terms} ${plural(terms, "термин", "термина", "терминов")}`
+            : `ИИ предлагает ${fixes} ${plural(fixes, "исправление", "исправления", "исправлений")} распознавания`}
+          {by && <span className="muted" title="Какая модель предложила замены"> · {by}</span>}
+        </Callout>
       );
     }
     case "failed":
@@ -313,12 +311,12 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
     default:
       if (!state.hint || !onRetry) return null;
       return (
-        <div className="analysis-status improve-hint" role="status">
-          <Sparkles size={13} strokeWidth={1.75} aria-hidden="true" className="improve-hint__icon" />
-          <span className="muted">Похоже, в тексте есть термины латиницей — улучшить?</span>
-          <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Улучшить</button>
-          <button type="button" className="link-btn muted" onClick={onDismiss}>Не нужно</button>
-        </div>
+        <Callout tone="ai" actions={<>
+          <Button variant="aurora" flat onClick={onOpen} disabled={busy}>Улучшить</Button>
+          <Button variant="ghost" onClick={onDismiss}>Не нужно</Button>
+        </>}>
+          Похоже, в тексте есть термины латиницей — улучшить?
+        </Callout>
       );
   }
 }
@@ -666,14 +664,14 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
               <TipLine>Каждая новая расшифровка сразу после распознавания заменит выбранные термины так же: целые
                 слова, без учёта регистра, «ё» и «е» не различаются. Исправления обычных слов правилами не
                 становятся: в другой встрече те же слова могут быть верными.</TipLine>
-              <TipLine>Список правил — «Настройки → Распознавание», там их можно удалить.</TipLine>
+              <TipLine>Список правил — «Настройки → Словарь», там их можно удалить.</TipLine>
             </HelpTip>
           </label>
           <label className="tfix__check">
             <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} />
             <span>Добавить в термины</span>
             <HelpTip label="Что такое термины распознавания" title="Термины распознавания">
-              <TipLine>Правильные написания выбранных терминов (не исправлений обычных слов) попадут в список терминов распознавания («Настройки → Распознавание»):
+              <TipLine>Правильные написания выбранных терминов (не исправлений обычных слов) попадут в список терминов распознавания («Настройки → Словарь»):
                 их реже путают в новых расшифровках, и ИИ при улучшении берёт написание оттуда.</TipLine>
             </HelpTip>
           </label>

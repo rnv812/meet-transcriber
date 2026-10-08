@@ -57,7 +57,7 @@ test("без провайдера «Сделать итоги» неактивн
   expect(button).toBeDisabled();
   expect(screen.getByText("Подключите Claude Code, Codex или OpenCode в настройках")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Открыть настройки" }));
-  expect(onOpenSettings).toHaveBeenCalledWith("assistant");
+  expect(onOpenSettings).toHaveBeenCalledWith("models");
 });
 
 test("провайдер ещё проверяется: кнопка доступна, подсказки нет", async () => {

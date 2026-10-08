@@ -1,8 +1,9 @@
 /**
- * Действия карточки записи: две группы вместо сплошной полосы.
+ * Действия карточки записи — в строке названия, справа (макет «карточка готовой
+ * встречи»): две группы малых кнопок Aurora.
  *
- * Слева — главное, со значком и подписью: «Экспорт» (меню форматов) и «В базу
- * знаний». Справа — значками с подсказками: «Открыть папку» и «Ещё действия»
+ * Сначала главное — контурные, со значком и подписью: «Экспорт» (меню форматов)
+ * и «В базу знаний». Затем значки без рамки: «Открыть папку» и «Ещё действия»
  * (⋯) — редкое и опасное: «Переразделить на спикеров…», «Перерасшифровать…»,
  * ✦ «Улучшить расшифровку», «Переанализировать», «Предложить название» и за
  * чертой «Удалить…». У действий модели, когда включено больше одной модели, —
@@ -10,11 +11,12 @@
  * этого действия (основное нажатие — модель по умолчанию).
  * Подтверждения — общим окном (ui/ConfirmDialog): фокус на «Отмена», Esc — отмена.
  *
- * Узкая карточка (меньше COMPACT_PX) — подписи свёрнуты в значки; имя кнопки
- * для экранного диктора и подсказка при наведении остаются.
+ * Узкая шапка карточки (меньше COMPACT_PX) — подписи свёрнуты в значки; имя
+ * кнопки для экранного диктора и подсказка при наведении остаются. Меряется
+ * шапка (`header`), в которой стоят действия: свою ширину они берут по содержимому.
  */
 
-import { useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   BookOpen, ChevronDown, ChevronLeft, Download, Ellipsis, FolderOpen, RotateCcw, ScanSearch, Sparkles, Trash2, Users,
   WandSparkles,
@@ -22,6 +24,8 @@ import {
 import { inTauri } from "../../lib/shell";
 import { useWide } from "../../live/useWide";
 import { Button } from "../../ui/Button";
+import { Icon } from "../../ui/Icon";
+import { IconButton } from "../../ui/IconButton";
 import { ConfirmDialog, type ConfirmOptions } from "../../ui/ConfirmDialog";
 import type { ModelChoice } from "../../lib/types";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
@@ -102,7 +106,11 @@ export function CardActions({
   const root = useRef<HTMLDivElement>(null);
   const exportBtn = useRef<HTMLButtonElement>(null);
   const moreBtn = useRef<HTMLButtonElement>(null);
-  const compact = !useWide(root, COMPACT_PX);
+  // Меряем шапку карточки, а не сами действия: их ширина — по содержимому (свёрнутые
+  // подписи сузили бы их ещё сильнее). Вне шапки (отдельно) — свою полосу.
+  const measured = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => { measured.current = root.current?.closest("header") ?? root.current; }, []);
+  const compact = !useWide(measured, COMPACT_PX);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   /** Меню показывает список моделей для этого действия. */
@@ -125,7 +133,7 @@ export function CardActions({
   };
   const run = (fn: () => void) => () => { close(false); fn(); };
 
-  const label = (text: string) => <span className={compact ? "sr-only" : "act__label"}>{text}</span>;
+  const label = (text: string) => <span className={compact ? "sr-only" : undefined}>{text}</span>;
 
   /** Пункт меню, который сначала спрашивает: меню закрывается, открывается подтверждение. */
   const ask = (kind: NonNullable<Confirm>) => () => { close(false); setChosen(undefined); setConfirm(kind); };
@@ -199,32 +207,31 @@ export function CardActions({
     ];
   }
 
-  const iconButton = (name: string, hint: string, icon: ReactNode, onClick: () => void, extra = {}) => (
-    <Button className="act act--icon" aria-label={name} title={hint} onClick={onClick} {...extra}>{icon}</Button>
-  );
-
   return (
     <div ref={root} className={`card__actions${compact ? " card__actions--compact" : ""}`}>
-      <div className="act-group" role="group" aria-label="Главные действия">
+      <div className="card__act-group" role="group" aria-label="Главные действия">
         {canExport && (
-          <Button ref={exportBtn} className="act" title="Сохранить расшифровку файлом: Markdown, текст или субтитры"
+          <Button ref={exportBtn} variant="secondary" icon={Download}
+            title="Сохранить расшифровку файлом: Markdown, текст или субтитры"
             aria-haspopup="menu" aria-expanded={menu?.kind === "export"} onClick={() => toggle("export")}>
-            <Download {...ICON} />{label("Экспорт")}<ChevronDown {...ICON} size={14} className="act__chevron" />
+            {label("Экспорт")}<Icon as={ChevronDown} size="sm" className="card__act-chevron" />
           </Button>
         )}
         {(onKbExport || kbPending) && (
-          <Button className="act" title="Выгрузить расшифровку и итоги в папку встреч базы знаний"
+          <Button variant="secondary" icon={BookOpen} title="Выгрузить расшифровку и итоги в папку встреч базы знаний"
             onClick={onKbExport} disabled={busy || !onKbExport}>
-            <BookOpen {...ICON} />{label("В базу знаний")}
+            {label("В базу знаний")}
           </Button>
         )}
       </div>
-      <div className="act-group act-group--end" role="group" aria-label="Другие действия">
-        {inTauri() && iconButton("Открыть папку", "Открыть папку записи в проводнике",
-          <FolderOpen {...ICON} />, onOpenFolder)}
-        {iconButton("Ещё действия", "Ещё действия: переразделить, перерасшифровать, удалить",
-          <Ellipsis {...ICON} />, () => toggle("more"),
-          { ref: moreBtn, "aria-haspopup": "menu", "aria-expanded": menu?.kind === "more" })}
+      <div className="card__act-group" role="group" aria-label="Другие действия">
+        {inTauri() && (
+          <IconButton icon={FolderOpen} label="Открыть папку" tooltip="Открыть папку записи в проводнике"
+            onClick={onOpenFolder} />
+        )}
+        <IconButton ref={moreBtn} icon={Ellipsis} label="Ещё действия"
+          tooltip="Ещё действия: переразделить, перерасшифровать, удалить"
+          aria-haspopup="menu" aria-expanded={menu?.kind === "more"} onClick={() => toggle("more")} />
       </div>
       {menu && (
         <ItemMenu items={items} align={menu.kind === "more" ? "end" : "start"} note={note}

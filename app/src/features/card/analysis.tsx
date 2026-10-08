@@ -18,6 +18,7 @@ import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { JobProgress } from "../../ui/JobProgress";
+import { Callout } from "./Callout";
 import { CONFIRMS } from "./CardActions";
 import { Popover } from "../../ui/Popover";
 import "./analysis.css";
@@ -228,21 +229,19 @@ export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
   onOpenSettings?: () => void;
 }) {
   return (
-    <div className="card__banner card__banner--ok analysis-offer" role="region" aria-label="Предложение: анализ встречи">
-      <span>
-        {ANALYSIS_OFFER}
-        <span className="muted analysis-offer__note">
-          {" "}Можно изменить в{" "}
-          {onOpenSettings
-            ? <button type="button" className="link-btn" onClick={onOpenSettings}>настройках</button>
-            : "настройках"}
-        </span>
-      </span>
-      <span className="card__row">
+    <Callout tone="ai" role="region" label="Предложение: анализ встречи"
+      actions={<>
         <Button variant="primary" onClick={() => onAnswer("granted")} disabled={busy}>Включить</Button>
         <Button onClick={() => onAnswer("declined")} disabled={busy}>Не сейчас</Button>
+      </>}>
+      {ANALYSIS_OFFER}
+      <span className="muted">
+        {" "}Можно изменить в{" "}
+        {onOpenSettings
+          ? <button type="button" className="link-btn" onClick={onOpenSettings}>настройках</button>
+          : "настройках"}
       </span>
-    </div>
+    </Callout>
   );
 }
 

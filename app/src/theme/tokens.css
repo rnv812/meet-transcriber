@@ -59,10 +59,3 @@ body { overflow: hidden; }
 }
 .empty-state__title { color: var(--ink); font: 600 var(--text-ui)/1.4 var(--font-body); }
 
-/* Разделённая кнопка: действие и узкая стрелка выбора варианта (модели) вплотную. */
-.split-btn { display: inline-flex; align-items: stretch; }
-.split-btn > .btn.split-btn__main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.split-btn > .btn.split-btn__more {
-  padding: 0 6px; margin-left: -1px;
-  border-top-left-radius: 0; border-bottom-left-radius: 0;
-}

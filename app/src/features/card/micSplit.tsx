@@ -14,10 +14,12 @@ import { plural } from "../../lib/format";
 import type { MicSplitInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { NUDGE_TEXT, OwnerVoiceNudge } from "../settings/OwnerVoiceDialog";
+import { Callout } from "./Callout";
 
-type Hint = { text: string; action?: "sound" | "engine"; button?: string };
+/** Раздел настроек: образец голоса и токен Hugging Face — оба в «Спикерах» (0.4). */
+type Hint = { text: string; action?: "speakers"; button?: string; record?: boolean };
 
-const RECORD = { action: "sound" as const, button: "Записать образец" };
+const RECORD = { action: "speakers" as const, button: "Записать образец", record: true };
 
 /** Подсказка по статусу; `diarization` — пометка пропущенной диаризации (её баннер уже про HF). */
 export function micSplitHint(info: Pick<MicSplitInfo, "status"> | null | undefined,
@@ -38,7 +40,7 @@ export function micSplitHint(info: Pick<MicSplitInfo, "status"> | null | undefin
         + "он подписан вами целиком" };
     case "skipped_no_token":
       if (diarization?.startsWith("skipped_")) return null;
-      return { text: "Голоса на микрофоне не разобраны: нет доступа к модели Hugging Face", action: "engine",
+      return { text: "Голоса на микрофоне не разобраны: нет доступа к модели Hugging Face", action: "speakers",
         button: "Настроить" };
     default:
       return null;
@@ -70,29 +72,31 @@ export function MicSplitNote({ info, diarization, endpoint, onOpenSettings, onSh
 }) {
   const hint = micSplitHint(info, diarization);
   const removed = removedSummary(info?.dropped);
-  const nudge = hint?.action === "sound" && endpoint
+  const nudge = hint?.record && endpoint
     ? <OwnerVoiceNudge endpoint={endpoint} lead={`${hint.text}.`} className="card__note" /> : null;
   const quiet = nudge ? null : hint;
   if (!quiet && !removed) return nudge;
   return (
     <>
       {nudge}
-      <div className="muted card__note mic-note" role="note">
-        {quiet && (
-          <span className="mic-note__line">
-            <span>{quiet.action === "sound" ? `${quiet.text}. ${NUDGE_TEXT}` : quiet.text}</span>
-            {quiet.action && quiet.button && onOpenSettings && (
-              <Button variant="link" size="xs" onClick={() => onOpenSettings(quiet.action!)}>{quiet.button}</Button>
-            )}
-          </span>
-        )}
-        {removed && (
-          <span className="mic-note__line">
-            <span>{(info?.dropped?.owner_leak ?? 0) > 0 ? "Убраны повторы" : "С микрофона убраны повторы"}: {removed}</span>
-            {onShowRemoved && <Button variant="link" size="xs" onClick={onShowRemoved}>Показать</Button>}
-          </span>
-        )}
-      </div>
+      <Callout tone="note" role="note">
+        <span className="mic-note">
+          {quiet && (
+            <span className="mic-note__line">
+              <span>{quiet.record ? `${quiet.text}. ${NUDGE_TEXT}` : quiet.text}</span>
+              {quiet.action && quiet.button && onOpenSettings && (
+                <Button variant="link" onClick={() => onOpenSettings(quiet.action!)}>{quiet.button}</Button>
+              )}
+            </span>
+          )}
+          {removed && (
+            <span className="mic-note__line">
+              <span>{(info?.dropped?.owner_leak ?? 0) > 0 ? "Убраны повторы" : "С микрофона убраны повторы"}: {removed}</span>
+              {onShowRemoved && <Button variant="link" onClick={onShowRemoved}>Показать</Button>}
+            </span>
+          )}
+        </span>
+      </Callout>
     </>
   );
 }

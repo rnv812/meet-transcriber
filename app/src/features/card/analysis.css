@@ -1,13 +1,13 @@
 /* Анализ встречи в карточке: тихая строка состояния и окно «Предложить название». */
 .analysis-status {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 6px 20px 0; font-size: 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; font-size: var(--text-xs);
 }
 .analysis-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px;
-  color: var(--text-2); background: var(--surface); border: 1px solid var(--line-2); border-radius: 11px;
+  color: var(--ink-2); background: var(--surface-1); border: 1px solid var(--hairline-strong); border-radius: 11px;
 }
 .analysis-chip__pulse {
-  width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent-hi);
+  width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent-hover);
   animation: analysis-pulse 1.4s ease-in-out infinite;
 }
 @keyframes analysis-pulse { 50% { opacity: 0.3; } }
@@ -17,8 +17,8 @@
 
 .title-suggest { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .title-suggest__label { font-size: 11px; }
-.title-suggest__title { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
-.title-suggest__busy { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
+.title-suggest__title { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.title-suggest__busy { display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
 .title-suggest__row { display: flex; justify-content: flex-end; gap: 8px; }
 /* Модель не дала части разметки (главы, важность): сказано прямо, а не пустой полосой. */
-.analysis-status__missing { color: var(--amber); }
+.analysis-status__missing { color: var(--warning); }

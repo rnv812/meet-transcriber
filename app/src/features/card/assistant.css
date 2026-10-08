@@ -1,38 +1,28 @@
-/* Вкладки готовой записи и содержимое «Итогов» / «Вопросов». */
+/* Вкладки записи и содержимое «Итогов» / «Вопросов». */
 
-.card-tabs { display: flex; flex-direction: column; min-height: 100%; }
-/* Полоса вкладок прилипает к верху прокрутки .card__body (у него padding-top 8px). */
-.card-tabs__list {
-  position: sticky; top: -8px; z-index: 2; display: flex; gap: 2px;
-  margin: -8px -20px 8px; padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line);
-}
-.card-tabs__tab {
-  position: relative; height: 34px; padding: 0 8px; border: 0; background: none;
-  color: var(--text-2); font: inherit; cursor: pointer; transition: color var(--t);
-}
-.card-tabs__tab:hover { color: var(--text); }
-/* Агент записи работает (agentSessions): точка на вкладке «Агент». */
-.card-tabs__tab .agent-live { display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle; border-radius: 50%; background: var(--ok); }
-.card-tabs__tab[aria-selected="true"] { color: var(--text); font-weight: 500; }
-.card-tabs__tab[aria-selected="true"]::after {
-  content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px;
-  border-radius: 1px; background: var(--accent);
-}
+/* Вкладки — Aurora `.tabs` под шапкой, вне прокрутки; под ними — тело карточки
+   (.card__body в card.css: граница сверху, прокрутка). */
+.card-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.card-tabs__bar { flex: none; padding: 10px 24px 0; }
+/* В узкой карточке вкладки не вылезают за край — прокручиваются вбок. */
+.card-tabs__list { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+/* Агент записи работает (agentSessions): точка 6 px цвета акцента на вкладке «Агент». */
+.card-tabs__list .agent-live { flex: none; width: 6px; height: 6px; border-radius: var(--r-full); background: var(--accent); }
 .card-tabs__panel { flex: 1; display: flex; flex-direction: column; }
 .card-tabs__panel[hidden] { display: none; }
 
 .assist { flex: 1; display: flex; flex-direction: column; gap: 10px; }
 .assist > .empty-state { flex: 1; height: auto; }
-.assist__error { color: var(--err); font-size: 12px; white-space: pre-wrap; }
+.assist__error { color: var(--danger); font-size: 12px; white-space: pre-wrap; }
 .assist__failed { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .assist__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .assist__when { margin-left: auto; font-size: 12px; }
 /* Черновик из живого режима: пока итогов нет. Рамка — чтобы не спутать с итогами. */
-.assist__draft { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--r-lg); }
-.assist__draft-title { margin: 0; color: var(--text-2); font-size: 12px; font-weight: 500; }
+.assist__draft { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--hairline-strong); border-radius: var(--r-lg); }
+.assist__draft-title { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 500; }
 .assist__draft-note { margin: 0; font-size: 12px; }
-.assist__hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--amber); }
-.assist__stage { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
+.assist__hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--warning); }
+.assist__stage { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12px; }
 .assist__stage--progress { max-width: 480px; }
 .assist__pulse {
   width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--accent);
@@ -42,47 +32,47 @@
 @media (prefers-reduced-motion: reduce) { .assist__pulse { animation: none; } }
 
 .link-btn {
-  padding: 0; border: 0; background: none; color: var(--accent-hover);
+  padding: 0; border: 0; background: none; color: var(--accent-line);
   font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
 }
-.link-btn:hover { color: var(--text); }
+.link-btn:hover { color: var(--ink); }
 
 /* Markdown модели. */
-.md { color: var(--text); line-height: 1.6; overflow-wrap: anywhere; }
+.md { color: var(--ink); line-height: 1.6; overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p, .md ul, .md ol, .md pre, .md blockquote, .md .md-table { margin: 0 0 10px; }
-.md-h { margin: 18px 0 8px; color: var(--text); font-weight: 600; line-height: 1.3; }
+.md-h { margin: 18px 0 8px; color: var(--ink); font-weight: 600; line-height: 1.3; }
 .md-h1 { font-size: 17px; }
 .md-h2 { font-size: 15px; }
 .md-h3, .md-h4, .md-h5, .md-h6 { font-size: 13px; }
 .md ul, .md ol { padding-left: 22px; }
 .md li { margin: 2px 0; }
 .md li > ul, .md li > ol { margin: 2px 0 0; }
-.md li::marker { color: var(--text-3); }
-.md strong { font-weight: 600; color: var(--text); }
+.md li::marker { color: var(--ink-3); }
+.md strong { font-weight: 600; color: var(--ink); }
 .md code {
   padding: 1px 4px; border-radius: var(--r-sm); background: var(--surface-2);
   font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
-.md pre { padding: 10px 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.md pre { padding: 10px 12px; overflow-x: auto; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-1); }
 .md pre code { padding: 0; background: none; }
-.md blockquote { padding: 2px 0 2px 12px; border-left: 2px solid var(--line-2); color: var(--text-2); }
-.md hr { margin: 14px 0; border: 0; border-top: 1px solid var(--line); }
-.md del { color: var(--text-3); }
-.md-link { color: var(--accent-hover); border-bottom: 1px dotted currentColor; cursor: help; }
-.md-table { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+.md blockquote { padding: 2px 0 2px 12px; border-left: 2px solid var(--hairline-strong); color: var(--ink-2); }
+.md hr { margin: 14px 0; border: 0; border-top: 1px solid var(--hairline); }
+.md del { color: var(--ink-3); }
+.md-link { color: var(--accent-line); border-bottom: 1px dotted currentColor; cursor: help; }
+.md-table { overflow-x: auto; border: 1px solid var(--hairline); border-radius: var(--r-md); }
 .md table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.md th, .md td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-.md th { background: var(--surface); color: var(--text-2); font-weight: 500; }
+.md th, .md td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--hairline); }
+.md th { background: var(--surface-1); color: var(--ink-2); font-weight: 500; }
 .md tr:last-child td { border-bottom: 0; }
 
 /* Прошлые вопросы (вкладка «Агент»): вопрос и ответ модели. */
 .qa__list { flex: 1; display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; list-style: none; }
-.qa__item { display: flex; flex-direction: column; gap: 6px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.qa__item { display: flex; flex-direction: column; gap: 6px; padding-bottom: 14px; border-bottom: 1px solid var(--hairline); }
 .qa__q { align-self: flex-start; max-width: 100%; padding: 6px 10px; border-radius: var(--r-lg);
-  background: var(--surface-2); color: var(--text); font-weight: 500; white-space: pre-wrap; }
-.qa__meta { font-size: 11px; color: var(--text-3); }
+  background: var(--surface-2); color: var(--ink); font-weight: 500; white-space: pre-wrap; }
+.qa__meta { font-size: 11px; color: var(--ink-3); }
 /* ✦ у пунктов итогов (Markdown itemAction): видна при наведении на пункт и с клавиатуры. */
 .md-act { display: inline-flex; margin-left: 4px; vertical-align: middle; }
 .md-act .ask-agent, .md-act-col .ask-agent { opacity: 0; }
@@ -94,21 +84,21 @@
 .assist-chat__main { flex: 1; min-height: 360px; max-width: 860px; }
 .assist-chat__main .chat__scroll { max-height: none; }
 .assist-chat__loading { margin: 8px 0; font-size: 12px; }
-.assist-chat__profile { margin: 0 0 4px; color: var(--text-2); font-size: 11.5px; }
+.assist-chat__profile { margin: 0 0 4px; color: var(--ink-2); font-size: 11.5px; }
 .assist-chat__continue { display: flex; flex-direction: column; gap: 4px; }
-.assist-chat__label { color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.assist-chat__label { color: var(--ink-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 .assist-chat > .empty-state { flex: 1; height: auto; min-height: 220px; }
 
 /* Прежний ассистент (до 0.3.6): подсказки и вопросы — только чтение. */
 .assist-legacy { display: flex; flex-direction: column; gap: 6px; max-width: 860px; padding: 10px 12px;
-  border: 1px dashed var(--line-2); border-radius: var(--r-lg); }
-.assist-legacy__title { margin: 0; color: var(--text-2); font-size: 12px; font-weight: 500; }
+  border: 1px dashed var(--hairline-strong); border-radius: var(--r-lg); }
+.assist-legacy__title { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 500; }
 .assist-legacy__note { margin: 0; font-size: 11.5px; }
-.assist-legacy__sub { margin: 6px 0 0; color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.assist-legacy__sub { margin: 6px 0 0; color: var(--ink-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 .assist-legacy__hints { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .assist-legacy__hint { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; }
-.assist-legacy__kind { color: var(--kind, var(--text-2)); font-size: 11px; font-weight: 500; }
-.assist-legacy__time { color: var(--text-3); font-size: 11px; }
-.assist-legacy__text { color: var(--text); }
+.assist-legacy__kind { color: var(--kind, var(--ink-2)); font-size: 11px; font-weight: 500; }
+.assist-legacy__time { color: var(--ink-3); font-size: 11px; }
+.assist-legacy__text { color: var(--ink); }
 .assist-legacy__why { flex-basis: 100%; font-size: 11.5px; }
 .assist-chat__thinking .chat-compose__stop { margin-left: 8px; }

@@ -32,5 +32,6 @@ test("нажатая недоступная кнопка при наведени
 
 test("включённый «Не отвлекать» — акцентного цвета: правило карточки сильнее общего нажатого", () => {
   const card = strip(readFileSync(join(src, "features", "card", "card.css"), "utf8"));
-  expect(card).toMatch(/\.btn\.live-card__quiet\[aria-pressed="true"\]\s*\{[^}]*color:\s*var\(--accent-hover\)/);
+  // Текст цвета акцента — текстовый токен Aurora `--accent-line` (читается и в светлой теме).
+  expect(card).toMatch(/\.btn\.live-card__quiet\[aria-pressed="true"\]\s*\{[^}]*color:\s*var\(--accent-line\)/);
 });

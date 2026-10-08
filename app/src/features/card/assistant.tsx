@@ -122,7 +122,7 @@ export function ProviderHint({ onOpenSettings, info = null }: {
     <div className="assist__hint">
       <span>{noModelText(info)}</span>
       {onOpenSettings && (
-        <button type="button" className="link-btn" onClick={() => onOpenSettings("assistant")}>
+        <button type="button" className="link-btn" onClick={() => onOpenSettings("models")}>
           Открыть настройки
         </button>
       )}

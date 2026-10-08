@@ -114,6 +114,8 @@ const AURORA_IN_MARKUP = new Map<string, string[]>([
   [join("features", "recordings", "SearchSuggest.tsx"), ["search"]],
   // «Поиск по настройкам» — `.search` Aurora (значок слева в поле), этап 4.
   [join("features", "settings", "SettingsSearch.tsx"), ["search"]],
+  // Вкладки карточки записи — `.tabs` Aurora (controls.css), этап 3.
+  [join("features", "card", "CardTabs.tsx"), ["tabs"]],
   // «Мой голос» и таблица людей — `.card`, «Найти человека» — `.search` Aurora, этап 3.
   [join("features", "voices", "VoicesPane.tsx"), ["card", "search"]],
 ]);

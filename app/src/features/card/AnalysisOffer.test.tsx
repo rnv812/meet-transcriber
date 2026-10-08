@@ -64,6 +64,8 @@ test.each([["Включить", "granted"], ["Не сейчас", "declined"]] a
     await screen.findByText(/Начинаем планёрку/);
     await waitFor(() => expect(offer()).not.toBeNull());
     expect(offer()).toHaveTextContent(ANALYSIS_OFFER);
+    // Предложение ИИ — выноска на сиянии (aurora-wash).
+    expect(offer()).toHaveClass("callout", "aurora-wash");
     expect(offer()).toHaveTextContent("Можно изменить в настройках");
     await userEvent.click(screen.getByRole("button", { name: label }));
     expect(api.answerAnalysisOffer).toHaveBeenCalledWith(ep, "r1", answer);
