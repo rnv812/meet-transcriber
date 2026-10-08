@@ -362,6 +362,25 @@ export function curveValues(turns: Turn[], importance: number[], duration: numbe
 }
 
 /**
+ * Важные реплики (верхние 30 % по важности, как у «Только важного») — индексы
+ * по порядку: риски над волной (0.5), щелчок — к реплике.
+ */
+export function importantTurns(turns: Turn[], importance: number[]): number[] {
+  const top = topShare(importance, turns, ONLY_IMPORTANT_SHARE);
+  return turns.flatMap((_, i) => (top[i] ? [i] : []));
+}
+
+/**
+ * Верхний край кривой — открытая линия SVG (контур волны, 0.5): тот же путь,
+ * что у `curvePath`, без спуска к низу и замыкания.
+ */
+export function curveLine(values: number[], width = 1000, height = 100): string {
+  const d = curvePath(values, width, height);
+  if (!d) return "";
+  return d.replace(/^M0,[\d.]+ L/, "M").replace(/ L[\d.]+,[\d.]+ Z$/, "");
+}
+
+/**
  * Контур кривой одной линией SVG (с заливкой до низа) в координатах
  * `width`×`height`; сглаженная: квадратичные кривые через середины точек.
  */

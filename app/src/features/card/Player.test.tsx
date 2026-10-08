@@ -167,10 +167,14 @@ test("щелчок и перетаскивание по полосе перем�
   expect(audio.currentTime).toBe(360);
 });
 
-test("кривая важности: при наведении (по умолчанию), всегда или нет; один путь SVG", () => {
+test("кривая важности: при наведении (по умолчанию), всегда или нет; заливка и контур (0.5)", () => {
   const hover = setup();
   const svg = hover.container.querySelector(".pbar__curve")!;
-  expect(svg.querySelectorAll("path")).toHaveLength(1);
+  expect(svg.querySelectorAll("path")).toHaveLength(2);
+  expect(svg.querySelector(".pbar__curve-fill")!.getAttribute("d")).toMatch(/Z$/);
+  const line = svg.querySelector(".pbar__curve-line")!;
+  expect(line.getAttribute("d")).not.toMatch(/Z$/);
+  expect(line).toHaveAttribute("vector-effect", "non-scaling-stroke");   // 1,5 px при любой ширине
   expect(hover.container.querySelector(".player")).toHaveClass("player--curve-hover");
   hover.unmount();
   const always = setup({ curveMode: "always" });
@@ -401,4 +405,36 @@ test("перетаскивание полосы в «Только важном»
   expect(audio.currentTime).toBe(30);
   fireEvent.pointerUp(bar(), { clientX: 45, pointerId: 1 });
   expect(audio.currentTime).toBe(30); // отпустили в неважном — доиграет до важного
+});
+
+test("0.5: риски важных реплик над волной — щелчок к реплике; жёлтых отметок «Только важного» нет", async () => {
+  const onSeeked = vi.fn();
+  const { audio, container } = setup({ onSeeked });
+  const group = screen.getByRole("group", { name: "Важные реплики" });
+  const marks = within(group).getAllByRole("button");
+  // importance: реплики 2, 3, 6 → верхние 30 % из 8 = 2 (бюджет 2:00 и решение 3:20).
+  expect(marks.map((m) => m.getAttribute("aria-label"))).toEqual([
+    "Важная реплика 02:00, Анна", "Важная реплика 03:20, Борис",
+  ]);
+  expect(marks[0]).toHaveAttribute("tabindex", "-1");
+  expect(marks[1]).toHaveStyle({ left: `${(200 / 600) * 100}%` });
+  fireEvent.click(marks[1]!);
+  expect(audio.currentTime).toBe(200);
+  expect(onSeeked).toHaveBeenCalledWith(200);
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  expect(container.querySelector(".pbar__span")).toBeNull();
+});
+
+test("0.5: без анализа рисок нет", () => {
+  setup({ importance: null });
+  expect(screen.queryByRole("group", { name: "Важные реплики" })).toBeNull();
+});
+
+test("0.5: волна — контур 1,5 px акцента и полупрозрачная заливка; риски — тонкие, акцент при наведении", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/features/card/player.css"), "utf8");
+  expect(css).toMatch(/\.pbar__curve-fill \{ fill: var\(--accent-line\); fill-opacity: 0\.16; \}/);
+  expect(css).toMatch(/\.pbar__curve-line \{[^}]*stroke: var\(--accent-line\); stroke-width: 1\.5px;/);
+  expect(css).toMatch(/\.pticks__mark::before \{[^}]*width: 2px;[^}]*background: var\(--ink-3\)/);
+  expect(css).toMatch(/\.pticks__mark:hover::before \{ background: var\(--accent-line\); \}/);
+  expect(css).not.toMatch(/\.pbar__span|--warning\); \}\s*$/m);
 });

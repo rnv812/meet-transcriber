@@ -86,8 +86,17 @@
   background: var(--data-1);
   transform: scaleX(clamp(0, calc((var(--pos) - var(--a)) / (var(--b) - var(--a))), 1));
 }
-/* Фрагменты «Только важного» — тонкие отметки над полосой. */
-.pbar__span { position: absolute; top: -4px; height: 2px; border-radius: 1px; background: var(--warning); }
+/* Дорожка рисок над волной (0.5): важные реплики — вертикальные риски, щелчок — к реплике.
+   Кнопка шире риски (попасть мышью), сама риска — 2 px; поверх волны при наведении. */
+.pticks { position: relative; z-index: 1; height: 10px; margin: 0 0 2px; }
+.pticks__mark {
+  position: absolute; top: 0; width: 10px; height: 10px; margin-left: -5px; padding: 0;
+  border: 0; background: none; cursor: pointer;
+}
+.pticks__mark::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; border-radius: 1px; background: var(--ink-3);
+}
+.pticks__mark:hover::before { background: var(--accent-line); }
 
 /* Бегунок: маленький круг, растёт при наведении. */
 .pbar__knob {
@@ -98,12 +107,14 @@
 .pbar.is-hover .pbar__knob, .pbar:focus-visible .pbar__knob { transform: scale(1.1); }
 .pbar.is-drag .pbar__knob { transform: scale(1.25); }
 
-/* Кривая важности над полосой («самые пересматриваемые»): заливка --accent-soft, как в макете. */
+/* Кривая важности над полосой («самые пересматриваемые»). */
 .pbar__curve {
   position: absolute; left: 0; bottom: 10px; width: 100%; height: 34px; pointer-events: none;
   opacity: 0; transition: opacity var(--d-slow);
 }
-.pbar__curve path { fill: var(--accent-soft); }
+/* Волна (0.5): контур 1,5 px цвета акцента и полупрозрачная заливка; обе темы — токены. */
+.pbar__curve-fill { fill: var(--accent-line); fill-opacity: 0.16; }
+.pbar__curve-line { fill: none; stroke: var(--accent-line); stroke-width: 1.5px; stroke-linejoin: round; }
 .pbar.is-hover .pbar__curve { opacity: 1; }
 /* Под кривой — мягкая подложка цвета плеера: строка расшифровки под ней не сливается с кривой. */
 .pbar::before {
@@ -112,10 +123,10 @@
 }
 .player--curve-hover .pbar.is-hover::before { opacity: 1; }
 /* «Всегда»: место под кривую отведено, раскладка не прыгает. */
-.player--curve-always .player__bar { padding-top: 18px; }
+.player--curve-always .pbar { margin-top: 18px; } /* риски (.pticks) — над местом волны */
 .player--curve-always .pbar__curve { height: 28px; opacity: 0.7; }
 .player--curve-always .pbar.is-hover .pbar__curve { opacity: 1; }
-.player--compact.player--curve-always .player__bar { padding-top: 0; }
+.player--compact.player--curve-always .pbar { margin-top: 0; }
 .player--compact .pbar__curve { height: 22px; }
 
 /* Пузырь над курсором. */
@@ -161,6 +172,17 @@
 .pchapters__n { flex: none; width: 18px; color: var(--ink-3); font-size: var(--text-xs); }
 .pchapters__title { flex: 1; min-width: 0; }
 .pchapters__time { flex: none; color: var(--ink-3); font-family: var(--font-code); font-size: var(--text-xs); }
+
+/* Меню скорости (0.5): пункты-радио, отметка текущей слева. */
+.pspeed { display: flex; flex-direction: column; padding: 4px; }
+.pspeed__item {
+  display: flex; align-items: center; gap: 6px; height: var(--control-sm); padding: 0 10px 0 6px;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--ink); font-family: var(--font-code);
+  font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+.pspeed__item:hover { background: var(--surface-3); }
+.pspeed__item[aria-checked="true"] { color: var(--accent-line); }
+.pspeed__check { display: inline-flex; width: var(--icon-sm); flex: none; }
 
 /* Узкая карточка: подписи кнопок — только значки, название главы короче. */
 @container (max-width: 620px) {

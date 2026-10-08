@@ -1,5 +1,5 @@
 import { act, createRef } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import { AudioPlayer, type AudioPlayerHandle, SPEEDS, SEEK_STEP_S } from "./AudioPlayer";
@@ -67,18 +67,31 @@ test("полоса перемотки ставит позицию (щелчок 
   expect(audio.currentTime).toBe(120);
 });
 
-test("скорость: 1× → 1,25× → 1,5× → 2× → 1×", async () => {
+test("скорость (0.5) — меню 0,75 / 1 / 1,25 / 1,5 / 2× с отметкой текущей; выбор закрывает меню", async () => {
   const { audio } = setup();
   const button = () => screen.getByRole("button", { name: /Скорость воспроизведения/ });
+  expect(SPEEDS).toEqual([0.75, 1, 1.25, 1.5, 2]);
   expect(button()).toHaveTextContent("1×");
-  const seen: number[] = [];
-  for (let i = 0; i < SPEEDS.length; i++) {
-    await userEvent.click(button());
-    seen.push(audio.playbackRate);
-  }
-  expect(seen).toEqual([1.25, 1.5, 2, 1]);
+  expect(button()).toHaveAttribute("aria-haspopup", "menu");
   await userEvent.click(button());
-  expect(button()).toHaveTextContent("1,25×");
+  const menu = screen.getByRole("menu", { name: "Скорость воспроизведения" });
+  const items = within(menu).getAllByRole("menuitemradio");
+  expect(items.map((i) => i.textContent)).toEqual(["0,75×", "1×", "1,25×", "1,5×", "2×"]);
+  expect(within(menu).getByRole("menuitemradio", { name: "1×" })).toHaveAttribute("aria-checked", "true");
+  expect(within(menu).getByRole("menuitemradio", { name: "1×" })).toHaveFocus();
+  await userEvent.keyboard("{ArrowUp}");
+  expect(within(menu).getByRole("menuitemradio", { name: "0,75×" })).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  expect(audio.playbackRate).toBe(0.75);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(button()).toHaveTextContent("0,75×");
+  await userEvent.click(button());
+  await userEvent.click(screen.getByRole("menuitemradio", { name: "1,5×" }));
+  expect(audio.playbackRate).toBe(1.5);
+  await userEvent.click(button());
+  expect(screen.getByRole("menuitemradio", { name: "1,5×" })).toHaveAttribute("aria-checked", "true");
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("menu")).toBeNull();
 });
 
 test("звук: выключить и включить", async () => {

@@ -1,5 +1,5 @@
 import {
-  barLayout, buildView, chapterAt, chapterJump, curvePath, curveValues, fitLabel, importantSpans, layoutRows,
+  barLayout, buildView, chapterAt, chapterJump, curveLine, curvePath, curveValues, fitLabel, importantSpans, importantTurns, layoutRows,
   LOW_IMPORTANCE, skipTarget, topShare, turnAt, turnImportance, turnJump, turnType, typeCounts, usableAnalysis,
   type ViewParts,
 } from "./analysisView";
@@ -167,6 +167,17 @@ test("кривая важности: точки 0..1, пик — у важног
   expect(d.startsWith("M0,100 L")).toBe(true);
   expect(d.endsWith("L1000,100 Z")).toBe(true);
   expect(d.match(/M/g)).toHaveLength(1);
+  // Контур (0.5) — тот же верх без спуска к низу и замыкания.
+  const line = curveLine(values);
+  expect(line.startsWith("M0,")).toBe(true);
+  expect(line).not.toMatch(/Z$|M0,100 /);
+  expect(d).toContain(line.slice(1));
+  expect(curveLine([])).toBe("");
+});
+
+test("важные реплики для рисок — верхние 30 % по важности, по порядку, без пауз", () => {
+  expect(importantTurns(TURNS, [0.9, 0.7, 0, 0.8, LOW_IMPORTANCE])).toEqual([0]) // 4 реплики без перерыва → верхние 30 % = одна;
+  expect(importantTurns(TURNS, [0.1, 0.1, 0.1, 0.1, 0.1])).toEqual([]);
 });
 
 test("подпись главы на полосе: целиком, с многоточием, номер или ничего", () => {

@@ -32,10 +32,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  ChevronRight, ListVideo, Maximize2, Minimize2, Pause, Play, Sparkles, Volume1, Volume2, VolumeX, X,
+  Check, ChevronRight, ListVideo, Maximize2, Minimize2, Pause, Play, Sparkles, Volume1, Volume2, VolumeX, X,
 } from "lucide-react";
 import {
-  BAR_GAP_PX, barLayout, chapterAt, chapterJump, curvePath, curveValues, importantSpans, skipTarget, turnAt, turnJump,
+  BAR_GAP_PX, barLayout, chapterAt, chapterJump, curveLine, curvePath, curveValues, importantSpans, importantTurns,
+  skipTarget, turnAt, turnJump,
   type ChapterView, type Span,
 } from "../../lib/analysisView";
 import { audioUrl, type Endpoint } from "../../lib/api";
@@ -59,7 +60,8 @@ export type AudioPlayerHandle = {
   release: () => void;
 };
 
-export const SPEEDS = [1, 1.25, 1.5, 2];
+/** Скорости — меню с отметкой текущей (0.5). */
+export const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 export const SEEK_STEP_S = 5;
 export const JUMP_STEP_S = 10;
 /** Сколько символов реплики в пузыре над полосой. */
@@ -164,6 +166,32 @@ const NO_PEOPLE: PersonColor[] = [];
 const frame = (fn: () => void): number =>
   (typeof requestAnimationFrame === "function" ? requestAnimationFrame(fn) : (fn(), 0));
 const cancelFrame = (id: number) => { if (id && typeof cancelAnimationFrame === "function") cancelAnimationFrame(id); };
+
+/** Меню скорости (0.5): пункты-радио, текущая отмечена; ↑/↓/Home/End — по пунктам, Enter — выбрать. */
+function SpeedMenu({ rate, onPick }: { rate: number; onPick: (rate: number) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.querySelector<HTMLButtonElement>("[aria-checked=true]")?.focus(); }, []);
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const all = [...(box.current?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]") ?? [])];
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === "ArrowDown" ? (at + 1) % all.length : e.key === "ArrowUp" ? (at - 1 + all.length) % all.length
+      : e.key === "Home" ? 0 : e.key === "End" ? all.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    all[next]?.focus();
+  };
+  return (
+    <div ref={box} className="pspeed" role="menu" aria-label="Скорость воспроизведения" onKeyDown={onKeyDown}>
+      {SPEEDS.map((s) => (
+        <button key={s} type="button" role="menuitemradio" aria-checked={s === rate} tabIndex={-1}
+          className="pspeed__item num" onClick={() => onPick(s)}>
+          <span className="pspeed__check" aria-hidden="true">{s === rate && <Icon as={Check} size="sm" />}</span>
+          {speedText(s)}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   endpoint: Endpoint;
@@ -330,10 +358,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     start();
   }, [start, userSeek]);
 
-  const nextSpeed = () => {
-    const next = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length] ?? 1;
+  /** Меню скорости открыто: у кнопки «1×». */
+  const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
+  const pickSpeed = (next: number) => {
     if (el.current) el.current.playbackRate = next;
     setRate(next);
+    setSpeedAnchor(null);
   };
 
   const mutedRef = useRef(muted);
@@ -388,6 +418,11 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
 
   const pieces = useMemo(() => barLayout(chapters, total, width), [chapters, total, width]);
   const path = useMemo(() => (curve?.length ? curvePath(curve) : ""), [curve]);
+  const line = useMemo(() => (curve?.length ? curveLine(curve) : ""), [curve]);
+  // Риски важных реплик над волной (0.5; вместо жёлтых отметок «Только важного»).
+  const marks = useMemo(
+    () => (importance && total > 0 ? importantTurns(turns, importance).map((i) => turns[i]!) : null),
+    [importance, turns, total]);
   const chapter = chapterAt(chapters, current);
 
   // --- указатель на полосе: наведение и перетаскивание без состояния React -------------------------
@@ -574,6 +609,20 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         }}
       />
       <div className="player__bar">
+        {/* Дорожка рисок над волной (0.5): важные реплики, щелчок — к реплике (и расшифровка к ней).
+            Из Tab-порядка вне: перемотка с клавиатуры — полоса (Ctrl+←/→ — по репликам). */}
+        {marks && marks.length > 0 && (
+          <div className="pticks" role="group" aria-label="Важные реплики">
+            {marks.map((t) => (
+              <Tip key={t.start} content={`${clock(t.start)} · ${t.speaker}: ${bubbleText(t.texts.join(" "))}`} describe={false}>
+                <button type="button" tabIndex={-1} className="pticks__mark"
+                  style={{ left: `${(t.start / total) * 100}%` }}
+                  aria-label={`Важная реплика ${clock(t.start)}, ${t.speaker}`}
+                  onClick={() => userSeek(t.start)} />
+              </Tip>
+            ))}
+          </div>
+        )}
         <div
           ref={bar}
           className="pbar"
@@ -585,10 +634,11 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           onPointerEnter={onPointerEnter} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}
           onPointerDown={onPointerDown} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
         >
-          {/* Цвет кривой — токенами в player.css (заливка --accent-soft, как в макете). */}
+          {/* Волна (0.5): контур 1,5 px цвета акцента и полупрозрачная заливка — токенами в player.css. */}
           {curveOn && (
             <svg className="pbar__curve" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
-              <path d={path} />
+              <path className="pbar__curve-fill" d={path} />
+              <path className="pbar__curve-line" d={line} vectorEffect="non-scaling-stroke" />
             </svg>
           )}
           <div className="pbar__track">
@@ -604,10 +654,6 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
                 <div className="pbar__hov" />
                 <div className="pbar__fill" />
               </div>
-            ))}
-            {onlySpans?.map((s, k) => (
-              <div key={k} className="pbar__span" aria-hidden="true"
-                style={{ left: `${(s.start / (total || 1)) * 100}%`, width: `${((s.end - s.start) / (total || 1)) * 100}%` }} />
             ))}
           </div>
           <div className="pbar__knob" aria-hidden="true" />
@@ -684,8 +730,9 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         )}
       </div>
       <div className="player__right">
-        <button type="button" className="btn btn--ghost btn--sm player__speed" onClick={nextSpeed}
-          aria-label={`Скорость воспроизведения: ${speedText(rate)}`}>
+        <button type="button" className="btn btn--ghost btn--sm player__speed" aria-haspopup="menu"
+          aria-expanded={!!speedAnchor} aria-label={`Скорость воспроизведения: ${speedText(rate)}`}
+          onClick={(e) => { const b = e.currentTarget; setSpeedAnchor((cur) => (cur === b ? null : b)); }}>
           {speedText(rate)}
         </button>
         {hasChapters && (
@@ -712,6 +759,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         <IconButton icon={compact ? Maximize2 : Minimize2} label={compact ? "Развернуть плеер" : "Компактный плеер"}
           onClick={toggleCompact} />
       </div>
+      {speedAnchor && (
+        <Popover anchor={speedAnchor} onClose={() => setSpeedAnchor(null)} label="Скорость воспроизведения"
+          width={120} anchorToggles align="end">
+          <SpeedMenu rate={rate} onPick={pickSpeed} />
+        </Popover>
+      )}
       {chaptersAnchor && (
         <Popover anchor={chaptersAnchor} onClose={() => setChaptersAnchor(null)} label="Главы встречи" width={300}>
           <ol className="pchapters">
