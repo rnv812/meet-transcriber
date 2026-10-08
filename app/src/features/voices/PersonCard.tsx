@@ -19,12 +19,21 @@ type Props = {
   onRenamed: (to: string) => void;
   onRemoved: (next: string | null) => void;
   onOpenRecording: (id: string) => void;
+  /**
+   * Зачем открыта карточка из строки таблицы: переименовать (курсор в имени),
+   * объединить (фокус на выборе человека) или удалить (сразу вопрос). Новый
+   * `n` повторяет намерение для уже открытой карточки. Нет — карточка берёт
+   * фокус сама (Ctrl+V для фотографии).
+   */
+  intent?: PersonIntent;
 };
+
+export type PersonIntent = { kind: "rename" | "merge" | "delete"; n: number };
 
 const MAX_AVATAR = 10 * 1024 * 1024;
 
 export function PersonCard({
-  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording,
+  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording, intent,
 }: Props) {
   const name = person.name;
   const [data, setData] = useState<PersonData | null>(null);
@@ -35,8 +44,16 @@ export function PersonCard({
   const stopAt = useRef<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const cancelled = useRef(false);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const mergeSelect = useRef<HTMLSelectElement>(null);
 
-  useEffect(() => root.current?.focus(), []);
+  useEffect(() => {
+    if (!intent) { root.current?.focus(); return; }
+    if (intent.kind === "delete") { setConfirm("delete"); return; }
+    const target = intent.kind === "merge" ? mergeSelect.current : nameInput.current;
+    (target ?? root.current)?.focus();
+    if (intent.kind === "rename") nameInput.current?.select();
+  }, [intent]);
 
   useEffect(() => {
     let live = true;
@@ -122,6 +139,7 @@ export function PersonCard({
           onError={setError}
         />
         <input
+          ref={nameInput}
           className="pcard__name"
           aria-label="Имя"
           value={draft}
@@ -167,6 +185,7 @@ export function PersonCard({
       <div className="pcard__row">
         {others.length > 0 && (
           <select
+            ref={mergeSelect}
             aria-label="Объединить с…"
             className="pcard__select"
             value=""

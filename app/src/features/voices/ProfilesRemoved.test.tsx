@@ -12,6 +12,9 @@ import { VoicesPane } from "./VoicesPane";
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getPerson: vi.fn(),
+  getOwnerVoice: vi.fn(async () => ({
+    samples: [], take: null, ready: true, reason: null, recording: false, seconds: 25,
+  })),
   getProfilesRemoved: vi.fn(),
   dismissProfilesRemoved: vi.fn(async () => ({ ok: true })),
 }));
@@ -42,7 +45,7 @@ test("заметки перенесены: путь, «Открыть папку
   expect(api.dismissProfilesRemoved).toHaveBeenCalledWith(ep);
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
   // Голоса на месте.
-  expect(screen.getByText("3 встречи · 29 мин речи")).toBeInTheDocument();
+  expect(screen.getByRole("cell", { name: "29 мин" })).toBeInTheDocument();
 });
 
 test("заметок не было: без пути и без «Открыть папку»; видно и при пустой базе голосов", async () => {

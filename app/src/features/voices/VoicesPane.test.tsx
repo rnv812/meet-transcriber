@@ -9,6 +9,9 @@ import type { Person } from "../../lib/types";
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getPeople: vi.fn(),
+  getOwnerVoice: vi.fn(async () => ({
+    samples: [], take: null, ready: true, reason: null, recording: false, seconds: 25,
+  })),
   getPerson: vi.fn(),
   getSample: vi.fn(),
   putAvatar: vi.fn(),
@@ -64,11 +67,84 @@ function Harness() {
   );
 }
 
-test("сетка людей с заголовком и сводкой", () => {
+test("таблица людей: заголовок, колонки «Человек · Встреч · Речи», по строке на человека", () => {
   setup(people.slice(0, 2));
+  expect(screen.getByRole("heading", { name: "Голоса" })).toBeInTheDocument();
   expect(screen.getByText("2 человека · узнаются автоматически")).toBeInTheDocument();
-  expect(screen.getByText("2 встречи · 20 мин речи")).toBeInTheDocument();
-  expect(screen.getByText("1 встреча · 4 мин речи")).toBeInTheDocument();
+  const table = screen.getByRole("table", { name: "Люди с голосом в базе" });
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent))
+    .toEqual(["Человек", "Встреч", "Речи", "Действие", "Ещё"]);
+  const rows = within(table).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(2);
+  expect(within(rows[0]!).getByRole("button", { name: "Демьян" })).toBeInTheDocument();
+  expect(within(rows[0]!).getByRole("cell", { name: "2" })).toBeInTheDocument();
+  expect(within(rows[0]!).getByRole("cell", { name: "20 мин" })).toBeInTheDocument();
+  expect(within(rows[1]!).getByRole("cell", { name: "4 мин" })).toBeInTheDocument();
+  // «Последний раз» нужен бэкенд — колонки нет.
+  expect(screen.queryByText("Последний раз")).toBeNull();
+});
+
+test("сверху — карточка «Мой голос» из настроек, а не её копия", async () => {
+  setup();
+  const mine = screen.getByRole("group", { name: "Мой голос" });
+  expect(await within(mine).findByText("не записан")).toBeInTheDocument();
+  expect(within(mine).getByRole("button", { name: "Записать" })).toBeInTheDocument();
+  expect(api.getOwnerVoice).toHaveBeenCalledWith(ep);
+  // Выше таблицы.
+  const table = screen.getByRole("table");
+  expect(mine.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("поиск «Найти человека» фильтрует по имени на клиенте", async () => {
+  setup();
+  const search = screen.getByRole("searchbox", { name: "Найти человека" });
+  const names = () => within(screen.getByRole("table")).getAllByRole("row").slice(1).map((r) => r.textContent);
+  expect(names()).toHaveLength(3);
+  await userEvent.type(search, "аркад");
+  expect(names()).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Аркадий" })).toBeInTheDocument();
+  await userEvent.clear(search);
+  await userEvent.type(search, "АРКА");
+  expect(names()).toHaveLength(2);
+  await userEvent.clear(search);
+  await userEvent.type(search, "никого");
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(screen.getByText("Никого с таким именем нет")).toBeInTheDocument();
+  expect(api.getPeople).not.toHaveBeenCalled();
+});
+
+test("строка открывает карточку: кликом по строке и Enter на имени", async () => {
+  setup();
+  const row = screen.getByRole("button", { name: "Аркаша" }).closest("tr")!;
+  await userEvent.click(within(row).getByRole("cell", { name: "1" }));
+  expect(await screen.findByLabelText("Имя")).toHaveValue("Аркаша");
+  expect(row).toHaveAttribute("aria-selected", "true");
+  screen.getByRole("button", { name: "Демьян" }).focus();
+  await userEvent.keyboard("{Enter}");
+  await waitFor(() => expect(screen.getByLabelText("Имя")).toHaveValue("Демьян"));
+});
+
+test("«Переименовать» в строке открывает карточку с именем под рукой", async () => {
+  setup();
+  const row = screen.getByRole("button", { name: "Демьян" }).closest("tr")!;
+  await userEvent.click(within(row).getByRole("button", { name: "Переименовать" }));
+  const input = await screen.findByLabelText("Имя");
+  await waitFor(() => expect(input).toHaveFocus());
+});
+
+test("«Ещё»: объединить — к выбору человека, удалить — к подтверждению; прежние диалоги", async () => {
+  vi.mocked(api.deletePerson).mockResolvedValue({});
+  setup();
+  const row = () => screen.getByRole("button", { name: "Демьян" }).closest("tr")!;
+  await userEvent.click(within(row()).getByRole("button", { name: "Ещё: Демьян" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Объединить с…" }));
+  await waitFor(() => expect(screen.getByLabelText("Объединить с…")).toHaveFocus());
+  await userEvent.click(within(row()).getByRole("button", { name: "Ещё: Демьян" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Удалить голос" }));
+  expect(screen.getByRole("alertdialog")).toHaveAccessibleName("Удалить голос «Демьян»?");
+  expect(api.deletePerson).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(api.deletePerson).toHaveBeenCalledWith(ep, "Демьян"));
 });
 
 test("пустое состояние", () => {
@@ -80,7 +156,7 @@ test("пустое состояние", () => {
 test("клик по человеку открывает карточку со встречами; встреча открывает запись", async () => {
   const onOpenRecording = vi.fn();
   setup(people, { onOpenRecording });
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   await userEvent.click(await screen.findByText("Планёрка"));
   expect(onOpenRecording).toHaveBeenCalledWith("r1");
 });
@@ -91,7 +167,7 @@ test("загрузка файла: putAvatar, refresh, аватар везде �
     .mockResolvedValueOnce({ items: people })
     .mockResolvedValue({ items: people.map((p) => (p.name === "Демьян" ? { ...p, has_avatar: true } : p)) });
   render(<Harness />);
-  await userEvent.click(await screen.findByText("Демьян", { selector: ".person__name" }));
+  await userEvent.click(within(await screen.findByRole("table")).getByRole("button", { name: "Демьян" }));
   const before = screen.getByTestId("rec").querySelector("img");
   expect(before).toBeNull();
   const file = new File(["x"], "a.png", { type: "image/png" });
@@ -106,7 +182,7 @@ test("загрузка файла: putAvatar, refresh, аватар везде �
 
 test("слишком большой файл не отправляется", async () => {
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   const big = new File(["x"], "big.png", { type: "image/png" });
   Object.defineProperty(big, "size", { value: 11 * 1024 * 1024 });
   await userEvent.upload(await screen.findByTestId("avatar-file"), big);
@@ -118,7 +194,7 @@ test("сброс к инициалам: deleteAvatar и onAvatar", async () => {
   vi.mocked(api.deleteAvatar).mockResolvedValue({ ok: true });
   const onAvatar = vi.fn();
   setup([{ ...people[0]!, has_avatar: true }, ...people.slice(1)], { onAvatar });
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   await userEvent.click(await screen.findByRole("button", { name: "Аватар" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Сбросить к инициалам" }));
   // Сначала подтверждение: фотография пропадёт.
@@ -131,7 +207,7 @@ test("сброс к инициалам: deleteAvatar и onAvatar", async () => {
 
 test("Escape в имени отменяет переименование", async () => {
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   const input = await screen.findByLabelText("Имя");
   await userEvent.clear(input);
   await userEvent.type(input, "Пётр{Escape}");
@@ -141,14 +217,14 @@ test("Escape в имени отменяет переименование", async
 
 test("карточка получает фокус для Ctrl+V", async () => {
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   await waitFor(() => expect(document.querySelector(".pcard")).toHaveFocus());
 });
 
 test("ошибка загрузки: текст виден", async () => {
   vi.mocked(api.putAvatar).mockRejectedValue(new api.ApiError(400, "не изображение"));
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   await userEvent.upload(await screen.findByTestId("avatar-file"), new File(["x"], "a.txt", { type: "image/png" }));
   expect(await screen.findByText("не изображение")).toBeInTheDocument();
 });
@@ -156,7 +232,7 @@ test("ошибка загрузки: текст виден", async () => {
 test("вставка изображения из буфера", async () => {
   vi.mocked(api.putAvatar).mockResolvedValue();
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   const card = document.querySelector(".pcard")!;
   const file = new File(["x"], "s.png", { type: "image/png" });
   const ev = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
@@ -169,7 +245,7 @@ test("объединение: выбор, подтверждение, mergePerso
   vi.mocked(api.mergePerson).mockResolvedValue({});
   const onChanged = vi.fn();
   setup(people, { onChanged });
-  await userEvent.click(screen.getByText("Аркаша"));
+  await userEvent.click(screen.getByRole("button", { name: "Аркаша" }));
   await userEvent.selectOptions(await screen.findByLabelText("Объединить с…"), "Аркадий");
   expect(screen.getByRole("alertdialog")).toHaveAccessibleName(/^Объединить «.+» с «Аркадий»\?$/);
   expect(api.mergePerson).not.toHaveBeenCalled();
@@ -181,7 +257,7 @@ test("объединение: выбор, подтверждение, mergePerso
 test("удаление: подтверждение, deletePerson, карточка закрыта", async () => {
   vi.mocked(api.deletePerson).mockResolvedValue({});
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   await userEvent.click(await screen.findByRole("button", { name: "Удалить голос" }));
   await userEvent.click(screen.getByRole("button", { name: /^(Объединить|Удалить)$/ }));
   await waitFor(() => expect(api.deletePerson).toHaveBeenCalledWith(ep, "Демьян"));
@@ -191,7 +267,7 @@ test("удаление: подтверждение, deletePerson, карточк
 test("переименование: ошибка дубликата текстом", async () => {
   vi.mocked(api.renamePerson).mockRejectedValue(new api.ApiError(400, "человек с таким именем уже есть"));
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   const input = await screen.findByLabelText("Имя");
   await userEvent.clear(input);
   await userEvent.type(input, "Аркаша{Enter}");
@@ -201,7 +277,7 @@ test("переименование: ошибка дубликата тексто
 test("образец: getSample и src с #t=start,end", async () => {
   vi.mocked(api.getSample).mockResolvedValue({ recording: "r1", start: 5, end: 9, track: "sys" });
   setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
   await userEvent.click(await screen.findByRole("button", { name: "Прослушать образец" }));
   await waitFor(() => expect(document.querySelector("audio")!.getAttribute("src")).toMatch(/track=sys#t=5,9$/));
 });
@@ -213,7 +289,7 @@ test("панель человека — колонка рядом с сетко�
   localStorage.setItem("meet.pane.voices-card", "640");
   try {
     const { container } = setup();
-    await userEvent.click(screen.getByRole("button", { name: /Демьян/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Демьян" }));
     const area = container.querySelector<HTMLElement>(".voices")!;
     const aside = container.querySelector(".voices__card")!;
     // Панель — не внутри сетки, а следом за ней.

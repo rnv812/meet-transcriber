@@ -75,24 +75,16 @@ test("псевдонимы окна ссылаются только на объ�
   expect(missing).toEqual([]);
 });
 
-test("компоненты Aurora: base, aurora, controls, feedback и overlays перенесены скриптом и подключены после палитр", () => {
-  for (const name of ["base", "aurora", "controls", "feedback", "overlays"]) {
+test("компоненты Aurora: base, aurora, controls, feedback, overlays и data перенесены скриптом и подключены после палитр", () => {
+  for (const name of ["base", "aurora", "controls", "feedback", "overlays", "data"]) {
     const css = read("aurora", `${name}.css`);
     expect(css.split("\n")[0]).toMatch(new RegExp(`^/\\* Atlas Aurora v2\\.6 — ${name}: `));
   }
   const index = read("aurora", "index.css");
-  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "feedback.css", "overlays.css", "../aurora-fixes.css", "../aurora-fallbacks.css"]
+  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "feedback.css", "overlays.css", "data.css", "../aurora-fallbacks.css"]
     .map((f) => index.indexOf(`"./${f}"`.replace("./../", "../")));
   expect(order.every((i) => i >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
-});
-
-test("правки каскада Aurora: размеры select-btn--md/--sm сильнее «.select-btn» из overlays.css", () => {
-  const css = read("aurora-fixes.css");
-  expect(css).toMatch(/\.select-btn\.select-btn--md \{[^}]*height: var\(--control\);/);
-  expect(css).toMatch(/\.select-btn\.select-btn--sm \{[^}]*height: var\(--control-sm\);/);
-  // Скопированные файлы дизайн-системы не правятся.
-  expect(read("aurora", "overlays.css")).not.toMatch(/select-btn--md/);
 });
 
 test("запасные значения без color-mix(): файл окна, под @supports not", () => {

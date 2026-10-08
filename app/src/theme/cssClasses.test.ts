@@ -48,7 +48,7 @@ test("запасные значения переопределяют тольк�
   expect(roots.filter((name) => !vendored.has(name))).toEqual([]);
 });
 
-test("карточка человека в «Голосах» — колонка рядом с сеткой: не наезжает на неё и не выходит за край", () => {
+test("карточка человека в «Голосах» — колонка рядом с таблицей: не наезжает на неё и не выходит за край", () => {
   const css = readFileSync(join(process.cwd(), "src", "features", "voices", "voices.css"), "utf8");
   const card = /\.voices__card \{([^}]*)\}/.exec(css)?.[1] ?? "";
   const main = /\.voices__main \{([^}]*)\}/.exec(css)?.[1] ?? "";
@@ -56,10 +56,11 @@ test("карточка человека в «Голосах» — колонка
   expect(card).toMatch(/flex: none/);
   expect(card).toMatch(/width: var\(--person-w/);
   expect(card).toMatch(/max-width: calc\(100% - 200px\)/);
-  // Сетка берёт остаток и перестраивается (auto-fill), а не уходит под панель.
+  // Таблица берёт остаток и прокручивается внутри, а не уходит под панель.
   expect(main).toMatch(/flex: 1/);
   expect(main).toMatch(/min-width: 0/);
-  expect(css).toMatch(/\.voices__grid \{[^}]*repeat\(auto-fill/);
+  expect(css).not.toMatch(/\.voices__grid/);
+  expect(css).toMatch(/\.voices__table \{[^}]*overflow/);
 });
 
 test("«Фильтры»: измерение — и .cat-filter__list, но не сжимается: правило двух классов сильнее при любом порядке файлов", () => {
