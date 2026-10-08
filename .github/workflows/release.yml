@@ -102,9 +102,9 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           uv venv --python 3.12 .venv-ci
-          uv pip install --python .venv-ci -e . pytest
+          uv pip install --python .venv-ci -e . pytest pytest-xdist
           $env:PYTHONPATH = "src"
-          ./.venv-ci/Scripts/python -m pytest -q -p no:cacheprovider
+          ./.venv-ci/Scripts/python -m pytest -q -p no:cacheprovider -n auto
 
       - name: Window tests
         working-directory: app
@@ -210,7 +210,7 @@ jobs:
       - name: Python tests (macOS layer)
         run: |
           uv venv --python 3.12 .venv-ci
-          uv pip install --python .venv-ci -e . pytest
+          uv pip install --python .venv-ci -e . pytest pytest-xdist
           PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider \
             tests/test_plat.py tests/test_netproxy_mac.py tests/test_audiotap.py \
             tests/test_watch_mac.py tests/test_engine_mac.py tests/test_app_icons.py \

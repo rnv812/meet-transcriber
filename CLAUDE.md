@@ -185,7 +185,7 @@ git не попадают.
 
 Python (из корня, venv с установленным пакетом):
 
-    PYTHONPATH=src PYTHONUTF8=1 .venv/Scripts/python -m pytest -q
+    PYTHONPATH=src PYTHONUTF8=1 .venv/Scripts/python -m pytest -q -n auto   # параллельно; без xdist — без -n
 
 Окно (из `app/`):
 

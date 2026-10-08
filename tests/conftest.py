@@ -16,11 +16,23 @@
 Временная папка системы (`tempfile`, TMP/TEMP) на всю сессию — своя папка
 внутри basetemp pytest: замки meta.json, папки задач и живого режима не
 копятся в настоящем %TEMP% разработчика.
+
+Параллельный прогон (`-n auto`, pytest-xdist): процессов не больше
+`MAX_WORKERS` — каждый при сборе грузит тяжёлые модули, и на 20 ядрах при
+10 ГБ свободной памяти `-n 8` уже падал с MemoryError.
 """
 
+import os
 import sys
 
 import pytest
+
+MAX_WORKERS = 6
+
+
+def pytest_xdist_auto_num_workers(config):
+    """`-n auto` — по ядрам, но не больше `MAX_WORKERS` (память)."""
+    return max(1, min(os.cpu_count() or 1, MAX_WORKERS))
 
 
 def _memory_backend():
