@@ -78,6 +78,28 @@ test("шапка: точка записи, таймер, знак агента �
   }
 });
 
+test("шапка панели от 420 px: «Стоп» — красная кнопка с подписью (MeetLive), имя прежнее; уже — значок", () => {
+  const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockReturnValue({ width: 480, height: 520, top: 0, left: 0, right: 480, bottom: 520, x: 0, y: 0, toJSON: () => ({}) });
+  try {
+    render(<LivePanel endpoint={ep} />);
+    act(() => bus().emit("state", snap(status())));
+    const stop = within(head()).getByRole("button", { name: "Остановить и сохранить" });
+    expect(stop).toHaveTextContent("Стоп");
+    expect(stop).toHaveClass("btn", "btn--danger", "btn--sm");
+    expect(stop).not.toHaveClass("btn--icon");
+  } finally {
+    rect.mockRestore();
+  }
+});
+
+test("«Не отвлекать»: тихая метка у состояния — бейдж Aurora без точки", async () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status())));
+  await userEvent.click(within(head()).getByRole("button", { name: "Не отвлекать" }));
+  expect(within(head()).getByText("тихо")).toHaveClass("badge", "badge--plain", "live-head__quiet-tag");
+});
+
 test("шапка: догоняет начало — знак «ищет»; модель грузится — «ждёт»", () => {
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status({ ready: false, stage: "загружаю модель распознавания…" }))));

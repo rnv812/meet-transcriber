@@ -131,6 +131,8 @@ const AURORA_IN_MARKUP = new Map<string, string[]>([
   [join("live", "SessionBar.tsx"), ["tabs"]],
   // Сообщение агента в чате — `.card aurora-wash` Aurora (макет MeetLive), этап 5.
   [join("live", "LiveChat.tsx"), ["card"]],
+  // Подсказка прежнего режима — `.card` Aurora (доводка 0.4, A9).
+  [join("live", "LiveHints.tsx"), ["card"]],
 ]);
 
 test("разметка не использует прежние классы tabs/card/search/help/empty", () => {

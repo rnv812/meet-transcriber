@@ -110,6 +110,31 @@ test("закреплённый вопрос — над лентой, с кноп
   expect(screen.queryByRole("region", { name: "Вопрос вам" })).toBeNull();
 });
 
+test("закреплённый вопрос — одной строкой (MeetLive): бейдж, текст с многоточием, «Показать в ленте», «×»; щелчок — полностью", async () => {
+  render(<Host />);
+  load([agentMsg("m1", { text: "Сказать **Анне** про срок? Она ждёт ответа до вечера", pin: true })]);
+  const pin = screen.getByRole("region", { name: "Вопрос вам" });
+  expect(pin.querySelector(".badge")).toHaveClass("badge", "badge--info");
+  const line = within(pin).getByRole("button", { name: /Сказать Анне про срок/ });
+  expect(line).toHaveTextContent("Сказать Анне про срок? Она ждёт ответа до вечера");   // без разметки
+  expect(line).toHaveAttribute("aria-expanded", "false");
+  expect(line).toHaveClass("chat-pin__line");
+  expect(pin.querySelector(".chat-pin__row")!.children).toHaveLength(4);
+  await userEvent.click(line);
+  expect(line).toHaveAttribute("aria-expanded", "true");
+  expect(pin).toHaveClass("is-open");
+  await userEvent.click(line);
+  expect(pin).not.toHaveClass("is-open");
+});
+
+test("«Показать в ленте» у закреплённого — значком с тем же именем (место — тексту вопроса)", () => {
+  render(<Host />);
+  load([agentMsg("m1", { text: "Сказать Анне про срок?", pin: true })]);
+  const show = within(screen.getByRole("region", { name: "Вопрос вам" })).getByRole("button", { name: "Показать в ленте" });
+  expect(show).toHaveClass("btn--icon");
+  expect(show.textContent).toBe("");
+});
+
 test("закреплённый вопрос можно убрать «×»", async () => {
   render(<Host />);
   load([agentMsg("m1", { pin: true })]);
@@ -130,6 +155,7 @@ test("ваше сообщение с вложением: картинка и д�
   expect(msg).toHaveTextContent("Модель не видит изображения");
   expect(msg).toHaveTextContent("План.pptx");
   expect(log()).not.toHaveTextContent("Сломанный.pdf"); // ни на что не сослались — в ленте нет
+  for (const chip of msg.querySelectorAll(".chat-att")) expect(chip).toHaveClass("badge", "badge--plain");
 });
 
 test("системные строки и строки встречи", () => {
@@ -215,9 +241,9 @@ test("реакции: формальные подписи у кнопок, в п
   const like = within(row).getByRole("button", { name: "Полезно" });
   const dislike = within(row).getByRole("button", { name: "Не по теме" });
   const explain = within(row).getByRole("button", { name: "Поясни" });
-  expect(like).toHaveAttribute("title", "Полезно — ассистент будет писать больше такого");
-  expect(dislike).toHaveAttribute("title", "Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать");
-  expect(explain).toHaveAttribute("title", "Поясни — ассистент объяснит, на что опирался");
+  expect(like).toHaveAccessibleDescription("Полезно — ассистент будет писать больше такого");
+  expect(dislike).toHaveAccessibleDescription("Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать");
+  expect(explain).toHaveAccessibleDescription("Поясни — ассистент объяснит, на что опирался");
   // подпись рядом со значком Lucide (видна при наведении и фокусе — CSS), без эмодзи; прежних «норм» нет
   for (const [btn, label] of [[like, "Полезно"], [dislike, "Не по теме"], [explain, "Поясни"]] as const) {
     expect(btn).toHaveTextContent(new RegExp(`^${label}$`));
@@ -233,7 +259,7 @@ test("узкая панель: у реакций только значок, по
   const like = screen.getByRole("button", { name: "Полезно" });
   expect(like).toHaveTextContent(/^$/);
   expect(like.querySelector("svg.lucide-thumbs-up")).not.toBeNull();
-  expect(like).toHaveAttribute("title", "Полезно — ассистент будет писать больше такого");
+  expect(like).toHaveAccessibleDescription("Полезно — ассистент будет писать больше такого");
   const dislike = screen.getByRole("button", { name: "Не по теме" });
   expect(dislike).toHaveTextContent(/^$/);
   expect(dislike.querySelector("svg.lucide-thumbs-down")).not.toBeNull();
@@ -331,19 +357,30 @@ const card = (id: string, o: Partial<ChatMessage> = {}): ChatMessage => ({
   ...agentMsg(id), kind: "system", status: undefined, mode: undefined, card: "confirm", tool: "Bash", title: "команду",
   text: "Ассистент хочет выполнить: команду", args: "echo hi > out.txt", expires_at: Date.now() / 1000 + 120, ...o,
 });
-const cards = () => screen.queryByRole("region", { name: "Подтверждение действия" });
+/**
+ * Карточки подтверждения решают прямо в ленте, кнопками самой карточки: отдельной области
+ * над лентой нет (после встречи, во вкладке «Ассистент», её было не видно — ход висел).
+ */
+const cards = () => log();
 
-test("карточка подтверждения Meet: над лентой, точный вызов, «Разрешить один раз» уходит confirmChat (0.3.7)", async () => {
+test("карточка подтверждения Meet: в ленте, точный вызов, кнопки в самой карточке; «Разрешить один раз» — confirmChat", async () => {
   render(<Host />);
   load([agentMsg("m1"), card("m2")]);
-  const region = cards()!;
-  expect(region).toHaveTextContent("Ассистент хочет выполнить: команду");
-  expect(region).toHaveTextContent("echo hi > out.txt");
-  // В ленте — та же запись без кнопок: решать — над лентой (её видно и при прокрутке вверх).
-  expect(within(log()).queryByRole("button", { name: "Разрешить один раз" })).toBeNull();
-  expect(log()).toHaveTextContent("Ждёт вашего решения — над лентой");
-  await userEvent.click(within(region).getByRole("button", { name: "Разрешить один раз" }));
+  expect(screen.queryByRole("region", { name: "Подтверждение действия" })).toBeNull();
+  const box = within(log()).getByRole("group", { name: "Ассистент хочет выполнить: команду" });
+  expect(box).toHaveTextContent("echo hi > out.txt");
+  expect(log()).not.toHaveTextContent("над лентой");
+  expect(within(log()).getAllByRole("button", { name: "Разрешить один раз" })).toHaveLength(1);
+  await userEvent.click(within(box).getByRole("button", { name: "Разрешить один раз" }));
   expect(confirmChat).toHaveBeenCalledWith(ep, "m2", true, false);
+});
+
+test("ждущая решения карточка — в порядке Tab ленты, даже если после неё пришло сообщение", async () => {
+  render(<Host />);
+  load([card("m2"), agentMsg("m3", { text: "Жду вашего решения" })]);
+  const box = within(log()).getByRole("group", { name: "Ассистент хочет выполнить: команду" });
+  const allow = within(box).getByRole("button", { name: "Разрешить один раз" });
+  expect(allow).not.toHaveAttribute("tabindex", "-1");
 });
 
 test("карточка: длинный вызов — начало и конец, «Разрешить» доступна сразу, «Показать полностью» — по желанию; Esc", async () => {
@@ -371,7 +408,7 @@ test("карточка: «Разрешать такое до конца встр
   expect(region).toHaveTextContent("⚠ Без песочницы Claude Code");
   const grants = within(region).getAllByRole("button", { name: "Разрешать такое до конца встречи" });
   expect(grants).toHaveLength(1);
-  expect(grants[0]).toHaveAttribute("title", expect.stringContaining("Bash npm"));
+  expect(grants[0]).toHaveAccessibleDescription(expect.stringContaining("Bash npm"));
   await userEvent.click(grants[0]!);
   expect(confirmChat).toHaveBeenCalledWith(ep, "m2", true, true);
 });
@@ -415,7 +452,7 @@ test("карточки по инструменту: запись, правка, 
   expect(edit.querySelector("pre")!.textContent).toBe(EDIT_CARD.args);
   expect(mcp.querySelector("pre")!.textContent).toContain("\"attachment\": \"C:\\Users\\demo\\spec.md\"");
   expect(within(write).getByRole("button", { name: "Разрешать такое до конца встречи" }))
-    .toHaveAttribute("title", "Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00");
+    .toHaveAccessibleDescription("Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00");
 });
 
 test("карточка WebFetch: настоящий хост первой строкой, часть до @ — предупреждением (ревью GP1)", () => {
@@ -441,11 +478,12 @@ test("карточка записи: начало и конец с пометк�
   expect(write).toMatchSnapshot("Write, полностью");
 });
 
-test("решённая или просроченная карточка уходит из-над ленты, в ленте — итог", () => {
+test("решённая или просроченная карточка — без кнопок, в ленте — итог", () => {
   render(<Host />);
   load([card("m2", { decision: "allow" }), card("m3", { expires_at: Date.now() / 1000 - 5 }),
     card("m4", { decision: "timeout" })]);
-  expect(cards()).toBeNull();
+  expect(within(log()).queryByRole("button", { name: "Разрешить один раз" })).toBeNull();
+  expect(within(log()).queryByRole("button", { name: "Отклонить" })).toBeNull();
   expect(log()).toHaveTextContent("Разрешено один раз");
   expect(log()).toHaveTextContent("Время вышло — не выполнено");
 });

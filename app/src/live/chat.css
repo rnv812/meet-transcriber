@@ -1,11 +1,25 @@
 /* Чат агента-участника (0.3.6): рабочая область, лента, строка ввода, шапка сессии.
    Atlas Aurora (0.4): только токены дизайн-системы; сообщения агента — карточки
-   `.card.aurora-wash`, его кнопки — `.filter`, строка ввода — `.aurora-edge`. */
+   `.card.aurora-wash`, его кнопки — `.filter`, строка ввода — `.aurora-edge`.
+   Кегль — только шкала Aurora: текст сообщений --text-ui, мета и кнопки --text-sm,
+   подписи и счётчики --text-xs. */
 
-/* --- Рабочая область: шапка сессии, колонка расшифровки и чат --- */
-.chat-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+/* --- Рабочая область: полосы во всю ширину по линейке (макет MeetLive) ---
+   строка сессии (линия снизу) · колонка расшифровки | чат · док строки ввода (линия сверху).
+   В панели (`--panel`) поля по краям — 12 px; в карточке записи — поля карточки. */
+.chat-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat-ws > .live-catchup { margin-top: 10px; }
+.chat-ws--panel > .live-catchup { margin: 10px 12px 0; }
+
+/* Строка сессии: кнопка колонки расшифровки и шапка сессии. 40 px, только линия снизу. */
+.chat-ws__bar {
+  flex: none; display: flex; align-items: center; gap: 4px; min-width: 0; height: var(--control);
+  border-bottom: 1px solid var(--hairline);
+}
+.chat-ws--panel > .chat-ws__bar { padding: 0 12px 0 6px; }
+
 .chat-ws__main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-.chat-ws__feed { flex: 1; min-height: 0; font-size: 12px; }
+.chat-ws__feed { flex: 1; min-height: 0; padding: 10px 0; font-size: var(--text-sm); }
 .chat-ws__transcript {
   min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; overflow-x: auto;
 }
@@ -19,9 +33,9 @@
 }
 
 /*
- * Одна раскладка при любой ширине (0.3.7): расшифровка — колонкой слева (по
- * умолчанию ~30 %, потянули — `--chat-side`), чат — справа и всегда виден.
- * Разделитель — на правой рамке колонки, на нём же кнопка «‹» / «›».
+ * Тело: расшифровка — колонкой слева (по умолчанию ~30 %, потянули — `--chat-side`),
+ * чат — справа. Разделитель — на правой рамке колонки. Колонку убрали (или узкая
+ * область, решает ChatWorkspace) — чат во всю ширину.
  */
 .chat-ws__body {
   flex: 1; min-height: 0; display: grid; gap: 12px;
@@ -29,97 +43,87 @@
   grid-template-columns: var(--chat-side, max(0px, min(clamp(120px, 30%, 480px), calc(100% - 172px)))) minmax(160px, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
+.chat-ws--panel > .chat-ws__body { padding: 0 12px; }
 .chat-ws__body > .chat-ws__transcript { grid-column: 1; grid-row: 1; padding-right: 12px; border-right: 1px solid var(--hairline); }
 .chat-ws__body > .chat-ws__main { grid-column: 2; grid-row: 1; }
 .chat-ws__body > .chat-ws__split { grid-column: 2; grid-row: 1; justify-self: start; margin-left: -12px; }
-.chat-ws__body > .chat-ws__edge {
-  grid-column: 2; grid-row: 1; justify-self: start; align-self: start; z-index: 16; margin: 2px 0 0 -24px;
-}
-/* Расшифровку убрали сами: узкая полоса с «›» и чат на всю ширину. */
-.chat-ws__body.is-hidden { grid-template-columns: 24px minmax(0, 1fr); gap: 6px; }
-.chat-ws__body.is-hidden > .chat-ws__edge {
-  grid-column: 1; justify-self: stretch; align-self: stretch; margin: 0; display: flex; justify-content: center;
-  border-right: 1px solid var(--hairline);
-}
-.chat-ws__toggle {
-  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-full); background: var(--surface-1); color: var(--ink-2);
-  font: inherit; line-height: 1; cursor: pointer;
-}
-.chat-ws__toggle:hover { color: var(--ink); border-color: var(--control-line); }
+.chat-ws__body.is-hidden { grid-template-columns: minmax(0, 1fr); }
+.chat-ws__body.is-hidden > .chat-ws__main { grid-column: 1; }
+/* Лента и закреплённое — с воздухом от линий полос; прокрутка доходит до самих линий. */
+.chat-ws .chat__scroll { padding: 10px 0; }
+.chat-ws .chat > .chat-pin { margin-top: 10px; }
 
-/* --- Шапка сессии --- */
+/* Док строки ввода: во всю ширину под колонками, линия сверху; лента под ним не видна. */
+.chat-dock { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--hairline); }
+.chat-ws--card > .chat-dock { padding: 10px 0 0; }
+
+/* --- Шапка сессии (одна строка): состояние · модель · профиль · предупреждение … «Что я знаю» --- */
 .session-bar {
-  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 26px;
-  padding: 3px 8px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-1);
-  color: var(--ink-2); font-size: 11.5px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  color: var(--ink-2); font-size: var(--text-sm); white-space: nowrap;
 }
-.session-bar__state { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); font-weight: 500; white-space: nowrap; }
+.session-bar__state { flex: none; color: var(--ink); font-weight: 600; }
+/* В плавающей панели состояние агента уже сказано в её шапке (знак и слово) — здесь только ошибка. */
+.chat-ws--panel .session-bar__state:not(.session-bar__state--error) { display: none; }
 .session-bar__state--error { color: var(--danger); }
-.session-bar__model { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.session-bar__sees { color: var(--ink-3); min-width: 0; }
-/* Профиль сессии (0.3.7): виден всегда, и в компактной шапке. */
-.session-bar__profile {
-  padding: 0 7px; border: 1px solid var(--hairline-strong); border-radius: var(--r-full); color: var(--ink-2);
-  font-size: 11px; line-height: 16px; white-space: nowrap;
-}
-.session-bar__profile--personal { border-color: var(--accent); color: var(--accent-line); }
-.session-bar__note {
-  padding: 0 6px; border-radius: var(--r-xs); background: var(--warning-soft); color: var(--warning);
-  font-size: 11px; line-height: 18px; white-space: nowrap;
-}
-/* Запущена не та модель, что в настройках: пометка заметнее прочих. */
-.session-bar__note--warn { font-weight: 600; box-shadow: inset 0 0 0 1px var(--warning); }
+.session-bar__model { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .session-bar__model--warn { color: var(--warning); }
-.session-bar__end { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
-.session-bar__know {
-  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px;
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-full); background: transparent;
-  color: var(--ink-2); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap;
-}
-.session-bar__know:hover, .session-bar__know[aria-expanded="true"] { color: var(--ink); border-color: var(--control-line); }
-.session-bar--compact .session-bar__model { max-width: 140px; }
-/* «Отозвать» у разрешения «до конца встречи»: маленькая «×» в строке. */
-.session-bar__revoke {
-  margin-left: 2px; padding: 0 3px; border: 0; border-radius: var(--r-xs); background: none;
-  color: var(--ink-3); font: inherit; line-height: 1; cursor: pointer;
-}
-.session-bar__revoke:hover { color: var(--danger); background: var(--danger-soft); }
+.session-bar__profile { flex: none; }
+/* Предупреждение (не та модель) — бейдж Aurora «устарело»; длинный текст — с многоточием. */
+.session-bar__note { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; }
+.session-bar__note-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.session-bar__end { flex: none; margin-left: auto; display: inline-flex; align-items: center; }
+/* Поповер «Что я знаю»: вид — общий `.popover` (ui/popover.css, стекло Aurora);
+   здесь — без внутренних полей, их задаёт содержимое. */
+.session-bar > .popover { padding: 0; white-space: normal; }
 
-.session-freq { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.session-freq__label { color: var(--ink-3); }
-
-.session-know { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; font-size: 12px; max-height: 60vh; overflow-y: auto; }
-.session-know__line { margin: 0; color: var(--ink); }
-.session-know__note { margin: 0; color: var(--warning); font-size: 11.5px; }
-.session-know__title { margin: 6px 0 0; color: var(--ink-3); font-size: var(--text-xs); font-weight: 500; }
+.session-know {
+  display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow-y: auto;
+  padding: 12px 14px; color: var(--ink); font-size: var(--text-sm); line-height: 1.5;
+}
+.session-know__facts { display: flex; flex-direction: column; gap: 4px; }
+.session-know__line { margin: 0; overflow-wrap: anywhere; }
+.session-know__key { color: var(--ink-3); }
+.session-know__note { margin: -6px 0 0; color: var(--warning); font-size: var(--text-xs); }
+.session-know__hint { margin: 2px 0 0; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.45; }
+.session-know__section, .session-know__controls {
+  display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--hairline);
+}
+.session-know__title { margin: 0; color: var(--ink-3); font-size: var(--text-xs); font-weight: 600; }
+.session-know__grants { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.session-bar__grant { display: flex; align-items: center; gap: 8px; min-height: var(--control-sm); }
+.session-know__grant-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* Переключатели (профиль, частота): подпись слева, сегменты справа. */
+.session-freq { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.session-freq__label { color: var(--ink-2); }
 
 /* --- Лента --- */
 .chat { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
 .chat__scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.chat__list { margin: 0; padding: 2px 2px 4px; list-style: none; display: flex; flex-direction: column; gap: 10px; }
-.chat__empty { margin: 8px 0; font-size: 12px; line-height: 1.5; }
+.chat__list { margin: 0; padding: 2px 2px 4px; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+.chat__empty { margin: 8px 0; color: var(--ink-3); font-size: var(--text-sm); line-height: 1.5; }
 /* «↓ N новых»: кнопка Aurora поверх ленты. `.chat > ` — сильнее «button.btn { position: relative }». */
 .chat > .chat__new { position: absolute; right: 8px; bottom: 6px; z-index: 2; box-shadow: var(--elev-2); }
 /* Своя тень вытесняет рамку фокуса Aurora — при фокусе с клавиатуры обе. */
 .chat > .chat__new:focus-visible { box-shadow: var(--focus-ring), var(--elev-2); }
 
 .chat-msg { position: relative; display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
-.chat-msg__head { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-.chat-msg__who { color: var(--ink); font-weight: 600; }
-.chat-msg__time { color: var(--ink-3); font-family: var(--font-code); font-size: 11px; }
-.chat-msg__tag { flex: none; height: 18px; padding: 0 6px; }
-.chat-msg__text { color: var(--ink); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.chat-msg__head { display: flex; align-items: center; gap: 6px; min-height: 20px; font-size: var(--text-xs); }
+.chat-msg__who { color: var(--ink); font-size: var(--text-sm); font-weight: 600; }
+.chat-msg__time { color: var(--ink-3); font-family: var(--font-code); font-size: var(--text-xs); }
+.chat-msg__tag { flex: none; height: 20px; padding: 0 8px; }
+.chat-msg__text { color: var(--ink); font-size: var(--text-ui); line-height: 1.55; overflow-wrap: anywhere; }
 .chat-msg__text--plain, .chat-msg__text--streaming { white-space: pre-wrap; }
-.chat-msg__text .md-p, .chat-msg__text p { margin: 0 0 4px; }
-.chat-msg__text ul, .chat-msg__text ol { margin: 2px 0 4px; padding-left: 18px; }
-.chat-msg__note { color: var(--ink-3); font-size: 11px; }
-.chat-msg__writing { color: var(--ink-3); font-size: 10.5px; font-weight: 500; }
-.chat-msg__error { color: var(--danger); font-size: 11.5px; }
-.chat-msg__via { color: var(--ink-3); font-size: 11px; }
+.chat-msg__text .md-p, .chat-msg__text p { margin: 0 0 6px; }
+.chat-msg__text > :last-child { margin-bottom: 0; }
+.chat-msg__text ul, .chat-msg__text ol { margin: 2px 0 6px; padding-left: 20px; }
+.chat-msg__note { color: var(--ink-3); font-size: var(--text-xs); }
+.chat-msg__writing { color: var(--ink-3); font-size: var(--text-xs); font-weight: 500; }
+.chat-msg__error { color: var(--danger); font-size: var(--text-sm); }
+.chat-msg__via { color: var(--ink-3); font-size: var(--text-xs); }
 
-/* Сообщение агента — карточка Aurora с отсветом сияния (вывод ИИ, макет MeetLive). */
-.chat-msg--agent { gap: 6px; padding: 8px 10px; }
+/* Сообщение агента — карточка Aurora с отсветом сияния (вывод ИИ, макет MeetLive: 12 × 14, промежуток 8). */
+.chat-msg--agent { gap: 8px; padding: 12px 14px; }
 /*
  * Сияние плывёт только у последнего сообщения ленты: в долгой встрече сотни
  * анимированных слоёв грузили бы видеокарту поверх звонка. Остальные — тот же
@@ -128,14 +132,14 @@
 .chat__list > .chat-msg--agent:not(:last-child)::before { animation: none; }
 .chat-msg--agent.is-pin { border-color: var(--accent); }
 .chat-msg--user {
-  align-self: flex-end; max-width: 85%; padding: 6px 10px; gap: 2px;
+  align-self: flex-end; max-width: 85%; padding: 8px 12px; gap: 2px;
   border: 1px solid transparent; border-radius: var(--r-lg); background: var(--surface-3);
 }
-.chat-msg--user .chat-msg__time { align-self: flex-end; font-size: 10.5px; }
+.chat-msg--user .chat-msg__time { align-self: flex-end; }
 .chat-msg--user.is-sending { opacity: 0.7; }
 .chat-msg--user.is-failed { border-color: var(--danger); }
 
-.chat-typing { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12px; }
+.chat-typing { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--text-sm); }
 .chat-typing__dots { width: 18px; height: 6px; background: radial-gradient(circle, var(--ink-3) 2px, transparent 2.5px) 0 0 / 6px 6px repeat-x; animation: live-pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .chat-typing__dots { animation: none; } }
 
@@ -186,91 +190,92 @@
 }
 
 /* Отклик окна на 👍 / 👎: держится и гаснет — остаётся нажатая кнопка. */
-.chat-msg__ack { color: var(--accent-line); font-size: 11px; animation: chat-ack 3.5s ease forwards; }
+.chat-msg__ack { color: var(--accent-line); font-size: var(--text-xs); animation: chat-ack 3.5s ease forwards; }
 @keyframes chat-ack { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 /* ❓: ждём пояснения. */
-.chat-msg__pending { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 11px; }
+.chat-msg__pending { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--text-xs); }
 /* Пояснение: ссылка к поясняемому сообщению. */
 .chat-msg__ref {
-  min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink-3); font: inherit; font-size: 10.5px;
+  min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink-3); font: inherit; font-size: var(--text-xs);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; text-decoration: underline dotted;
 }
 .chat-msg__ref:hover { color: var(--accent-line); }
 .chat__list > .chat-msg.is-flash { background: var(--accent-soft); transition: background var(--d-slow) var(--ease-out); }
 @media (prefers-reduced-motion: reduce) { .chat-msg__ack { animation: none; } .chat-msg.is-flash { transition: none; } }
 
-/* Вложения в сообщении. */
-.chat-msg__atts { display: flex; flex-wrap: wrap; gap: 4px; }
-.chat-att {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 8px 2px 4px;
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--surface-1); font-size: 11.5px; color: var(--ink-2);
+/* Вложения — бейджи Aurora (`badge badge--plain`) высотой с малую кнопку: миниатюра или значок, имя, пометка. */
+.chat-msg__atts { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-att.badge, .chat-draft.badge {
+  height: var(--control-sm); max-width: 100%; padding: 0 10px 0 4px; gap: 6px; border-radius: var(--r-sm);
 }
-.chat-att.is-failed { border-color: var(--danger); }
-.chat-att__thumb { width: 48px; height: 36px; object-fit: cover; border-radius: var(--r-xs); }
-.chat-att__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-att__note { color: var(--ink-3); font-size: 10.5px; }
+.chat-att.is-failed, .chat-draft--failed { box-shadow: inset 0 0 0 1px var(--danger); }
+.chat-att__thumb, .chat-draft__thumb { width: 32px; height: 24px; flex: none; object-fit: cover; border-radius: var(--r-xs); }
+.chat-att__name, .chat-draft__name { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.chat-att__note, .chat-draft__status { color: var(--ink-3); white-space: nowrap; }
+.chat-draft--failed .chat-draft__status { color: var(--danger); }
+/* У черновика справа — «×» (плотная кнопка 28): поля по краям уже. */
+.chat-draft.badge { padding-right: 2px; }
 
-.chat-sys { align-self: center; max-width: 90%; color: var(--ink-3); font-size: 11.5px; text-align: center; }
+.chat-sys { align-self: center; max-width: 90%; color: var(--ink-3); font-size: var(--text-sm); text-align: center; }
 .chat-sys--gate { font-style: italic; }
-.chat-divider { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 11px; }
+.chat-divider { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: var(--text-xs); }
 .chat-divider::before, .chat-divider::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
 
-/* Закреплённый вопрос к вам — над лентой (макет MeetLive: подложка «инфо», метка, «Показать в ленте»). */
+/* Закреплённый вопрос к вам — над лентой одной строкой (макет MeetLive): бейдж · текст · «Показать в ленте» · «×». */
 .chat-pin {
-  flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px 12px; max-height: 40%; overflow-y: auto;
-  border-radius: var(--r-md); background: var(--info-soft);
+  flex: none; display: flex; flex-direction: column; gap: 6px; max-height: 40%; overflow-y: auto;
+  padding: 6px 6px 6px 10px; border-radius: var(--r-md); background: var(--info-soft);
 }
-.chat-pin__head { display: flex; align-items: center; gap: 6px; }
-.chat-pin__badge { flex: none; height: 22px; }
-.chat-pin__gap { flex: 1; }
-.chat-pin__text { color: var(--ink); font-size: 12.5px; line-height: 1.5; }
+.chat-pin__row { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--control-sm); }
+.chat-pin__badge { flex: none; }
+.chat-pin__line {
+  flex: 1; min-width: 0; padding: 4px 0; border: 0; border-radius: var(--r-xs); background: none;
+  color: var(--ink); font: inherit; font-size: var(--text-ui); line-height: 1.45; text-align: left; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-pin__line:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* Щелчок по тексту — вопрос целиком (переносы), ещё щелчок — снова строкой. */
+.chat-pin.is-open .chat-pin__line { white-space: normal; overflow-wrap: anywhere; }
+.chat-pin > .chat-msg__buttons { padding-bottom: 4px; }
 
 .chat--compact .chat-msg--user { max-width: 92%; }
-.chat--compact .chat__list { gap: 8px; }
+.chat--compact .chat__list { gap: 10px; }
 
-/* --- Строка ввода: Знак ИИ (aurora-edge), быстрые вопросы над полем --- */
+/* --- Строка ввода: Знак ИИ (aurora-edge) на своей плотной поверхности, быстрые вопросы над полем --- */
 .chat-compose {
-  position: relative; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 8px 10px;
+  position: relative; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 10px 12px;
   border-radius: var(--r-xl);
 }
-/* Над строкой несут файл: подложка акцента (фон aurora-edge — через --edge-bg). */
-.chat-compose.is-over { --edge-bg: var(--accent-soft); }
+/* Своя поверхность: в тёмной — на ступень светлее панели (не «дыра»), в светлой — белая; тень отрывает её от фона. */
+.chat-compose.aurora-edge { --edge-bg: var(--surface-2); box-shadow: var(--aurora-edge-glow), var(--elev-2); }
+/* Фокус — кромка сияния (.aurora-edge:focus-within) вместе со своей тенью. */
+.chat-compose.aurora-edge:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line), var(--aurora-edge-glow), var(--elev-2); }
+[data-theme='light'] .chat-compose.aurora-edge { --edge-bg: var(--surface-1); }
+/* Над строкой несут файл: подложка акцента (фон aurora-edge — через --edge-bg). Позже светлой темы — сильнее её. */
+.chat-compose.aurora-edge.is-over { --edge-bg: var(--accent-soft); }
 /* Недоступна: гаснут поле и кнопки, причина — нет (контраст ≥ 4,5 : 1). */
 .chat-compose.is-disabled .chat-compose__row { opacity: 0.6; }
 .chat-compose__drop {
   position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
-  border-radius: inherit; background: var(--accent-soft); color: var(--accent-line); font-size: 12px; pointer-events: none;
+  border-radius: inherit; background: var(--accent-soft); color: var(--accent-line); font-size: var(--text-sm); pointer-events: none;
 }
 .chat-compose__row { display: flex; align-items: flex-end; gap: 6px; }
 .chat-compose__field {
-  flex: 1; min-width: 0; min-height: 32px; max-height: 120px; padding: 7px 4px; resize: none;
-  border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; line-height: 18px;
+  flex: 1; min-width: 0; min-height: var(--control-sm); max-height: 132px; padding: 6px 4px; resize: none;
+  border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-ui); line-height: 20px;
 }
 /* Фокус показывает вся строка (кромка сияния .aurora-edge:focus-within), своего кольца у поля нет —
    иначе внутри светящейся рамки рисуется вторая, серая. */
 .chat-compose__field:focus, .chat-compose__field:focus-visible { outline: none; box-shadow: none; }
 .chat-compose__field::placeholder { color: var(--ink-3); }
-.chat-compose__note { color: var(--danger); font-size: 11.5px; }
-.chat-compose__reason { color: var(--ink-2); font-size: 11.5px; }
+.chat-compose__note { color: var(--danger); font-size: var(--text-sm); }
+.chat-compose__reason { color: var(--ink-2); font-size: var(--text-sm); }
 .chat-compose__quick { display: flex; flex-wrap: wrap; gap: 6px; }
 .chat-compose__stop { flex: none; }
-.chat-compose__atts { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; }
-.chat-draft {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 2px 2px 4px;
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--surface-2); font-size: 11.5px; color: var(--ink-2);
-}
-.chat-draft--failed { border-color: var(--danger); }
-.chat-draft--failed .chat-draft__status { color: var(--danger); }
-.chat-draft__thumb { width: 48px; height: 36px; object-fit: cover; border-radius: var(--r-xs); }
-.chat-draft__name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-.chat-draft__status { color: var(--ink-3); font-size: 10.5px; white-space: nowrap; }
+.chat-compose__atts { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* Свёрнутая панель: подпись «Ассистент» у последнего сообщения агента. */
 .live-last__kind--agent { --kind: var(--accent-line); }
-
-/* Поповер «Что я знаю»: вид — общий `.popover` (ui/popover.css, стекло Aurora);
-   здесь — без внутренних полей, их задаёт содержимое. */
-.session-bar > .popover { padding: 0; }
 
 /* Источники: документы, которые упомянул агент, — кнопки Aurora со значком; щелчок открывает. */
 .chat-msg__sources { display: flex; gap: 6px; }
@@ -284,33 +289,34 @@
 .chat__list > .chat-msg--agent[data-key]:focus-visible { border-radius: var(--r-lg); }
 
 /* Узкая панель: вложения сообщения — счётчиком со скрепкой. */
-.chat-msg__att-count { align-self: flex-end; display: inline-flex; align-items: center; gap: 3px; color: var(--ink-2); font-size: 11.5px; }
+.chat-msg__att-count { align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); font-size: var(--text-xs); }
 
 /* «Показать более ранние сообщения» (снимок ленты — последние 200). */
 .chat__more {
-  display: block; margin: 2px auto 6px; padding: 0; border: 0; background: none;
-  color: var(--accent-line); font: inherit; font-size: 11.5px; cursor: pointer; text-decoration: underline;
+  display: block; margin: 2px auto 8px; padding: 0; border: 0; background: none;
+  color: var(--accent-line); font: inherit; font-size: var(--text-sm); cursor: pointer; text-decoration: underline;
   text-underline-offset: 2px;
 }
 .chat__more:hover { color: var(--ink); }
 
-/* Карточка подтверждения Meet: что хочет выполнить агент — над лентой, пока ждёт решения. */
-.chat-cards { display: flex; flex-direction: column; gap: 6px; padding: 0 0 8px; border-bottom: 1px solid var(--hairline); }
+/* Карточка подтверждения Meet: что хочет выполнить агент — в ленте; ждёт решения — кнопки в ней же. */
 .chat-sys--card { align-self: stretch; max-width: none; text-align: left; font-size: inherit; color: inherit; }
 .chat-card {
-  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
-  border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-1);
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--surface-1);
 }
+/* Ждёт решения: рамка «внимание» и поверхность на ступень выше — видно в длинной ленте. */
 .chat-card--open { border-color: var(--warning); background: var(--surface-2); }
-.chat-card__title { color: var(--ink); font-size: 12.5px; }
-.chat-card__size { color: var(--ink-3); }
+.chat-card__title { display: flex; align-items: flex-start; gap: 8px; color: var(--ink); font-size: var(--text-ui); line-height: 1.45; }
+.chat-card__icon { flex: none; margin-top: 2px; color: var(--ink-3); }
+.chat-card--open .chat-card__icon { color: var(--warning); }
+.chat-card__size { color: var(--ink-3); font-size: var(--text-sm); white-space: nowrap; }
 .chat-card__args {
-  margin: 2px 0; padding: 6px 8px; max-height: 50vh; overflow: auto; border-radius: var(--r-sm); background: var(--code-bg);
-  color: var(--code-ink); font: 11.5px/1.5 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere;
+  margin: 0; padding: 8px 10px; max-height: 50vh; overflow: auto; border-radius: var(--r-sm); background: var(--code-bg);
+  color: var(--code-ink); font: 400 var(--text-xs)/1.5 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere;
   unicode-bidi: plaintext; text-align: left;
 }
-.chat-card > .chat-card__more { align-self: flex-start; font-size: 12px; }
-.chat-card__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.chat-card__done { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
-.chat-card__warn { color: var(--danger); font-weight: 600; font-size: 12px; margin: 2px 0; }
-.session-bar__grant { display: inline-flex; align-items: center; gap: 2px; }
+.chat-card > .chat-card__more { align-self: flex-start; font-size: var(--text-sm); }
+.chat-card__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.chat-card__done { color: var(--ink-3); font-size: var(--text-sm); }
+.chat-card__warn { margin: 0; color: var(--danger); font-size: var(--text-sm); font-weight: 600; }

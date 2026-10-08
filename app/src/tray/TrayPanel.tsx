@@ -1,4 +1,6 @@
-import { AudioLines, Check, ChevronRight, Circle, Clock3, LoaderCircle, Save, Square, Trash2, X } from "lucide-react";
+import {
+  AudioLines, Check, ChevronRight, Circle, CircleAlert, Clock3, LoaderCircle, Save, Square, Trash2, TriangleAlert, X,
+} from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { fallbackText, liveOf } from "../app/RecordingBadge";
@@ -15,6 +17,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { MeetMark } from "../ui/MeetMark";
+import { Tip } from "../ui/Tip";
 import { elapsedOf, phaseOf } from "./trayModel";
 
 const TICK_MS = 1000;
@@ -141,20 +144,25 @@ export function TrayPanel({
         </div>
         {title && <div className="tp__title">{title}</div>}
         {phase.assistant && (
-          <span className={`tp__chip${phase.assistant === "on" ? "" : " tp__chip--muted"}`}>
+          <span className="badge badge--plain tp__badge">
             <AgentMark state={phase.assistant === "on" ? "listen" : "wait"} size={12} />
             {phase.assistant === "on" ? "с ассистентом"
               : phase.assistant === "starting" ? "ассистент запускается…" : "ассистент выключается…"}
           </span>
         )}
         {phase.temporary && (
-          <span className="tp__chip tp__chip--temp" title={TEMP_NOTE}>
-            <Icon as={Clock3} size="sm" />
-            {TEMP_BADGE}
-          </span>
+          <Tip content={TEMP_NOTE}>
+            <span className="badge badge--stale badge--plain tp__badge">
+              <Icon as={Clock3} size="sm" />
+              {TEMP_BADGE}
+            </span>
+          </Tip>
         )}
         {[...fallbacks.map(fallbackText), ...(sysAudio ? [sysAudio] : [])].map((text) => (
-          <p key={text} className="tp__warn">{text}</p>
+          <p key={text} className="callout callout--warn tp__callout">
+            <Icon as={TriangleAlert} size="sm" className="ic" />
+            <span>{text}</span>
+          </p>
         ))}
         {asking ? (
           <ConfirmDialog inline className="tp__confirm"
@@ -253,11 +261,12 @@ export function TrayPanel({
             <AgentMark size={16} />
             С ассистентом
           </Button>
-          <Button variant="ghost" className="tp__wide" icon={Clock3} disabled={pending || blocked}
-            title={`Временная встреча ${TEMP_NOTE}`}
-            aria-describedby={blocked ? "tp-provider" : undefined} onClick={() => startLive(true)}>
-            {TEMP_LABEL}
-          </Button>
+          <Tip content={`Временная встреча ${TEMP_NOTE}`}>
+            <Button variant="ghost" className="tp__wide" icon={Clock3} disabled={pending || blocked}
+              aria-describedby={blocked ? "tp-provider" : undefined} onClick={() => startLive(true)}>
+              {TEMP_LABEL}
+            </Button>
+          </Tip>
         </div>
         {blocked && (
           <p id="tp-provider" className="tp__note">
@@ -272,8 +281,9 @@ export function TrayPanel({
   return (
     <div className="tp__content">
       {error && (
-        <div className="tp__error" role="alert">
-          <span>{error}</span>
+        <div className="callout callout--err tp__callout tp__callout--top" role="alert">
+          <Icon as={CircleAlert} size="sm" className="ic" />
+          <span className="tp__callout-text">{error}</span>
           <IconButton icon={X} label="Скрыть ошибку" size="xs" onClick={() => setError(null)} />
         </div>
       )}

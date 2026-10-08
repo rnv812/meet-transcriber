@@ -361,14 +361,19 @@ test("после встречи: отклик на 👎, ❓ «поясняет�
   expect(within(m2()).queryByText("Ассистент поясняет…")).toBeNull();
 });
 
-test("карточка подтверждения Meet после встречи: решение уходит в журнал записи (0.3.7)", async () => {
+test("карточка подтверждения Meet после встречи: кнопки — в самой карточке ленты, решение уходит в журнал записи", async () => {
   const card: ChatMessage = {
     ...agentMsg("m3"), kind: "system", status: undefined, mode: undefined, t: undefined, card: "confirm", tool: "Bash",
     title: "команду", text: "Ассистент хочет выполнить: команду", args: "ls", expires_at: Date.now() / 1000 + 100,
   };
   vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: [...journal, card], seq: 3 }));
   render(<Tab />);
-  const region = await screen.findByRole("region", { name: "Подтверждение действия" });
-  await userEvent.click(within(region).getByRole("button", { name: "Отклонить" }));
+  // Отдельной области над лентой нет: в длинной переписке после встречи её не было видно — ход висел.
+  const box = await within(await screen.findByRole("log", { name: "Чат с ассистентом" }))
+    .findByRole("group", { name: "Ассистент хочет выполнить: команду" });
+  expect(screen.queryByRole("region", { name: "Подтверждение действия" })).toBeNull();
+  expect(box).not.toHaveTextContent("над лентой");
+  expect(within(box).getByRole("button", { name: "Разрешить один раз" })).toBeEnabled();
+  await userEvent.click(within(box).getByRole("button", { name: "Отклонить" }));
   expect(recordingChatConfirm).toHaveBeenCalledWith(ep, ID, "m3", false, false);
 });

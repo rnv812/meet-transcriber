@@ -32,10 +32,21 @@ test("системное стекло macOS: корень без своей за
   expect(native).not.toMatch(/background/);
 });
 
-test("таймер записи — 40 px моноширинным шрифтом Aurora", () => {
+test("таймер записи — 40 px display-шрифтом Aurora (как часы карточки записи), цифры не прыгают", () => {
   const timer = rule(".tp__timer");
-  expect(timer).toMatch(/font-size:\s*40px/);
-  expect(timer).toMatch(/font-family:\s*var\(--font-code\)/);
+  expect(timer).toMatch(/font:\s*500 40px\/1 var\(--font-display\)/);
+  expect(timer).toMatch(/font-variant-numeric:\s*tabular-nums/);
+  expect(timer).not.toMatch(/--font-code/);
+});
+
+test("строка последней записи — высотой --control-lg, отступ по сетке", () => {
+  const row = rule(".tp__recent-row");
+  expect(row).toMatch(/height:\s*var\(--control-lg\)/);
+  expect(row).toMatch(/padding:\s*0 var\(--s-2\)/);
+});
+
+test("свои метки и плашки ушли — бейджи и выноски Aurora", () => {
+  expect(css).not.toMatch(/\.tp__chip\b|\.tp__warn\b|\.tp__error\b/);
 });
 
 test("занятая кнопка вопроса не пустая: индикатор не прячется (подпись прячет button.css)", () => {

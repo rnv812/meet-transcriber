@@ -101,16 +101,13 @@ export function LiveAsk({ qa, asking = false, error = null, onAsk, disabled = fa
       {error && <div className="live-ask__error" role="alert">{error}</div>}
       <div className="live-ask__quick" role="group" aria-label="Быстрые вопросы">
         {QUICK_ACTIONS.map((q) => (
-          <button key={q.id} type="button" className="live-chip" disabled={blocked}
-            onClick={() => void onAsk(q.label, q.id)}>
-            {q.label}
-          </button>
+          <Button key={q.id} disabled={blocked} onClick={() => void onAsk(q.label, q.id)}>{q.label}</Button>
         ))}
       </div>
       <form className="live-ask__row" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         {/* Однострочное поле: Enter отправляет форму сам (неявная отправка). */}
         <input
-          className="live-ask__input" aria-label="Вопрос ассистенту" placeholder="Спросите о встрече"
+          className="field field--sm live-ask__input" aria-label="Вопрос ассистенту" placeholder="Спросите о встрече"
           value={text} disabled={disabled}
           onChange={(e) => setText(e.target.value)}
         />

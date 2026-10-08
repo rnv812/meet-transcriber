@@ -14,7 +14,9 @@ import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CHAT_COMPACT_PX, CHAT_FLOOR, CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN, TRANSCRIPT_FLOOR, chatReserve } from "./ChatWorkspace";
+import {
+  CHAT_COMPACT_PX, CHAT_FLOOR, CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN, TRANSCRIPT_FLOOR, TRANSCRIPT_PX, chatReserve,
+} from "./ChatWorkspace";
 import { LiveWorkspace, PARTICIPANT_KEY, useLiveView } from "./LiveWorkspace";
 import { EMPTY_SUMMARY } from "./liveModel";
 import { type Chat, useChat } from "./useChat";
@@ -82,21 +84,37 @@ test("таймкод в сообщении — к моменту в расшиф
   expect(target).toHaveClass("is-target");
 });
 
-test("узкая панель: та же раскладка (колонка и чат), только плотнее — без «видит:» в шапке", () => {
+test("узкая панель (уже 560): по умолчанию только чат во всю ширину; расшифровка — кнопкой в строке сессии", () => {
   width(360);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
-  expect(screen.getByRole("log", { name: "Лента встречи" })).toBeInTheDocument();
-  expect(screen.getByRole("separator", { name: "Ширина расшифровки" })).toBeInTheDocument();
+  expect(TRANSCRIPT_PX).toBe(560);
+  expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+  expect(screen.queryByRole("separator", { name: "Ширина расшифровки" })).toBeNull();
   expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Убрать расшифровку" })).toBeInTheDocument();
+  const show = screen.getByRole("button", { name: "Показать расшифровку" });
+  expect(show).toHaveAttribute("aria-expanded", "false");
+  // Кнопка Aurora 32 px в строке сессии, а не самодельный кружок на разделителе.
+  expect(show).toHaveClass("btn", "btn--sm", "btn--icon");
+  expect(show.closest(".chat-ws__bar")).not.toBeNull();
   expect(screen.queryByText(/видит:/)).toBeNull();
+});
+
+test("строка ввода — в доке под чатом и расшифровкой, вне колонок", () => {
+  width(600);
+  render(<Host live={makeLive({ agent: agentInfo() })} />);
+  const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+  const dock = field.closest(".chat-dock")!;
+  expect(dock).not.toBeNull();
+  expect(dock.parentElement).toHaveClass("chat-ws");
+  expect(dock.closest(".chat-ws__body")).toBeNull();
 });
 
 test("«Как часто писать» уходит setAgentFrequency и сразу видно выбранное", async () => {
   width(600);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
+  await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
   const group = screen.getByRole("radiogroup", { name: "Как часто писать" });
   await userEvent.click(within(group).getByRole("radio", { name: "реже" }));
   expect(setAgentFrequency).toHaveBeenCalledWith(ep, "реже");
@@ -107,6 +125,7 @@ test("«Профиль» уходит setAgentProfile, чип и выбор ме
   width(600);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
+  await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
   const group = screen.getByRole("radiogroup", { name: "Профиль" });
   await userEvent.click(within(group).getByRole("radio", { name: "личный" }));
   expect(setAgentProfile).toHaveBeenCalledWith(ep, "personal");
@@ -169,9 +188,10 @@ test("до первого состояния — уже чат с «Подклю
 
 // --- ширина колонки расшифровки: без верхнего предела, только минимумы -----------------------
 
-/** Ширина тела широкой раскладки (jsdom не раскладывает); `room.px` можно менять — «окно». */
+/** Ширина тела широкой раскладки (jsdom не раскладывает); `room.px` можно менять — «окно» (и ширина области). */
 function sideLayout(room: { px: number }, column = 300) {
-  width(1200);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => (
+    { width: room.px, height: 600, top: 0, left: 0, right: room.px, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }));
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
     return this.classList.contains("chat-ws__body") ? room.px : 0;
   });
@@ -252,7 +272,7 @@ describe("ширина колонки расшифровки", () => {
 });
 
 
-// --- одна раскладка при любой ширине: чат всегда на месте, расшифровку убирают только сами ------
+// --- одна раскладка: чат всегда на месте; расшифровка колонкой — от 560 px или по выбору человека ---
 
 describe("одна раскладка", () => {
   afterEach(() => {
@@ -265,7 +285,7 @@ describe("одна раскладка", () => {
     children: [...body().children].map((el) => el.className.split(" ")[0]),
   });
 
-  test("ширина 300–1600 px: та же раскладка, чат и строка ввода всегда видны, ничего не пересоздаётся", () => {
+  test("ширина 300–1600 px: от 560 — колонка и чат, уже — только чат; чат и строка ввода не пересоздаются", () => {
     const room = { px: 1600 };
     const win = sideLayout(room);
     const live = makeLive({ agent: agentInfo() });
@@ -274,20 +294,41 @@ describe("одна раскладка", () => {
     const chatLog = screen.getByRole("log", { name: "Чат с ассистентом" });
     const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
     const first = shape();
-    expect(first.children).toEqual(["chat-ws__transcript", "splitter", "chat-ws__edge", "chat-ws__main"]);
-    for (const px of [300, 360, 420, 520, 719, 720, 900, 1280, 1600]) {
+    expect(first.children).toEqual(["chat-ws__transcript", "splitter", "chat-ws__main"]);
+    for (const px of [300, 360, 420, 559, 560, 719, 720, 900, 1280, 1600]) {
       win.resize(px);
       rerender(<Host live={{ ...live }} wide={px >= 720} />);
-      expect(shape()).toEqual(first);
       expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBe(chatLog);
       expect(chatLog).toBeVisible();
       expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBe(field);
-      expect(screen.getByRole("region", { name: "Расшифровка" })).toBeVisible();
-      expect(screen.queryByRole("button", { name: "Развернуть расшифровку" })).toBeNull();   // прежней строки нет
+      if (px >= TRANSCRIPT_PX) {
+        expect(shape()).toEqual(first);
+        expect(screen.getByRole("region", { name: "Расшифровка" })).toBeVisible();
+      } else {
+        expect(shape()).toEqual({ body: "chat-ws__body is-hidden", children: ["chat-ws__main"] });
+        expect(screen.getByRole("button", { name: "Показать расшифровку" })).toBeInTheDocument();
+      }
+      expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBeNull();   // ширина — не выбор человека
     }
   });
 
-  test("совсем узко: обе колонки ужимаются до своих минимумов, ни одна не пропадает", () => {
+  test("узкая: открытая вручную колонка запоминается и остаётся; убранная вручную в широкой — тоже", async () => {
+    const room = { px: 400 };
+    const win = sideLayout(room);
+    const live = makeLive({ agent: agentInfo() });
+    const { unmount } = render(<Host live={live} />);
+    await userEvent.click(screen.getByRole("button", { name: "Показать расшифровку" }));
+    expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+    expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBe("0");
+    win.resize(360);
+    expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+    unmount();
+    render(<Host live={live} />);                                 // перезапуск — помнит
+    expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+  });
+
+  test("совсем узко (колонку открыли сами): обе колонки ужимаются до своих минимумов, ни одна не пропадает", () => {
+    localStorage.setItem("meet.pane.live-chat-side-hidden", "0");
     localStorage.setItem("meet.pane.live-chat-side", "900");
     const room = { px: 1600 };
     const win = sideLayout(room);
@@ -326,7 +367,7 @@ describe("одна раскладка", () => {
     expect(show).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(show);
     expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
-    expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBeNull();
+    expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBe("0");
   });
 
   test("при убранной расшифровке таймкод в сообщении возвращает её (действие человека)", async () => {
@@ -386,7 +427,8 @@ describe("исправления 1", () => {
   /** Поля панели вокруг рабочей области (шапка панели, отступы) — по снимку окна 380 px. */
   const PANEL_CHROME = 45;
 
-  test("I2: окно 300 px (минимум панели): чат не уже 160, колонка не уже 120 или прокручивается", () => {
+  test("I2: окно 300 px (минимум панели, колонку открыли сами): чат не уже 160, колонка не уже 120 или прокручивается", () => {
+    localStorage.setItem("meet.pane.live-chat-side-hidden", "0");
     localStorage.setItem("meet.pane.live-chat-side", "900");
     vi.stubGlobal("innerWidth", 300);
     const room = { px: window.innerWidth - PANEL_CHROME };
@@ -419,7 +461,6 @@ describe("исправления 1", () => {
     expect(rule).toContain("minmax(160px, 1fr)");
     expect(chatCss).toMatch(/\.chat-ws__transcript \{[^}]*overflow-x: auto/);
     expect(chatCss).toContain(".chat-ws__transcript > .chat-ws__feed { min-width: 108px; }");
-    expect(chatCss).toMatch(/\.chat-ws__toggle \{[^}]*width: 24px; height: 24px/);           // цель ≥ 24 px
   });
 
   test("плотность ленты — по ширине колонки чата: широкое окно, узкий чат — реакции без подписей", () => {
@@ -433,7 +474,8 @@ describe("исправления 1", () => {
     const like = screen.getByRole("button", { name: "Полезно" });
     expect(like).toHaveTextContent(/^$/);                                            // только значок
     expect(like.querySelector("svg")).not.toBeNull();
-    expect(screen.getByText(/видит:/)).toBeInTheDocument();                         // шапка — по всей области
+    // Шапка сессии — по всей области: кнопка «Что я знаю» с подписью.
+    expect(screen.getByRole("button", { name: "Что я знаю" })).toHaveTextContent("Что я знаю");
   });
 
   test("I4: до первого состояния — раскладка по последнему флагу участника; выключен — сразу прежняя, без чата", () => {

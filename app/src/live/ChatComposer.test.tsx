@@ -91,6 +91,8 @@ test("Ctrl+V с картинкой — pasteChatImage, превью с «×»; �
   expect(pasteChatImage).toHaveBeenCalledWith(ep, png, "Скриншот.png");
   const atts = screen.getByRole("list", { name: "Вложения" });
   expect(atts).toHaveTextContent("загружается…");
+  // Чип вложения — бейдж Aurora без точки (с миниатюрой и «×»).
+  expect(within(atts).getByRole("listitem")).toHaveClass("badge", "badge--plain", "chat-draft");
   expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
   await act(async () => {
     done({ id: "a1", status: "ready", attachment: attMsg("a1", { name: "Скриншот.png" }) });
@@ -165,7 +167,11 @@ test("Atlas Aurora: строка ввода — aurora-edge; быстрые во
   const box = field().closest(".chat-compose")!;
   expect(box).toHaveClass("aurora-edge");
   const quick = screen.getByRole("group", { name: "Быстрые вопросы" });
-  for (const b of within(quick).getAllByRole("button")) expect(b).toHaveClass("btn", "btn--outline");
+  // Как в макете MeetLive: btn--outline btn--sm (32), не плотные 28.
+  for (const b of within(quick).getAllByRole("button")) {
+    expect(b).toHaveClass("btn", "btn--outline", "btn--sm");
+    expect(b).not.toHaveAttribute("data-density");
+  }
   // Над полем: группа идёт в документе раньше поля.
   expect(quick.compareDocumentPosition(field()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   act(() => chat.sink.onChatPartial({ id: "m1", text: "Сейчас" }));
@@ -173,7 +179,7 @@ test("Atlas Aurora: строка ввода — aurora-edge; быстрые во
   expect(stop).toHaveClass("btn", "btn--outline");
   expect(stop).toHaveTextContent(/^Стоп$/);
   expect(stop.querySelector("svg")).not.toBeNull();
-  expect(stop).toHaveAttribute("title", "Остановить ответ ассистента");
+  expect(stop).toHaveAccessibleDescription("Остановить ответ ассистента");
 });
 
 test("агент выключен — поле недоступно и видно почему", () => {

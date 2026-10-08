@@ -17,9 +17,19 @@
  * - Поле фокус само не берёт (панель поверх звонка), но после отправки
  *   остаётся в нём.
  * - Над пустым полем — быстрые вопросы (QUICK_QUESTIONS): щелчок отправляет.
- * - Вид — Atlas Aurora: рамка «Знак ИИ» (`aurora-edge`), кнопки — `Button`.
+ * - Вид — Atlas Aurora: рамка «Знак ИИ» (`aurora-edge`) на своей плотной
+ *   поверхности (`--edge-bg`: `--surface-2`, в светлой — `--surface-1`), кнопки — `Button`.
  * - Текст и вложения живут в `useChat` (`chat.composer`): сворачивание панели и
  *   смена раскладки их не теряют.
+ *
+ * Устройство `.chat-compose` сверху вниз (точки расширения — здесь, а не снаружи):
+ *   `.chat-compose__note` / `__reason` — ошибки и почему писать нельзя;
+ *   `.chat-compose__quick` — быстрые вопросы над пустым полем (сюда же — подсказки
+ *     команд, если они появятся: тот же ряд над полем);
+ *   `.chat-compose__atts` — вложения до отправки (бейджи с миниатюрой и «×»);
+ *   `.chat-compose__row` — скрепка · поле (`textarea`, вся клавиатура — `onKey`) · «Стоп» · «Отправить».
+ * Снаружи строку держит док (`.chat-dock` рабочей области или вкладка
+ * «Ассистент» карточки) — он задаёт только отступы и линию сверху.
  */
 
 import { FileText, Image as ImageIcon, Paperclip, SendHorizontal, Square, X } from "lucide-react";
@@ -27,9 +37,11 @@ import { type ClipboardEvent, type KeyboardEvent, useEffect, useLayoutEffect, us
 
 import { errorText } from "../lib/format";
 import { inTauri, onFileDrop, overChatDrop, pickChatFiles } from "../lib/shell";
+import { BADGE_CLASS } from "../ui/badge";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
+import { Tip } from "../ui/Tip";
 import type { Chat, ChatDraft } from "./useChat";
 import "./chat.css";
 
@@ -211,7 +223,7 @@ export function ChatComposer({
       {disabledReason && <div className="chat-compose__reason" role="status">{disabledReason}</div>}
       {quick && (
         <div className="chat-compose__quick" role="group" aria-label="Быстрые вопросы">
-          {questions.map((q) => <Button key={q} size="xs" onClick={() => ask(q)}>{q}</Button>)}
+          {questions.map((q) => <Button key={q} onClick={() => ask(q)}>{q}</Button>)}
         </div>
       )}
       {drafts.length > 0 && (
@@ -220,7 +232,7 @@ export function ChatComposer({
             const status = d.status === "uploading" ? (d.kind === "doc" ? "разбирается…" : "загружается…")
               : d.status === "failed" ? `не приложено: ${d.error}` : !vision && d.kind === "image" ? "модель не видит изображения" : null;
             return (
-              <li key={d.key} className={`chat-draft chat-draft--${d.status}`} title={status ? `${d.name} — ${status}` : d.name}>
+              <li key={d.key} className={`${BADGE_CLASS.plain} chat-draft chat-draft--${d.status}`} title={status ? `${d.name} — ${status}` : d.name}>
                 {d.preview ? <img className="chat-draft__thumb" src={d.preview} alt={d.name} />
                   : <Icon as={d.kind === "image" ? ImageIcon : FileText} size="sm" />}
                 <span className="chat-draft__name">{d.name}</span>
@@ -240,12 +252,14 @@ export function ChatComposer({
         <textarea ref={field} className="chat-compose__field" rows={1} value={text} disabled={disabled}
           aria-label="Сообщение ассистенту"
           placeholder={disabled ? "Писать ассистенту сейчас нельзя" : placeholder}
-          title="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот"
+          aria-description="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот"
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} />
         {chat.writing && (
           // Контурная, со словом «Стоп»: красная кнопка-значок в шапке останавливает запись, а не ответ.
-          <Button size="sm" icon={Square} className="chat-compose__stop" aria-label="Остановить ответ"
-            title="Остановить ответ ассистента" onClick={() => void chat.stop()}>Стоп</Button>
+          <Tip content="Остановить ответ ассистента">
+            <Button size="sm" icon={Square} className="chat-compose__stop" aria-label="Остановить ответ"
+              onClick={() => void chat.stop()}>Стоп</Button>
+          </Tip>
         )}
         <IconButton icon={SendHorizontal} label="Отправить" variant="secondary" tooltip={sendTitle}
           disabled={!canSend} className="chat-compose__send" onClick={submit} />

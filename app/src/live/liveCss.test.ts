@@ -69,3 +69,47 @@ test("отклик на реакцию гаснет анимацией, но н�
   expect(css).toMatch(/\.chat-msg__ack \{[^}]*animation: chat-ack/);
   expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^@]*\.chat-msg__ack \{ animation: none; \}/);
 });
+
+// --- Доводка 0.4 (пакет A аудита) ---------------------------------------------------------
+
+test("A1: корень панели — плотное стекло на непрозрачной подложке (окно прозрачное: рабочий стол не просвечивает)", () => {
+  const css = clean(join("live", "panel.css"));
+  expect(css).toMatch(/\.live-panel\.glass--dense \{[^}]*background: linear-gradient\(var\(--glass-2\), var\(--glass-2\)\), var\(--canvas\)/);
+  // Размывать под панелью нечего (WebView2 не видит рабочий стол) — фильтр не тратит видеокарту поверх звонка.
+  expect(css).toMatch(/\.live-panel\.glass--dense \{[^}]*backdrop-filter: none/);
+});
+
+test("A2: строка ввода — своя плотная поверхность, док под ней сплошной и с линией сверху", () => {
+  const css = clean(join("live", "chat.css"));
+  expect(css).toMatch(/\.chat-compose\.aurora-edge \{[^}]*--edge-bg: var\(--surface-2\)/);
+  expect(css).toMatch(/\[data-theme='light'\] \.chat-compose\.aurora-edge \{[^}]*--edge-bg: var\(--surface-1\)/);
+  expect(css).toMatch(/\.chat-compose\.aurora-edge \{[^}]*box-shadow: var\(--aurora-edge-glow\), var\(--elev-2\)/);
+  // Фокус — кромка сияния вместе с тенью (своя тень не вытесняет кольцо .aurora-edge:focus-within).
+  expect(css).toMatch(/\.chat-compose\.aurora-edge:focus-within \{[^}]*inset 0 0 0 1px var\(--accent-line\)/);
+  // Подсветка «несут файл» сильнее светлой темы: объявлена позже с той же силой.
+  expect(css.lastIndexOf(".chat-compose.aurora-edge.is-over"))
+    .toBeGreaterThan(css.indexOf("[data-theme='light'] .chat-compose.aurora-edge"));
+  expect(css).toMatch(/\.chat-dock \{[^}]*padding: 10px 12px 12px[^}]*border-top: 1px solid var\(--hairline\)/);
+});
+
+test("A3: кегль панели и чата — только по шкале Aurora (--text-*), без 10.5 / 11 / 11.5 / 12.5 px", () => {
+  const bad: string[] = [];
+  for (const rel of FILES.filter((f) => f.startsWith("live"))) {
+    clean(rel).split("\n").forEach((line, i) => {
+      if (/font-size:\s*[\d.]+px|font:[^;]*\b[\d.]+px/.test(line)) bad.push(`${rel}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  expect(bad).toEqual([]);
+});
+
+test("A6: шапка развёрнутой панели — высоты верхней панели Aurora (56), свёрнутой — 48", () => {
+  const css = clean(join("live", "panel.css"));
+  expect(css).toMatch(/\.live-head \{[^}]*height: var\(--control-lg\)/);
+  expect(css).toMatch(/\.live-panel--open \.live-head \{[^}]*height: var\(--topbar-h\); padding: 0 10px 0 16px/);
+});
+
+test("A7: самодельных контролов панели нет — кнопки, тост, бейджи и поле Aurora", () => {
+  const all = FILES.filter((f) => f.startsWith("live")).map(clean).join("\n");
+  expect(all).not.toMatch(/\.live-chip\b|\.chat-ws__toggle\b|\.session-bar__know\b|\.live-ask__input:focus\b/);
+  expect(all).not.toMatch(/\.live-head__quiet-tag \{[^}]*background/);
+});

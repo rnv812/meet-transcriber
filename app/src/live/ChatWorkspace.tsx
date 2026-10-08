@@ -2,23 +2,30 @@
  * Рабочая область агента-участника (`assist.participant`): чат — главное,
  * расшифровка — колонкой рядом.
  *
- * Раскладка одна при любой ширине окна (0.3.7): ничего не перескакивает и
- * ничего не прячется само. Слева — колонка расшифровки, справа — чат; между
- * ними разделитель (`meet.pane.<place>-chat-side`) без верхнего предела.
- * Окно сузили — сначала колонка расшифровки ужимается до TRANSCRIPT_FLOOR
- * (чату остаётся CHAT_MIN), потом чат — до CHAT_FLOOR. Ещё уже (самая узкая
- * панель, окно 300 px) чат остаётся CHAT_FLOOR, а колонка становится уже
- * TRANSCRIPT_FLOOR: её содержимое не ужимается дальше и прокручивается вбок.
- * Ни CSS по умолчанию, ни разделитель чат уже CHAT_FLOOR не делают. В узкой
- * колонке время — над репликой. Убрать расшифровку совсем можно только
- * самому: кнопка «‹» на разделителе (и «›»,
- * чтобы вернуть); выбор запоминается (`meet.pane.<place>-chat-side-hidden`).
- * Таймкод в сообщении при убранной расшифровке возвращает её — это тоже
- * действие человека.
+ * Раскладка (макет MeetLive, доводка 0.4) — полосы во всю ширину по линейке:
+ *   строка сессии (40 px: кнопка расшифровки, `SessionBar`) — линия снизу;
+ *   тело — колонка расшифровки слева и чат (`LiveChat`) справа;
+ *   док строки ввода (`.chat-dock` > `ChatComposer`) — линия сверху, сплошной фон.
+ * Строка ввода — вне колонок: под ней лента не просвечивает, а её устройство
+ * (поле, вложения, быстрые вопросы) живёт целиком в `ChatComposer`.
  *
- * Плотность (на раскладку не влияет): шапка сессии — по ширине всей области
- * (уже COMPACT_PX), лента — по ширине колонки чата (уже CHAT_COMPACT_PX):
- * время у сообщений в подсказке, у реакций только эмодзи.
+ * Колонка расшифровки по умолчанию видна, только если область не уже
+ * TRANSCRIPT_PX (560): в узкой панели две колонки нечитаемо узкие — там только
+ * чат во всю ширину. Показать или убрать колонку — кнопкой в строке сессии;
+ * выбор человека запоминается (`meet.pane.<place>-chat-side-hidden`: «1» —
+ * убрана, «0» — показана) и важнее ширины. Таймкод в сообщении при убранной
+ * расшифровке возвращает её — это тоже действие человека.
+ *
+ * Между колонками — разделитель (`meet.pane.<place>-chat-side`) без верхнего
+ * предела. Окно сузили — сначала колонка расшифровки ужимается до
+ * TRANSCRIPT_FLOOR (чату остаётся CHAT_MIN), потом чат — до CHAT_FLOOR. Ещё уже
+ * (самая узкая панель с открытой вручную колонкой) чат остаётся CHAT_FLOOR, а
+ * колонка становится уже TRANSCRIPT_FLOOR: её содержимое не ужимается дальше и
+ * прокручивается вбок. В узкой колонке время — над репликой.
+ *
+ * Плотность (на раскладку не влияет): строка сессии — по ширине всей области
+ * (уже COMPACT_PX «Что я знаю» — значком), лента — по ширине колонки чата (уже
+ * CHAT_COMPACT_PX): время у сообщений в подсказке, у реакций только значки.
  *
  * До первого состояния ассистента раскладку выбирает `LiveWorkspace` по
  * последнему известному флагу участника (`meet.live.participant`).
@@ -27,10 +34,10 @@
  * область — зона перетаскивания вложений (`data-chat-drop`).
  */
 
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { Icon } from "../ui/Icon";
+import { IconButton } from "../ui/IconButton";
 import { PaneResizer } from "../ui/PaneResizer";
 import { ChatComposer } from "./ChatComposer";
 import { LiveChat } from "./LiveChat";
@@ -45,6 +52,8 @@ import "./chat.css";
 
 /** Область уже этого — шапка сессии короче; раскладка та же. */
 export const COMPACT_PX = 420;
+/** Область не уже этого — колонка расшифровки видна по умолчанию; уже — только чат (выбор человека важнее). */
+export const TRANSCRIPT_PX = 560;
 /** Колонка чата уже этого — время в подсказке, реакции без подписей (подписи не вылезают вбок). */
 export const CHAT_COMPACT_PX = 360;
 
@@ -80,18 +89,19 @@ export const CHAT_PANES = {
 
 const hiddenKey = (name: string) => `meet.pane.${name}-hidden`;
 
-function loadHidden(name: string): boolean {
+/** Выбор человека: true — убрал колонку, false — показал; null — не выбирал (решает ширина). */
+function loadHidden(name: string): boolean | null {
   try {
-    return window.localStorage?.getItem(hiddenKey(name)) === "1";
+    const v = window.localStorage?.getItem(hiddenKey(name));
+    return v === "1" ? true : v === "0" ? false : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 function saveHidden(name: string, hidden: boolean): void {
   try {
-    if (hidden) window.localStorage?.setItem(hiddenKey(name), "1");
-    else window.localStorage?.removeItem(hiddenKey(name));
+    window.localStorage?.setItem(hiddenKey(name), hidden ? "1" : "0");
   } catch { /* хранилище недоступно: выбор живёт до перезапуска */ }
 }
 
@@ -115,14 +125,16 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
   const root = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
   const roomy = useWide(root, COMPACT_PX);
+  const spacious = useWide(root, TRANSCRIPT_PX);
   const chatRoomy = useWide(column, CHAT_COMPACT_PX);
   const barCompact = forced ?? !roomy;
   const compact = forced ?? !chatRoomy;
   const key = place === "card" ? "live-card" : "live";
   const name = `${key}-chat-side`;
-  const [hidden, setHiddenState] = useState(() => loadHidden(name));
+  const [choice, setChoice] = useState(() => loadHidden(name));
+  const hidden = choice ?? !spacious;
   const setHidden = (next: boolean) => {
-    setHiddenState(next);
+    setChoice(next);
     saveHidden(name, next);
   };
   const agent = chat.agent ?? live.agent ?? null;
@@ -142,14 +154,21 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
   const paneId = `${name}-pane`;
 
   return (
-    <div ref={root} className={`chat-ws${barCompact ? " chat-ws--compact" : ""}`} data-chat-drop="">
+    <div ref={root} className={`chat-ws chat-ws--${place}${barCompact ? " chat-ws--compact" : ""}`} data-chat-drop="">
       {live.catchup?.active && <CatchupNote catchup={live.catchup} />}
-      {agent && (
-        <SessionBar agent={agent} summary={live.summary} writing={!!chat.writing} compact={barCompact} quiet={view.quiet}
-          onFrequency={(f) => void chat.setFrequency(f)} onProfile={(p) => void chat.setProfile(p)}
-          disabled={!!block} onRevokeGrant={(id) => void chat.revokeGrant(id)} />
-      )}
-      {/* Одна раскладка при любой ширине: чат и строка ввода всегда на месте и не пересоздаются. */}
+      {/* Строка сессии: кнопка колонки расшифровки (всегда) и шапка сессии (когда агент известен). */}
+      <div className="chat-ws__bar">
+        <IconButton icon={hidden ? PanelLeftOpen : PanelLeftClose} className="chat-ws__side-toggle"
+          label={hidden ? "Показать расшифровку" : "Убрать расшифровку"}
+          tooltip={hidden ? "Показать расшифровку колонкой рядом с чатом" : "Убрать расшифровку — останется только чат"}
+          aria-expanded={!hidden} aria-controls={hidden ? undefined : paneId} onClick={() => setHidden(!hidden)} />
+        {agent && (
+          <SessionBar agent={agent} summary={live.summary} writing={!!chat.writing} compact={barCompact} quiet={view.quiet}
+            onFrequency={(f) => void chat.setFrequency(f)} onProfile={(p) => void chat.setProfile(p)}
+            disabled={!!block} onRevokeGrant={(id) => void chat.revokeGrant(id)} />
+        )}
+      </div>
+      {/* Чат и строка ввода всегда на месте и не пересоздаются; меняется только колонка расшифровки. */}
       <div className={`chat-ws__body${hidden ? " is-hidden" : ""}`}>
         {!hidden && (
           <section id={paneId} className="chat-ws__transcript" aria-label="Расшифровка">
@@ -160,20 +179,14 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
           <PaneResizer name={name} cssVar="--chat-side" spec={CHAT_PANES.side} panel="before"
             label="Ширина расшифровки" className="chat-ws__split" />
         )}
-        <div className="chat-ws__edge">
-          <button type="button" className="chat-ws__toggle" aria-expanded={!hidden}
-            aria-controls={hidden ? undefined : paneId}
-            aria-label={hidden ? "Показать расшифровку" : "Убрать расшифровку"}
-            title={hidden ? "Показать расшифровку" : "Убрать расшифровку — останется только чат"}
-            onClick={() => setHidden(!hidden)}>
-            <Icon as={hidden ? ChevronRight : ChevronLeft} size="sm" />
-          </button>
-        </div>
         <div ref={column} className="chat-ws__main">
           <LiveChat chat={chat} onTime={view.jump} quiet={view.quiet} compact={compact} disabled={!!block} />
-          <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
-            quick={profileOf(agent?.profile) === "personal" ? PERSONAL_LIVE_QUESTIONS : undefined} />
         </div>
+      </div>
+      {/* Док строки ввода: во всю ширину под колонками, сплошной, с линией сверху. */}
+      <div className="chat-dock">
+        <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
+          quick={profileOf(agent?.profile) === "personal" ? PERSONAL_LIVE_QUESTIONS : undefined} />
       </div>
     </div>
   );

@@ -21,6 +21,15 @@ test("быстрые действия: четыре кнопки, каждая �
   }
 });
 
+test("поле и кнопка — Aurora одной высоты (field--sm и btn--sm, 32 px); быстрые — btn--outline btn--sm", () => {
+  render(<LiveAsk qa={[]} onAsk={vi.fn()} />);
+  expect(screen.getByRole("textbox", { name: "Вопрос ассистенту" })).toHaveClass("field", "field--sm");
+  expect(screen.getByRole("button", { name: "Спросить" })).toHaveClass("btn", "btn--sm");
+  for (const b of within(screen.getByRole("group", { name: "Быстрые вопросы" })).getAllByRole("button")) {
+    expect(b).toHaveClass("btn", "btn--outline", "btn--sm");
+  }
+});
+
 test("свой вопрос: Enter отправляет, поле очищается", async () => {
   const onAsk = vi.fn(async () => {});
   render(<LiveAsk qa={[]} onAsk={onAsk} />);

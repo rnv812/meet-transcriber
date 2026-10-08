@@ -17,20 +17,16 @@
   margin: 0; padding: 0; list-style: none; overflow-y: auto;
 }
 .live-feed__line { display: flex; gap: 8px; line-height: 1.45; }
-.live-feed__t { flex: none; color: var(--ink-3); font-family: var(--font-code); font-size: 11px; padding-top: 2px; }
+.live-feed__t { flex: none; color: var(--ink-3); font-family: var(--font-code); font-size: var(--text-xs); padding-top: 1px; }
 .live-feed__text { color: var(--ink); overflow-wrap: anywhere; }
 .live-feed__who { margin-right: 6px; color: var(--ink); font-weight: 600; }
 .live-feed__empty { font-size: var(--text-xs); }
-.live-feed__hint { flex: none; margin: 0 0 4px; font-size: 11px; }
+.live-feed__hint { flex: none; margin: 0 0 4px; font-size: var(--text-xs); }
 
 .live-ask { display: flex; flex-direction: column; gap: 6px; }
 .live-ask__row { display: flex; gap: 6px; }
-.live-ask__input {
-  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
-  background: var(--surface-1); border: 1px solid var(--hairline-strong); border-radius: var(--r-sm);
-  color: var(--ink); font: inherit;
-}
-.live-ask__input:focus { outline: none; border-color: var(--accent-line); }
+/* Поле — Aurora `field field--sm` (32, как кнопка «Спросить» btn--sm); здесь — только место в строке. */
+.live-ask__input { flex: 1; min-width: 0; width: auto; }
 .live-ask__input:disabled { opacity: 0.6; }
 .live-ask__history {
   display: flex; flex-direction: column; gap: 10px;
@@ -38,23 +34,13 @@
 }
 .live-ask__item { display: flex; flex-direction: column; gap: 4px; }
 .live-ask__q { color: var(--ink-2); font-size: var(--text-xs); font-weight: 500; white-space: pre-wrap; }
-.live-ask__a { font-size: 12.5px; }
+.live-ask__a { font-size: var(--text-ui); }
 /* Ответ, который ещё пишется: тот же шрифт и место, что у готового. */
 .live-ask__a--streaming { color: var(--ink); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Быстрые вопросы переносятся на вторую строку, а не прячутся за краем:
-   скрытая полоса прокрутки обрезала последний вопрос («Что…»). */
-.live-ask__quick { display: flex; flex-wrap: wrap; gap: 4px; flex: none; }
-.live-ask__quick .live-chip { flex: none; }
-
-/* Маленькая кнопка-«таблетка»: быстрые вопросы, действия подсказок. */
-.live-chip {
-  display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px;
-  border: 1px solid var(--hairline-strong); border-radius: var(--r-full); background: transparent;
-  color: var(--ink-2); font: inherit; font-size: var(--text-xs); cursor: pointer; white-space: nowrap;
-  transition: color var(--d) var(--ease-out), border-color var(--d) var(--ease-out);
-}
-.live-chip:hover:not(:disabled) { color: var(--ink); border-color: var(--control-line); }
-.live-chip:disabled { opacity: 0.5; cursor: default; }
+/* Быстрые вопросы — кнопки Aurora btn--outline btn--sm; переносятся на вторую строку,
+   а не прячутся за краем: скрытая полоса прокрутки обрезала последний вопрос («Что…»). */
+.live-ask__quick { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
+.live-ask__quick > .btn { flex: none; }
 
 /* Таймкод в ответе модели: переход к реплике в ленте. */
 .md-time {
@@ -77,12 +63,11 @@
 
 /* Рабочая область: вкладки (узкая) или две колонки (широкая, от 720). */
 .live-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-/* «Подсказка скрыта · Вернуть» — поверх низа области, ничего не сдвигая. */
-.live-undo {
+/* «Подсказка скрыта · Вернуть» — тост Aurora (`.toast`) поверх низа области, ничего не сдвигая;
+   в узкой панели — по ширине содержимого, а не 320 px тоста окна. */
+.toast.live-undo {
   position: absolute; left: 50%; bottom: 8px; z-index: var(--z-raised); transform: translateX(-50%);
-  display: flex; align-items: center; gap: 10px; padding: 4px 12px; white-space: nowrap;
-  background: var(--surface-2); border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
-  box-shadow: var(--elev-2); font-size: var(--text-xs);
+  min-width: 0; min-height: var(--control); padding: 4px 4px 4px 14px; gap: 8px; white-space: nowrap; font-size: var(--text-sm);
 }
 .live-undo__text { color: var(--ink-2); }
 /* Вкладки узкой области — Aurora `.tabs.tabs--sm` (controls.css); здесь — только место. */
@@ -90,7 +75,7 @@
 .live-tabs__count {
   min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-full);
   background: var(--accent-soft); color: var(--accent-line);
-  font-size: 10.5px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs); line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
 }
 /* Узкая: полоса ленты (если есть) и вкладка одна над другой. */
 .live-ws__stack { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -170,7 +155,7 @@
 .live-empty { margin: 4px 0; font-size: var(--text-xs); }
 
 /* Сводка. */
-.live-summary { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.live-summary { display: flex; flex-direction: column; gap: 10px; font-size: var(--text-ui); }
 .live-summary__topic { margin: 0; color: var(--ink); }
 .live-summary__section { display: flex; flex-direction: column; gap: 3px; }
 .live-summary__title { margin: 0; color: var(--ink-2); font-size: var(--text-xs); font-weight: 600; }
@@ -179,12 +164,9 @@
 .live-summary__item::marker { color: var(--ink-3); }
 .live-summary__who { color: var(--ink); font-weight: 600; }
 
-/* Подсказки. Цвет вида — только у подписи, карточки спокойные. */
+/* Подсказки — карточки Aurora (`.card`: поверхность, линия, радиус); цвет вида — только у подписи. */
 .live-hints { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-.live-hint {
-  display: flex; flex-direction: column; gap: 3px; padding: 8px 10px;
-  background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md);
-}
+.live-hint { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; }
 .live-hint.is-pinned { border-color: var(--hairline-strong); }
 .live-hint--question { --kind: var(--info); }
 .live-hint--risk { --kind: var(--warning); }
@@ -193,25 +175,26 @@
 .live-hint--followup { --kind: var(--success); }
 /* «Вам вопрос»: наверху, с полосой и черновиком ответа. */
 .live-hint--ask_you { --kind: var(--info); background: var(--info-soft); border-color: transparent; box-shadow: inset 3px 0 0 var(--info); }
-.live-hint__reply { color: var(--ink); font-size: var(--text-xs); line-height: 1.45; overflow-wrap: anywhere; }
+.live-hint__reply { color: var(--ink); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 .live-hint__reply-label { color: var(--ink-3); margin-right: 4px; }
 .live-hint--ask_you.is-urgent-new { animation: live-urgent 1.2s var(--ease-out) 2; }
 @keyframes live-urgent { 50% { background: var(--surface-3); } }
 @media (prefers-reduced-motion: reduce) { .live-hint--ask_you.is-urgent-new { animation: none; } }
-.live-hint__head { display: flex; align-items: center; gap: 6px; min-height: 22px; }
-.live-hint__kind { color: var(--kind); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.live-hint__head { display: flex; align-items: center; gap: 6px; min-height: 28px; font-size: var(--text-xs); }
+.live-hint__kind { color: var(--kind); font-size: var(--text-xs); font-weight: 600; white-space: nowrap; }
 .live-hint__time {
   padding: 0 4px; border: 0; border-radius: var(--r-xs); background: none;
-  color: var(--ink-3); font: inherit; font-family: var(--font-code); font-size: 11px; cursor: pointer;
+  color: var(--ink-3); font: inherit; font-family: var(--font-code); font-size: var(--text-xs); cursor: pointer;
 }
+.live-hint__time:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .live-hint__time:hover { color: var(--accent-line); background: var(--accent-soft); }
 .live-hint__actions { margin-left: auto; display: flex; gap: 2px; }
-.live-hint__text { color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
-.live-hint__why { font-size: 11.5px; }
-.live-hint__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
-.live-hint__ref { max-width: 60%; font-size: 11px; }
-.live-hint__copied { font-size: 11px; }
-.live-hint__error { color: var(--danger); font-size: 11.5px; }
+.live-hint__text { color: var(--ink); font-size: var(--text-ui); line-height: 1.45; overflow-wrap: anywhere; }
+.live-hint__why { font-size: var(--text-sm); }
+.live-hint__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.live-hint__ref { max-width: 60%; font-size: var(--text-xs); }
+.live-hint__copied { font-size: var(--text-xs); }
+.live-hint__error { color: var(--danger); font-size: var(--text-sm); }
 
 /* Новое и изменённое — мягкая подсветка на несколько секунд, гаснет плавно. */
 .live-summary__item, .live-summary__topic, .live-hint { transition: background-color 1.2s var(--ease-out); }
@@ -224,7 +207,7 @@
 /* «Запишите образец своего голоса» над рабочей областью (OwnerVoiceDialog.tsx). */
 .live-nudge { flex: none; margin: 0; }
 
-/* Частота и профиль в шапке сессии — Aurora `.tabs.tabs--sm` с ролями радио:
+/* Частота и профиль в «Что я знаю» — Aurora `.tabs.tabs--sm` с ролями радио:
    выбранный — по `aria-checked` (у вкладок Aurora — по `aria-selected`). */
 .live-seg button[aria-checked='true'] {
   background: var(--deep); color: var(--on-deep); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line);

@@ -2,7 +2,13 @@
  * Лента чата с агентом-участником: его сообщения (Markdown, таймкоды — к
  * моменту в расшифровке), его кнопки, реакции 👍 👎 ❓, копирование; ваши
  * сообщения с вложениями; строки встречи и системы. Сверху — закреплённый
- * вопрос к вам (`pin`), пока вы после него ничего не написали.
+ * вопрос к вам (`pin`), пока вы после него ничего не написали: одной строкой
+ * (бейдж, текст с многоточием — щелчок показывает целиком, «Показать в ленте», «×»).
+ *
+ * Карточка подтверждения Meet («Ассистент хочет выполнить: …») решается прямо в
+ * ленте, своими кнопками — и во время встречи, и после неё (вкладка «Ассистент»
+ * карточки записи): отдельной области над лентой нет. Кнопки ждущей карточки
+ * всегда в порядке Tab, Esc в ней — «Отклонить».
  *
  * Лента следит за низом, пока человек сам не прокрутил вверх; тогда новые
  * сообщения агента копятся в плашке «↓ N новых». Своё отправленное сообщение
@@ -36,7 +42,8 @@
  */
 
 import {
-  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, type LucideIcon, Paperclip, ThumbsDown, ThumbsUp, X,
+  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, type LucideIcon, Paperclip, ShieldQuestion,
+  ThumbsDown, ThumbsUp, X,
 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -49,6 +56,7 @@ import { BADGE_CLASS } from "../ui/badge";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
+import { Tip } from "../ui/Tip";
 import { type FeedItem, type Outgoing, REACTIONS, isFinalAgent } from "./chatModel";
 import type { Source } from "./sources";
 import { type Chat, EXPLAINING } from "./useChat";
@@ -77,16 +85,16 @@ export const CARD_DECIDED: Record<string, string> = {
  * Карточка подтверждения Meet: что агент хочет выполнить — из настоящего вызова, не из его текста.
  * Резидент присылает вызов целиком (`args`, пробелы и переводы строк — видимыми пометками, невидимые
  * символы запрещены) и для длинного — начало и конец (`preview`, середина — пометкой «скрыто: …»),
- * так что хвост виден всегда. «Показать полностью» — по желанию. Кнопки: «Разрешить один раз»,
- * «Разрешать такое до конца встречи» (если Meet её предлагает) и «Отклонить» (Esc).
+ * так что хвост виден всегда. «Показать полностью» — по желанию. Ждёт решения (`open`) — кнопки
+ * прямо в карточке: «Разрешить один раз», «Разрешать такое до конца встречи» (если Meet её
+ * предлагает) и «Отклонить» (Esc); решена или срок вышел — итог словом.
  */
-function ConfirmCard({ m, chat, disabled, pinned = false }: {
-  m: ChatMessage; chat: Chat; disabled: boolean; pinned?: boolean;
+function ConfirmCard({ m, chat, disabled, open }: {
+  m: ChatMessage; chat: Chat; disabled: boolean; open: boolean;
 }) {
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const args = m.args ?? "";
-  const open = pinned && !m.decision;
   const decide = async (allow: boolean, meeting = false) => {
     if (busy) return;
     setBusy(true);
@@ -99,8 +107,11 @@ function ConfirmCard({ m, chat, disabled, pinned = false }: {
     <section className={`chat-card${open ? " chat-card--open" : ""}`} role="group"
       aria-label={`Ассистент хочет выполнить: ${m.title ?? m.tool ?? ""}`} onKeyDown={onKey}>
       <div className="chat-card__title">
-        Ассистент хочет выполнить: <b>{m.title ?? m.tool}</b>
-        {m.size && <span className="chat-card__size"> · {m.size}</span>}
+        <Icon as={ShieldQuestion} size="sm" className="chat-card__icon" />
+        <span>
+          Ассистент хочет выполнить: <b>{m.title ?? m.tool}</b>
+          {m.size && <span className="chat-card__size"> · {m.size}</span>}
+        </span>
       </div>
       {(m.warnings ?? []).map((w) => <div key={w} className="chat-card__warn" role="note">{w}</div>)}
       {args && <pre className="chat-card__args" dir="ltr">{m.preview && !full ? m.preview : args}</pre>}
@@ -112,31 +123,35 @@ function ConfirmCard({ m, chat, disabled, pinned = false }: {
       {open ? (
         // «Разрешить один раз» — сильная без цвета; «до конца встречи» (шире всего) — тише; «Отклонить» (Esc) — контур.
         <div className="chat-card__actions">
-          <Button variant="mono" size="xs" className="chat-card__allow" disabled={disabled || busy}
+          <Button variant="mono" className="chat-card__allow" disabled={disabled || busy}
             onClick={() => void decide(true)}>
             Разрешить один раз
           </Button>
           {m.grant && (
-            <Button variant="ghost" size="xs" className="chat-card__allow-meeting" disabled={disabled || busy}
-              title={`Дальше до конца встречи без вопросов: ${m.grant.label}`} onClick={() => void decide(true, true)}>
-              Разрешать такое до конца встречи
-            </Button>
+            <Tip content={`Дальше до конца встречи без вопросов: ${m.grant.label}`}>
+              <Button variant="ghost" className="chat-card__allow-meeting" disabled={disabled || busy}
+                onClick={() => void decide(true, true)}>
+                Разрешать такое до конца встречи
+              </Button>
+            </Tip>
           )}
-          <Button size="xs" className="chat-card__deny" disabled={disabled || busy} onClick={() => void decide(false)}>
+          <Button className="chat-card__deny" disabled={disabled || busy} onClick={() => void decide(false)}>
             Отклонить
           </Button>
         </div>
       ) : (
-        <div className="chat-card__done">{m.decision ? CARD_DECIDED[m.decision] ?? m.decision : "Ждёт вашего решения — над лентой"}</div>
+        <div className="chat-card__done">{m.decision ? CARD_DECIDED[m.decision] ?? m.decision : CARD_DECIDED.expired}</div>
       )}
     </section>
   );
 }
 
-/** Новые готовые сообщения агента в ленте (их считает «↓ N новых»). */
+/** Новые готовые сообщения агента и его карточки подтверждения в ленте (их считает «↓ N новых»). */
 function agentIds(items: FeedItem[]): string[] {
   const ids: string[] = [];
-  for (const it of items) if (it.type === "message" && isFinalAgent(it.message)) ids.push(it.message.id);
+  for (const it of items) {
+    if (it.type === "message" && (isFinalAgent(it.message) || it.message.card === "confirm")) ids.push(it.message.id);
+  }
   return ids;
 }
 
@@ -168,12 +183,12 @@ function AgentButtons({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disab
         // aria-disabled, а не disabled: фокус остаётся на нажатой кнопке.
         const off = used !== null || disabled;
         return (
-          <button key={label} type="button" className="filter" aria-pressed={on}
-            aria-disabled={off || undefined}
-            title={on ? "Вы ответили этим" : used !== null ? "Уже ответили" : undefined}
-            onClick={() => { if (!off) void chat.click(m.id, label); }}>
-            {label}
-          </button>
+          <Tip key={label} content={on ? "Вы ответили этим" : used !== null ? "Уже ответили" : undefined}>
+            <button type="button" className="filter" aria-pressed={on} aria-disabled={off || undefined}
+              onClick={() => { if (!off) void chat.click(m.id, label); }}>
+              {label}
+            </button>
+          </Tip>
         );
       })}
     </div>
@@ -186,12 +201,14 @@ function Reactions({ m, chat, disabled, compact }: { m: ChatMessage; chat: Chat;
       {REACTIONS.map(({ emoji, label, hint }) => {
         const on = !!m.reactions?.[emoji];
         return (
-          <Button key={emoji} variant="ghost" size="sm" icon={REACTION_ICON[emoji]}
-            className={`chat-react__btn${on ? " is-on" : ""}${compact ? " btn--icon" : ""}`} aria-pressed={on}
-            aria-label={label} title={hint} disabled={disabled}
-            onClick={() => void chat.react(m.id, emoji)}>
-            {!compact && <span className="chat-react__label" aria-hidden="true">{label}</span>}
-          </Button>
+          <Tip key={emoji} content={hint}>
+            <Button variant="ghost" size="sm" icon={REACTION_ICON[emoji]}
+              className={`chat-react__btn${on ? " is-on" : ""}${compact ? " btn--icon" : ""}`} aria-pressed={on}
+              aria-label={label} disabled={disabled}
+              onClick={() => void chat.react(m.id, emoji)}>
+              {!compact && <span className="chat-react__label" aria-hidden="true">{label}</span>}
+            </Button>
+          </Tip>
         );
       })}
     </span>
@@ -212,10 +229,11 @@ function ExplainsRef({ id, chat, onShow }: { id: string; chat: Chat; onShow: (id
   return (
     <>
       <span className={`${BADGE_CLASS.plain} chat-msg__tag`}>пояснение</span>
-      <button type="button" className="chat-msg__ref" title="Показать сообщение, которое поясняет ассистент"
-        onClick={() => onShow(id)}>
-        к сообщению{quote ? ` ${quote}` : ""}
-      </button>
+      <Tip content="Показать сообщение, которое поясняет ассистент">
+        <button type="button" className="chat-msg__ref" onClick={() => onShow(id)}>
+          к сообщению{quote ? ` ${quote}` : ""}
+        </button>
+      </Tip>
     </>
   );
 }
@@ -226,11 +244,13 @@ function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; co
   return (
     <div className="chat-msg__sources" role="group" aria-label="Источники">
       {sources.map((s) => (
-        <Button key={s.key} size="sm" icon={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText}
-          className={`chat-src${compact ? " btn--icon" : ""}`} aria-label={`Источник: ${s.label}`}
-          title={`Открыть «${s.label}»`} onClick={() => void chat.open(s)}>
-          {!compact && <span className="chat-src__name">{s.label}</span>}
-        </Button>
+        <Tip key={s.key} content={`Открыть «${s.label}»`}>
+          <Button size="sm" icon={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText}
+            className={`chat-src${compact ? " btn--icon" : ""}`} aria-label={`Источник: ${s.label}`}
+            onClick={() => void chat.open(s)}>
+            {!compact && <span className="chat-src__name">{s.label}</span>}
+          </Button>
+        </Tip>
       ))}
     </div>
   );
@@ -302,7 +322,7 @@ function AttachmentChip({ id, chat }: { id: string; chat: Chat }) {
   const failed = a?.status === "failed";
   const note = failed ? `не разобрано${a?.error ? `: ${a.error}` : ""}` : a?.note;
   return (
-    <span className={`chat-att${failed ? " is-failed" : ""}`} title={note || name}>
+    <span className={`${BADGE_CLASS.plain} chat-att${failed ? " is-failed" : ""}`} title={note || name}>
       {preview && a?.type === "image"
         ? <img className="chat-att__thumb" src={preview} alt={name} />
         : <Icon as={a?.type === "image" ? ImageIcon : FileText} size="sm" />}
@@ -355,7 +375,12 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
     return <li className="chat-divider" data-id={m.id} data-key={m.id}><span>{m.text || "встреча"}</span></li>;
   }
   if (m.card === "confirm") {
-    return <li className="chat-sys chat-sys--card" data-id={m.id} data-key={m.id}><ConfirmCard m={m} chat={chat} disabled={disabled} /></li>;
+    const open = chat.cards.some((c) => c.id === m.id);
+    return (
+      <li className="chat-sys chat-sys--card" data-id={m.id} data-key={m.id}>
+        <ConfirmCard m={m} chat={chat} disabled={disabled} open={open} />
+      </li>
+    );
   }
   if (m.gate) {
     // Ворота согласия заблокировали вызов агента (0.3.7): та же тихая строка, с пояснением.
@@ -364,19 +389,28 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
   return <li className="chat-sys" data-id={m.id} data-key={m.id}>{m.text}</li>;
 }
 
-/** Закреплённый вопрос агента — над лентой (макет MeetLive): метка, «Показать в ленте», «×»; текст и кнопки агента. */
-function Pinned({ m, chat, onTime, onShow, onHide, disabled }: {
-  m: ChatMessage; chat: Chat; onTime?: (t: number) => void; onShow: () => void; onHide: () => void; disabled: boolean;
+/**
+ * Закреплённый вопрос агента — над лентой одной строкой (макет MeetLive): бейдж «Вопрос вам»,
+ * текст без разметки с многоточием (щелчок — целиком и обратно), «Показать в ленте» и «×» —
+ * значками (место — тексту вопроса). Кнопки ответа агента — под строкой: ответить, не листая ленту.
+ */
+function Pinned({ m, chat, onShow, onHide, disabled }: {
+  m: ChatMessage; chat: Chat; onShow: () => void; onHide: () => void; disabled: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const text = plainMarkdown(m.text ?? "");
   return (
-    <section className="chat-pin" aria-label="Вопрос вам">
-      <div className="chat-pin__head">
+    <section className={`chat-pin${open ? " is-open" : ""}`} aria-label="Вопрос вам">
+      <div className="chat-pin__row">
         <span className={`${BADGE_CLASS.run} badge--plain chat-pin__badge`}><Icon as={CircleHelp} size="sm" />Вопрос вам</span>
-        <span className="chat-pin__gap" />
-        <Button variant="ghost" size="xs" icon={CornerDownRight} onClick={onShow}>Показать в ленте</Button>
-        <IconButton icon={X} size="xs" label="Убрать из закреплённых" onClick={onHide} />
+        <Tip content={open ? "Свернуть вопрос" : "Показать вопрос целиком"}>
+          <button type="button" className="chat-pin__line" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {text}
+          </button>
+        </Tip>
+        <IconButton icon={CornerDownRight} label="Показать в ленте" tooltip="Показать вопрос в ленте" onClick={onShow} />
+        <IconButton icon={X} label="Убрать из закреплённых" onClick={onHide} />
       </div>
-      <Markdown source={m.text ?? ""} className="chat-pin__text" onTime={onTime} />
       <AgentButtons m={m} chat={chat} disabled={disabled} />
     </section>
   );
@@ -452,7 +486,7 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   // Только когда сменились сообщения, их состояние (появились кнопки, реакции) или
   // выбранное: не на каждый кусок текста ответа (ревью after-chat, M7).
   const shape = chat.items.map((it) => (it.type === "message"
-    ? `${it.message.id}:${it.message.status ?? ""}:${it.message.buttons?.length ?? 0}:${it.message.text ? 1 : 0}`
+    ? `${it.message.id}:${it.message.status ?? ""}:${it.message.buttons?.length ?? 0}:${it.message.text ? 1 : 0}:${it.message.decision ?? ""}`
     : `o:${it.out.client_id}:${it.out.state}`)).join("|");
   useLayoutEffect(() => {
     const all = rows();
@@ -463,7 +497,9 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
       li.tabIndex = on ? 0 : -1;
       for (const el of li.querySelectorAll<HTMLElement>(ACTIONS)) el.tabIndex = on ? 0 : -1;
     }
-  }, [shape, active]);
+    // Карточка, что ждёт решения, — в порядке Tab всегда: ассистент стоит, пока её не решат.
+    for (const el of list.current?.querySelectorAll<HTMLElement>(`.chat-card--open :is(${ACTIONS})`) ?? []) el.tabIndex = 0;
+  }, [shape, active, chat.cards.length]);
   const onListKey = (e: KeyboardEvent<HTMLOListElement>) => {
     const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : e.key === "Home" ? -Infinity
       : e.key === "End" ? Infinity : 0;
@@ -489,8 +525,9 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   const pinned = chat.pinned;
   const hidePin = (id: string) => {
     chat.hidePin(id);
-    // Кнопка «×» ушла вместе с карточкой — фокус в строку ввода, а не на <body>.
-    box.current?.closest(".chat-ws__main")?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+    // Кнопка «×» ушла вместе с карточкой — фокус в строку ввода (док рабочей области), а не на <body>.
+    const area = box.current?.closest(".chat-ws") ?? box.current?.closest(".chat-ws__main");
+    area?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   };
   // «к сообщению …» у пояснения: к поясняемому сообщению — прокрутить, подсветить, фокус.
   const showMessage = (id: string) => {
@@ -508,20 +545,14 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
 
   return (
     <div className={`chat${compact ? " chat--compact" : ""}`}>
-      {chat.cards.length > 0 && (
-        // Карточки, которые ждут решения, — над лентой: их видно и при прокрученной вверх ленте.
-        <div className="chat-cards" role="region" aria-label="Подтверждение действия">
-          {chat.cards.map((m) => <ConfirmCard key={m.id} m={m} chat={chat} disabled={disabled} pinned />)}
-        </div>
-      )}
-      {/* Новая карточка объявляется и при «Не отвлекать»: ассистент ждёт решения. */}
+      {/* Новая карточка объявляется и при «Не отвлекать»: ассистент ждёт решения (кнопки — в ней, в ленте). */}
       {chat.cards.length > 0 && (
         <span className="sr-only" role="alert">
           {`Ассистент ждёт подтверждения: ${chat.cards[chat.cards.length - 1]!.title ?? ""}`}
         </span>
       )}
       {pinned && (
-        <Pinned m={pinned} chat={chat} onTime={onTime} onShow={showPinned} onHide={() => hidePin(pinned.id)}
+        <Pinned m={pinned} chat={chat} onShow={showPinned} onHide={() => hidePin(pinned.id)}
           disabled={disabled} />
       )}
       {/* «Не отвлекать» глушит ленту, но вопрос к вам объявляется и тогда (ревью live-chat, M15). */}

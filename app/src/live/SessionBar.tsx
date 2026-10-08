@@ -1,24 +1,30 @@
 /**
- * Шапка сессии агента-участника: что с ним (слушает / думает / пишет /
- * ошибка), какая модель (у Claude Code — та, что запустил CLI, из
- * `system/init`; не та, что в настройках, — предупреждение), что она видит
- * и что может (0.3.7: файлы, MCP, веб — по вашему согласию), пометки (не
- * видит картинок;
- * исключённые папки — только просьба), профиль сессии (0.3.7: чип и
- * переключатель «Профиль» — «Рабочая встреча» / «Личный», только на эту
- * сессию), «Как часто писать» и поповер «Что я знаю» со сводкой на сейчас
- * (сводка по-прежнему ведётся в фоне — на ней держатся итоги и название встречи).
+ * Шапка сессии агента-участника — одна строка (макет MeetLive, доводка 0.4):
+ * что с ним (слушает / думает / пишет / ошибка) · какая модель (у Claude Code —
+ * та, что запустил CLI, из `system/init`) · бейдж профиля сессии · пометка-
+ * предупреждение, если запущена не та модель, что в настройках; справа — «Что я знаю».
  *
- * В компактной панели — состояние, модель и чип профиля, остальное — в поповере.
+ * Поповер «Что я знаю» — всё остальное: модель и профиль с переключателем
+ * («Рабочая встреча» / «Личный», только на эту сессию), что модель видит и что
+ * может (0.3.7: файлы, MCP, веб — по вашему согласию), разрешённое до конца
+ * встречи с «Отозвать», пометки (не видит картинок; исключённые папки — только
+ * просьба), «Как часто писать» и сводка на сейчас (сводка по-прежнему ведётся в
+ * фоне — на ней держатся итоги и название встречи).
+ *
+ * Компактная (узкая область): «Что я знаю» — значком, предупреждение — цветом
+ * модели и текстом для экранного диктора.
  */
 
-import { BookOpen } from "lucide-react";
+import { BookOpen, X } from "lucide-react";
 import { type KeyboardEvent, useId, useState } from "react";
 
 import { plural } from "../lib/format";
 import type { AgentFrequencyLabel, AgentInfo, AgentProfile, LiveSummary as Summary } from "../lib/types";
-import { Icon } from "../ui/Icon";
+import { BADGE_CLASS } from "../ui/badge";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
 import { Popover } from "../ui/Popover";
+import { Tip } from "../ui/Tip";
 import { LiveSummary } from "./LiveSummary";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "./profiles";
 import "./chat.css";
@@ -143,11 +149,12 @@ function Segmented<T extends string>({ label, options, text, titles, value, onCh
       <span className="session-freq__label" id={labelId}>{label}</span>
       <div className="tabs tabs--sm live-seg" role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey}>
         {options.map((f) => (
-          <button key={f} type="button" role="radio" aria-checked={value === f} tabIndex={value === f ? 0 : -1}
-            disabled={disabled} title={titles?.(f)}
-            onClick={() => { if (f !== value) onChange(f); }}>
-            {text ? text(f) : f}
-          </button>
+          <Tip key={f} content={titles?.(f)}>
+            <button type="button" role="radio" aria-checked={value === f} tabIndex={value === f ? 0 : -1}
+              disabled={disabled} onClick={() => { if (f !== value) onChange(f); }}>
+              {text ? text(f) : f}
+            </button>
+          </Tip>
         ))}
       </div>
     </span>
@@ -202,67 +209,92 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
     : agent.can?.mode === "files" ? CAN_FILES_TITLE : undefined;
   const frequency = FREQUENCIES.includes(agent.frequency) ? agent.frequency : "чаще";
   const profile = profileOf(agent.profile);
+  const grants = agent.grants ?? [];
+  const toggle = (e: { currentTarget: HTMLElement }) => setAnchor(anchor ? null : e.currentTarget);
   return (
     <div className={`session-bar${compact ? " session-bar--compact" : ""}`} role="group" aria-label="Сессия ассистента">
       {/* Состояние меняется на каждом ходе агента — не живая область, иначе
           экранный диктор говорил бы всю встречу. Объявляется только ошибка.
           Без точки: точка одна — в шапке панели, и она тоже про агента
           (ревью live-chat, M6). */}
-      <span className={`session-bar__state session-bar__state--${state.key}`}
-        title={agent.state === "error" && agent.error ? agent.error : undefined}>
-        {state.text}
-      </span>
+      <Tip content={agent.state === "error" && agent.error ? agent.error : undefined}>
+        <span className={`session-bar__state session-bar__state--${state.key}`}>{state.text}</span>
+      </Tip>
       <span className="sr-only" role="status">
         {!quiet && agent.state === "error" ? `Ошибка ассистента${agent.error ? `: ${agent.error}` : ""}` : ""}
       </span>
-      <span className={`session-bar__model${warning ? " session-bar__model--warn" : ""}`}
-        title={warning ? `${warning}. ${MODEL_TITLE}` : agent.provider}>
-        {agent.label || agent.provider}
-        {compact && warning && <span className="sr-only"> ({warning})</span>}
-      </span>
-      <span className={`session-bar__profile session-bar__profile--${profile}`} title={profileTitle(profile)}>
-        {PROFILE_LABELS[profile]}
-      </span>
-      {!compact && <span className="session-bar__sees">видит: {sees}</span>}
-      {!compact && can && <span className="session-bar__sees session-bar__can" title={canTitle}>может: {can}</span>}
-      {!compact && (agent.grants?.length ?? 0) > 0 && (
-        <span className="session-bar__sees session-bar__grants" title="Разрешено до конца встречи — без карточки">
-          разрешено:{" "}
-          {agent.grants!.map((g, k) => (
-            <span key={g.id} className="session-bar__grant">
-              {k > 0 && ", "}{g.label}
-              {onRevokeGrant && (
-                <button type="button" className="session-bar__revoke" aria-label={`Отозвать: ${g.label}`}
-                  onClick={() => onRevokeGrant(g.id)}>×</button>
-              )}
-            </span>
-          ))}
+      {/* Модель может быть срезана многоточием — полное имя (и предупреждение) в подсказке. */}
+      <Tip content={warning ? `${warning}. ${MODEL_TITLE}` : agent.label || agent.provider}>
+        <span className={`session-bar__model${warning ? " session-bar__model--warn" : ""}`}>
+          {agent.label || agent.provider}
+          {compact && warning && <span className="sr-only"> ({warning})</span>}
         </span>
+      </Tip>
+      <Tip content={profileTitle(profile)}>
+        <span className={`${profile === "personal" ? BADGE_CLASS.run : "badge"} session-bar__profile session-bar__profile--${profile}`}>
+          {PROFILE_LABELS[profile]}
+        </span>
+      </Tip>
+      {/* В строке — только предупреждение (не та модель); остальные пометки — в «Что я знаю». */}
+      {!compact && warning && (
+        <Tip content={MODEL_TITLE}>
+          <span className={`${BADGE_CLASS.temp} session-bar__note session-bar__note--warn`}>
+            <span className="session-bar__note-text">{warning}</span>
+          </span>
+        </Tip>
       )}
-      {!compact && notes.map((n) => (
-        <span key={n.text} className={`session-bar__note${n.warn ? " session-bar__note--warn" : ""}`}
-          title={n.title ?? n.text}>{n.text}</span>
-      ))}
       <span className="session-bar__end">
-        {!compact && onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
-        {!compact && <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />}
-        <button type="button" className="session-bar__know" aria-expanded={!!anchor}
-          onClick={(e) => setAnchor(anchor ? null : e.currentTarget)}>
-          <Icon as={BookOpen} size="sm" />{compact ? <span className="sr-only">Что я знаю</span> : "Что я знаю"}
-        </button>
+        {compact ? (
+          <IconButton icon={BookOpen} label="Что я знаю" variant="secondary" aria-expanded={!!anchor} onClick={toggle} />
+        ) : (
+          <Button icon={BookOpen} aria-expanded={!!anchor} onClick={toggle}>Что я знаю</Button>
+        )}
       </span>
       {anchor && (
-        <Popover anchor={anchor} onClose={() => setAnchor(null)} label="Что я знаю" width={320} align="end" anchorToggles>
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} label="Что я знаю" width={340} align="end" anchorToggles>
           <div className="session-know">
-            <p className="session-know__line"><span className="muted">Модель:</span> {agent.label || agent.provider}</p>
-            <p className="session-know__line"><span className="muted">Профиль:</span> {PROFILE_LABELS[profile]}</p>
-            <p className="session-know__line"><span className="muted">Видит:</span> {sees}</p>
-            {can && <p className="session-know__line" title={canTitle}><span className="muted">Может:</span> {can}</p>}
-            {notes.map((n) => <p key={n.text} className="session-know__note" title={n.title}>{n.text}</p>)}
-            {compact && onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
-            {compact && <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />}
-            <h4 className="session-know__title">Сводка на сейчас</h4>
-            <div className="session-know__summary"><LiveSummary summary={summary} fresh={NO_FRESH} /></div>
+            <div className="session-know__facts">
+              <p className="session-know__line"><span className="session-know__key">Модель:</span> {agent.label || agent.provider}</p>
+              <p className="session-know__line"><span className="session-know__key">Профиль:</span> {PROFILE_LABELS[profile]}</p>
+              <p className="session-know__line"><span className="session-know__key">Видит:</span> {sees}</p>
+              {can && (
+                <div className="session-bar__can">
+                  <p className="session-know__line"><span className="session-know__key">Может:</span> {can}</p>
+                  {/* Пояснение — текстом, а не скрытой подсказкой: место в поповере есть. */}
+                  {canTitle && <p className="session-know__hint">{canTitle}</p>}
+                </div>
+              )}
+            </div>
+            {notes.map((n) => (
+              <Tip key={n.text} content={n.title && n.title !== n.text ? n.title : undefined}>
+                <p className="session-know__note">{n.text}</p>
+              </Tip>
+            ))}
+            {grants.length > 0 && (
+              <section className="session-know__section session-bar__grants">
+                <h4 className="session-know__title">Разрешено до конца встречи</h4>
+                <p className="session-know__hint">Такие действия ассистент выполняет без карточки.</p>
+                <ul className="session-know__grants">
+                  {grants.map((g) => (
+                    <li key={g.id} className="session-bar__grant">
+                      <span className="session-know__grant-label">{g.label}</span>
+                      {onRevokeGrant && (
+                        <IconButton icon={X} size="xs" variant="danger" label={`Отозвать: ${g.label}`}
+                          tooltip={`Отозвать: ${g.label} — дальше снова с карточкой`} onClick={() => onRevokeGrant(g.id)} />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            <div className="session-know__controls">
+              {onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
+              <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />
+            </div>
+            <section className="session-know__section">
+              <h4 className="session-know__title">Сводка на сейчас</h4>
+              <div className="session-know__summary"><LiveSummary summary={summary} fresh={NO_FRESH} /></div>
+            </section>
           </div>
         </Popover>
       )}

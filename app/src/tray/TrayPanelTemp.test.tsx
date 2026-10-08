@@ -41,7 +41,7 @@ test("простой: «Временная встреча с ассистент�
   const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
   panel();
   const button = screen.getByRole("button", { name: "Временная встреча с ассистентом" });
-  expect(button).toHaveAttribute("title", expect.stringContaining("не сохранится"));
+  expect(button).toHaveAccessibleDescription(expect.stringContaining("не сохранится"));
   await userEvent.click(button);
   expect(start).toHaveBeenCalledWith(ep, { temporary: true });
 });

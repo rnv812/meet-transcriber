@@ -15,8 +15,9 @@ import { Copy, Pin, Sparkles, X } from "lucide-react";
 
 import { clock } from "../lib/format";
 import type { LiveHint } from "../lib/types";
-import { Icon } from "../ui/Icon";
+import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
+import { Tip } from "../ui/Tip";
 import { Truncate } from "../ui/Truncate";
 import { KIND_LABEL, hintKey, isUrgent, orderHints } from "./liveModel";
 import "./live.css";
@@ -80,13 +81,15 @@ export function LiveHints({
     {announcer}
     <ul className="live-hints" aria-label="Подсказки">
       {orderHints(hints).map((h) => (
-        <li key={h.id} ref={h.id === urgentId ? urgentEl : undefined} className={`live-hint live-hint--${h.kind}${fresh.has(hintKey(h)) ? (isUrgent(h) ? " is-fresh is-urgent-new" : " is-fresh") : ""}${h.pinned ? " is-pinned" : ""}`}>
+        <li key={h.id} ref={h.id === urgentId ? urgentEl : undefined} className={`live-hint card live-hint--${h.kind}${fresh.has(hintKey(h)) ? (isUrgent(h) ? " is-fresh is-urgent-new" : " is-fresh") : ""}${h.pinned ? " is-pinned" : ""}`}>
           <div className="live-hint__head">
             <span className="live-hint__kind">{KIND_LABEL[h.kind] ?? h.kind}</span>
-            <button type="button" className="live-hint__time num" title="Перейти к реплике в ленте"
-              aria-label={`Момент ${clock(h.source_t)}`} onClick={() => onTime(h.source_t)}>
-              {clock(h.source_t)}
-            </button>
+            <Tip content="Перейти к реплике в ленте">
+              <button type="button" className="live-hint__time num"
+                aria-label={`Момент ${clock(h.source_t)}`} onClick={() => onTime(h.source_t)}>
+                {clock(h.source_t)}
+              </button>
+            </Tip>
             <span className="live-hint__actions">
               <IconButton icon={Pin} size="xs" className="live-hint__pin" pressed={h.pinned}
                 label={h.pinned ? "Открепить" : "Закрепить"}
@@ -108,14 +111,13 @@ export function LiveHints({
           <div className="live-hint__foot">
             {h.ref && <Truncate className="live-hint__ref muted" text={`База знаний: ${h.ref}`}>База знаний: {h.ref}</Truncate>}
             {isUrgent(h) ? (
-              <button type="button" className="live-chip" title="Спросить агента, что ответить"
-                onClick={() => (onAskUrgent ?? onAsk)(h)}>
-                <Icon as={Sparkles} size="sm" />Спросить агента
-              </button>
+              <Tip content="Спросить агента, что ответить">
+                <Button icon={Sparkles} onClick={() => (onAskUrgent ?? onAsk)(h)}>Спросить агента</Button>
+              </Tip>
             ) : (
-              <button type="button" className="live-chip" title={askTitle} onClick={() => onAsk(h)}>
-                {askTitle && <Icon as={Sparkles} size="sm" />}Спросить об этом
-              </button>
+              <Tip content={askTitle}>
+                <Button icon={askTitle ? Sparkles : undefined} onClick={() => onAsk(h)}>Спросить об этом</Button>
+              </Tip>
             )}
             {copied === h.id && <span className="muted live-hint__copied" role="status">Скопировано</span>}
           </div>

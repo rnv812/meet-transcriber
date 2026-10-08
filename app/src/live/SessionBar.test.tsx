@@ -9,24 +9,58 @@ import { DENY_NOTE, NO_VISION, PERSONAL_DENY_NOTE, SessionBar, canText, seesText
 const summary: LiveSummary = { ...EMPTY_SUMMARY, topic: "Запуск биллинга", decisions: [{ id: "d1", text: "Стенд к пятнице" }] };
 const bar = () => screen.getByRole("group", { name: "Сессия ассистента" });
 const stateEl = () => bar().querySelector(".session-bar__state")!;
+/** Открыть «Что я знаю»: всё, кроме состояния, модели, профиля и предупреждения, — там (аудит 0.4, A5). */
+async function know() {
+  await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
+  return screen.getByRole("dialog", { name: "Что я знаю" });
+}
 
-test("модель, что видит, состояние", () => {
+test("модель, что видит, состояние", async () => {
   render(<SessionBar agent={agentInfo({ sees: { conversation: true, kb: true, materials: 3, images: 0 } })} summary={summary}
     onFrequency={() => {}} />);
   expect(bar()).toHaveTextContent("Claude Code (sonnet)");
-  expect(bar()).toHaveTextContent("видит: разговор, структура базы знаний, 3 материала");
   expect(stateEl()).toHaveTextContent("слушает");
-  expect(bar()).not.toHaveTextContent(NO_VISION);
-  expect(bar()).not.toHaveTextContent(DENY_NOTE);
+  const pop = await know();
+  expect(pop).toHaveTextContent("Видит: разговор, структура базы знаний, 3 материала");
+  expect(pop).not.toHaveTextContent(NO_VISION);
+  expect(pop).not.toHaveTextContent(DENY_NOTE);
 });
 
-test("пометки: модель без зрения и Codex — исключённые папки только просьбой", () => {
-  render(<SessionBar agent={agentInfo({ provider: "codex", label: "Codex", vision: true, deny_enforced: false })}
-    summary={summary} onFrequency={() => {}} />);
-  expect(bar()).toHaveTextContent("Исключённые папки — только просьба");
+test("шапка сессии — одна строка: состояние · модель · профиль · кнопка «Что я знаю»; остальное — в поповере", async () => {
+  render(<SessionBar agent={agentInfo({ grants: [{ id: "m5", label: "Bash npm" }], vision: false, deny_enforced: false,
+    can: { mode: "consent", mcp: ["team-jira"] } })} summary={summary} onFrequency={() => {}} onProfile={() => {}}
+    onRevokeGrant={() => {}} />);
+  for (const gone of ["видит:", "может:", "Разрешено", NO_VISION, DENY_NOTE]) expect(bar()).not.toHaveTextContent(gone);
+  expect(within(bar()).queryByRole("radiogroup")).toBeNull();
+  const button = within(bar()).getByRole("button", { name: "Что я знаю" });
+  expect(button).toHaveClass("btn", "btn--outline", "btn--sm");
+  expect(button).toHaveTextContent("Что я знаю");
+  expect(button).toHaveAttribute("aria-expanded", "false");
+  const pop = await know();
+  expect(button).toHaveAttribute("aria-expanded", "true");
+  expect(within(pop).getByRole("radiogroup", { name: "Как часто писать" })).toBeInTheDocument();
+  expect(within(pop).getByRole("radiogroup", { name: "Профиль" })).toBeInTheDocument();
+  expect(pop).toHaveTextContent("Может: файлы, MCP (team-jira), веб — по вашему согласию");
+  expect(pop).toHaveTextContent("Bash npm");
+  expect(pop).toHaveTextContent(NO_VISION);
+  expect(pop).toHaveTextContent(DENY_NOTE);
+});
+
+test("компактная: «Что я знаю» — кнопка-значок с тем же именем", () => {
+  render(<SessionBar agent={agentInfo()} summary={summary} compact onFrequency={() => {}} />);
+  const button = within(bar()).getByRole("button", { name: "Что я знаю" });
+  expect(button).toHaveClass("btn", "btn--outline", "btn--sm", "btn--icon");
+  expect(button.textContent).toBe("");
+});
+
+test("пометки: модель без зрения и Codex — исключённые папки только просьбой (в «Что я знаю»)", async () => {
+  const { unmount } = render(<SessionBar agent={agentInfo({ provider: "codex", label: "Codex", vision: true,
+    deny_enforced: false })} summary={summary} onFrequency={() => {}} />);
+  expect(await know()).toHaveTextContent("Исключённые папки — только просьба");
+  unmount();
   render(<SessionBar agent={agentInfo({ provider: "opencode", label: "OpenCode", vision: false })} summary={summary}
     onFrequency={() => {}} />);
-  expect(screen.getAllByRole("group", { name: "Сессия ассистента" })[1]).toHaveTextContent("Модель не видит изображения");
+  expect(await know()).toHaveTextContent("Модель не видит изображения");
 });
 
 test("состояние: молчаливый ход — «думает», видимый ответ — «пишет», ошибка — с текстом в подсказке", () => {
@@ -36,7 +70,7 @@ test("состояние: молчаливый ход — «думает», ви
   expect(stateEl()).toHaveTextContent("пишет…");
   rerender(<SessionBar agent={agentInfo({ state: "error", error: "лимит запросов" })} summary={summary} onFrequency={() => {}} />);
   expect(stateEl()).toHaveTextContent("ошибка");
-  expect(stateEl()).toHaveAttribute("title", "лимит запросов");
+  expect(stateEl()).toHaveAccessibleDescription("лимит запросов");          // подсказка Aurora, не title
 });
 
 test("живая область объявляет только ошибку и молчит в «Не отвлекать»", () => {
@@ -53,7 +87,7 @@ test("живая область объявляет только ошибку и 
 test("«Как часто писать»: реже / обычно / чаще, щелчок и стрелки", async () => {
   const onFrequency = vi.fn();
   render(<SessionBar agent={agentInfo({ frequency: "обычно" })} summary={summary} onFrequency={onFrequency} />);
-  const group = screen.getByRole("radiogroup", { name: "Как часто писать" });
+  const group = within(await know()).getByRole("radiogroup", { name: "Как часто писать" });
   expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["реже", "обычно", "чаще"]);
   expect(within(group).getByRole("radio", { name: "обычно" })).toHaveAttribute("aria-checked", "true");
   await userEvent.click(within(group).getByRole("radio", { name: "реже" }));
@@ -63,10 +97,11 @@ test("«Как часто писать»: реже / обычно / чаще, щ
   expect(onFrequency).toHaveBeenLastCalledWith("чаще");
 });
 
-test("частота и профиль — сегменты Aurora (.tabs--sm), роли радио сохранены", () => {
+test("частота и профиль — сегменты Aurora (.tabs--sm), роли радио сохранены", async () => {
   render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} onProfile={() => {}} />);
+  const pop = await know();
   for (const name of ["Как часто писать", "Профиль"]) {
-    const group = screen.getByRole("radiogroup", { name });
+    const group = within(pop).getByRole("radiogroup", { name });
     expect(group).toHaveClass("tabs", "tabs--sm");
     expect(within(group).getAllByRole("radio").length).toBeGreaterThan(1);
   }
@@ -84,8 +119,7 @@ test("компактная: без «видит» и частоты в стро�
   render(<SessionBar agent={agentInfo({ vision: false })} summary={summary} compact onFrequency={() => {}} />);
   expect(bar()).not.toHaveTextContent("видит:");
   expect(screen.queryByRole("radiogroup")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
-  const pop = screen.getByRole("dialog", { name: "Что я знаю" });
+  const pop = await know();
   expect(within(pop).getByRole("radiogroup", { name: "Как часто писать" })).toBeInTheDocument();
   expect(pop).toHaveTextContent("Модель не видит изображения");
 });
@@ -114,22 +148,27 @@ test("модель — та, что запустил Claude Code (system/init); 
   expect(bar()).toHaveTextContent("Claude Code (claude-fable-5-1)");
   expect(bar()).toHaveTextContent("Запущена claude-fable-5-1, в настройках — opus");
   expect(bar().querySelector(".session-bar__model--warn")).not.toBeNull();
+  // Предупреждение — единственная пометка в строке: бейдж Aurora «устарело» (жёлтый).
+  expect(within(bar()).getByText("Запущена claude-fable-5-1, в настройках — opus")
+    .closest(".badge")).toHaveClass("badge", "badge--stale", "session-bar__note--warn");
   // Компактная панель: пометок нет, но модель подсвечена и подсказка — текстом для экранного диктора.
   rerender(<SessionBar agent={wrong} summary={summary} compact onFrequency={() => {}} />);
   const model = bar().querySelector(".session-bar__model")!;
   expect(model).toHaveClass("session-bar__model--warn");
   expect(model).toHaveTextContent("Запущена claude-fable-5-1, в настройках — opus");
-  expect(model.getAttribute("title")).toContain("~/.claude/settings.json");
+  expect(model).toHaveAccessibleDescription(expect.stringContaining("~/.claude/settings.json"));
 });
 
 test("профиль: чип виден всегда (и в компактной), «Рабочая встреча» — по умолчанию и у старого резидента", () => {
   const { rerender } = render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} />);
   const chip = () => bar().querySelector(".session-bar__profile")!;
   expect(chip()).toHaveTextContent("Рабочая встреча");
-  expect(chip().getAttribute("title")).toContain("база знаний");
+  expect(chip()).toHaveClass("badge");
+  expect(chip()).not.toHaveClass("badge--info");
+  expect(chip()).toHaveAccessibleDescription(expect.stringContaining("база знаний"));
   rerender(<SessionBar agent={agentInfo({ profile: "personal" })} summary={summary} compact onFrequency={() => {}} />);
   expect(chip()).toHaveTextContent("Личный");
-  expect(chip()).toHaveClass("session-bar__profile--personal");
+  expect(chip()).toHaveClass("session-bar__profile--personal", "badge", "badge--info");
   rerender(<SessionBar agent={agentInfo({ profile: undefined })} summary={summary} compact onFrequency={() => {}} />);
   expect(chip()).toHaveTextContent("Рабочая встреча");
 });
@@ -137,7 +176,7 @@ test("профиль: чип виден всегда (и в компактной
 test("«Профиль» рядом с «Как часто писать»: щелчок и стрелки зовут onProfile", async () => {
   const onProfile = vi.fn();
   render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} onProfile={onProfile} />);
-  const group = screen.getByRole("radiogroup", { name: "Профиль" });
+  const group = within(await know()).getByRole("radiogroup", { name: "Профиль" });
   expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["рабочая встреча", "личный"]);
   expect(within(group).getByRole("radio", { name: "рабочая встреча" })).toHaveAttribute("aria-checked", "true");
   await userEvent.click(within(group).getByRole("radio", { name: "личный" }));
@@ -163,7 +202,7 @@ test("компактная: переключатель профиля — в п�
   expect(onProfile).toHaveBeenCalledWith("work");
 });
 
-test("личный: видит «только разговор» и вложения пользователя, никакой базы знаний", () => {
+test("личный: видит «только разговор» и вложения пользователя, никакой базы знаний", async () => {
   const personal = (sees: Parameters<typeof agentInfo>[0]) => seesText(agentInfo({ profile: "personal", ...sees }));
   expect(personal({ sees: { conversation: true, kb: false, materials: 0, images: 0 } })).toBe("только разговор");
   expect(personal({ sees: { conversation: true, kb: false, materials: 2, images: 1 } }))
@@ -173,57 +212,60 @@ test("личный: видит «только разговор» и вложен
   render(<SessionBar agent={agentInfo({ profile: "personal", deny_enforced: false,
     sees: { conversation: true, kb: false, materials: 1, images: 0 } })}
     summary={summary} onFrequency={() => {}} />);
-  expect(bar()).toHaveTextContent("видит: разговор и ваши материалы (1 материал)");
-  expect(bar()).not.toHaveTextContent("базы знаний");
+  const pop = await know();
+  expect(pop).toHaveTextContent("Видит: разговор и ваши материалы (1 материал)");
+  expect(pop).not.toHaveTextContent("базы знаний");
   // Пометка об исключённых папках базы — не про «Личный».
-  expect(bar()).not.toHaveTextContent(DENY_NOTE);
+  expect(pop).not.toHaveTextContent(DENY_NOTE);
 });
 
-test("может: файлы, MCP с именами серверов, веб — по вашему согласию (0.3.7)", () => {
+test("может: файлы, MCP с именами серверов, веб — по вашему согласию (0.3.7)", async () => {
   const free = agentInfo({ freedom: true, can: { mode: "consent", mcp: ["team-jira", "team-gitlab"] } });
   render(<SessionBar agent={free} summary={summary} onFrequency={() => {}} />);
-  const can = bar().querySelector(".session-bar__can")!;
-  expect(can).toHaveTextContent("может: файлы, MCP (team-jira, team-gitlab), веб — по вашему согласию");
-  expect(can.getAttribute("title")).toMatch(/только эту встречу/);
+  const can = (await know()).querySelector(".session-bar__can")!;
+  expect(can).toHaveTextContent("Может: файлы, MCP (team-jira, team-gitlab), веб — по вашему согласию");
+  expect(can).toHaveTextContent(/только эту встречу/);                     // пояснение — текстом в поповере
   expect(canText(agentInfo({ can: { mode: "consent", mcp: ["a", "b", "c", "d"] } })))
     .toBe("файлы, MCP (a, b, c…), веб — по вашему согласию");
   expect(canText(agentInfo({ can: { mode: "consent", mcp: null } }))).toBe("файлы, MCP, веб — по вашему согласию");
 });
 
-test("может: без расширенных возможностей — только чтение; локальная модель — ничего", () => {
+test("может: без расширенных возможностей — только чтение; локальная модель — ничего", async () => {
   expect(canText(agentInfo({ can: { mode: "read", mcp: null } }))).toBe("читать встречу и базу знаний");
   expect(canText(agentInfo({ tools: true }))).toBe("читать встречу и базу знаний");   // старый резидент без `can`
   expect(canText(agentInfo({ tools: false, can: { mode: "meet", mcp: null } }))).toBe("");
   render(<SessionBar agent={agentInfo({ tools: false, can: { mode: "meet", mcp: null } })} summary={summary}
     onFrequency={() => {}} />);
-  expect(bar().querySelector(".session-bar__can")).toBeNull();
+  expect((await know()).querySelector(".session-bar__can")).toBeNull();
 });
 
-test("«Личный» со свободой: без MCP; у Codex — пометка, что база закрыта только просьбой", () => {
+test("«Личный» со свободой: без MCP; у Codex — пометка, что база закрыта только просьбой", async () => {
   const personal = agentInfo({ profile: "personal", freedom: true, can: { mode: "consent", mcp: ["team-jira"] } });
   expect(canText(personal)).toBe("файлы, веб — по вашему согласию");
   render(<SessionBar agent={agentInfo({ profile: "personal", provider: "codex", deny_enforced: false,
     can: { mode: "files", mcp: null } })} summary={summary} onFrequency={() => {}} />);
-  expect(bar()).toHaveTextContent(PERSONAL_DENY_NOTE);
-  expect(bar()).not.toHaveTextContent(DENY_NOTE);
+  const pop = await know();
+  expect(pop).toHaveTextContent(PERSONAL_DENY_NOTE);
+  expect(pop).not.toHaveTextContent(DENY_NOTE);
   // Старое имя профиля от резидента до переименования — тоже «Личный».
   expect(canText(agentInfo({ profile: "neutral" as never, can: { mode: "read", mcp: null } })))
     .toBe("читать эту запись и ваши вложения");
 });
 
-test("может: Codex/OpenCode со свободой — только чтение файлов по просьбе", () => {
+test("может: Codex/OpenCode со свободой — только чтение файлов по просьбе", async () => {
   expect(canText(agentInfo({ provider: "codex", can: { mode: "files", mcp: null } }))).toBe("читать файлы по вашей просьбе");
   render(<SessionBar agent={agentInfo({ provider: "codex", can: { mode: "files", mcp: null } })} summary={summary}
     onFrequency={() => {}} />);
-  expect(bar().querySelector(".session-bar__can")!.getAttribute("title")).toMatch(/MCP, веб и действия — только с Claude Code/);
+  expect((await know()).querySelector(".session-bar__can"))
+    .toHaveTextContent(/MCP, веб и действия — только с Claude Code/);
 });
 
-test("разрешено до конца встречи: список в шапке и «×» отзывает", async () => {
+test("разрешено до конца встречи: список в «Что я знаю» и «Отозвать»", async () => {
   const onRevoke = vi.fn();
   render(<SessionBar agent={agentInfo({ grants: [{ id: "m5", label: "Bash npm" }, { id: "m6", label: "MCP team-jira: jira_create_issue" }] })}
     summary={summary} onFrequency={() => {}} onRevokeGrant={onRevoke} />);
-  const grants = bar().querySelector(".session-bar__grants")!;
-  expect(grants).toHaveTextContent("разрешено:");
+  const grants = (await know()).querySelector(".session-bar__grants")!;
+  expect(grants).toHaveTextContent("Разрешено до конца встречи");
   expect(grants).toHaveTextContent("Bash npm");
   expect(grants).toHaveTextContent("MCP team-jira: jira_create_issue");
   await userEvent.click(screen.getByRole("button", { name: "Отозвать: Bash npm" }));

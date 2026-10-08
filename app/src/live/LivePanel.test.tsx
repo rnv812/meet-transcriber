@@ -233,7 +233,7 @@ test("скрыть или вернуть подсказку не вышло — 
   expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
 });
 
-test("кнопки шапки — одинаковые значки с подписью в подсказке при любой ширине", async () => {
+test("кнопки шапки узкой панели — одинаковые значки с подписью в подсказке", async () => {
   render(<LivePanel endpoint={ep} />);
   await act(async () => {});
   const buttons = within(screen.getByRole("banner")).getAllByRole("button");
@@ -241,9 +241,11 @@ test("кнопки шапки — одинаковые значки с подп�
     ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Остановить и сохранить"]);
   for (const b of buttons) {
     expect(b).toHaveClass("btn--icon");
-    expect(b.textContent).toBe(""); // только значок, подпись — title
-    expect(b.getAttribute("title")).toBeTruthy();
+    expect(b.textContent).toBe(""); // только значок, подпись — облачко Aurora (ui/Tip), не системный title
+    expect(b).not.toHaveAttribute("title");
   }
+  const stop = within(screen.getByRole("banner")).getByRole("button", { name: "Остановить и сохранить" });
+  expect(stop).toHaveAccessibleDescription("Остановить и сохранить запись");
 });
 
 test("«Поверх всех окон» включено по умолчанию и переключается", async () => {

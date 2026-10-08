@@ -341,7 +341,7 @@ function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, plac
   useEffect(() => { if (dismissal.hidden) undoBtn.current?.focus(); }, [dismissal.hidden]);
   // «Подсказка скрыта · Вернуть» — плашкой поверх низа области: ничего не сдвигает.
   const undoBar = dismissal.hidden && (
-    <div className="live-undo" role="status">
+    <div className="toast live-undo" role="status">
       <span className="live-undo__text">Подсказка скрыта</span>
       <Button ref={undoBtn} size="xs" variant="link" onClick={dismissal.undo}>Вернуть</Button>
     </div>

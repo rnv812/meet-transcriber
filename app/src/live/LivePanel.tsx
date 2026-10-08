@@ -3,13 +3,19 @@
  *
  * Окно создаёт и закрывает оболочка по `snapshot.live.active`; окно прозрачное
  * — стекло рисует корень панели. Панель двигают за шапку (двойной щелчок по
- * ней — на весь экран и обратно), её растягивают за края. Шапка 48 px: точка
- * записи, таймер, знак агента в его состоянии (`AgentMark`: слушает, ищет,
- * пишет, ждёт) и слово, бейдж непрочитанного, кнопки.
+ * ней — на весь экран и обратно), её растягивают за края. Шапка — 56 px в
+ * развёрнутой (высота верхней панели Aurora) и 48 в свёрнутой: точка записи,
+ * таймер, знак агента в его состоянии (`AgentMark`: слушает, ищет, пишет, ждёт)
+ * и слово, бейдж непрочитанного, кнопки-значки; «Стоп» от STOP_LABEL_PX — с подписью.
+ *
+ * Корень — плотное стекло на непрозрачной подложке (panel.css): окно прозрачное
+ * ради скруглений, и размывать под панелью нечего — рабочий стол не просвечивает.
  *
  * Свёрнутая (макет MeetLiveMini) — под шапкой одно из: «Не удалось запустить
- * ассистента» («Повторить», «Открыть настройки»), вопрос вам («Копировать»,
- * «Показать в ленте»), «Догоняю начало встречи» с полосой хода, иначе одна
+ * ассистента» («Повторить», «Открыть настройки»), ассистент ждёт решения по
+ * карточке подтверждения («Решить» — развернуть к ней: кнопки в самой карточке
+ * ленты), вопрос вам («Копировать», «Показать в ленте»), «Догоняю начало
+ * встречи» с полосой хода, иначе одна
  * строка: последнее сообщение агента или самая важная подсказка (она
  * сменяется, только когда сменилась сама); щелчок разворачивает панель.
  * Развёрнутая и на весь экран — рабочая область (`LiveWorkspace`): вкладки,
@@ -51,7 +57,7 @@ import { inTauri, invoke, trayPanelOpen } from "../lib/shell";
 import type { AgentProfile, ChatMessage, LiveHint } from "../lib/types";
 import {
   Bell, BellOff, Check, ChevronDown, ChevronUp, Copy, CornerDownRight, Maximize2, Minimize2, Pin, PowerOff,
-  RefreshCw, Save, SlidersHorizontal, Square, Trash2, TriangleAlert,
+  RefreshCw, Save, ShieldQuestion, SlidersHorizontal, Square, Trash2, TriangleAlert,
 } from "lucide-react";
 import { AgentMark, type AgentState } from "../ui/AgentMark";
 import { BADGE_CLASS } from "../ui/badge";
@@ -59,6 +65,7 @@ import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
+import { Tip } from "../ui/Tip";
 import { Truncate } from "../ui/Truncate";
 import { isFinalAgent } from "./chatModel";
 import { CatchupNote, LiveWorkspace, participantOn, useLiveView } from "./LiveWorkspace";
@@ -77,6 +84,8 @@ import type { PanelStatus } from "./useLiveStatus";
 import "./live.css";
 
 const TICK_MS = 1000;
+/** Панель не уже этого — «Стоп» в шапке с подписью (макет MeetLive), уже — значком. */
+export const STOP_LABEL_PX = 420;
 /** Сколько держать в шапке заметку о несработавшем действии с подсказкой. */
 export const HINT_NOTE_MS = 8000;
 
@@ -203,6 +212,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const [quiet, setQuiet] = useQuiet(live.quietDefault);
   const root = useRef<HTMLDivElement>(null);
   const wide = useWide(root);
+  const stopLabelled = useWide(root, STOP_LABEL_PX);
   // На весь экран — всё содержимое, как у развёрнутой.
   const open = view.expanded || view.maximized;
   const ask = useLiveAsk(live, open);
@@ -348,9 +358,11 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // отдельной строкой (под шапкой 48 в окне 120 места на одну карточку).
   const [tempShort, tempRest] = TEMP_BADGE.split(" — ");
   const tempBadge = temporary && !open ? (
-    <span className={`${BADGE_CLASS.temp} live-temp__badge`} role="note" title={TEMP_NOTE}>
-      {tempShort}{tempRest && <span className="sr-only"> — {tempRest}</span>}
-    </span>
+    <Tip content={TEMP_NOTE}>
+      <span className={`${BADGE_CLASS.temp} live-temp__badge`} role="note">
+        {tempShort}{tempRest && <span className="sr-only"> — {tempRest}</span>}
+      </span>
+    </Tip>
   ) : null;
   const failure = failed ? (
     <StartFailed error={status?.error ?? ""} retryError={retryError} onRetry={retry} onSettings={openModels}
@@ -402,7 +414,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           {head.mark ? <AgentMark state={head.mark} size={open ? 16 : 14} />
             : <Icon as={TriangleAlert} className="live-head__alert" />}
           <span className="live-head__state">{state}</span>
-          {quiet && <span className="live-head__quiet-tag">тихо</span>}
+          {quiet && <span className={`${BADGE_CLASS.plain} live-head__quiet-tag`}>тихо</span>}
           {/* Ошибки и связь — в той же строке состояния шапки (одна, по важности):
               не закрывают поле вопроса и действия и не сдвигают содержимое. */}
           {stopError ? (
@@ -466,9 +478,12 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
                 disabled={stopping} />
             ) : (
               // Одно имя в обоих режимах: и ассистент, что пишет сам, на «Стоп» дописывает и сохраняет запись.
-              <Button variant="danger" icon={Square} className="btn--icon live-head__stop"
-                aria-label="Остановить и сохранить" title="Остановить и сохранить запись"
-                onClick={() => stop(false)} disabled={stopping} />
+              <Tip content="Остановить и сохранить запись">
+                <Button variant="danger" icon={Square} className={`${stopLabelled ? "" : "btn--icon "}live-head__stop`}
+                  aria-label="Остановить и сохранить" onClick={() => stop(false)} disabled={stopping}>
+                  {stopLabelled ? "Стоп" : null}
+                </Button>
+              </Tip>
             )
           )}
         </span>
@@ -476,7 +491,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       {/* Отдельной строкой под шапкой: в шапке узкой панели метка обрезалась бы.
           Свёрнутая — метка в строке карточки (`tempBadge`). */}
       {temporary && open && (
-        <div className="live-temp" role="note" title={TEMP_NOTE}>
+        <div className="live-temp" role="note" aria-description={TEMP_NOTE}>
           <span className={`${BADGE_CLASS.temp} live-temp__badge`}>{TEMP_BADGE}</span>
           <span className="live-temp__note">удалится вместе с чатом</span>
         </div>
@@ -502,7 +517,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} />
         </div>
       ) : failure ? failure
-      : participant && chat.pinned && agentLine ? (
+      : participant && chat.cards[0] ? (
+        <NeedsDecision m={chat.cards[0]} lead={tempBadge} onShow={() => showInFeed(chat.cards[0]!.id)} />
+      ) : participant && chat.pinned && agentLine ? (
         <AskYou m={agentLine} lead={tempBadge} onOpen={() => setExpanded(true)} onShow={() => showInFeed(agentLine.id)} />
       ) : catchup && !urgentHint ? (
         <div className="live-mini"><CatchupNote catchup={catchup} mini lead={tempBadge} /></div>
@@ -548,6 +565,26 @@ function AskYou({ m, lead, onOpen, onShow }: {
         {m.t != null && <span className="live-mini__time">{clock(m.t)}</span>}
         <Button size="xs" icon={copied ? Check : Copy} onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>
         <Button size="xs" variant="ghost" icon={CornerDownRight} onClick={onShow}>Показать в ленте</Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Свёрнутая: ассистент ждёт решения по карточке подтверждения — без него ход стоит.
+ * Только указатель: «Решить» разворачивает панель к карточке в ленте, кнопки — в ней.
+ */
+function NeedsDecision({ m, lead, onShow }: { m: ChatMessage; lead?: ReactNode; onShow: () => void }) {
+  const what = `Ассистент хочет выполнить: ${m.title ?? m.tool ?? "действие"}`;
+  return (
+    <div className="live-mini" role="group" aria-label="Ассистент ждёт решения">
+      <p className="live-mini__line">
+        <span className={`${BADGE_CLASS.temp} live-mini__badge`}>Нужно решение</span>
+        <Truncate className="live-mini__text">{what}</Truncate>
+      </p>
+      <div className="live-mini__actions">
+        {lead}
+        <Button size="xs" variant="mono" icon={ShieldQuestion} onClick={onShow}>Решить</Button>
       </div>
     </div>
   );

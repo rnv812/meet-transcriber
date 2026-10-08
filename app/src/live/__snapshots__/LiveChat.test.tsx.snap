@@ -9,15 +9,41 @@ exports[`карточка WebFetch: настоящий хост первой с�
   <div
     class="chat-card__title"
   >
-    Ассистент хочет выполнить: 
-    <b>
-      открыть адрес
-    </b>
-    <span
-      class="chat-card__size"
+    <svg
+      aria-hidden="true"
+      class="lucide lucide-shield-question-mark lucide-shield-question chat-card__icon"
+      fill="none"
+      focusable="false"
+      height="14"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.75"
+      viewBox="0 0 24 24"
+      width="14"
+      xmlns="http://www.w3.org/2000/svg"
     >
-       · 
-      5 строк, 135 симв.
+      <path
+        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+      />
+      <path
+        d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"
+      />
+      <path
+        d="M12 17h.01"
+      />
+    </svg>
+    <span>
+      Ассистент хочет выполнить: 
+      <b>
+        открыть адрес
+      </b>
+      <span
+        class="chat-card__size"
+      >
+         · 
+        5 строк, 135 симв.
+      </span>
     </span>
   </div>
   <div
@@ -41,7 +67,7 @@ exports[`карточка WebFetch: настоящий хост первой с�
   >
     <button
       class="btn btn--mono btn--sm chat-card__allow"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -52,7 +78,7 @@ exports[`карточка WebFetch: настоящий хост первой с�
     </button>
     <button
       class="btn btn--outline btn--sm chat-card__deny"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -74,15 +100,41 @@ exports[`карточка записи: начало и конец с помет
   <div
     class="chat-card__title"
   >
-    Ассистент хочет выполнить: 
-    <b>
-      запись в файл
-    </b>
-    <span
-      class="chat-card__size"
+    <svg
+      aria-hidden="true"
+      class="lucide lucide-shield-question-mark lucide-shield-question chat-card__icon"
+      fill="none"
+      focusable="false"
+      height="14"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.75"
+      viewBox="0 0 24 24"
+      width="14"
+      xmlns="http://www.w3.org/2000/svg"
     >
-       · 
-      17 строк, 263 симв.
+      <path
+        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+      />
+      <path
+        d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"
+      />
+      <path
+        d="M12 17h.01"
+      />
+    </svg>
+    <span>
+      Ассистент хочет выполнить: 
+      <b>
+        запись в файл
+      </b>
+      <span
+        class="chat-card__size"
+      >
+         · 
+        17 строк, 263 симв.
+      </span>
     </span>
   </div>
   <pre
@@ -110,6 +162,7 @@ exports[`карточка записи: начало и конец с помет
   <button
     aria-expanded="true"
     class="btn btn--link chat-card__more"
+    tabindex="0"
     type="button"
   >
     <span
@@ -123,7 +176,7 @@ exports[`карточка записи: начало и конец с помет
   >
     <button
       class="btn btn--mono btn--sm chat-card__allow"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -133,9 +186,9 @@ exports[`карточка записи: начало и конец с помет
       </span>
     </button>
     <button
+      aria-description="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
       class="btn btn--ghost btn--sm chat-card__allow-meeting"
-      data-density="compact"
-      title="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
+      tabindex="0"
       type="button"
     >
       <span
@@ -146,7 +199,7 @@ exports[`карточка записи: начало и конец с помет
     </button>
     <button
       class="btn btn--outline btn--sm chat-card__deny"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -168,15 +221,41 @@ exports[`карточки по инструменту: запись, правк�
   <div
     class="chat-card__title"
   >
-    Ассистент хочет выполнить: 
-    <b>
-      правку файла
-    </b>
-    <span
-      class="chat-card__size"
+    <svg
+      aria-hidden="true"
+      class="lucide lucide-shield-question-mark lucide-shield-question chat-card__icon"
+      fill="none"
+      focusable="false"
+      height="14"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.75"
+      viewBox="0 0 24 24"
+      width="14"
+      xmlns="http://www.w3.org/2000/svg"
     >
-       · 
-      5 строк, 159 симв.
+      <path
+        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+      />
+      <path
+        d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"
+      />
+      <path
+        d="M12 17h.01"
+      />
+    </svg>
+    <span>
+      Ассистент хочет выполнить: 
+      <b>
+        правку файла
+      </b>
+      <span
+        class="chat-card__size"
+      >
+         · 
+        5 строк, 159 симв.
+      </span>
     </span>
   </div>
   <pre
@@ -194,7 +273,7 @@ exports[`карточки по инструменту: запись, правк�
   >
     <button
       class="btn btn--mono btn--sm chat-card__allow"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -205,7 +284,7 @@ exports[`карточки по инструменту: запись, правк�
     </button>
     <button
       class="btn btn--outline btn--sm chat-card__deny"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -227,15 +306,41 @@ exports[`карточки по инструменту: запись, правк�
   <div
     class="chat-card__title"
   >
-    Ассистент хочет выполнить: 
-    <b>
-      MCP team-jira → jira_create_issue
-    </b>
-    <span
-      class="chat-card__size"
+    <svg
+      aria-hidden="true"
+      class="lucide lucide-shield-question-mark lucide-shield-question chat-card__icon"
+      fill="none"
+      focusable="false"
+      height="14"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.75"
+      viewBox="0 0 24 24"
+      width="14"
+      xmlns="http://www.w3.org/2000/svg"
     >
-       · 
-      6 строк, 125 симв.
+      <path
+        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+      />
+      <path
+        d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"
+      />
+      <path
+        d="M12 17h.01"
+      />
+    </svg>
+    <span>
+      Ассистент хочет выполнить: 
+      <b>
+        MCP team-jira → jira_create_issue
+      </b>
+      <span
+        class="chat-card__size"
+      >
+         · 
+        6 строк, 125 симв.
+      </span>
     </span>
   </div>
   <pre
@@ -254,7 +359,7 @@ exports[`карточки по инструменту: запись, правк�
   >
     <button
       class="btn btn--mono btn--sm chat-card__allow"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -265,7 +370,7 @@ exports[`карточки по инструменту: запись, правк�
     </button>
     <button
       class="btn btn--outline btn--sm chat-card__deny"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -287,15 +392,41 @@ exports[`карточки по инструменту: запись, правк�
   <div
     class="chat-card__title"
   >
-    Ассистент хочет выполнить: 
-    <b>
-      запись в файл
-    </b>
-    <span
-      class="chat-card__size"
+    <svg
+      aria-hidden="true"
+      class="lucide lucide-shield-question-mark lucide-shield-question chat-card__icon"
+      fill="none"
+      focusable="false"
+      height="14"
+      stroke="currentColor"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="1.75"
+      viewBox="0 0 24 24"
+      width="14"
+      xmlns="http://www.w3.org/2000/svg"
     >
-       · 
-      17 строк, 263 симв.
+      <path
+        d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+      />
+      <path
+        d="M9.1 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"
+      />
+      <path
+        d="M12 17h.01"
+      />
+    </svg>
+    <span>
+      Ассистент хочет выполнить: 
+      <b>
+        запись в файл
+      </b>
+      <span
+        class="chat-card__size"
+      >
+         · 
+        17 строк, 263 симв.
+      </span>
     </span>
   </div>
   <pre
@@ -317,6 +448,7 @@ exports[`карточки по инструменту: запись, правк�
   <button
     aria-expanded="false"
     class="btn btn--link chat-card__more"
+    tabindex="0"
     type="button"
   >
     <span
@@ -330,7 +462,7 @@ exports[`карточки по инструменту: запись, правк�
   >
     <button
       class="btn btn--mono btn--sm chat-card__allow"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span
@@ -340,9 +472,9 @@ exports[`карточки по инструменту: запись, правк�
       </span>
     </button>
     <button
+      aria-description="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
       class="btn btn--ghost btn--sm chat-card__allow-meeting"
-      data-density="compact"
-      title="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
+      tabindex="0"
       type="button"
     >
       <span
@@ -353,7 +485,7 @@ exports[`карточки по инструменту: запись, правк�
     </button>
     <button
       class="btn btn--outline btn--sm chat-card__deny"
-      data-density="compact"
+      tabindex="0"
       type="button"
     >
       <span

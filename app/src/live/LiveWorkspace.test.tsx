@@ -124,6 +124,17 @@ test("действия подсказки: закрепить, скрыть, к�
   expect(await within(first!).findByText("Скопировано")).toBeInTheDocument();
 });
 
+test("подсказка — карточка Aurora, её действия — кнопки Aurora (btn--outline btn--sm), «Подсказка скрыта» — тост", async () => {
+  const live = makeLive({ hint: vi.fn(async () => true) });
+  render(<Host live={live} wide />);
+  const list = screen.getByRole("list", { name: "Подсказки" });
+  const card = within(list).getAllByRole("listitem")[0]!;
+  expect(card).toHaveClass("live-hint", "card");
+  expect(within(card).getByRole("button", { name: "Спросить об этом" })).toHaveClass("btn", "btn--outline", "btn--sm");
+  await userEvent.click(within(list).getByRole("button", { name: "Скрыть" }));
+  expect(screen.getByText("Подсказка скрыта").closest(".live-undo")).toHaveClass("toast");
+});
+
 test("«Скрыть» уходит ассистенту сразу; «Вернуть» — с фокусом — возвращает её (restore)", async () => {
   const live = makeLive({ hint: vi.fn(async () => true) });
   render(<Host live={live} wide />);
@@ -227,7 +238,7 @@ test("в карточке «Спросить об этом» уходит аге
   render(<Host live={live} onAskHint={onAskHint} />);
   await userEvent.click(screen.getByRole("tab", { name: "Подсказки" }));
   const ask = screen.getByRole("button", { name: "Спросить об этом" });
-  expect(ask).toHaveAttribute("title", expect.stringContaining("агента"));
+  expect(ask).toHaveAccessibleDescription(expect.stringContaining("агента"));
   await userEvent.click(ask);
   expect(onAskHint).toHaveBeenCalledWith(expect.objectContaining({ id: "h1", text: "У миграции нет ответственного" }));
   expect(screen.getByRole("tab", { name: "Подсказки" })).toHaveAttribute("aria-selected", "true");

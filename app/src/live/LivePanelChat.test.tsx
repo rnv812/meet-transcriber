@@ -66,6 +66,26 @@ test("свёрнутая: закреплённый вопрос перекрыв
   expect(screen.getByRole("button", { name: /Вопрос вам: Сказать про срок\?/ })).toBeInTheDocument();
 });
 
+test("свёрнутая: ассистент ждёт решения — строка-указатель важнее вопроса; «Решить» разворачивает к карточке с кнопками", async () => {
+  const card = {
+    ...agentMsg("m3"), kind: "system" as const, status: undefined, mode: undefined, card: "confirm" as const, tool: "Bash",
+    title: "команду", text: "Ассистент хочет выполнить: команду", args: "npm test", expires_at: Date.now() / 1000 + 120,
+  };
+  render(<LivePanel endpoint={ep} />);
+  act(() => {
+    liveStream().emit("state", liveState);
+    liveStream().emit("chat_snapshot", { messages: [agentMsg("m1", { text: "Сказать про срок?", pin: true }), card], seq: 3 });
+  });
+  const pointer = screen.getByRole("group", { name: "Ассистент ждёт решения" });
+  expect(pointer).toHaveTextContent("Ассистент хочет выполнить: команду");
+  expect(screen.queryByRole("button", { name: /Вопрос вам: / })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Решить" }));
+  const box = await screen.findByRole("group", { name: "Ассистент хочет выполнить: команду" });
+  expect(box.closest("[role='log']")).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Разрешить один раз" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Отклонить" })).toBeInTheDocument();
+});
+
 test("без агента-участника — прежняя строка подсказок", () => {
   render(<LivePanel endpoint={ep} />);
   act(() => liveStream().emit("state", { ...liveState, agent: undefined, hints_enabled: true }));

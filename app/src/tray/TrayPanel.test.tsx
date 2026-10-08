@@ -209,3 +209,24 @@ test("подмена микрофона во время записи — пре�
   panel({ snapshot: snap({ status: "recording", devices_fallback: [{ kind: "mic", name: "USB", device: null }] }) });
   expect(screen.getByText("Микрофон «USB» не найден — запись с системного")).toBeInTheDocument();
 });
+
+// --- Доводка 0.4 (аудит, A10): метки — бейджи Aurora, предупреждение и ошибка — выноски ---
+
+test("метки записи — бейджи Aurora: «с ассистентом» и временная встреча (badge--stale)", () => {
+  panel({ snapshot: snap({ status: "recording", source: "live", temporary: true,
+    live: live({ active: true, attached: true }) }) });
+  expect(screen.getByText("с ассистентом").closest(".badge")).toHaveClass("badge", "badge--plain");
+  expect(screen.getByText("Временная — не сохранится").closest(".badge")).toHaveClass("badge", "badge--stale");
+});
+
+test("предупреждение — выноска callout--warn со значком, ошибка — callout--err", async () => {
+  vi.spyOn(api, "recordingCommand").mockRejectedValue(new Error("микрофон занят"));
+  panel({ snapshot: snap({ status: "recording", devices_fallback: [{ kind: "mic", name: "USB", device: null }] }) });
+  const warn = screen.getByText("Микрофон «USB» не найден — запись с системного").closest(".callout")!;
+  expect(warn).toHaveClass("callout", "callout--warn", "tp__callout");
+  expect(warn.querySelector("svg")).not.toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Остановить" }));
+  const error = await screen.findByRole("alert");
+  expect(error).toHaveClass("callout", "callout--err", "tp__callout");
+  expect(error).toHaveTextContent("микрофон занят");
+});
