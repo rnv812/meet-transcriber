@@ -26,7 +26,9 @@ import { EmptyState } from "../../ui/EmptyState";
 import { Loading, StatusSlot } from "../../ui/Loading";
 import { PaneResizer } from "../../ui/PaneResizer";
 import { About } from "./About";
+import { type Appearance, DEFAULT_APPEARANCE } from "../../theme/appearance";
 import { AnalysisSection } from "./AnalysisSection";
+import { AppearanceSection } from "./AppearanceSection";
 import { AsrChoice, backendOf } from "./AsrChoice";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
@@ -51,10 +53,11 @@ import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
 type SectionId =
-  | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "categories" | "markup"
+  | "appearance" | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "categories" | "markup"
   | "diagnostics" | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
+  { id: "appearance", title: "Оформление" },
   { id: "recording", title: "Запись" },
   { id: "sound", title: "Звук" },
   { id: "auto", title: "Автозапись" },
@@ -70,7 +73,7 @@ const MENU: { id: SectionId; title: string }[] = [
   { id: "advanced", title: "Дополнительно" },
 ];
 
-const NO_DRAFT: SectionId[] = ["diagnostics", "about"];
+const NO_DRAFT: SectionId[] = ["appearance", "diagnostics", "about"];
 
 /**
  * Разделы, в которых видна правка ключа `group.key`: точка у раздела в меню.
@@ -81,7 +84,9 @@ export function sectionsOf(group: string, key: string): SectionId[] {
   switch (group) {
     case "recording":
       return key === "mic_device" || key === "output_device" ? ["sound"] : ["recording"];
-    case "ui": return ["recording"];
+    case "ui":
+      // Оформление пишется сразу, мимо черновика; в «Записи» — уведомления.
+      return ["theme", "aurora", "aurora_style", "motion"].includes(key) ? [] : ["recording"];
     case "auto_record": return ["auto"];
     case "asr": return ["asr"];
     case "export": return ["export"];
@@ -339,8 +344,11 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
 /** Меню разделов: тексту настроек справа остаётся не меньше 420 px. */
 const SETTINGS_MENU = { def: 200, min: 140, max: 360, reserve: 420 };
 
-export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef, onDirtyChange }: {
+export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef, onDirtyChange, appearance, onAppearance }: {
   endpoint: Endpoint;
+  /** Текущее оформление окна и как его применить (useAppearance в App). */
+  appearance?: Appearance;
+  onAppearance?: (a: Appearance) => void;
   /** Появились или пропали несохранённые правки (оболочке: «Выход» из трея спрашивает). */
   onDirtyChange?: (dirty: boolean) => void;
   /** Сюда настройки кладут, есть ли несохранённое и как его сохранить (вопрос при уходе — в App). */
@@ -519,8 +527,11 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           )}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="settings__content">
-          {!settings && section !== "about" && section !== "diagnostics" ? (
+          {!settings && section !== "about" && section !== "diagnostics" && section !== "appearance" ? (
             error ? <EmptyState title="Настройки недоступны" /> : <Loading label="Загружаю настройки…" />
+          ) : section === "appearance" ? (
+            <AppearanceSection endpoint={endpoint} value={appearance ?? DEFAULT_APPEARANCE}
+              onPreview={onAppearance ?? (() => {})} />
           ) : section === "recording" ? (
             <RecordingSection draft={draft} set={set} recordingsDir={recordingsDir} />
           ) : section === "sound" ? (

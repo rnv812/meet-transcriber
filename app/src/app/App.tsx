@@ -47,8 +47,7 @@ export function App() {
   const [cardTick, setCardTick] = useState(0);
   const resident = useResident();
   // Оформление (тема, палитра, северное сияние): кеш → настройки резидента → другие окна.
-  // TODO(Task 6): сохранить результат (look) и передать в SettingsPane.
-  useAppearance(resident.endpoint ?? null);
+  const look = useAppearance(resident.endpoint ?? null);
   // Категории правят в настройках: из них вернулись — список перечитывается.
   const categories = useCategories(resident.endpoint ?? null, section === "settings");
   /** Фильтр списка по категориям (запоминается в этом окне); пусто — все записи. */
@@ -254,6 +253,7 @@ export function App() {
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
                 initial={settingsPart?.part} initialTick={settingsPart?.n} guardRef={settingsGuard}
+                appearance={look.appearance} onAppearance={look.preview}
                 onDirtyChange={(dirty) => void setSettingsDirty(dirty)}
                 // Мастер заменяет окно целиком: несохранённое — через тот же вопрос.
                 onRunWizard={(step) => leaveSettings(() => gate.open(step ?? "hardware"))} />

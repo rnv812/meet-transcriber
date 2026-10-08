@@ -677,3 +677,18 @@ test("команда после записи: сказано, что ассис�
   expect(tip).toHaveTextContent("live_state.json");
   expect(tip).toHaveTextContent("дописывает");
 });
+
+test("«Оформление» — первый раздел, без «Сохранить»: применяется сразу", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="appearance" />);
+  const nav = await screen.findByRole("navigation", { name: "Разделы настроек" });
+  expect(within(nav).getAllByRole("button")[0]).toHaveTextContent("Оформление");
+  expect(await screen.findByRole("radiogroup", { name: "Тема" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
+});
+
+test("ключи оформления не попадают в черновик других разделов", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="appearance" />);
+  await userEvent.click(await screen.findByRole("radio", { name: "Светлая" }));
+  const nav = screen.getByRole("navigation", { name: "Разделы настроек" });
+  expect(within(nav).queryByTitle("Есть несохранённые изменения")).not.toBeInTheDocument();
+});

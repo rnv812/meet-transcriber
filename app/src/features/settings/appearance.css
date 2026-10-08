@@ -1,0 +1,17 @@
+/* «Оформление»: образцы палитр сияния. Цвета — из палитры на самом образце
+   (data-aurora на .swatch), а не hex: образец всегда совпадает с окном. */
+.appearance { display: flex; flex-direction: column; }
+.appearance__error { margin: 8px 0 0; color: var(--danger); }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch {
+  position: relative; display: inline-flex; align-items: center; gap: 8px;
+  height: var(--control-sm); padding: 0 10px 0 4px; border-radius: var(--r-control-sm);
+  border: 1px solid var(--hairline); cursor: pointer; color: var(--ink-2);
+}
+.swatch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.swatch__chip {
+  width: 22px; height: 22px; border-radius: var(--r-full);
+  background: radial-gradient(circle at 35% 30%, var(--wave-5), var(--wave-4) 45%, var(--wave-2) 80%);
+}
+.swatch:has(input:checked) { border-color: var(--control-line); color: var(--ink); font-weight: 600; }
+.swatch:has(input:focus-visible) { box-shadow: var(--focus-ring); }
