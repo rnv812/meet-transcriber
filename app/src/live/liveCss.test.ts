@@ -59,6 +59,11 @@ test("сенсорный экран: поставленная реакция н�
   expect(touch).toMatch(/\.chat-react__btn\.is-on \{ opacity: 1 !important; \}/);
 });
 
+test("поле ввода чата без своего кольца фокуса: фокус показывает кромка сияния строки", () => {
+  const css = clean(join("live", "chat.css"));
+  expect(css).toMatch(/\.chat-compose__field:focus-visible[^{]*\{[^}]*box-shadow: none/);
+});
+
 test("отклик на реакцию гаснет анимацией, но не при «уменьшить движение»", () => {
   const css = clean(join("live", "chat.css"));
   expect(css).toMatch(/\.chat-msg__ack \{[^}]*animation: chat-ack/);
