@@ -37,7 +37,7 @@
  * клавиатура остаётся у звонка, пока человек не щёлкнет в панель.
  */
 
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { plainMarkdown } from "../lib/agentRef";
 import {
@@ -101,6 +101,9 @@ function useHintNote(error: { id: string; text: string; action?: string } | null
 const FIND_MS = 2000;
 /** Сколько «Копировать» показывает «Скопировано». */
 const COPIED_MS = 1500;
+/** «Показать в ленте»: сколько ждать, пока сообщение появится в ленте, и сколько его подсвечивать. */
+const REVEAL_MS = 1500;
+const FLASH_MS = 1600;
 
 /**
  * Знак агента по слову его состояния: слушает, ищет (думает, догоняет),
@@ -236,6 +239,10 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   };
   // Временная встреча (идёт запись резидента с ассистентом в ней).
   const temporary = attached && !!status?.temporary;
+  // Была ли эта встреча временной: после сбоя пометки в снимке уже нет, а
+  // «Повторить» должно начать снова временную, а не сохраняемую встречу.
+  const wasTemporary = useRef(false);
+  if (status?.temporary) wasTemporary.current = true;
   // Вопрос «Остановить без сохранения?» / конец временной встречи. Свёрнутую
   // панель на время вопроса разворачиваем (в строку он не помещается), потом — обратно.
   const [asking, setAsking] = useState<"discard" | "temp-end" | null>(null);
@@ -276,7 +283,8 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const retry = () => {
     setRetryError(null);
     const profile: AgentProfile | undefined = chat.agent?.profile ?? live.agent?.profile;
-    const call = status?.recording ? liveAttach(endpoint, profile) : liveStart(endpoint, profile ? { profile } : {});
+    const opts = { ...(wasTemporary.current ? { temporary: true } : {}), ...(profile ? { profile } : {}) };
+    const call = status?.recording ? liveAttach(endpoint, profile) : liveStart(endpoint, opts);
     return call.catch((e) => setRetryError(errorText(e)));
   };
   // Раздел «Модели ИИ» главного окна (оболочка откроет окно Meet на нём).
@@ -303,14 +311,23 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const newHints = quiet ? 0 : participant ? unseenAgent : ws.unseen.hints;
   const shownAgent = useShownAgentLine(chat, quiet);
   const agentLine = participant ? shownAgent : null;
-  // «Показать в ленте»: развернуть и, когда лента чата отрисуется, прокрутить к сообщению.
+  // «Показать в ленте»: развернуть и, когда лента чата отрисуется, прокрутить
+  // к сообщению, перевести на него фокус и подсветить (как «к сообщению …» в
+  // ленте). Не появилось за REVEAL_MS — больше не ждём.
   const [reveal, setReveal] = useState<string | null>(null);
   useEffect(() => {
     if (!open || !reveal) return;
     const rows = root.current?.querySelectorAll<HTMLElement>("li[data-id]") ?? [];
     const row = [...rows].find((el) => el.dataset.id === reveal);
-    if (!row) return;
+    if (!row) {
+      const t = setTimeout(() => setReveal(null), REVEAL_MS);
+      return () => clearTimeout(t);
+    }
     row.scrollIntoView?.({ block: "center" });
+    row.tabIndex = 0;
+    row.focus({ preventScroll: true });
+    row.classList.add("is-flash");
+    setTimeout(() => row.classList.remove("is-flash"), FLASH_MS);
     setReveal(null);
   }, [open, reveal, chat.items]);
   const showInFeed = (id: string) => {
@@ -322,10 +339,52 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const dragAnywhere = (e: MouseEvent) => {
     if (!open && !(e.target as Element).closest(".live-head")) headPress(e, startDrag);
   };
+  // Временная встреча в свёрнутой панели: метка — в строке карточки, а не
+  // отдельной строкой (под шапкой 48 в окне 120 места на одну карточку).
+  const [tempShort, tempRest] = TEMP_BADGE.split(" — ");
+  const tempBadge = temporary && !open ? (
+    <span className={`${BADGE_CLASS.temp} live-temp__badge`} role="note" title={TEMP_NOTE}>
+      {tempShort}{tempRest && <span className="sr-only"> — {tempRest}</span>}
+    </span>
+  ) : null;
   const failure = failed ? (
     <StartFailed error={status?.error ?? ""} retryError={retryError} onRetry={retry} onSettings={openModels}
-      compact={!open} />
+      compact={!open} lead={tempBadge} />
   ) : null;
+  // Свёрнутая строка: последнее сообщение агента, самая важная подсказка или реплика.
+  const line = participant ? (
+    <button type="button" className="live-last" onClick={() => setExpanded(true)}
+      aria-label={agentLine ? `Ассистент: ${agentText(agentLine)}. Открыть чат` : "Развернуть панель"}>
+      {agentLine ? (
+        <>
+          <span className="live-last__kind live-last__kind--agent">Ассистент</span>
+          <Truncate className="live-last__text">{agentText(agentLine)}</Truncate>
+        </>
+      ) : last ? (
+        <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
+          {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
+          <span>{last.text}</span>
+        </Truncate>
+      ) : <span className="live-last__text muted">Ассистент слушает встречу</span>}
+    </button>
+  ) : (
+    <button type="button" className={`live-last${shown && isUrgent(shown) ? " live-last--urgent" : ""}`} onClick={openHints}
+      aria-label={shown ? `Подсказка: ${shown.text}. Открыть подсказки` : "Развернуть панель"}>
+      {shown ? (
+        <>
+          <span className={`live-last__kind live-hint--${shown.kind}`}>{KIND_LABEL[shown.kind]}</span>
+          <Truncate className="live-last__text">{shown.text}</Truncate>
+        </>
+      ) : last ? (
+        <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
+          {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
+          <span>{last.text}</span>
+        </Truncate>
+      ) : <span className="live-last__text muted">{live.loaded || participant ? "Реплики появятся, как только их расшифрует ассистент" : "Ассистент подключается…"}</span>}
+    </button>
+  );
+  // Прежний режим: «Вам вопрос» важнее хода «Догоняю» — как раньше.
+  const urgentHint = !participant && !!shown && isUrgent(shown);
   return (
     <div ref={root} className={`live-panel glass glass--dense${mods}${quiet ? " live-panel--quiet" : ""}`}
       onMouseDown={dragAnywhere}>
@@ -364,8 +423,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           )}
         </span>
         {!open && newHints > 0 && (
-          <span className={`${BADGE_CLASS.run} badge--plain live-head__count`}
-            aria-label={`${participant ? "новых сообщений" : "новых подсказок"}: ${newHints}`}>{newHints}</span>
+          <span className={`${BADGE_CLASS.run} badge--plain live-head__count`}>
+            <span className="sr-only">{participant ? "новых сообщений" : "новых подсказок"}: </span>{newHints}
+          </span>
         )}
         {/* Все кнопки шапки — значки 32 px одного вида при любой ширине; подпись — в подсказке. */}
         <span className="live-head__actions">
@@ -407,8 +467,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           )}
         </span>
       </header>
-      {/* Отдельной строкой под шапкой: в шапке узкой панели метка обрезалась бы. */}
-      {temporary && (
+      {/* Отдельной строкой под шапкой: в шапке узкой панели метка обрезалась бы.
+          Свёрнутая — метка в строке карточки (`tempBadge`). */}
+      {temporary && open && (
         <div className="live-temp" role="note" title={TEMP_NOTE}>
           <span className={`${BADGE_CLASS.temp} live-temp__badge`}>{TEMP_BADGE}</span>
           <span className="live-temp__note">удалится вместе с чатом</span>
@@ -436,40 +497,12 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
         </div>
       ) : failure ? failure
       : participant && chat.pinned && agentLine ? (
-        <AskYou m={agentLine} onOpen={() => setExpanded(true)} onShow={() => showInFeed(agentLine.id)} />
-      ) : catchup ? (
-        <div className="live-mini"><CatchupNote catchup={catchup} mini /></div>
-      ) : participant ? (
-        <button type="button" className="live-last" onClick={() => setExpanded(true)}
-          aria-label={agentLine ? `Ассистент: ${agentText(agentLine)}. Открыть чат` : "Развернуть панель"}>
-          {agentLine ? (
-            <>
-              <span className="live-last__kind live-last__kind--agent">Ассистент</span>
-              <Truncate className="live-last__text">{agentText(agentLine)}</Truncate>
-            </>
-          ) : last ? (
-            <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
-              {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
-              <span>{last.text}</span>
-            </Truncate>
-          ) : <span className="live-last__text muted">Ассистент слушает встречу</span>}
-        </button>
-      ) : (
-        <button type="button" className={`live-last${shown && isUrgent(shown) ? " live-last--urgent" : ""}`} onClick={openHints}
-          aria-label={shown ? `Подсказка: ${shown.text}. Открыть подсказки` : "Развернуть панель"}>
-          {shown ? (
-            <>
-              <span className={`live-last__kind live-hint--${shown.kind}`}>{KIND_LABEL[shown.kind]}</span>
-              <Truncate className="live-last__text">{shown.text}</Truncate>
-            </>
-          ) : last ? (
-            <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
-              {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
-              <span>{last.text}</span>
-            </Truncate>
-          ) : <span className="live-last__text muted">{live.loaded || participant ? "Реплики появятся, как только их расшифрует ассистент" : "Ассистент подключается…"}</span>}
-        </button>
-      )}
+        <AskYou m={agentLine} lead={tempBadge} onOpen={() => setExpanded(true)} onShow={() => showInFeed(agentLine.id)} />
+      ) : catchup && !urgentHint ? (
+        <div className="live-mini"><CatchupNote catchup={catchup} mini lead={tempBadge} /></div>
+      ) : tempBadge ? (
+        <div className="live-line">{tempBadge}{line}</div>
+      ) : line}
     </div>
   );
 }
@@ -484,7 +517,9 @@ function agentText(m: ChatMessage): string {
  * в чат; «Копировать» — текст вопроса; «Показать в ленте» — развернуть и
  * прокрутить к нему.
  */
-function AskYou({ m, onOpen, onShow }: { m: ChatMessage; onOpen: () => void; onShow: () => void }) {
+function AskYou({ m, lead, onOpen, onShow }: {
+  m: ChatMessage; lead?: ReactNode; onOpen: () => void; onShow: () => void;
+}) {
   const text = agentText(m);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -503,6 +538,7 @@ function AskYou({ m, onOpen, onShow }: { m: ChatMessage; onOpen: () => void; onS
         <Truncate className="live-mini__text">{text}</Truncate>
       </button>
       <div className="live-mini__actions">
+        {lead}
         {m.t != null && <span className="live-mini__time">{clock(m.t)}</span>}
         <Button size="xs" icon={copied ? Check : Copy} onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>
         <Button size="xs" variant="ghost" icon={CornerDownRight} onClick={onShow}>Показать в ленте</Button>
@@ -516,8 +552,10 @@ function AskYou({ m, onOpen, onShow }: { m: ChatMessage; onOpen: () => void; onS
  * подключение) и «Открыть настройки» (раздел «Модели ИИ»). В свёрнутой
  * панели причина — в одной строке с заголовком: под шапкой места на две строки.
  */
-function StartFailed({ error, retryError, onRetry, onSettings, compact }: {
+function StartFailed({ error, retryError, onRetry, onSettings, compact, lead }: {
   error: string; retryError: string | null; onRetry: () => unknown; onSettings: () => void; compact: boolean;
+  /** Метка временной встречи в свёрнутой панели — первой в строке кнопок. */
+  lead?: ReactNode;
 }) {
   const reason = retryError ? `Повтор не удался: ${retryError}` : error;
   return (
@@ -527,6 +565,7 @@ function StartFailed({ error, retryError, onRetry, onSettings, compact }: {
         <span className="live-fail__reason">{reason}</span>
       </p>
       <div className="live-mini__actions">
+        {lead}
         <Button size="xs" icon={RefreshCw} onClick={onRetry}>Повторить</Button>
         <Button size="xs" variant="ghost" icon={SlidersHorizontal} onClick={onSettings}>Открыть настройки</Button>
       </div>

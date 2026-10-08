@@ -133,10 +133,11 @@
 .live-catchup__percent { font-family: var(--font-code); color: var(--ink-2); white-space: nowrap; }
 /* Полоса — Aurora `.progress` (feedback.css), тоньше: 4 px. */
 .live-catchup__bar { flex: 1 1 100%; height: 4px; display: block; }
-.live-catchup__note { flex-basis: 100%; color: var(--ink-3); font-size: var(--text-xs); }
+.live-catchup__note { flex-basis: 100%; display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink-3); font-size: var(--text-xs); }
+.live-catchup__note-text { min-width: 0; }
 /* Свёрнутая панель: без рамки — карточка под шапкой уже есть. */
 .live-catchup--mini { padding: 0; border: 0; background: none; gap: 6px; }
-.live-catchup--mini .live-catchup__note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-catchup--mini .live-catchup__note-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .live-ws__side {
   --side-gap: 10px;
   min-height: 0; display: flex; flex-direction: column; gap: var(--side-gap); padding-left: 12px; border-left: 1px solid var(--hairline);

@@ -363,12 +363,12 @@ test("свёрнутая: самая важная подсказка и счёт
   const line = screen.getByRole("button", { name: /Открыть подсказки/ });
   expect(line).toHaveTextContent("Без ответа");
   expect(line).toHaveTextContent("Вопрос про цену без ответа");
-  expect(within(head()).getByLabelText("новых подсказок: 2")).toBeInTheDocument();
+  expect(head()).toHaveTextContent("новых подсказок: 2");
   await userEvent.click(line);
   expect(invoke).toHaveBeenLastCalledWith("live_set_expanded", { expanded: true });
   expect(screen.getByRole("tab", { name: "Подсказки" })).toHaveAttribute("aria-selected", "true");
   await userEvent.click(screen.getByRole("button", { name: "Свернуть" }));
-  expect(screen.queryByLabelText(/новых подсказок/)).toBeNull(); // увидел — не новые
+  expect(head()).not.toHaveTextContent(/новых подсказок/); // увидел — не новые
 });
 
 test("строка меняется, только когда сменилась самая важная подсказка", async () => {
@@ -394,7 +394,7 @@ test("«Не отвлекать»: строка не меняется, пока 
   ])));
   const line = screen.getByRole("button", { name: /Открыть подсказки/ });
   expect(line).toHaveTextContent("Следующий шаг: созвон");
-  expect(screen.queryByLabelText(/новых подсказок/)).toBeNull();
+  expect(head()).not.toHaveTextContent(/новых подсказок/);
   act(() => liveStream().emit("state", state([hint("h2", "unanswered", "Цена без ответа")])));
   expect(screen.getByRole("button", { name: /Открыть подсказки/ })).toHaveTextContent("Цена без ответа");
 });

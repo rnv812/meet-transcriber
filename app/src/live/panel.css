@@ -47,6 +47,10 @@ html, body { background: transparent; }
   padding: 4px 14px; border-bottom: 1px solid var(--hairline); font-size: var(--text-xs);
 }
 .live-temp__badge { flex: none; height: 18px; }
+/* Свёрнутая временная: метка — в строке карточки или перед строкой последнего сообщения. */
+.live-line { flex: none; display: flex; align-items: center; min-width: 0; }
+.live-line > .live-temp__badge { margin-left: 14px; }
+.live-line > .live-last { flex: 1; min-width: 0; padding-left: 10px; }
 .live-temp__note { min-width: 0; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Вопрос «Остановить без сохранения?» / конец временной встречи — на месте содержимого. */
 .live-panel__confirm { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 12px; }

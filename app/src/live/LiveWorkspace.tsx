@@ -225,7 +225,11 @@ export function urgentQuestion(hint: LiveHint): string {
  * (Aurora `.progress`) над рабочей областью, а в свёрнутой панели (`mini`) —
  * под шапкой. Строки начала встречи встают в ленту выше живых.
  */
-export function CatchupNote({ catchup, mini = false }: { catchup: LiveCatchup; mini?: boolean }) {
+export function CatchupNote({ catchup, mini = false, lead }: {
+  catchup: LiveCatchup; mini?: boolean;
+  /** Метка перед пояснением (временная встреча в свёрнутой панели). */
+  lead?: ReactNode;
+}) {
   const from = catchup.capped && catchup.from_t != null ? clock(catchup.from_t) : null;
   const percent = Math.round(Math.max(0, Math.min(100, catchup.percent)));
   return (
@@ -239,7 +243,10 @@ export function CatchupNote({ catchup, mini = false }: { catchup: LiveCatchup; m
         <i style={{ width: `${percent}%` }} />
       </span>
       <span className="live-catchup__note">
-        {from ? `с ${from}; раньше — в итогах по полной расшифровке` : "Запись не прерывается."}
+        {lead}
+        <span className="live-catchup__note-text">
+          {from ? `с ${from}; раньше — в итогах по полной расшифровке` : "Запись не прерывается."}
+        </span>
       </span>
     </div>
   );

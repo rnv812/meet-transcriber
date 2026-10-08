@@ -50,7 +50,7 @@ test("свёрнутая: последнее сообщение агента и 
   expect(screen.getByRole("button", { name: /Ассистент: Первое/ })).toBeInTheDocument();
   act(() => liveStream().emit("chat", { seq: 3, op: "add", message: agentMsg("m2", { text: "Там **15.11**, а не 01.12" }) }));
   const row = screen.getByRole("button", { name: /Ассистент: Там 15.11, а не 01.12/ });
-  expect(screen.getByRole("banner")).toContainElement(screen.getByLabelText("новых сообщений: 1"));
+  expect(screen.getByRole("banner")).toHaveTextContent("новых сообщений: 1");
   await userEvent.click(row);
   expect(await screen.findByRole("log", { name: "Чат с ассистентом" })).toHaveTextContent("Там 15.11, а не 01.12");
 });

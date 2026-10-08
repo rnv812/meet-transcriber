@@ -105,7 +105,8 @@ test("свёрнутая: непрочитанное — бейджем в ша�
     liveStream().emit("chat_snapshot", { messages: [agentMsg("m1", { text: "Первое" })], seq: 2, agent: agentInfo() });
   });
   act(() => liveStream().emit("chat", { seq: 3, op: "add", message: agentMsg("m2", { text: "Второе" }) }));
-  expect(within(head()).getByLabelText("новых сообщений: 1")).toHaveTextContent("1");
+  // Число — с невидимой подписью: экранный диктор читает «новых сообщений: 1».
+  expect(head().querySelector(".live-head__count")).toHaveTextContent(/^новых сообщений: 1$/);
 });
 
 test("свёрнутая: вопрос вам — «Копировать» и «Показать в ленте»", async () => {
@@ -132,6 +133,50 @@ test("свёрнутая: вопрос вам — «Копировать» и «
   await screen.findByRole("log", { name: "Чат с ассистентом" });
   expect(scroll).toHaveBeenCalledWith({ block: "center" });
   expect(scroll.mock.contexts.some((el) => (el as HTMLElement).dataset?.id === "m1")).toBe(true);
+  // Фокус — на показанном сообщении, оно подсвечено.
+  const row = document.activeElement as HTMLElement;
+  expect(row.dataset.id).toBe("m1");
+  expect(row).toHaveClass("is-flash");
+});
+
+test("свёрнутая временная встреча: метка — в строке карточки, кнопки вопроса не срезаны", () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ attached: true }), { status: "recording", temporary: true, source: "live" })));
+  act(() => {
+    liveStream().emit("state", liveState);
+    liveStream().emit("chat_snapshot", { messages: [agentMsg("m1", { text: "Успеете?", pin: true })], seq: 2, agent: agentInfo() });
+  });
+  const card = screen.getByRole("group", { name: "Вопрос вам" });
+  // Отдельной строки «Временная» под шапкой нет: метка — первой в строке кнопок карточки.
+  expect(document.querySelector(".live-temp")).toBeNull();
+  const note = within(card).getByRole("note");
+  expect(note).toHaveTextContent("Временная — не сохранится");
+  const actions = note.parentElement!;
+  expect(actions.firstElementChild).toBe(note);
+  expect(within(actions).getByRole("button", { name: "Копировать" })).toBeInTheDocument();
+  expect(within(actions).getByRole("button", { name: "Показать в ленте" })).toBeInTheDocument();
+});
+
+test("развёрнутая временная встреча — метка отдельной строкой под шапкой", async () => {
+  view = { ...view, expanded: true };
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {}); // оболочка ответила видом: развёрнута
+  act(() => bus().emit("state", snap(status({ attached: true }), { status: "recording", temporary: true, source: "live" })));
+  expect(screen.getByRole("note")).toHaveClass("live-temp");
+});
+
+test("прежний режим: «Вам вопрос» в свёрнутой важнее хода «Догоняю»", () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ attached: true }), { status: "recording" })));
+  act(() => liveStream().emit("state", {
+    digest: "", status: null, hints_enabled: true,
+    hints: [{ id: "h1", kind: "ask_you", text: "Ольга спрашивает про отчёт", why: "", source_t: 60, ref: null,
+      pinned: false, dismissed: false, created_at: 1, updated_at: 1 }],
+    catchup: { active: true, percent: 42, from_t: 0, to_t: 1466, capped: false, complete: false },
+  }));
+  expect(screen.getByRole("button", { name: /Открыть подсказки/ })).toHaveTextContent("Ольга спрашивает про отчёт");
+  expect(screen.queryByRole("progressbar")).toBeNull();
+  expect(head()).toHaveTextContent("Догоняю 42 %");
 });
 
 test("свёрнутая: догоняет начало встречи — ход полосой (progressbar)", () => {
@@ -159,6 +204,16 @@ test("не запустился: карточка-предупреждение, 
   expect(liveAttach).not.toHaveBeenCalled();
   await userEvent.click(within(alert).getByRole("button", { name: "Открыть настройки" }));
   expect(trayPanelOpen).toHaveBeenCalledWith({ section: "models" });
+});
+
+test("не запустилась временная встреча: «Повторить» начинает снова временную, а не сохраняемую", async () => {
+  vi.mocked(liveStart).mockResolvedValue({ ok: true, ...status({ active: false, starting: true }) });
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ attached: true }), { status: "recording", temporary: true, source: "live" })));
+  // Сбой: запись кончилась, пометки «временная» в снимке уже нет.
+  act(() => bus().emit("state", snap(status({ active: false, error: "упал", ended_by: "crash" }))));
+  await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Повторить" }));
+  expect(liveStart).toHaveBeenCalledWith(ep, { temporary: true });
 });
 
 test("не подключился к идущей записи: «Повторить» — снова подключить, ошибка повтора видна", async () => {
