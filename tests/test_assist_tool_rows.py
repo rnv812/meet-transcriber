@@ -175,3 +175,48 @@ def test_opencode_tool_use_parts_become_tool_events():
     assert use["name"] == "Edit" and use["input"] == {"file_path": "C:/kb/a.md", "old_string": "a", "new_string": "b\nc"}
     assert res["ok"] and res["duration_ms"] == 600
     assert use2["name"] == "Bash" and res2["ok"] is False and res2["output"] == "denied"
+
+
+# --- M4: маскирование секретов перед записью в журнал ---
+
+
+def test_mask_secrets_hides_obvious_tokens():
+    m = tr.mask_secrets
+    assert "sk-" not in m("key: sk-abcDEF012345678901234567890123")
+    assert "sk-ant-" not in m("ANTHROPIC=sk-ant-api03-ABCdef_012-345xyz")
+    assert "ghp_" not in m("ghp_0123456789abcdefABCDEF0123456789abcd")
+    assert "gho_" not in m("token gho_0123456789abcdefABCDEF0123456789abcd")
+    assert "github_pat_" not in m("github_pat_11ABCDE0000aZ_abcdefghijKLMNOP0123456789abcdefghij")
+    assert "xoxb-" not in m("xoxb-123456789012-ABCDEFabcdef0123456789")
+    assert "AKIA" not in m("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE")
+    masked = m("Authorization: Bearer eyJabc.def.ghiJKLmnop0123456789")
+    assert "eyJabc" not in masked and "Bearer" in masked
+    for line in ("password=hunter2very", "PASSWORD = s3cr3t-value", "token: abc123DEFxyz",
+                 "api_key=AKIAZZ99longvalue", "API-KEY: zzz999longvalue", "apikey=qwertykeyvalue1"):
+        out = m(line)
+        assert "скрыто" in out, line
+    assert "BEGIN" not in m("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----")
+
+
+def test_mask_leaves_ordinary_text_alone():
+    for text in ("On branch main\nnothing to commit", "const token = parseToken(req)",
+                 "задача ABC-123 закрыта", "cat file.txt | head -n 5", ""):
+        assert tr.mask_secrets(text) == text
+
+
+def test_output_and_input_previews_are_masked():
+    out, _cut = tr.output_preview("export GITHUB_TOKEN=ghp_0123456789abcdefABCDEF0123456789abcd\n")
+    assert "ghp_" not in out and "скрыто" in out
+    pv = tr.input_preview("Bash", {"command": "curl -H 'Authorization: Bearer secret012345token' https://x"})
+    assert "secret012345token" not in pv
+
+
+def test_masked_secret_in_a_tool_result_is_not_stored(tmp_path):
+    chat = _log(tmp_path)
+    rows = tr.ToolRows()
+    rows.apply(chat, _use("toolu_s", "Bash", {"command": "cat .env"}))
+    rows.apply(chat, {"type": "tool_result", "id": "toolu_s", "ok": True,
+                      "output": "OPENAI_API_KEY=sk-ABCdef012345678901234567890123\n", "parent": None})
+    raw = (tmp_path / "rec" / "assistant" / "chat.jsonl").read_text(encoding="utf-8")
+    assert "sk-ABCdef012345678901234567890123" not in raw
+    assert _rows(chat)[0]["output_preview"].count("скрыто") >= 1

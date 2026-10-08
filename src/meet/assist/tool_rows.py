@@ -30,13 +30,55 @@
 
 Вывод команд хранится только в журнале встречи (`chat.jsonl` — журнал
 пользователя, как и сами сообщения); в журнал процесса из него не пишется
-ничего (CLAUDE.md). Секреты из вывода автоматически не вырезаются.
+ничего (CLAUDE.md). Очевидные секреты в выводе и аргументах перед записью
+маскируются (`mask_secrets`: `sk-…`, `ghp_…`, `xoxb-…`, `AKIA…`, блоки
+приватных ключей, `Bearer …`, значения `password=`/`token=`/`api_key=`).
 
 `ToolRows.apply` — блокирующий (журнал): из цикла событий — через поток
 журнала участника, по порядку событий.
 """
 
 import json
+import re
+
+MASK = "«скрыто»"
+# Явные секреты в выводе и аргументах: заменяются `MASK` перед записью в
+# `chat.jsonl` (журнал пользователя, но лучше не хранить токены). Грубый
+# фильтр по форме, не полнота: маскирует то, что очевидно секрет.
+# Секреты по форме токена — маскируются целиком.
+_SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----.*?-----END[ A-Z]*PRIVATE KEY-----", re.DOTALL),
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"\bgh[posru]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bxox[abpr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
+# `Bearer <токен>` — префикс остаётся, значение скрывается.
+_BEARER = re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
+# env-подобная строка: имя-ключ в начале строки (можно `export`/`set` и префикс
+# имени, как `GITHUB_TOKEN`), затем `=`/`:` и значение. Имя и разделитель
+# остаются, значение скрывается. `const token = parseToken(req)` не подходит —
+# ключ не в начале строки.
+_ENV_SECRET = re.compile(
+    r"(?im)^(\s*(?:export\s+|set\s+)?[\w.-]*?(?:pass(?:word)?|token|secret|api[_-]?key|access[_-]?key)\s*[:=]\s*)\S+")
+
+
+def mask_secrets(text: str) -> str:
+    """Заменить очевидные секреты (`sk-…`, `sk-ant-…`, `ghp_/gho_…`,
+    `github_pat_…`, `xoxb-…`, `AKIA…`, блоки приватных ключей, `Bearer …`,
+    значения `password=`/`token=`/`api_key=` в env-подобных строках) на
+    `«скрыто»`. У `Bearer` и env-строк префикс (вид ключа) остаётся."""
+    s = str(text or "")
+    if not s:
+        return s
+    for pat in _SECRET_PATTERNS:
+        s = pat.sub(MASK, s)
+    s = _BEARER.sub(r"\1" + MASK, s)
+    s = _ENV_SECRET.sub(r"\1" + MASK, s)
+    return s
+
 
 INPUT_PREVIEW_MAX = 2 * 1024        # байт UTF-8
 OUTPUT_PREVIEW_MAX = 64 * 1024      # байт UTF-8
@@ -154,13 +196,15 @@ def input_preview(name: str, data) -> str:
             text = json.dumps(data, ensure_ascii=False, indent=1)
         except (TypeError, ValueError):
             text = str(data)
+    text = mask_secrets(text)
     cut, over = _cut_bytes(text, INPUT_PREVIEW_MAX - len("…".encode("utf-8")))
     return cut + "…" if over else text
 
 
 def output_preview(text) -> tuple[str, bool]:
-    """Вывод вызова → (не длиннее OUTPUT_PREVIEW_MAX байт, обрезан ли)."""
-    return _cut_bytes(str(text or ""), OUTPUT_PREVIEW_MAX)
+    """Вывод вызова → (не длиннее OUTPUT_PREVIEW_MAX байт, обрезан ли).
+    Очевидные секреты замаскированы (`mask_secrets`) перед хранением."""
+    return _cut_bytes(mask_secrets(str(text or "")), OUTPUT_PREVIEW_MAX)
 
 
 def gate_view(event: dict) -> dict:
