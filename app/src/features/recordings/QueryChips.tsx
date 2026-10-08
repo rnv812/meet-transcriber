@@ -8,6 +8,7 @@ import { CalendarRange, CircleCheck, CircleSlash, Clock, Folder, Type, UserRound
 import { chipColor, chipText, type Chip, type ChipKind, type QueryContext } from "../../lib/libraryQuery";
 import { CategoryDot } from "../../ui/Category";
 import { Icon } from "../../ui/Icon";
+import { Tip } from "../../ui/Tip";
 
 const ICONS: Partial<Record<ChipKind, LucideIcon>> = {
   person: UserRound, date: CalendarRange, has: CircleCheck, lacks: CircleSlash, longer: Clock, shorter: Clock, title: Type,
@@ -32,8 +33,8 @@ export function QueryChips({ chips, ctx, onRemove, onClear }: {
         const icon = ICONS[chip.kind];
         const color = chipColor(chip, ctx);
         return (
-          <span key={`${chip.kind}:${chip.value}`} className={`cat-filter__chip query-chip query-chip--${chip.kind}`}
-            title={`${KIND_NAME[chip.kind]}: ${text}`}>
+          <Tip key={`${chip.kind}:${chip.value}`} content={`${KIND_NAME[chip.kind]}: ${text}`}>
+          <span className={`cat-filter__chip query-chip query-chip--${chip.kind}`}>
             {chip.kind === "category" ? <CategoryDot color={color} />
               : chip.kind === "group" ? (
                 <span className="query-chip__icon" style={color ? { color } : undefined} aria-hidden="true">
@@ -44,6 +45,7 @@ export function QueryChips({ chips, ctx, onRemove, onClear }: {
             <button type="button" className="cat-filter__clear" aria-label={`Убрать «${text}» из фильтра`}
               onClick={() => onRemove(chip)}><Icon as={X} size="sm" /></button>
           </span>
+          </Tip>
         );
       })}
       {chips.length >= 2 && (

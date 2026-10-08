@@ -14,6 +14,7 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
+import { Tip } from "../../ui/Tip";
 import { GroupMenu } from "./GroupMenu";
 import { GroupsPicker } from "./GroupsPicker";
 import type { GroupsUi } from "./useGroupsUi";
@@ -25,9 +26,11 @@ export function GroupHeader({ ui }: { ui: GroupsUi }) {
   if (!ui.shown) {
     if (!ui.unavailable) return null;
     return (
-      <p className="group-head__note" role="note" title="Группы недоступны: служба записи не ответила">
+      <p className="group-head__note" role="note">
         <Icon as={TriangleAlert} size="sm" className="group-head__note-icon" />
-        <span className="group-head__note-text">Группы недоступны</span>
+        <Tip content="Служба записи не ответила">
+          <span className="group-head__note-text">Группы недоступны</span>
+        </Tip>
         <IconButton icon={RotateCw} size="xs" label="Повторить" onClick={ui.retry} />
       </p>
     );
@@ -52,11 +55,13 @@ export function GroupHeader({ ui }: { ui: GroupsUi }) {
       )}
       {named && <IconButton icon={X} label="Показать все записи" onClick={() => ui.setScope(null)} />}
       {kbFolder && (
-        <span className="group-head__kb" title="Папка базы знаний группы: на её встречах она в карте ассистента целиком">
+        <Tip content="Папка базы знаний группы: на её встречах она в карте ассистента целиком">
+        <span className="group-head__kb">
           <Icon as={Folder} size="sm" />
           <span className="sr-only">Папка базы знаний: </span>
           <span className="group-head__kb-path">{kbFolder}</span>
         </span>
+        </Tip>
       )}
       {menu && scope && <GroupMenu ui={ui} id={scope} anchor={more} align="end" onClose={close} />}
     </div>

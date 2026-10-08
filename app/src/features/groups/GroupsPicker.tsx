@@ -22,6 +22,7 @@ import { ALL_NAME, meetingsText, NO_GROUP } from "../../lib/groups";
 import { CategoryDot } from "../../ui/Category";
 import { Icon } from "../../ui/Icon";
 import { Popover } from "../../ui/Popover";
+import { Tip } from "../../ui/Tip";
 import { GroupsNav } from "./GroupsNav";
 import type { GroupsUi } from "./useGroupsUi";
 import "./groups.css";
@@ -83,9 +84,9 @@ export function GroupsPicker({ ui }: { ui: GroupsUi }) {
 
   return (
     <>
+      <Tip content={open ? null : count === null ? label : `${label} · ${meetingsText(count)}`} describe={false}>
       <button ref={button} type="button" className="select-btn select-btn--md group-pick" data-groups-picker=""
         aria-label={`Группа встреч: ${label}`} aria-haspopup="dialog" aria-expanded={open}
-        title={count === null ? label : `${label} · ${meetingsText(count)}`}
         onClick={() => setOpen((v) => !v)} onKeyDown={onKeyDown}>
         {!named ? <Icon as={Layers} size="sm" className="group-pick__icon" />
           : scope === NO_GROUP ? <Icon as={CircleDashed} size="sm" className="group-pick__icon" />
@@ -94,12 +95,13 @@ export function GroupsPicker({ ui }: { ui: GroupsUi }) {
         {count !== null && <span className="group-pick__count num" aria-hidden="true">{count}</span>}
         {/* Файл групп повреждён: предупреждение — в дереве; здесь — знак, чтобы его открыли. */}
         {ui.broken && (
-          <span className="group-pick__warn" title="Файл групп повреждён — подробности в списке групп">
+          <span className="group-pick__warn" aria-label="Файл групп повреждён — подробности в списке групп" role="img">
             <Icon as={TriangleAlert} size="sm" />
           </span>
         )}
         <Icon as={ChevronDown} size="sm" className="ic" />
       </button>
+      </Tip>
       {open && button.current && (
         <Popover anchor={button.current} label="Группы" anchorToggles keepOpen={keepOpen}
           width={Math.max(MIN_W, button.current.offsetWidth)} onClose={onPopoverClose}>

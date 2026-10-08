@@ -73,7 +73,9 @@ beforeEach(() => {
 test("бейдж типа реплики — изображение с подписью; у утверждения бейджа нет", () => {
   const { container } = view();
   const rows = turnRows(container);
-  expect(within(rows[1]!).getByRole("img", { name: "Вопрос" })).toHaveAttribute("title", "Вопрос");
+  // Подпись видна в бейдже — системной подсказки с тем же словом нет.
+  expect(within(rows[1]!).getByRole("img", { name: "Вопрос" })).toHaveTextContent("Вопрос");
+  expect(within(rows[1]!).getByRole("img", { name: "Вопрос" })).not.toHaveAttribute("title");
   expect(within(rows[2]!).getByRole("img", { name: "Решение" })).toBeInTheDocument();
   expect(within(rows[4]!).getByRole("img", { name: "Риск" })).toBeInTheDocument();
   expect(rows[0]!.querySelector(".turn__type")).toBeNull();

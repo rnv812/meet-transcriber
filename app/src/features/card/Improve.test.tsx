@@ -173,7 +173,7 @@ test("ImproveStatus: очередь, готово, ошибка, подсказ�
   await userEvent.click(screen.getByRole("button", { name: "Просмотреть" }));
   rerender(<ImproveStatus state={{ state: "failed", error: "таймаут" }} busy={false} onOpen={onOpen} onRetry={onOpen}
     onDismiss={onDismiss} />);
-  expect(screen.getByText("Улучшение расшифровки не удалось")).toHaveAttribute("title", "таймаут");
+  expect(screen.getByText("Улучшение расшифровки не удалось")).toHaveAccessibleDescription("таймаут");
   rerender(<ImproveStatus state={{ state: "none", hint: true }} busy={false} onOpen={onOpen} onRetry={onOpen}
     onDismiss={onDismiss} />);
   expect(screen.getByRole("status")).toHaveTextContent("Похоже, в тексте есть термины латиницей — улучшить?");
@@ -218,13 +218,13 @@ test("карточка: «Ещё действия» и кнопка в стро�
   await waitFor(() => expect(screen.getByRole("button", { name: "Улучшить расшифровку" })).toBeDisabled());
   // Причина — подсказкой на самой кнопке (у недоступной .btn наведение есть: ui/button.css).
   const inBar = screen.getByRole("button", { name: "Улучшить расшифровку" });
-  expect(inBar).toHaveAttribute("title", "Подключите Claude Code, Codex или OpenCode в настройках");
+  expect(inBar).toHaveAccessibleDescription("Подключите Claude Code, Codex или OpenCode в настройках");
   expect(inBar.parentElement).toHaveAttribute("role", "search");
   await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
   const menu = screen.getByRole("menu", { name: "Ещё действия с записью" });
   const item = within(menu).getByRole("menuitem", { name: "Улучшить расшифровку" });
   expect(item).toBeDisabled();
-  expect(item).toHaveAttribute("title", "Подключите Claude Code, Codex или OpenCode в настройках");
+  expect(item).toHaveAccessibleDescription("Подключите Claude Code, Codex или OpenCode в настройках");
 });
 
 test("карточка: готовое предложение — применить выбранное, итог и «Отменить»", async () => {
@@ -328,7 +328,7 @@ test("правка: щелчок по замене — поле; Enter прин�
   expect(screen.queryByRole("textbox", { name: "Как правильно: апи" })).toBeNull();
   const row = rowOf("апи");
   expect(row).toHaveTextContent("апи → MSSP");
-  expect(within(row).getByText("изменено")).toHaveAttribute("title", "Вписано вручную; ИИ предлагал «API»");
+  expect(within(row).getByText("изменено")).toHaveAccessibleDescription("Вписано вручную; ИИ предлагал «API»");
   expect(within(row).getByRole("checkbox")).toHaveAccessibleName("апи → MSSP");
   // Количество мест не меняется: вписанное — во всех местах группы.
   expect(row).toHaveTextContent("· 12");

@@ -12,6 +12,7 @@ import { meetingsText, UNKNOWN_NAME } from "../../lib/groups";
 import type { GroupInfo, LibraryItem } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
+import { Tip } from "../../ui/Tip";
 import { ItemMenu } from "../recordings/ItemMenu";
 import type { MeetingsPayload } from "./drag";
 import { moveItems, type MoveToGroup } from "./moveMenu";
@@ -90,7 +91,9 @@ export function GroupPickbar({ move, chosen }: { move: MoveToGroup; chosen: stri
         В группу<Icon as={ChevronDown} size="sm" />
       </Button>
       {name !== null && (
-        <Button title={`Убрать из «${name}»`} onClick={() => move.move(chosen, null)}>Убрать из группы</Button>
+        <Tip content={`Убрать из «${name}»`}>
+          <Button onClick={() => move.move(chosen, null)}>Убрать из группы</Button>
+        </Tip>
       )}
       {open && (
         <ItemMenu anchor={button} label={`Переместить в группу: ${meetingsText(chosen.length)}`}

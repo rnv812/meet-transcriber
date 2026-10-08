@@ -419,7 +419,7 @@ test("QueryChips: подпись каждой метки, «✕» — по од�
   expect([...row.querySelectorAll(".cat-filter__chip-text")].map((c) => c.textContent)).toEqual([
     "Без категории", "Проект Альфа", "Без группы", "Анна", "Сентябрь", "Есть итоги", "Без ассистента",
     "Дольше 15 мин", "Короче 1 ч", "В названии: релиз"]);
-  expect(row.querySelector(".query-chip--group")).toHaveAttribute("title", "Группа: Проект Альфа");
+  expect(row.querySelector(".query-chip--group")).toHaveAccessibleDescription("Группа: Проект Альфа");
   await userEvent.click(within(row).getByRole("button", { name: "Убрать «Анна» из фильтра" }));
   expect(onRemove).toHaveBeenCalledWith({ kind: "person", value: "Анна" });
   await userEvent.click(within(row).getByRole("button", { name: "Сбросить" }));

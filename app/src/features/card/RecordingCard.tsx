@@ -22,6 +22,7 @@ import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { Loading } from "../../ui/Loading";
+import { Tip } from "../../ui/Tip";
 import type { AgentInsert } from "./AgentTab";
 import {
   AnalysisOffer, AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
@@ -454,7 +455,10 @@ export function RecordingCard({
       <span className="card__textfirst-text">{textNoteText(st)}</span>
       {/* Например, разделение на спикеров идёт на процессоре — и почему. */}
       {st.job?.state === "running" && st.job.warning && <span className="muted card__textfirst-note">{st.job.warning}</span>}
-      {!st.job && st.error && <span className="muted card__textfirst-note" title={st.error}>{st.error}</span>}
+      {!st.job && st.error && (
+        // Строка обрезается многоточием: целиком — в подсказке.
+        <Tip content={st.error} describe={false}><span className="muted card__textfirst-note">{st.error}</span></Tip>
+      )}
       {/* Задача только что кончилась — ни отмены, ни повтора: спикеры уже записаны. */}
       {!st.job ? <Button onClick={doTranscribe} disabled={busy}>Расшифровать заново</Button>
         : st.job.state === "done" ? null : cancelButton}
@@ -504,12 +508,13 @@ export function RecordingCard({
           tools={
             // Причина недоступности — подсказкой на самой кнопке: недоступная .btn наведение
             // получает (ui/button.css).
-            <Button variant="aurora" size="md" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
-              title={improve.blocked
-                ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}
-              onClick={() => void improve.start()}>
-              <AgentMark size={16} />Улучшить
-            </Button>
+            <Tip content={improve.blocked
+              ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}>
+              <Button variant="aurora" size="md" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
+                onClick={() => void improve.start()}>
+                <AgentMark size={16} />Улучшить
+              </Button>
+            </Tip>
           }
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn}
           // Разовое предложение анализа — только на «Расшифровке», над лентой: вкладки не сдвигаются.

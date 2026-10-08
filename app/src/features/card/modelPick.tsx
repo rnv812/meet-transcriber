@@ -10,6 +10,7 @@ import { ChevronDown, Cloud, Laptop } from "lucide-react";
 import { choiceHint } from "../../lib/llm";
 import type { ModelChoice } from "../../lib/types";
 import { Button, type ButtonVariant } from "../../ui/Button";
+import { Tip } from "../../ui/Tip";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
 import "./card.css";
 
@@ -51,18 +52,20 @@ export function ModelSplitButton({ label, choices, onRun, disabled, pickDisabled
   const arrow = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   if (choices.length < 2) {
-    return <Button variant={variant} onClick={() => onRun()} disabled={disabled} title={reason ?? undefined}>{label}</Button>;
+    return <Tip content={reason}><Button variant={variant} onClick={() => onRun()} disabled={disabled}>{label}</Button></Tip>;
   }
   const close = () => { setOpen(false); arrow.current?.focus(); };
   return (
     <span className="split-btn">
-      <Button variant={variant} className="split-btn__main" onClick={() => onRun()} disabled={disabled}
-        title={reason ?? undefined}>{label}</Button>
-      <Button ref={arrow} variant={variant} className="split-btn__more" aria-label={pickLabel(label)}
-        title="Выбрать модель для этого действия" aria-haspopup="menu" aria-expanded={open}
-        onClick={() => setOpen((o) => !o)} disabled={pickDisabled}>
-        <ChevronDown {...ICON} size={14} />
-      </Button>
+      <Tip content={reason}>
+        <Button variant={variant} className="split-btn__main" onClick={() => onRun()} disabled={disabled}>{label}</Button>
+      </Tip>
+      <Tip content="Выбрать модель для этого действия">
+        <Button ref={arrow} variant={variant} className="split-btn__more" aria-label={pickLabel(label)}
+          aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} disabled={pickDisabled}>
+          <ChevronDown {...ICON} size={14} />
+        </Button>
+      </Tip>
       {open && (
         <ItemMenu anchor={arrow} label={`${label} — какой моделью`} align="end"
           items={modelMenuItems(choices, (p) => { setOpen(false); onRun(p); })} onClose={close} />

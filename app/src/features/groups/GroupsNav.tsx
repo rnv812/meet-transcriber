@@ -20,6 +20,7 @@ import {
 import { ALL_NAME, meetingsText, NO_GROUP, NO_GROUP_NAME, shiftId, UNKNOWN_NAME, type GroupScope } from "../../lib/groups";
 import { CategoryDot } from "../../ui/Category";
 import { Icon } from "../../ui/Icon";
+import { Tip } from "../../ui/Tip";
 import type { DragView } from "./drag";
 import { GroupMenu } from "./GroupMenu";
 import type { GroupsUi } from "./useGroupsUi";
@@ -180,8 +181,9 @@ export function GroupsNav({ ui, active, onOpen }: {
           return (
             <li key={row.key} className={cls} data-row-key={row.key} data-group-row={row.group} data-drop-group={row.drop}
               onContextMenu={onContext}>
+              <Tip content={title} side="right" describe={false}>
               <button type="button" className="nav-group__main" data-scope-key={row.scope ?? "all"}
-                data-group={row.group} aria-current={current ? "true" : undefined} title={title}
+                data-group={row.group} aria-current={current ? "true" : undefined}
                 tabIndex={tabStop ? 0 : -1}
                 aria-keyshortcuts={[row.group && editable ? "Alt+ArrowUp Alt+ArrowDown" : "", menuId ? "Shift+F10" : ""]
                   .filter(Boolean).join(" ") || undefined}
@@ -193,6 +195,7 @@ export function GroupsNav({ ui, active, onOpen }: {
                 <span className="nav-group__count num" aria-hidden="true">{row.count}</span>
                 <span className="sr-only">, {meetingsText(row.count)}</span>
               </button>
+              </Tip>
               {menuId && (
                 <button type="button" className="nav-group__more" aria-label={`Действия с группой «${row.label}»`}
                   aria-haspopup="menu" aria-expanded={menu?.id === menuId} tabIndex={-1}
@@ -214,14 +217,14 @@ export function GroupsNav({ ui, active, onOpen }: {
         </button>
       )}
       {ui.readOnly && (
-        <p className="nav-groups__note" role="note" title="Группы записаны более новой версией Meet">
+        <p className="nav-groups__note" role="note">
           <Icon as={TriangleAlert} size="sm" />
           <span className="nav-groups__note-text">Группы записаны более новой версией Meet — здесь их можно только смотреть.</span>
         </p>
       )}
       {ui.broken && (
-        <div className="nav-groups__note nav-groups__note--warn" role="alert"
-          title={ui.broken.copy ? `Файл групп повреждён, копия: ${ui.broken.copy}` : "Файл групп повреждён"}>
+        <Tip content={ui.broken.copy ? `Файл групп повреждён, копия: ${ui.broken.copy}` : null}>
+        <div className="nav-groups__note nav-groups__note--warn" role="alert">
           <Icon as={TriangleAlert} size="sm" />
           <span className="nav-groups__note-text">
             {/* Полный путь длинный: виден файл, весь путь — в подсказке, для диктора и кнопкой «Скопировать». */}
@@ -232,14 +235,17 @@ export function GroupsNav({ ui, active, onOpen }: {
               : "Файл групп повреждён. При первом изменении групп он будет сохранён рядом как копия."}
           </span>
           {ui.broken.copy && typeof navigator !== "undefined" && navigator.clipboard && (
-            <button type="button" className="nav-groups__close" aria-label="Скопировать путь к копии"
-              title="Скопировать путь к копии" onClick={() => void navigator.clipboard.writeText(ui.broken!.copy!)}>
-              <Icon as={Copy} size="sm" />
-            </button>
+            <Tip content="Скопировать путь к копии" describe={false}>
+              <button type="button" className="nav-groups__close" aria-label="Скопировать путь к копии"
+                onClick={() => void navigator.clipboard.writeText(ui.broken!.copy!)}>
+                <Icon as={Copy} size="sm" />
+              </button>
+            </Tip>
           )}
           <button type="button" className="nav-groups__close" aria-label="Скрыть предупреждение"
             onClick={ui.dismissBroken}><Icon as={X} size="sm" /></button>
         </div>
+        </Tip>
       )}
     </div>
   );

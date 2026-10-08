@@ -19,6 +19,7 @@ import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Tip } from "../../ui/Tip";
 import { JobProgress } from "../../ui/JobProgress";
 import { CONFIRMS } from "./CardActions";
 import { Popover } from "../../ui/Popover";
@@ -152,7 +153,11 @@ function AnalysisNotes({ analysis, durationS }: { analysis?: Analysis; durationS
   const notes = analysisNotes(analysis, durationS);
   if (!notes.length) return null;
   const title = [analysis?.unparsed?.reason, ...(analysis?.warnings ?? [])].filter(Boolean).join("\n") || undefined;
-  return <>{notes.map((note) => <span key={note} className="analysis-status__missing" title={title}>{note}</span>)}</>;
+  return <>{notes.map((note) => (
+    <Tip key={note} content={title && <span className="tip-lines">{title}</span>}>
+      <span className="analysis-status__missing">{note}</span>
+    </Tip>
+  ))}</>;
 }
 
 /** Тихая строка о состоянии анализа под действиями карточки; нечего сказать — ничего. */
@@ -177,10 +182,12 @@ export function AnalysisStatus({ state, busy, onRun, durationS }: {
       }
       return (
         <div className="analysis-status" role="status">
-          <span className="analysis-chip" title={state.state === "queued" ? "Анализ встречи ждёт в очереди" : "Агент размечает встречу"}>
-            <span className="analysis-chip__pulse" aria-hidden="true" />
-            {state.state === "queued" ? "Анализ в очереди…" : "Анализ…"}
-          </span>
+          <Tip content={state.state === "queued" ? "Анализ встречи ждёт в очереди" : "Агент размечает встречу"}>
+            <span className="analysis-chip">
+              <span className="analysis-chip__pulse" aria-hidden="true" />
+              {state.state === "queued" ? "Анализ в очереди…" : "Анализ…"}
+            </span>
+          </Tip>
         </div>
       );
     case "ready": {
@@ -189,7 +196,7 @@ export function AnalysisStatus({ state, busy, onRun, durationS }: {
       const missing = <AnalysisNotes analysis={state.analysis} durationS={durationS} />;
       return line || analysisNotes(state.analysis, durationS).length ? (
         <div className="analysis-status analysis-status--origin">
-          {line && <span className="muted" title="Какая модель разметила встречу">{line}</span>}
+          {line && <Tip content="Какая модель разметила встречу"><span className="muted">{line}</span></Tip>}
           {missing}
         </div>
       ) : null;
@@ -202,7 +209,9 @@ export function AnalysisStatus({ state, busy, onRun, durationS }: {
       return (
         <div className="analysis-status" role="status">
           {/* Подробности (часто длинные и технические) — в подсказке, в строке — коротко. */}
-          <span className="muted" title={state.error || undefined}>Анализ не удался</span>
+          <Tip content={state.error && <span className="tip-lines">{state.error}</span>}>
+            <span className="muted">Анализ не удался</span>
+          </Tip>
           {onRun && (
             <button type="button" className="link-btn" onClick={() => onRun(state.provider)} disabled={busy}>
               {retryText(state.provider)}
@@ -262,7 +271,7 @@ function StaleAnalysis({ busy, onRun, origin, missing }: {
   const [asking, setAsking] = useState(false);
   return (
     <div className="analysis-status" role="status">
-      <span className="muted" title={origin ?? undefined}>Анализ устарел: расшифровку изменили после него</span>
+      <Tip content={origin}><span className="muted">Анализ устарел: расшифровку изменили после него</span></Tip>
       {onRun && <button type="button" className="link-btn" onClick={() => setAsking(true)} disabled={busy}>Переанализировать…</button>}
       {missing}
       {asking && onRun && (

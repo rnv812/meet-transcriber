@@ -8,6 +8,7 @@ import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
+import { Tip } from "../../ui/Tip";
 import { LinkedText } from "../../ui/LinkedText";
 import { TypeIcon } from "./markup";
 
@@ -152,24 +153,26 @@ export const Turns = memo(function Turns({
                 ) : t.speaker === NO_SPEAKER ? (
                   <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
                 ) : (
-                  <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}
-                    style={person} aria-haspopup={onSpeaker ? "dialog" : undefined}
-                    title={onSpeaker ? "Исправить спикера реплики" : undefined}
-                    onClick={(e) => {
-                      if (onSelect && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
-                      if (onSpeaker) onSpeaker(i, e.currentTarget);
-                      else onNameSpeaker?.(t.speaker);
-                    }}>{t.speaker}</button>
+                  <Tip content={onSpeaker ? "Исправить спикера реплики" : null} describe={false}>
+                    <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}
+                      style={person} aria-haspopup={onSpeaker ? "dialog" : undefined}
+                      onClick={(e) => {
+                        if (onSelect && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
+                        if (onSpeaker) onSpeaker(i, e.currentTarget);
+                        else onNameSpeaker?.(t.speaker);
+                      }}>{t.speaker}</button>
+                  </Tip>
                 )}
                 {t.room && !textPhase && (
-                  <span className="turn__room" title="Голос с вашего микрофона: человек рядом с вами">в комнате</span>
+                  <Tip content="Голос с вашего микрофона: человек рядом с вами">
+                    <span className="turn__room">в комнате</span>
+                  </Tip>
                 )}
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
                 {t.unsure && (
-                  <span className="turn__flag"
-                    title="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
-                    (голос под вопросом)
-                  </span>
+                  <Tip content="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
+                    <span className="turn__flag">(голос под вопросом)</span>
+                  </Tip>
                 )}
                 {/* Тип реплики — бейдж после имени (у утверждения бейджа нет). */}
                 {types?.[i] && <TypeIcon type={types[i]!} />}
@@ -218,10 +221,11 @@ export const Turns = memo(function Turns({
       );
     }
     return (
-      <button type="button" className="turns-more" key={`m${row.from}`} data-more={row.from}
-        onClick={() => onExpand?.(row.from)} title="Показать скрытые фильтром реплики">
-        … {row.count} {plural(row.count, "реплика", "реплики", "реплик")}
-      </button>
+      <Tip key={`m${row.from}`} content="Показать скрытые фильтром реплики">
+        <button type="button" className="turns-more" data-more={row.from} onClick={() => onExpand?.(row.from)}>
+          … {row.count} {plural(row.count, "реплика", "реплики", "реплик")}
+        </button>
+      </Tip>
     );
   };
   return (

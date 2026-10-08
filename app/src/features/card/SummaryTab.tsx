@@ -33,6 +33,7 @@ import { AskAgentButton } from "../../ui/AskAgent";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
+import { Tip } from "../../ui/Tip";
 import { ProviderHint, ThinkingStage, noModelText, noProvider, useLostJobs } from "./assistant";
 import { ModelSplitButton } from "./modelPick";
 
@@ -238,9 +239,9 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     main = (
       <>
         <div className="assist__toolbar">
-          <span className="assist__when" title={summary.llm ? "Какая модель и когда сделала итоги" : undefined}>
-            {byline}
-          </span>
+          <Tip content={summary.llm ? "Какая модель и когда сделала итоги" : null}>
+            <span className="assist__when">{byline}</span>
+          </Tip>
           <Button variant="ghost" icon={Copy} onClick={() => copy(summary.markdown)} disabled={busy}>
             {copied ? "Скопировано" : "Копировать"}
           </Button>
@@ -248,10 +249,12 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
             reason={reason} onRun={(p) => void remake(p)} />
           {confirmNode}
           {onAskAgent && (
-            <Button variant="aurora" title="Спросить агента об итогах: откроется вкладка «Агент»"
-              onClick={() => onAskAgent({ kind: "meeting-summary", refs: [], about: "summary.md в папке встречи" })}>
-              <AgentMark size={16} />Спросить агента
-            </Button>
+            <Tip content="Спросить агента об итогах: откроется вкладка «Агент»">
+              <Button variant="aurora"
+                onClick={() => onAskAgent({ kind: "meeting-summary", refs: [], about: "summary.md в папке встречи" })}>
+                <AgentMark size={16} />Спросить агента
+              </Button>
+            </Tip>
           )}
         </div>
         {hint}

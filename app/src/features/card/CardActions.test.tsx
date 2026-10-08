@@ -42,7 +42,7 @@ test("узкая карточка: подписи свёрнуты в значк
   setup();
   const exp = screen.getByRole("button", { name: "Экспорт" });
   expect(exp.querySelector(".sr-only")).toHaveTextContent("Экспорт");
-  expect(exp).toHaveAttribute("title");
+  expect(exp).toHaveAccessibleDescription(/Сохранить расшифровку файлом/);
   expect(screen.getByRole("button", { name: "В базу знаний" }).querySelector(".sr-only")).not.toBeNull();
 });
 

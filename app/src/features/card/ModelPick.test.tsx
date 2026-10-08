@@ -185,7 +185,7 @@ test("модель по умолчанию недоступна: основно�
   render(<SummaryTab endpoint={ep} id="r1" folder="C:\rec\r1" jobs={[]} assistant={down} />);
   const main = await screen.findByRole("button", { name: "Сделать итоги" });
   expect(main).toBeDisabled();
-  expect(main).toHaveAttribute("title", expect.stringMatching(/Модель по умолчанию \(Локальная модель \(qwen3\)\) недоступна/));
+  expect(main).toHaveAccessibleDescription(/Модель по умолчанию \(Локальная модель \(qwen3\)\) недоступна/);
   expect(screen.getByText(/выберите другую модель стрелкой/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Сделать итоги: выбрать модель" }));
   await userEvent.click(screen.getByRole("menuitem", { name: /Claude Code/ }));
@@ -227,5 +227,5 @@ test("«Повторить» анализа и улучшения после с�
 test("устаревший анализ показывает, какая модель его делала", () => {
   const doc = { version: 1 as const, model: "codex", created_at: 1, fingerprint: "x", features: [] };
   render(<AnalysisStatus state={{ state: "stale", analysis: doc }} busy={false} />);
-  expect(screen.getByText(/Анализ устарел/)).toHaveAttribute("title", expect.stringContaining("Анализ: Codex"));
+  expect(screen.getByText(/Анализ устарел/)).toHaveAccessibleDescription(/Анализ: Codex/);
 });

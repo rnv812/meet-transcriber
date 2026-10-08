@@ -33,6 +33,9 @@
 .assist--summary table.tbl tr:last-child td { border-bottom: 0; }
 .assist--summary table.tbl tbody tr:hover td { background: transparent; }
 .assist--summary table.tbl td:first-child { font-weight: 600; white-space: nowrap; }
+/* Кто и Срок — узкие (макет: 90 · остальное · 150), «Что» — всё остальное. */
+.assist--summary table.tbl th:first-child { width: 18%; }
+.assist--summary table.tbl th:nth-child(3) { width: 22%; }
 .assist--summary table.tbl td:nth-child(3) { color: var(--ink-2); white-space: nowrap; }
 /* Время у пунктов — чип Geist Mono (как .cite в макете): нажатие ведёт к реплике. */
 .assist--summary .md-time { padding: 0 6px; border-radius: var(--r-xs); font-weight: 500; }

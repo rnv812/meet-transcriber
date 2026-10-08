@@ -26,6 +26,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
 import { JobProgress } from "../../ui/JobProgress";
+import { Tip } from "../../ui/Tip";
 import { improvedText } from "./speakers/staging";
 import { Callout } from "./Callout";
 import "./improve.css";
@@ -275,10 +276,12 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
       }
       return (
         <div className="analysis-status" role="status">
-          <span className="analysis-chip" title={state.state === "queued" ? "Улучшение расшифровки ждёт в очереди" : "ИИ проверяет расшифровку"}>
-            <span className="analysis-chip__pulse" aria-hidden="true" />
-            {state.state === "queued" ? "Улучшение в очереди…" : "Улучшение расшифровки…"}
-          </span>
+          <Tip content={state.state === "queued" ? "Улучшение расшифровки ждёт в очереди" : "ИИ проверяет расшифровку"}>
+            <span className="analysis-chip">
+              <span className="analysis-chip__pulse" aria-hidden="true" />
+              {state.state === "queued" ? "Улучшение в очереди…" : "Улучшение расшифровки…"}
+            </span>
+          </Tip>
         </div>
       );
     case "ready": {
@@ -293,14 +296,16 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
           {terms
             ? `ИИ предлагает исправить ${terms} ${plural(terms, "термин", "термина", "терминов")}`
             : `ИИ предлагает ${fixes} ${plural(fixes, "исправление", "исправления", "исправлений")} распознавания`}
-          {by && <span className="muted" title="Какая модель предложила замены"> · {by}</span>}
+          {by && <Tip content="Какая модель предложила замены"><span className="muted"> · {by}</span></Tip>}
         </Callout>
       );
     }
     case "failed":
       return (
         <div className="analysis-status" role="status">
-          <span className="muted" title={state.error || undefined}>Улучшение расшифровки не удалось</span>
+          <Tip content={state.error && <span className="tip-lines">{state.error}</span>}>
+            <span className="muted">Улучшение расшифровки не удалось</span>
+          </Tip>
           {state.proposal && state.proposal.groups.length > 0 && (
             <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Прежний список</button>
           )}
@@ -335,9 +340,10 @@ function Places({ group, playable, onPlay }: {
       {group.samples.slice(0, PLACES).map((s) => (
         <li key={`${s.segment}:${s.offset}`}>
           {playable ? (
-            <button type="button" className="spk-link improve__play" title="Прослушать это место"
-              aria-label={`Прослушать с ${clock(s.start)}`}
-              onClick={() => onPlay(Math.max(0, s.start - 0.3), s.end + 0.5)}><Icon as={Play} size="sm" />{clock(s.start)}</button>
+            <Tip content="Прослушать это место">
+              <button type="button" className="spk-link improve__play" aria-label={`Прослушать с ${clock(s.start)}`}
+                onClick={() => onPlay(Math.max(0, s.start - 0.3), s.end + 0.5)}><Icon as={Play} size="sm" />{clock(s.start)}</button>
+            </Tip>
           ) : <span className="muted num">{clock(s.start)}</span>}
           <span className="improve__ctx">
             {s.before}<mark className="hit">{s.match}</mark>{s.after}
@@ -435,13 +441,18 @@ function Target({ group, value, onChange, onInvalid }: {
   }
   return (
     <span className="improve__to">
-      <button ref={button} type="button" className="improve__target" title="Изменить: вписать, как правильно" onClick={begin}>
-        <strong>{shown}</strong>
-      </button>
-      <button type="button" className="improve__pen" aria-label={`Изменить замену: ${group.find}`}
-        title="Изменить: вписать, как правильно" onClick={begin}><Icon as={Pencil} size="sm" /></button>
+      <Tip content="Изменить: вписать, как правильно">
+        <button ref={button} type="button" className="improve__target" onClick={begin}>
+          <strong>{shown}</strong>
+        </button>
+      </Tip>
+      <Tip content="Изменить: вписать, как правильно">
+        <button type="button" className="improve__pen" aria-label={`Изменить замену: ${group.find}`} onClick={begin}>
+          <Icon as={Pencil} size="sm" />
+        </button>
+      </Tip>
       {edited && (
-        <span className="improve__edited" title={`Вписано вручную; ИИ предлагал «${group.replace}»`}>изменено</span>
+        <Tip content={`Вписано вручную; ИИ предлагал «${group.replace}»`}><span className="improve__edited">изменено</span></Tip>
       )}
       {edited && (
         <button type="button" className="spk-link improve__revert" onClick={() => onChange(undefined)}>вернуть предложенное</button>
@@ -533,7 +544,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   );
 
   const failure = state?.state === "failed" ? (
-    <div className="improve__error" role="alert" title={state.error || undefined}>
+    <div className="improve__error" role="alert">
       Улучшение расшифровки не удалось{state.error ? `: ${state.error}` : ""}
       {groups.length > 0 && <span className="muted"> · ниже — прежний список</span>}
     </div>
@@ -590,12 +601,12 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                     <span className="improve__from">{g.find}</span>{" → "}
                   </label>
                   {target(g)}
-                  <span className="muted num" title={`Будет заменено: ${n} ${placesWord(n)}`}>· {n}</span>
+                  <Tip content={`Будет заменено: ${n} ${placesWord(n)}`}><span className="muted num">· {n}</span></Tip>
                   {unmarked > 0 && (
                     // Другие места термина видны и в свёрнутой строке: их стоит проверить.
-                    <span className="muted improve__unmarked" title="ИИ их не отмечал — раскройте, чтобы проверить">
-                      · ещё {unmarked} {placesWord(unmarked)}
-                    </span>
+                    <Tip content="ИИ их не отмечал — раскройте, чтобы проверить">
+                      <span className="muted improve__unmarked">· ещё {unmarked} {placesWord(unmarked)}</span>
+                    </Tip>
                   )}
                 </div>
                 {expanded.has(g.id) && (
@@ -613,9 +624,11 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                                 checked={extraOn.has(extraKey(g.id, k))}
                                 onChange={() => setExtraOn((on) => toggle(on, extraKey(g.id, k)))} />
                               {playable ? (
-                                <button type="button" className="spk-link improve__play" title="Прослушать это место"
-                                  aria-label={`Прослушать с ${clock(x.start)}`}
-                                  onClick={() => onPlay(Math.max(0, x.start - 0.3), x.end + 0.5)}><Icon as={Play} size="sm" />{clock(x.start)}</button>
+                                <Tip content="Прослушать это место">
+                                  <button type="button" className="spk-link improve__play"
+                                    aria-label={`Прослушать с ${clock(x.start)}`}
+                                    onClick={() => onPlay(Math.max(0, x.start - 0.3), x.end + 0.5)}><Icon as={Play} size="sm" />{clock(x.start)}</button>
+                                </Tip>
                               ) : <span className="muted num">{clock(x.start)}</span>}
                               <span className="improve__ctx">{x.before}<mark className="hit">{x.match}</mark>{x.after}</span>
                             </li>

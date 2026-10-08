@@ -19,6 +19,7 @@ import {
 import { createPortal } from "react-dom";
 import { floatingStyle, pointAnchor, useFloating, type Align } from "../../ui/floating";
 import { Icon } from "../../ui/Icon";
+import { Tip } from "../../ui/Tip";
 
 export type MenuItem = {
   label: string;
@@ -118,21 +119,24 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
       aria-describedby={note ? noteId : undefined} style={floatingStyle(pos)}>
       {note && <div className="item-menu__note" id={noteId}>{note}</div>}
       {items.map((item, i) => {
+        // Подсказка пункта (что сделает, почему недоступен) — облачко Aurora справа, не системный title.
         const main = (
-          <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"}
-            aria-checked={item.checked} tabIndex={-1} title={item.hint} disabled={item.disabled}
-            aria-disabled={item.unavailable || undefined}
-            data-autofocus={item.autoFocus || undefined}
-            className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}${
-              item.unavailable ? " item-menu__item--unavailable" : ""}`}
-            onClick={item.unavailable ? undefined : item.onSelect}>
-            {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
-            {item.detail ? (
-              <span className="item-menu__text">{item.label}<span className="item-menu__detail">{item.detail}</span></span>
-            ) : item.label}
-            {item.checked && <span className="item-menu__end" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
-            {item.trailing && <span className="item-menu__end item-menu__icon" aria-hidden="true">{item.trailing}</span>}
-          </button>
+          <Tip content={item.hint} side="right">
+            <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+              aria-checked={item.checked} tabIndex={-1} disabled={item.disabled}
+              aria-disabled={item.unavailable || undefined}
+              data-autofocus={item.autoFocus || undefined}
+              className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}${
+                item.unavailable ? " item-menu__item--unavailable" : ""}`}
+              onClick={item.unavailable ? undefined : item.onSelect}>
+              {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
+              {item.detail ? (
+                <span className="item-menu__text">{item.label}<span className="item-menu__detail">{item.detail}</span></span>
+              ) : item.label}
+              {item.checked && <span className="item-menu__end" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
+              {item.trailing && <span className="item-menu__end item-menu__icon" aria-hidden="true">{item.trailing}</span>}
+            </button>
+          </Tip>
         );
         return (
           <Fragment key={`${i}:${item.label}`}>
@@ -140,11 +144,14 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
             {item.split ? (
               <div className="item-menu__split">
                 {main}
-                <button type="button" role="menuitem" tabIndex={-1} aria-label={item.split.label}
-                  title={item.split.hint ?? item.split.label} disabled={item.split.disabled ?? item.disabled}
-                  className="item-menu__item item-menu__more" onClick={item.split.onSelect}>
-                  <Icon as={ChevronRight} size="sm" />
-                </button>
+                <Tip content={item.split.hint ?? item.split.label} side="right"
+                  describe={(item.split.hint ?? item.split.label) !== item.split.label}>
+                  <button type="button" role="menuitem" tabIndex={-1} aria-label={item.split.label}
+                    disabled={item.split.disabled ?? item.disabled}
+                    className="item-menu__item item-menu__more" onClick={item.split.onSelect}>
+                    <Icon as={ChevronRight} size="sm" />
+                  </button>
+                </Tip>
               </div>
             ) : main}
           </Fragment>

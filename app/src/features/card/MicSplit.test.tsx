@@ -65,8 +65,8 @@ describe("реплики", () => {
     const rows = document.querySelectorAll("[data-turn]");
     expect(within(rows[0] as HTMLElement).getByText("(нахлёст)")).toBeInTheDocument();
     expect(within(rows[1] as HTMLElement).queryByText("в комнате")).toBeNull();
-    expect(within(rows[2] as HTMLElement).getByText("в комнате")).toHaveAttribute("title",
-      expect.stringMatching(/микрофон/));
+    // Пояснение — облачком Aurora (ui/Tip) и описанием, не системным title.
+    expect(within(rows[2] as HTMLElement).getByText("в комнате")).toHaveAccessibleDescription(/микрофон/);
     expect(within(rows[3] as HTMLElement).getByText("(голос под вопросом)")).toBeInTheDocument();
     expect(within(rows[3] as HTMLElement).queryByText("(нахлёст)")).toBeNull();
   });

@@ -321,7 +321,7 @@ test("файл групп повреждён — предупреждение с
   expect(warn.querySelector(".nav-groups__path")).toHaveTextContent(".meet-groups.json.broken-20261006");
   // Сжимается начало имени, время в конце — отдельно и целиком.
   expect(warn.querySelector(".nav-groups__path-tail")).toHaveTextContent(/^20261006$/);
-  expect(warn).toHaveAttribute("title", "Файл групп повреждён, копия: C:/rec/.meet-groups.json.broken-20261006");
+  expect(warn).toHaveAccessibleDescription("Файл групп повреждён, копия: C:/rec/.meet-groups.json.broken-20261006");
   expect(warn.querySelector(".sr-only")).toHaveTextContent("C:/rec/.meet-groups.json.broken-20261006");
   expect(screen.getByRole("button", { name: "Новая группа" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Скрыть предупреждение" }));
@@ -445,7 +445,7 @@ test("панель выбора: «В группу ▾» — одиночный 
   fireEvent.click(recordMain("Ретро"), { ctrlKey: true });
   const bar = screen.getByRole("toolbar", { name: "Выбранные записи" });
   const remove = within(bar).getByRole("button", { name: "Убрать из группы" });
-  expect(remove).toHaveAttribute("title", "Убрать из «Проект Альфа»");
+  expect(remove).toHaveAccessibleDescription("Убрать из «Проект Альфа»");
   await userEvent.click(within(bar).getByRole("button", { name: "В группу" }));
   const menu = screen.getByRole("menu", { name: "Переместить в группу: 2 встречи" });
   expect(within(menu).getByRole("menuitemradio", { name: "Проект Альфа" })).toHaveAttribute("aria-checked", "true");

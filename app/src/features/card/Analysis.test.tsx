@@ -76,7 +76,7 @@ test("AnalysisStatus: идёт, устарел, не удался", async () => 
     .getByRole("button", { name: "Переанализировать" }));
   rerender(<AnalysisStatus state={{ state: "failed", error: "таймаут вызова модели" }} busy={false} onRun={onRun} />);
   expect(screen.getByRole("status")).toHaveTextContent("Анализ не удался");
-  expect(screen.getByText("Анализ не удался")).toHaveAttribute("title", "таймаут вызова модели");
+  expect(screen.getByText("Анализ не удался")).toHaveAccessibleDescription("таймаут вызова модели");
   await userEvent.click(screen.getByRole("button", { name: "Повторить" }));
   expect(onRun).toHaveBeenCalledTimes(2);
   rerender(<AnalysisStatus state={{ state: "ready" }} busy={false} onRun={onRun} />);
@@ -100,7 +100,7 @@ test("анализ без глав — честная строка, а не мо
     busy={false} />);
   // Локальная модель — совет и про окно контекста (частая причина).
   const note = screen.getByText("Модель вернула анализ без глав — увеличьте контекст модели (16K+) или попробуйте другую модель");
-  expect(note).toHaveAttribute("title", warnings[0]);
+  expect(note).toHaveAccessibleDescription(warnings[0]);
   // Какая модель разметила — по-прежнему видно.
   expect(screen.getByText(/Анализ: Локальная модель \(qwen3:8b\)/)).toBeInTheDocument();
 });
@@ -159,7 +159,7 @@ test("карточка: идёт анализ — «Анализ…», «Пер�
   const menu = await openMore();
   const item = within(menu).getByRole("menuitem", { name: "Переанализировать…" });
   expect(item).toBeDisabled();
-  expect(item).toHaveAttribute("title", "Анализ уже идёт");
+  expect(item).toHaveAccessibleDescription("Анализ уже идёт");
 });
 
 test("карточка: без модели «Переанализировать» недоступно", async () => {
@@ -189,7 +189,7 @@ test("карточка: анализ не удался — тихая строк
   vi.mocked(api.runAnalysis).mockResolvedValue(job("queued"));
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
-  expect(await screen.findByTitle("rate_limit")).toHaveTextContent("Анализ не удался");
+  expect(await screen.findByText("Анализ не удался")).toHaveAccessibleDescription("rate_limit");
   await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Переанализировать…" }));
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Переанализировать" }));
   expect(api.runAnalysis).toHaveBeenCalledTimes(1);
@@ -281,5 +281,5 @@ test("карточка: часть встречи не разобрана — с
     busy={false} />);
   const note = screen.getByText(/^Часть встречи не разобрана \(1 из 3 кусков\): таймаут/);
   expect(note.textContent!.length).toBeLessThan(200);
-  expect(note.getAttribute("title")).toContain(reason);
+  expect(note).toHaveAccessibleDescription(expect.stringContaining(reason.trim()));
 });

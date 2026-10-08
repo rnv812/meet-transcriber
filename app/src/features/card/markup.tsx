@@ -16,6 +16,7 @@ import type { Turn } from "../../lib/speakers";
 import type { InsightKind, PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { JiraLink, LinkedText } from "../../ui/LinkedText";
+import { Tip } from "../../ui/Tip";
 import "./markup.css";
 
 const TYPE_ICON: Record<PhraseType, LucideIcon | null> = {
@@ -41,8 +42,8 @@ export function TypeIcon({ type }: { type: PhraseType }) {
   const Icon = TYPE_ICON[type];
   if (!Icon) return null;
   return (
-    <span className={`badge badge--plain turn__type turn__type--${type}`} role="img" aria-label={TYPE_LABEL[type]}
-      title={TYPE_LABEL[type]}>
+    // Подпись видна в самом бейдже: отдельной подсказки не нужно.
+    <span className={`badge badge--plain turn__type turn__type--${type}`} role="img" aria-label={TYPE_LABEL[type]}>
       <Icon size={12} strokeWidth={1.75} aria-hidden="true" />{TYPE_LABEL[type]}
     </span>
   );
@@ -121,10 +122,11 @@ export function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: 
               if (!t) return null;
               const at = `${clock(t.start)} · ${t.speaker}`;
               return (
-                <button key={r} type="button" className="jtask__ref num" onClick={() => onJump(r)}
-                  aria-label={at} title={`${at} — перейти к реплике`}>
-                  {clock(t.start)}
-                </button>
+                <Tip key={r} content={`${at} — перейти к реплике`} describe={false}>
+                  <button type="button" className="jtask__ref num" onClick={() => onJump(r)} aria-label={at}>
+                    {clock(t.start)}
+                  </button>
+                </Tip>
               );
             })}
             {task.turns.length > TASK_TURNS && (
@@ -165,9 +167,11 @@ export function InsightsBlock({ insights, turns, onJump, onAsk }: {
             const open = why.has(x.id);
             return (
               <li key={x.id} className={`insight insight--${x.kind}`}>
-                <span className="insight__icon" role="img" aria-label={INSIGHT_LABEL[x.kind]} title={INSIGHT_LABEL[x.kind]}>
-                  <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
-                </span>
+                <Tip content={INSIGHT_LABEL[x.kind]} describe={false}>
+                  <span className="insight__icon" role="img" aria-label={INSIGHT_LABEL[x.kind]}>
+                    <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+                  </span>
+                </Tip>
                 <div className="insight__body">
                   <p className="insight__text"><LinkedText text={x.text} linker={jira} /></p>
                   {open && x.why && <p className="insight__why muted"><LinkedText text={x.why} linker={jira} /></p>}
@@ -187,10 +191,11 @@ export function InsightsBlock({ insights, turns, onJump, onAsk }: {
                       const t = turns[r];
                       if (!t) return null;
                       return (
-                        <button key={r} type="button" className="insight__ref num" onClick={() => onJump(r)}
-                          title={`${clock(t.start)} · ${t.speaker} — перейти к реплике`}>
-                          {clock(t.start)} · {t.speaker}
-                        </button>
+                        <Tip key={r} content="Перейти к реплике">
+                          <button type="button" className="insight__ref num" onClick={() => onJump(r)}>
+                            {clock(t.start)} · {t.speaker}
+                          </button>
+                        </Tip>
                       );
                     })}
                     {onAsk && (

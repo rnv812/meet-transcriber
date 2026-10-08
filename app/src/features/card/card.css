@@ -54,6 +54,8 @@
   border-radius: var(--r-full); background: var(--surface-2); box-shadow: inset 0 0 0 2px var(--person, var(--control-line));
   color: var(--ink); font-weight: 600; line-height: 1;
 }
+/* Многострочная подсказка (ui/Tip) с текстом резидента: переводы строк — строками. */
+.tip-lines { white-space: pre-line; }
 .card__merge { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-xs); }
 .card__merge code { margin-left: 4px; overflow-wrap: anywhere; }
 

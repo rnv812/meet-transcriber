@@ -252,7 +252,6 @@ export function PersonCard({
             aria-label="Объединить с…"
             placeholder="Объединить с…"
             size="sm"
-            width={184}
             value=""
             options={others.map((o) => ({ value: o.name, label: o.name }))}
             onChange={(to) => setConfirm({ merge: to })}

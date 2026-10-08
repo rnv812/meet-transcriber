@@ -147,7 +147,7 @@ export function SearchSuggest({ value, onChange, onApply, onBackspaceEmpty, endp
         className="field field--md rec-search__input"
         role="combobox"
         placeholder={placeholder}
-        title="Поиск по названиям и тексту расшифровок. Префиксы: участник:, группа:, категория:, дата:, есть:, дольше:…"
+        aria-description="Поиск по названиям и тексту расшифровок. Префиксы: участник:, группа:, категория:, дата:, есть:, дольше:…"
         aria-label="Поиск по записям"
         aria-autocomplete="list"
         aria-expanded={shown}

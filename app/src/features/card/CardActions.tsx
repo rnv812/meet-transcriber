@@ -26,6 +26,7 @@ import { useWide } from "../../live/useWide";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
+import { Tip } from "../../ui/Tip";
 import { ConfirmDialog, type ConfirmOptions } from "../../ui/ConfirmDialog";
 import type { ModelChoice } from "../../lib/types";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
@@ -211,17 +212,19 @@ export function CardActions({
     <div ref={root} className={`card__actions${compact ? " card__actions--compact" : ""}`}>
       <div className="card__act-group" role="group" aria-label="Главные действия">
         {canExport && (
-          <Button ref={exportBtn} variant="secondary" icon={Download}
-            title="Сохранить расшифровку файлом: Markdown, текст или субтитры"
-            aria-haspopup="menu" aria-expanded={menu?.kind === "export"} onClick={() => toggle("export")}>
-            {label("Экспорт")}<Icon as={ChevronDown} size="sm" className="card__act-chevron" />
-          </Button>
+          <Tip content="Сохранить расшифровку файлом: Markdown, текст или субтитры">
+            <Button ref={exportBtn} variant="secondary" icon={Download}
+              aria-haspopup="menu" aria-expanded={menu?.kind === "export"} onClick={() => toggle("export")}>
+              {label("Экспорт")}<Icon as={ChevronDown} size="sm" className="card__act-chevron" />
+            </Button>
+          </Tip>
         )}
         {(onKbExport || kbPending) && (
-          <Button variant="secondary" icon={BookOpen} title="Выгрузить расшифровку и итоги в папку встреч базы знаний"
-            onClick={onKbExport} disabled={busy || !onKbExport}>
-            {label("В базу знаний")}
-          </Button>
+          <Tip content="Выгрузить расшифровку и итоги в папку встреч базы знаний">
+            <Button variant="secondary" icon={BookOpen} onClick={onKbExport} disabled={busy || !onKbExport}>
+              {label("В базу знаний")}
+            </Button>
+          </Tip>
         )}
       </div>
       <div className="card__act-group" role="group" aria-label="Другие действия">

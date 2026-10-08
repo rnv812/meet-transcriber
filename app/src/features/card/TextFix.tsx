@@ -21,6 +21,7 @@ import type { Segment, TextPreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
+import { Tip } from "../../ui/Tip";
 import { floatingStyle, useFloating } from "../../ui/floating";
 import { rulesOf, withRule } from "../settings/ReplacementsEditor";
 import { Icon } from "../../ui/Icon";
@@ -305,12 +306,14 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     const canApply = !busy && !target.split && !!right && !(same && !hotword) && !(all && count === 0);
     node = (
       <>
-        <button ref={floatRef} type="button" className={`tfix-float${open ? " tfix-float--anchor" : ""}`}
-          style={floatingStyle(floatPos)} aria-hidden={open || undefined}
-          tabIndex={open ? -1 : undefined} title="Исправить распознанное (Ctrl+E)" aria-keyshortcuts="Control+E"
-          onMouseDown={(e) => e.preventDefault()} onClick={() => show(target)}>
-          Исправить…
-        </button>
+        <Tip content={open ? null : "Исправить распознанное (Ctrl+E)"} describe={false}>
+          <button ref={floatRef} type="button" className={`tfix-float${open ? " tfix-float--anchor" : ""}`}
+            style={floatingStyle(floatPos)} aria-hidden={open || undefined}
+            tabIndex={open ? -1 : undefined} aria-keyshortcuts="Control+E"
+            onMouseDown={(e) => e.preventDefault()} onClick={() => show(target)}>
+            Исправить…
+          </button>
+        </Tip>
         {open && anchor && (
           <Popover anchor={anchor} onClose={close} label="Исправить распознанное" width={POPOVER_W}>
             <form className="tmenu tfix" onSubmit={(e) => { e.preventDefault(); if (canApply) void apply(); }}>
@@ -318,11 +321,12 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
               <div className="tfix__heard">
                 <span>Распознано: <q className="tfix__find">{target.find}</q></span>
                 {playable && here && (
-                  <button type="button" className="spk-link" title="Прослушать это место"
-                    aria-label={`Прослушать с ${clock(here.start)}`}
-                    onClick={() => onPlay(Math.max(0, here.start - 0.3), here.end + 0.5)}>
-                    <Icon as={Play} size="sm" />{clock(here.start)}
-                  </button>
+                  <Tip content="Прослушать это место">
+                    <button type="button" className="spk-link" aria-label={`Прослушать с ${clock(here.start)}`}
+                      onClick={() => onPlay(Math.max(0, here.start - 0.3), here.end + 0.5)}>
+                      <Icon as={Play} size="sm" />{clock(here.start)}
+                    </button>
+                  </Tip>
                 )}
               </div>
               {target.split ? (

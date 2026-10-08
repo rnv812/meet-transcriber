@@ -14,7 +14,7 @@ import { ChevronRight } from "lucide-react";
 import { useId, useState } from "react";
 
 import { type Endpoint, recordingCommand } from "../../lib/api";
-import { dayLabel, duration, errorText, plural } from "../../lib/format";
+import { dayLabel, errorText, plural } from "../../lib/format";
 import { statusOf } from "../../lib/status";
 import type { Job, LibraryItem, Snapshot } from "../../lib/types";
 import { BADGE_CLASS } from "../../ui/badge";
@@ -22,7 +22,7 @@ import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
 import { ImportErrors, useImportFiles } from "./ImportZone";
 import { autoRecordText } from "./LibraryEmpty";
-import { badgeOf } from "./RecordingItem";
+import { badgeOf, listDuration } from "./RecordingItem";
 import "./library-home.css";
 
 /** Последняя встреча: самая поздняя по началу; без дат — первая в списке; пусто — null. */
@@ -67,7 +67,7 @@ export function LibraryHome({ endpoint, snapshot, items, jobs, onOpen, onSnapsho
   let last = null;
   if (latest) {
     const when = latest.started_at ? dayLabel(latest.started_at) : "";
-    const meta = [when, latest.duration_s ? duration(latest.duration_s) : ""].filter(Boolean).join(" · ");
+    const meta = [when, listDuration(latest.duration_s)].filter(Boolean).join(" · ");
     const status = statusOf(latest, jobs, snapshot);
     const badge = badgeOf(status);
     last = (

@@ -25,6 +25,7 @@ import type { PhraseType } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
+import { Tip } from "../../ui/Tip";
 import { InsightsBlock, JiraTasks, TypeFilters, hasTypeFilters } from "./markup";
 import { TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
@@ -413,12 +414,13 @@ export function TranscriptView({
         <span className="find__gap" />
         {onFix && (
           // Нажатие не снимает выделение в реплике: по нему и откроется окно.
-          <Button variant="ghost" size="md" icon={PenLine} aria-label="Исправить распознанное"
-            title="Исправить выделенное в реплике (Ctrl+E)" aria-keyshortcuts="Control+E"
-            aria-expanded={fixHint !== null} aria-controls={fixHint ?? undefined}
-            onMouseDown={(e) => e.preventDefault()} onClick={(e) => onFix(e.currentTarget)}>
-            Исправить…
-          </Button>
+          <Tip content="Исправить выделенное в реплике (Ctrl+E)">
+            <Button variant="ghost" size="md" icon={PenLine} aria-label="Исправить распознанное" aria-keyshortcuts="Control+E"
+              aria-expanded={fixHint !== null} aria-controls={fixHint ?? undefined}
+              onMouseDown={(e) => e.preventDefault()} onClick={(e) => onFix(e.currentTarget)}>
+              Исправить…
+            </Button>
+          </Tip>
         )}
         {tools}
       </div>

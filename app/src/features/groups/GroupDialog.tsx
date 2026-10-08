@@ -125,7 +125,7 @@ export function GroupDialog({ state, groups, onSubmit, onClose }: {
             onKeyDown={onPaletteKey}>
             {CATEGORY_PALETTE.map((p) => (
               <button key={p.color} type="button" role="radio" aria-checked={p === current} aria-label={p.name}
-                title={p.name} className="group-dialog__color" style={{ background: p.color }}
+                className="group-dialog__color" style={{ background: p.color }}
                 tabIndex={p === focused ? 0 : -1} onClick={() => setColor(p.color)} />
             ))}
           </div>
