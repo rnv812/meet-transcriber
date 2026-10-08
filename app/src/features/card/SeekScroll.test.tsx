@@ -205,3 +205,9 @@ test("важная реплика: подложка строки, колонка
   expect(css).toMatch(/\.turn\[data-now\] \.turn__time \{ color: var\(--accent-line\)/);
   expect(css).not.toMatch(/\.turn\[data-now\][^{]*\{[^}]*box-shadow/);
 });
+
+test("0.5: плеер всегда внизу — карточку не прокрутить (overflow: clip), прокручивается только тело", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/features/card/card.css"), "utf8");
+  expect(css).toMatch(/\.rec-card \{[^}]*height: 100%;[^}]*overflow: clip;/);
+  expect(css).toMatch(/\.card__body \{[^}]*flex: 1; min-height: 0;[^}]*overflow-y: auto;/);
+});
