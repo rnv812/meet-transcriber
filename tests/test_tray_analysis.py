@@ -812,7 +812,12 @@ def test_recover_leaves_analysis_to_a_pending_retranscription(app, tmp_path, mon
                                 "pending_analysis": {"at": _time.time(), "manual": False}})
     st = _restart(app)
     st.queue._ensure_worker = lambda: None
-    done = st.recover()
+    # «Сейчас» — час после начала записи: RID — фиксированная дата, а записи
+    # старше недели recover не трогает (тест не про возраст).
+    from datetime import datetime
+
+    now = datetime.fromisoformat(library._started_at(RID)).timestamp() + 3600
+    done = st.recover(now=now)
     assert done["queued"] == [RID] and "analysis" not in done
     assert st.llm_queue.listing() == [] and _pending(tmp_path) is None
 
