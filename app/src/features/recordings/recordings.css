@@ -250,8 +250,8 @@
 .date-sec__pick { flex: none; margin: 0 0 0 10px; cursor: pointer; }
 .rec-found { margin: 0; padding: 0 2px; font-size: 12px; }
 /* Длинный список: строки за экраном не раскладываются. Сдерживание отрисовки
-   обрезает всё, что выходит за строку, — рамка фокуса внутрь, а с открытым
+   обрезает всё, что выходит за строку, — рамка фокуса внутрь (inset-тень), а с открытым
    меню (оно fixed внутри строки) сдерживание снимается. */
 .rec-item { content-visibility: auto; contain-intrinsic-size: auto 52px; }
 .rec-item--menu { content-visibility: visible; }
-.rec-item > .rec-item__main:focus-visible { outline-offset: -2px; }
+.rec-item > .rec-item__main:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-line); }
