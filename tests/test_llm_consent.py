@@ -112,7 +112,7 @@ def test_request_reads_anywhere_and_searches_without_a_card(dirs):
     ("Edit", {"file_path": "{downloads}/a.txt"}, "правку файла"),
     ("NotebookEdit", {"notebook_path": "{downloads}/a.ipynb"}, "правку файла"),
     ("mcp__team-jira__jira_create_issue", {"summary": "x"}, "MCP team-jira → jira_create_issue"),
-    ("mcp__vb-os__GenericOpenSearchApiTool", {}, "MCP vb-os → GenericOpenSearchApiTool"),
+    ("mcp__vb-os__GenericSearchApiTool", {}, "MCP vb-os → GenericSearchApiTool"),
     ("WebFetch", {"url": "https://example.com/?q=1"}, "открыть адрес"),
     ("Skill", {"skill": "newbug"}, "навык"),
     ("CustomTool", {}, "CustomTool"),

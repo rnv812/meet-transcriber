@@ -92,7 +92,7 @@ test("таблица людей: заголовок, колонки «Челов
 });
 
 test("«Кто это» в таблице — в одну строку с многоточием; полный текст — подсказкой обрезанного", () => {
-  const long = "Руководитель направления интеграции Acme у заказчика, отвечает за сроки пилота";
+  const long = "Руководитель направления интеграции платформы у заказчика, отвечает за сроки пилота";
   setup([{ ...people[0]!, role: long }]);
   const cell = screen.getByRole("cell", { name: long });
   expect(cell.querySelector(".truncate")).toHaveTextContent(long);
@@ -145,7 +145,7 @@ test("поиск «Найти человека» ищет и по «Кто эт�
   expect(rows).toHaveLength(1);
   expect(within(rows[0]!).getByRole("button", { name: "Аркадий" })).toBeInTheDocument();
   await userEvent.clear(search);
-  await userEvent.type(search, "smart");
+  await userEvent.type(search, "acme");
   expect(within(screen.getByRole("table")).getByRole("button", { name: "Демьян" })).toBeInTheDocument();
 });
 

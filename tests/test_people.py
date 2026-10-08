@@ -484,7 +484,7 @@ def test_empty_role_clears_the_key(tmp_path):
 def test_role_newlines_become_spaces_and_length_is_capped(tmp_path):
     voices = tmp_path / "voices"
     _voice(voices, "Демьян", [])
-    assert people.set_role("Демьян", "CTO\r\nSmart\n\n  Monitor\tи т.д.", voices) == "CTO Acme и т.д."
+    assert people.set_role("Демьян", "CTO\r\nAcme\n\n  Labs\tи т.д.", voices) == "CTO Acme Labs и т.д."
     got = people.set_role("Демьян", "я" * 500, voices)
     assert len(got) == people.MAX_ROLE == 160
     assert people.role_of("Демьян", voices) == got

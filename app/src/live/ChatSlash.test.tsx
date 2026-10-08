@@ -169,7 +169,7 @@ test("/mcp enable — только выключенные; /model — модел
 test("подсказки обновляются вместе с агентом (после /mcp reconnect — новое состояние)", async () => {
   render(<Host />);
   loadFull();
-  await userEvent.type(field(), "/mcp reconnect v");
+  await userEvent.type(field(), "/mcp reconnect t");
   expect(options()[0]).toHaveTextContent("team-jiraошибка");
   act(() => chat.sink.onAgent(agentInfo({ commands: cli, mcp_servers: [{ name: "team-jira", status: "connected" }], models })));
   expect(options()[0]).toHaveTextContent("team-jiraподключён");
