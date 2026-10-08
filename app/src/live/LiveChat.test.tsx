@@ -505,6 +505,35 @@ describe("Atlas Aurora", () => {
     expect(src.querySelector("svg")).not.toBeNull();
   });
 
+  test("низ карточки (макет MeetLive): источники, промежуток, реакции и копирование — одной строкой; кнопки ответа — под ней", () => {
+    render(<Host />);
+    load([attMsg("a1", { type: "doc", name: "Регламент API.pdf", path: "C:/r/x/assistant/files/a1.pdf" }),
+      userMsg("m0", { text: "вот", attachments: ["a1"] }),
+      agentMsg("m1", { text: "См. Регламент API.pdf", buttons: ["Только сроки"] })]);
+    const row = msgRow("См. Регламент API.pdf");
+    const foot = row.querySelector<HTMLElement>(".chat-msg__foot")!;
+    expect(foot).not.toBeNull();
+    const src = within(foot).getByRole("button", { name: "Источник: Регламент API.pdf" });
+    const like = within(foot).getByRole("button", { name: "Полезно" });
+    within(foot).getByRole("button", { name: "Копировать" });
+    expect(foot.querySelector(".chat-msg__gap")).not.toBeNull();
+    // Порядок: источник → промежуток → реакции; кнопки ответа агента — после строки.
+    expect(src.compareDocumentPosition(like) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const reply = within(row).getByRole("button", { name: "Только сроки" });
+    expect(foot.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Размер — sm (32 px), как у кнопок ответа `.filter` в той же карточке: не плотные xs.
+    for (const b of [src, like, within(foot).getByRole("button", { name: "Копировать" })]) {
+      expect(b).toHaveClass("btn--sm");
+      expect(b).not.toHaveAttribute("data-density");
+    }
+  });
+
+  test("низ карточки без источников и текста-ответа не рисуется пустым", () => {
+    render(<Host />);
+    load([agentMsg("m1", { text: "", status: "failed", error: "сбой" })]);
+    expect(within(log()).getByText("сбой").closest("li")!.querySelector(".chat-msg__foot")).toBeNull();
+  });
+
   test("закреплённый вопрос: метка «Вопрос вам», кнопки — .filter, «Показать в ленте» ведёт к сообщению", async () => {
     render(<Host />);
     load([agentMsg("m1", { text: "Сказать Анне про срок?", pin: true, buttons: ["Да", "Нет"] })]);
@@ -516,6 +545,8 @@ describe("Atlas Aurora", () => {
     row.scrollIntoView = scrolled;
     await userEvent.click(within(pin).getByRole("button", { name: "Показать в ленте" }));
     expect(scrolled).toHaveBeenCalled();
+    expect(row).toHaveFocus();
+    expect(row).toHaveClass("is-flash");
     expect(within(pin).getByRole("button", { name: "Убрать из закреплённых" })).toHaveClass("btn");
   });
 

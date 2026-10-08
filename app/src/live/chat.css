@@ -146,8 +146,17 @@
 .chat-msg__buttons > .filter[aria-disabled="true"]:not([aria-pressed="true"]):hover { background: transparent; color: var(--ink-2); }
 .chat-msg__buttons > .filter[aria-pressed="true"] { cursor: default; }
 
+/*
+ * Низ карточки агента (макет MeetLive) — одна строка высотой с кнопку: источники,
+ * промежуток, реакции и копирование. Строка не переносится и не схлопывается:
+ * подписи реакций при наведении отнимают место у источников (их имена сокращаются
+ * многоточием), а не добавляют строку — лента не прыгает.
+ */
+.chat-msg__foot { display: flex; align-items: center; gap: 6px; min-height: var(--control-sm); min-width: 0; }
+.chat-msg__gap { flex: 1; }
+.chat-msg__foot > .chat-msg__sources { flex: 0 1 auto; min-width: 0; }
 /* Реакции и копирование: видны при наведении и фокусе, поставленная реакция — всегда. */
-.chat-msg__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 28px; }
+.chat-msg__tools { flex: none; display: flex; align-items: center; gap: 2px; }
 .chat-react { display: inline-flex; gap: 2px; }
 .chat-react > .chat-react__btn { opacity: 0.7; }
 .chat-react > .chat-react__btn:not(.btn--icon) { min-width: var(--control-sm); padding: 0 8px; justify-content: center; }
@@ -173,6 +182,7 @@
     clip-path: none !important; overflow: visible !important;
   }
   .chat-msg--agent .chat-react__btn, .chat-msg--agent .chat-msg__copy { opacity: 0.8 !important; }
+  .chat-react__btn.is-on { opacity: 1 !important; }
 }
 
 /* Отклик окна на 👍 / 👎: держится и гаснет — остаётся нажатая кнопка. */
@@ -261,9 +271,10 @@
 .session-bar > .popover { padding: 0; }
 
 /* Источники: документы, которые упомянул агент, — кнопки Aurora со значком; щелчок открывает. */
-.chat-msg__sources { display: flex; flex-wrap: wrap; gap: 6px; }
-.chat-msg__sources > .chat-src { max-width: 100%; }
-.chat-src__name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-msg__sources { display: flex; gap: 6px; }
+/* Кнопка сжимается до значка и многоточия; обрезает только своё содержимое — рамка фокуса (тень) видна. */
+.chat-msg__sources > .chat-src { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; }
+.chat-src__name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Клавиатура: сообщение ленты в фокусе (↑ / ↓ между сообщениями). */
 .chat__list > li[data-key]:focus { outline: none; }

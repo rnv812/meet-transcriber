@@ -53,6 +53,12 @@ test("мёртвых правил переключателя частоты (д�
   expect(read(join("live", "chat.css"))).not.toMatch(/session-freq__(group|opt)|session-bar__dot/);
 });
 
+test("сенсорный экран: поставленная реакция не приглушена", () => {
+  const css = clean(join("live", "chat.css"));
+  const touch = css.slice(css.indexOf("@media (hover: none)"));
+  expect(touch).toMatch(/\.chat-react__btn\.is-on \{ opacity: 1 !important; \}/);
+});
+
 test("отклик на реакцию гаснет анимацией, но не при «уменьшить движение»", () => {
   const css = clean(join("live", "chat.css"));
   expect(css).toMatch(/\.chat-msg__ack \{[^}]*animation: chat-ack/);

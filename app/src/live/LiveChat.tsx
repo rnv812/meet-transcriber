@@ -148,7 +148,7 @@ function CopyButton({ text }: { text: string }) {
     return () => clearTimeout(t);
   }, [copied]);
   return (
-    <IconButton icon={Copy} size="xs" label={copied ? "Скопировано" : "Копировать"} className="chat-msg__copy"
+    <IconButton icon={Copy} size="sm" label={copied ? "Скопировано" : "Копировать"} className="chat-msg__copy"
       onClick={() => {
         if (!navigator.clipboard) return;
         void navigator.clipboard.writeText(text).then(() => setCopied(true), () => {});
@@ -186,7 +186,7 @@ function Reactions({ m, chat, disabled, compact }: { m: ChatMessage; chat: Chat;
       {REACTIONS.map(({ emoji, label, hint }) => {
         const on = !!m.reactions?.[emoji];
         return (
-          <Button key={emoji} variant="ghost" size="xs" icon={REACTION_ICON[emoji]}
+          <Button key={emoji} variant="ghost" size="sm" icon={REACTION_ICON[emoji]}
             className={`chat-react__btn${on ? " is-on" : ""}${compact ? " btn--icon" : ""}`} aria-pressed={on}
             aria-label={label} title={hint} disabled={disabled}
             onClick={() => void chat.react(m.id, emoji)}>
@@ -226,7 +226,7 @@ function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; co
   return (
     <div className="chat-msg__sources" role="group" aria-label="Источники">
       {sources.map((s) => (
-        <Button key={s.key} size="xs" icon={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText}
+        <Button key={s.key} size="sm" icon={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText}
           className={`chat-src${compact ? " btn--icon" : ""}`} aria-label={`Источник: ${s.label}`}
           title={`Открыть «${s.label}»`} onClick={() => void chat.open(s)}>
           {!compact && <span className="chat-src__name">{s.label}</span>}
@@ -246,6 +246,8 @@ function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
   const reacted = REACTIONS.some((r) => m.reactions?.[r.emoji]);
   const ack = chat.ack(m.id);
   const explaining = !disabled && !writing && chat.explaining(m.id);
+  const sources = writing ? [] : chat.sources(m);
+  const hasText = !!text.trim();
   return (
     // Карточка Aurora с отсветом сияния (вывод ИИ) и знаком агента; пока пишет — знак «пишет».
     <li className={`chat-msg chat-msg--agent card aurora-wash${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
@@ -267,14 +269,21 @@ function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
       ) : null}
       {m.status === "cancelled" && <div className="chat-msg__note">Остановлено</div>}
       {m.status === "failed" && <div className="chat-msg__error">{m.error || "Ассистент не смог ответить"}</div>}
-      {!writing && <Sources sources={chat.sources(m)} chat={chat} compact={compact} />}
-      {!writing && <AgentButtons m={m} chat={chat} disabled={disabled} />}
-      {!writing && text.trim() && (
-        <div className="chat-msg__tools">
-          <Reactions m={m} chat={chat} disabled={disabled} compact={compact} />
-          <CopyButton text={plainMarkdown(text)} />
+      {/* Низ карточки (макет MeetLive) — одна строка: источники, промежуток, реакции и копирование.
+          Строка не схлопывается вне наведения: лента не прыгает. Кнопки ответа агента — под ней. */}
+      {!writing && (sources.length > 0 || hasText) && (
+        <div className="chat-msg__foot">
+          <Sources sources={sources} chat={chat} compact={compact} />
+          <span className="chat-msg__gap" />
+          {hasText && (
+            <div className="chat-msg__tools">
+              <Reactions m={m} chat={chat} disabled={disabled} compact={compact} />
+              <CopyButton text={plainMarkdown(text)} />
+            </div>
+          )}
         </div>
       )}
+      {!writing && <AgentButtons m={m} chat={chat} disabled={disabled} />}
       {/* Видимые заметки; диктору их объявляет постоянная live-область ленты (`chat.announce`). */}
       {ack && <div key={ack} className="chat-msg__ack">{ack}</div>}
       {explaining && (
