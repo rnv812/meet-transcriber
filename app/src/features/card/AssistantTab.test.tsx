@@ -380,3 +380,15 @@ test("карточка подтверждения Meet после встречи
   await userEvent.click(within(box).getByRole("button", { name: "Отклонить" }));
   expect(recordingChatConfirm).toHaveBeenCalledWith(ep, ID, "m3", false, false);
 });
+
+test("0.4: «/» после встречи — подсказка команд Meet; выбранная команда уходит continueChat", async () => {
+  vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
+  vi.mocked(continueChat).mockResolvedValue({ message: userMsg("m3", { text: "/help", client_id: "c1" }), job: null });
+  render(<Tab />);
+  await within(await ready()).findByText("15 ноября");
+  await userEvent.type(field(), "/h");
+  const list = screen.getByRole("listbox", { name: "Команды" });
+  expect(within(list).getByRole("option")).toHaveTextContent("/helpКоманды чата");
+  await userEvent.keyboard("{Enter}");
+  expect(continueChat).toHaveBeenCalledWith(ep, ID, { text: "/help", client_id: "c1", attachments: [] });
+});

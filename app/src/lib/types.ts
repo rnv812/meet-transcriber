@@ -911,7 +911,8 @@ export type ChatMessage = {
   /** Секунды записи (во время встречи); после встречи нет. */
   t?: number;
   text?: string;
-  status?: ChatStatus | "parsing" | "ready" | "removed";
+  /** У строки вызова инструмента (`kind: "tool"`, `event: "call"`) — `running` / `done` / `error` / `denied`. */
+  status?: ChatStatus | "parsing" | "ready" | "removed" | ToolStatus;
   mode?: "reply" | "proactive";
   re?: string;
   /** Ответ агента на ❓: id сообщения, которое он поясняет. */
@@ -921,16 +922,43 @@ export type ChatMessage = {
   reactions?: Partial<Record<ChatReaction, number>>;
   attachments?: string[];
   /** Нажатие кнопки агента; `reaction` — ❓ после встречи (просьба пояснить сообщение `re`). */
-  via?: "button" | "reaction";
+  via?: "button" | "reaction" | "command";
   client_id?: string;
   after_meeting?: boolean;
   error?: string;
   note?: string;
   merged_into?: string;
   /** Системная строка ворот согласия: «Ассистент хотел … — запрос заблокирован» (0.3.7). */
-  gate?: boolean;
-  /** Карточка подтверждения Meet (0.3.7): точный вызов агента, ждёт «Разрешить один раз» / «Отклонить». */
-  card?: "confirm";
+  gate?: boolean | ToolGate;
+  /**
+   * Карточка подтверждения Meet (0.3.7): точный вызов агента, ждёт «Разрешить один раз» / «Отклонить»;
+   * её `tool_use_id` (0.4) ставит её в строку того же вызова. `command` — ответ слэш-команды Meet (0.4).
+   */
+  card?: "confirm" | "command";
+  /** Ответ слэш-команды: имя команды, список команд (`/help`), MCP-серверы (`/mcp`), неизвестная — как набрана. */
+  command?: string;
+  items?: AgentCommand[];
+  servers?: { name: string; status: string; error?: string }[];
+  unknown?: string;
+  /** Системная строка с ошибкой или пометкой. */
+  level?: "error" | "info";
+  /** Однократная строка: `agent_mode` — «Ассистент теперь сам выполняет обычные действия…» (0.4). */
+  notice?: string;
+  // --- строка вызова инструмента агента (0.4, `kind: "tool"`, `event: "call"`) ---
+  tool_use_id?: string;
+  /** Вид вызова: shell, read, search, edit, web, mcp, skill, agent, hook, other. */
+  view?: string;
+  added?: number;
+  removed?: number;
+  server?: string | null;
+  input_preview?: string;
+  /** Вывод (до 64 КБ); `truncated` — обрезан. */
+  output_preview?: string;
+  truncated?: boolean;
+  duration_ms?: number;
+  /** Реплика агента хода, которому принадлежит вызов. */
+  reply?: string;
+  parent?: string;
   tool?: string;
   title?: string;
   args?: string;
@@ -959,6 +987,17 @@ export type ChatMessage = {
   source?: string;
   [key: string]: unknown;
 };
+
+/** Состояние вызова инструмента агента (строка хода работы). */
+export type ToolStatus = "running" | "done" | "error" | "denied";
+/** Решение ворот Meet по вызову: `auto`/`allowed` — «разрешено автоматически», `approved`/`declined` — «спросил вас», `denied` — «запрещено: …». */
+export type ToolGate = { decision: string; label: string };
+/** Слэш-команда для подсказки в строке ввода: `meet` — выполняет Meet, `cli` — уходит в CLI, `skill` — навык пользователя (тоже в CLI). */
+export type AgentCommand = { name: string; hint: string; description: string; source: "meet" | "cli" | "skill" };
+/** MCP-сервер сессии с состоянием (`connected`, `failed`, `needs-auth`, `pending`, `disabled`) — дополнение `/mcp …`. */
+export type AgentMcpServer = { name: string; status: string };
+/** Модель CLI (`initialize` → `models`) — дополнение `/model …`. */
+export type AgentModel = { value: string; label: string };
 
 /** Вложение — запись журнала `kind: "attachment"` (id `a<N>`). */
 export type ChatAttachment = ChatMessage & { kind: "attachment"; name: string; status: "parsing" | "ready" | "failed" | "removed" };
@@ -1005,7 +1044,22 @@ export type AgentInfo = {
    * `files` — Codex/OpenCode: только чтение файлов по просьбе; `read` — только чтение встречи и базы
    * знаний; `meet` — просит Meet прочитать (локальная модель).
    */
-  can?: { mode: "consent" | "files" | "read" | "meet"; mcp: string[] | null };
+  can?: {
+    /** 0.4: `act` — Codex/OpenCode в автомоде правят рабочие папки и выполняют команды сами. */
+    mode: "consent" | "act" | "files" | "read" | "meet";
+    mcp: string[] | null;
+    /** Как действует по просьбе (`assist.agent_mode`). */
+    agent_mode?: "auto" | "confirm";
+    /** Claude Code: автомод на деле работает (false — недоступен, спрашивает каждое действие; null — ещё не известно). */
+    auto?: boolean | null;
+  };
+  /** `/model имя` — модель, выбранная командой до конца сессии. */
+  model_override?: string | null;
+  /** Слэш-команды для подсказки на «/». Старый ребёнок — нет поля. */
+  commands?: AgentCommand[];
+  /** Для дополнения аргументов: MCP-серверы с состоянием (свежие после `/mcp`) и модели CLI. */
+  mcp_servers?: AgentMcpServer[];
+  models?: AgentModel[];
   /** Разрешения «до конца встречи» (× — отозвать). */
   grants?: { id: string; label: string }[];
 };

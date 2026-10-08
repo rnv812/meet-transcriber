@@ -320,3 +320,90 @@
 .chat-card__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 .chat-card__done { color: var(--ink-3); font-size: var(--text-sm); }
 .chat-card__warn { margin: 0; color: var(--danger); font-size: var(--text-sm); font-weight: 600; }
+
+/* --- Ход работы (0.4, «как в Claude CLI»): вызовы инструментов под сообщением агента ---
+   Строка — одна моноширинная линия: состояние · вид · суть (многоточие) · «+N −M» · время.
+   Раскрытая — блок кода (аргументы, вывод), карточка согласия вызова — в самой строке. */
+.chat-tools { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-tool { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-tool__line {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: var(--control-sm); padding: 0 6px;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-2); text-align: left;
+  font: 400 var(--text-xs)/1.4 var(--font-code); cursor: default;
+}
+button.chat-tool__line { cursor: pointer; }
+button.chat-tool__line:hover { background: var(--surface-3); }
+.chat-tool__line:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.chat-tool__status { flex: none; display: inline-grid; place-items: center; width: var(--icon-sm); height: var(--icon-sm); }
+.chat-tool__icon { color: var(--ink-3); }
+.chat-tool--done .chat-tool__icon { color: var(--success); }
+.chat-tool--error .chat-tool__icon { color: var(--danger); }
+.chat-tool--denied .chat-tool__icon { color: var(--warning); }
+.chat-tool__label { flex: none; color: var(--ink); font-weight: 600; }
+.chat-tool__summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-tool__diff { flex: none; white-space: nowrap; }
+.chat-tool__add { color: var(--success); }
+.chat-tool__del { color: var(--danger); }
+.chat-tool__time { flex: none; color: var(--ink-3); }
+.chat-tool__chevron { flex: none; color: var(--ink-3); transition: transform var(--d) var(--ease-out); }
+.chat-tool.is-open .chat-tool__chevron { transform: rotate(90deg); }
+.chat-tool__error, .chat-tool__gate { padding-left: calc(var(--icon-sm) + 14px); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.chat-tool__error { color: var(--danger); font-family: var(--font-code); }
+.chat-tool__gate { color: var(--ink-3); }
+.chat-tool__gate.is-denied { color: var(--warning); }
+.chat-tool__card, .chat-tool__body { padding-left: calc(var(--icon-sm) + 14px); }
+.chat-tool__body { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
+.chat-tool__code {
+  margin: 0; padding: 8px 10px; max-height: 50vh; overflow: auto; border-radius: var(--r-sm); background: var(--code-bg);
+  color: var(--code-ink); font: 400 var(--text-xs)/1.5 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere;
+  unicode-bidi: plaintext; text-align: left;
+}
+.chat-tool__code--in { color: var(--ink-2); }
+.chat-tool__more { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--text-xs); }
+.chat-tool__cut { color: var(--ink-3); }
+/* Карточка в строке вызова: вызов уже назван строкой — поля меньше. */
+.chat-card--inline { padding: 10px 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-tool__chevron { transition: none; }
+  .chat-tool .agent-mark svg { animation: none; }
+}
+
+/* --- Ответ слэш-команды Meet (0.4, `card: "command"`) и однократная строка --- */
+.chat-sys--command { align-self: stretch; max-width: none; text-align: left; }
+.chat-cmd {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 12px;
+  border-left: 2px solid var(--hairline-strong); color: var(--ink-2); font-size: var(--text-sm);
+}
+.chat-cmd--error { border-left-color: var(--danger); color: var(--danger); }
+.chat-cmd__name { color: var(--ink-3); font: 400 var(--text-xs)/1.4 var(--font-code); }
+.chat-cmd__text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.chat-cmd__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.chat-cmd__list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.chat-cmd__code { color: var(--ink); font: 500 var(--text-xs)/1.4 var(--font-code); }
+.chat-cmd__desc { min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.chat-cmd__server.is-failed .chat-cmd__desc { color: var(--danger); }
+.chat-cmd__src { height: 18px; padding: 0 6px; }
+.chat-sys--notice {
+  display: flex; align-items: flex-start; gap: 8px; align-self: stretch; max-width: none; padding: 8px 12px;
+  border-radius: var(--r-md); background: var(--info-soft); color: var(--ink); text-align: left;
+}
+.chat-sys__icon { flex: none; margin-top: 2px; color: var(--info); }
+
+/* --- Подсказка слэш-команд над полем ввода (`.menu` Aurora, раскрыта вверх) --- */
+.chat-compose > .menu.chat-slash {
+  top: auto; bottom: calc(100% + 6px); max-height: min(320px, 50vh); overflow-y: auto;
+  /* Плотное стекло на непрозрачной подложке: лента под списком не просвечивает (как панель, A1). */
+  background: linear-gradient(var(--glass-2), var(--glass-2)), var(--surface-1);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+.chat-slash li { min-height: var(--control-sm); gap: 8px; font-size: var(--text-sm); }
+.chat-slash__name { flex: none; color: var(--ink); font: 500 var(--text-sm)/1.4 var(--font-code); }
+.chat-slash__hint { flex: none; color: var(--ink-3); font: 400 var(--text-xs)/1.4 var(--font-code); }
+.chat-slash li .chat-slash__desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-slash li .chat-slash__desc.is-warn { color: var(--danger); }
+.chat-slash__tag { flex: none; height: 18px; padding: 0 6px; }
+/* Призрак аргументов над полем: что ждёт набранная команда. */
+.chat-slash__ghost { padding: 0 4px; color: var(--ink-3); font: 400 var(--text-xs)/1.4 var(--font-code); }
+
+/* Шапка сессии: как действует ассистент (0.4). */
+.session-bar__mode { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; }

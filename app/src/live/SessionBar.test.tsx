@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { LiveSummary } from "../lib/types";
 import { agentInfo } from "../test/chatFixtures";
 import { EMPTY_SUMMARY } from "./liveModel";
-import { DENY_NOTE, NO_VISION, PERSONAL_DENY_NOTE, SessionBar, canText, seesText } from "./SessionBar";
+import { DENY_NOTE, NO_VISION, PERSONAL_DENY_NOTE, SessionBar, canText, modeOf, seesText } from "./SessionBar";
 
 const summary: LiveSummary = { ...EMPTY_SUMMARY, topic: "Запуск биллинга", decisions: [{ id: "d1", text: "Стенд к пятнице" }] };
 const bar = () => screen.getByRole("group", { name: "Сессия ассистента" });
@@ -270,4 +270,32 @@ test("разрешено до конца встречи: список в «Чт�
   expect(grants).toHaveTextContent("MCP team-jira: jira_create_issue");
   await userEvent.click(screen.getByRole("button", { name: "Отозвать: Bash npm" }));
   expect(onRevoke).toHaveBeenCalledWith("m5");
+});
+
+test("0.4: как действует ассистент — «Автомод» / «Спрашиваю каждое действие» / автомод недоступен", async () => {
+  const consent = (o: object) => agentInfo({ freedom: true, can: { mode: "consent", mcp: ["team-jira"], ...o } });
+  expect(modeOf(consent({ agent_mode: "auto", auto: true }))).toEqual({ text: "Автомод" });
+  expect(modeOf(consent({ agent_mode: "auto", auto: null }))).toEqual({ text: "Автомод" });
+  expect(modeOf(consent({ agent_mode: "confirm" }))).toEqual({ text: "Спрашиваю каждое действие" });
+  expect(modeOf(consent({ agent_mode: "auto", auto: false })))
+    .toEqual({ text: "Автомод недоступен — спрашиваю каждое действие", warn: true });
+  expect(modeOf(agentInfo({ provider: "codex", can: { mode: "act", mcp: null, agent_mode: "auto" } })))
+    .toEqual({ text: "Автомод" });
+  expect(modeOf(consent({}))).toBeNull();                         // старый ребёнок
+  expect(modeOf(agentInfo({ can: { mode: "read", mcp: null } }))).toBeNull();
+  // «Личный» — только промпт: подпись «может» та же.
+  for (const profile of ["work", "personal"] as const) {
+    expect(canText({ ...consent({ agent_mode: "auto", auto: true }), profile }))
+      .toBe("файлы, команды, MCP (team-jira), веб — сам; рискованное — с вашего согласия");
+  }
+  expect(canText(consent({ agent_mode: "confirm" }))).toBe("файлы, команды, MCP (team-jira), веб — с вашего согласия на каждое действие");
+
+  const { rerender } = render(<SessionBar agent={consent({ agent_mode: "auto", auto: true })} summary={summary}
+    onFrequency={() => {}} />);
+  expect(bar()).toHaveTextContent("Автомод");
+  const pop = await know();
+  expect(pop).toHaveTextContent("Действия: Автомод");
+  expect(pop).toHaveTextContent("Спрашивает только рискованное");
+  rerender(<SessionBar agent={consent({ agent_mode: "auto", auto: false })} summary={summary} onFrequency={() => {}} compact />);
+  expect(bar().querySelector(".session-bar__mode--warn")).toHaveTextContent("Автомод недоступен — спрашиваю каждое действие");
 });

@@ -36,7 +36,7 @@ import { type Endpoint, getKbDocs, newChatClientId } from "../lib/api";
 import { errorText } from "../lib/format";
 import { openMaterial } from "../lib/shell";
 import type {
-  AgentFrequencyLabel, AgentInfo, AgentProfile, ChatAttachResult, ChatEvent, ChatMessage, ChatPartial, ChatReaction, ChatSnapshot,
+  AgentCommand, AgentFrequencyLabel, AgentInfo, AgentProfile, ChatAttachResult, ChatEvent, ChatMessage, ChatPartial, ChatReaction, ChatSnapshot,
   KbDocs,
 } from "../lib/types";
 import { type ChatBackend, LIVE_CHAT } from "./chatBackend";
@@ -45,6 +45,7 @@ import {
   nextExplainExpiry, nextReveal, pendingCards, pinnedOf, usedButtons, writingShown,
 } from "./chatModel";
 import { profileOf } from "./profiles";
+import { MEET_COMMANDS } from "./slash";
 import { type KbIndex, type Source, findSources, kbIndex, mayMentionDocs } from "./sources";
 
 /** Обработчики событий чата для `openLiveEvents` (их зовёт `useLive`). */
@@ -154,6 +155,8 @@ export type Chat = {
   more: (() => Promise<void>) | null;
   composer: ChatComposerState;
   sink: ChatSink;
+  /** Слэш-команды для подсказки на «/» (0.4): от ассистента, иначе — команды Meet. */
+  commands: AgentCommand[];
 };
 
 /** Документы базы знаний по адресу резидента: один запрос на всех, свежий KB_TTL_MS. */
@@ -521,5 +524,6 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     send, retry, click, confirm, revokeGrant, cards: pendingCards(state, now), react, stop, setFrequency, setProfile,
     paste, attach,
     removeAttachment, hidePin, sources, open, more, composer, sink,
+    commands: agent?.commands?.length ? agent.commands : MEET_COMMANDS,
   };
 }

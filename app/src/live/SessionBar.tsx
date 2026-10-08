@@ -83,6 +83,15 @@ const MCP_SHOWN = 3;
 export function canText(agent: AgentInfo): string {
   const can = agent.can ?? (agent.tools ? { mode: "read" as const, mcp: null } : { mode: "meet" as const, mcp: null });
   const personal = profileOf(agent.profile) === "personal";
+  if (can.mode === "consent" && can.agent_mode) {
+    // 0.4: «Личный» отличается только промптом — подпись одна для обоих профилей.
+    const names = (can.mcp ?? []).filter(Boolean);
+    const mcp = names.length ? `MCP (${names.slice(0, MCP_SHOWN).join(", ")}${names.length > MCP_SHOWN ? "…" : ""})` : "MCP";
+    return isAuto(agent)
+      ? `файлы, команды, ${mcp}, веб — сам; рискованное — с вашего согласия`
+      : `файлы, команды, ${mcp}, веб — с вашего согласия на каждое действие`;
+  }
+  if (can.mode === "act") return "файлы и команды в рабочих папках — сам; рискованное — нет";
   if (can.mode === "consent") {
     // «Личный»: MCP пользователя не подключаются (база знаний другим путём).
     if (personal) return "файлы, веб — по вашему согласию";
@@ -95,6 +104,32 @@ export function canText(agent: AgentInfo): string {
   if (can.mode === "files") return "читать файлы по вашей просьбе";
   if (can.mode === "read") return personal ? "читать эту запись и ваши вложения" : "читать встречу и базу знаний";
   return "";
+}
+
+export const CAN_AUTO_TITLE = "По вашей просьбе ассистент действует сам, как автомод Claude Code: читает, правит файлы, "
+  + "выполняет команды, зовёт MCP. Спрашивает только рискованное — удаление, запись вне рабочих папок, отправку наружу. "
+  + "Ход только по репликам встречи ничего не меняет и не отправляет";
+export const CAN_CONFIRM_TITLE = "Каждое действие (команда, правка, запись в задаче, открытие страницы) Meet покажет "
+  + "карточкой и выполнит только после «Разрешить». Вернуть автомод — Настройки → Ассистент";
+export const CAN_ACT_TITLE = "Codex/OpenCode по вашей просьбе правят рабочие папки и выполняют команды сами; удаление, "
+  + "запись вне рабочих папок, отправку наружу и MCP — может только ассистент на Claude Code";
+
+/** Автомод работает (или просили его, а CLI ещё не сообщил режим). */
+function isAuto(agent: AgentInfo): boolean {
+  return agent.can?.agent_mode === "auto" && agent.can.auto !== false;
+}
+
+/**
+ * Как действует ассистент по просьбе (0.4): «Автомод», «Спрашиваю каждое действие» или —
+ * просили автомод, а CLI в другом режиме — «Автомод недоступен — спрашиваю каждое действие»
+ * (`warn`). Без расширенных возможностей или у старого ребёнка — null.
+ */
+export function modeOf(agent: AgentInfo): { text: string; warn?: boolean } | null {
+  const can = agent.can;
+  if (!can?.agent_mode || (can.mode !== "consent" && can.mode !== "act")) return null;
+  if (can.agent_mode === "confirm") return { text: "Спрашиваю каждое действие" };
+  if (can.mode === "consent" && can.auto === false) return { text: "Автомод недоступен — спрашиваю каждое действие", warn: true };
+  return { text: "Автомод" };
 }
 
 /** «Личный» у Codex: база знаний и другие записи закрыты только просьбой в инструкции. */
@@ -204,9 +239,12 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
   const warning = modelWarning(agent);
   const sees = seesText(agent);
   const can = canText(agent);
-  const canTitle = agent.can?.mode === "consent"
-    ? (profileOf(agent.profile) === "personal" ? CAN_PERSONAL_TITLE : CAN_CONSENT_TITLE)
-    : agent.can?.mode === "files" ? CAN_FILES_TITLE : undefined;
+  const mode = modeOf(agent);
+  const canTitle = agent.can?.mode === "consent" && agent.can.agent_mode
+    ? (isAuto(agent) ? CAN_AUTO_TITLE : CAN_CONFIRM_TITLE)
+    : agent.can?.mode === "consent"
+      ? (profileOf(agent.profile) === "personal" ? CAN_PERSONAL_TITLE : CAN_CONSENT_TITLE)
+      : agent.can?.mode === "act" ? CAN_ACT_TITLE : agent.can?.mode === "files" ? CAN_FILES_TITLE : undefined;
   const frequency = FREQUENCIES.includes(agent.frequency) ? agent.frequency : "чаще";
   const profile = profileOf(agent.profile);
   const grants = agent.grants ?? [];
@@ -235,6 +273,14 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
           {PROFILE_LABELS[profile]}
         </span>
       </Tip>
+      {/* Как действует по просьбе (0.4): в узкой — только «автомод недоступен». */}
+      {mode && (!compact || mode.warn) && (
+        <Tip content={canTitle}>
+          <span className={`${mode.warn ? BADGE_CLASS.temp : `${BADGE_CLASS.plain}`} session-bar__mode${mode.warn ? " session-bar__mode--warn" : ""}`}>
+            <span className="session-bar__note-text">{mode.text}</span>
+          </span>
+        </Tip>
+      )}
       {/* В строке — только предупреждение (не та модель); остальные пометки — в «Что я знаю». */}
       {!compact && warning && (
         <Tip content={MODEL_TITLE}>
@@ -257,6 +303,9 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
               <p className="session-know__line"><span className="session-know__key">Модель:</span> {agent.label || agent.provider}</p>
               <p className="session-know__line"><span className="session-know__key">Профиль:</span> {PROFILE_LABELS[profile]}</p>
               <p className="session-know__line"><span className="session-know__key">Видит:</span> {sees}</p>
+              {mode && (
+                <p className="session-know__line"><span className="session-know__key">Действия:</span> {mode.text}</p>
+              )}
               {can && (
                 <div className="session-bar__can">
                   <p className="session-know__line"><span className="session-know__key">Может:</span> {can}</p>

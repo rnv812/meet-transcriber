@@ -24,8 +24,15 @@
  *
  * Устройство `.chat-compose` сверху вниз (точки расширения — здесь, а не снаружи):
  *   `.chat-compose__note` / `__reason` — ошибки и почему писать нельзя;
- *   `.chat-compose__quick` — быстрые вопросы над пустым полем (сюда же — подсказки
- *     команд, если они появятся: тот же ряд над полем);
+ *   `.chat-compose__quick` — быстрые вопросы над пустым полем;
+ *   `.chat-slash` — подсказка слэш-команд (0.4, `slash.ts`): поле — «/» и имя без пробела →
+ *     список `.menu` Aurora над полем (фильтр по набранному, описание и аргументы, навыки —
+ *     с пометкой «навык»); дальше — дополнение аргументов: `/mcp ` — действие, `/mcp
+ *     reconnect|enable|disable ` — MCP-серверы с состоянием, `/model ` — модели CLI (списки —
+ *     от ассистента: `agent.mcp_servers`, `agent.models`); у прочих команд с аргументами —
+ *     призрак `argumentHint` (`.chat-slash__ghost`). ↑ / ↓ — выбор, Tab — дописать, Enter —
+ *     выбрать (команда без аргументов, сервер, модель — сразу отправить), Esc — убрать список.
+ *     Выполняет команды ассистент;
  *   `.chat-compose__atts` — вложения до отправки (бейджи с миниатюрой и «×»);
  *   `.chat-compose__row` — скрепка · поле (`textarea`, вся клавиатура — `onKey`) · «Стоп» · «Отправить».
  * Снаружи строку держит док (`.chat-dock` рабочей области или вкладка
@@ -33,7 +40,7 @@
  */
 
 import { FileText, Image as ImageIcon, Paperclip, SendHorizontal, Square, X } from "lucide-react";
-import { type ClipboardEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ClipboardEvent, type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { errorText } from "../lib/format";
 import { inTauri, onFileDrop, overChatDrop, pickChatFiles } from "../lib/shell";
@@ -42,6 +49,7 @@ import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { Tip } from "../ui/Tip";
+import { type Suggestion, argHint, suggestions } from "./slash";
 import type { Chat, ChatDraft } from "./useChat";
 import "./chat.css";
 
@@ -76,6 +84,11 @@ export function ChatComposer({
   const { text, setText, drafts, setDrafts, dropped } = chat.composer;
   const [over, setOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [slashActive, setSlashActive] = useState(0);
+  /** Текст, при котором список команд убрали Esc (снова откроется, когда текст сменится). */
+  const [slashOff, setSlashOff] = useState<string | null>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const menuId = useId();
   const field = useRef<HTMLTextAreaElement>(null);
   const disabled = disabledReason !== null;
   const chatRef = useRef(chat);
@@ -177,7 +190,48 @@ export function ChatComposer({
     field.current?.focus();
   };
 
+  // Слэш-команды (0.4): «/» и имя → команды; `/mcp …`, `/model …` → аргументы (серверы, модели).
+  const agent = chat.agent;
+  const matches = disabled || drafts.length > 0 || slashOff === text ? []
+    : suggestions(text, { commands: chat.commands, servers: agent?.mcp_servers, models: agent?.models });
+  const menuOpen = matches.length > 0;
+  const active = Math.min(slashActive, Math.max(matches.length - 1, 0));
+  const ghost = !menuOpen && !disabled ? argHint(text, chat.commands) : null;
+  const shape = matches.map((s) => s.key).join("|");
+  useEffect(() => { setSlashActive(0); }, [shape]);
+  useEffect(() => {
+    if (menuOpen) menuRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
+  }, [active, menuOpen]);
+
+  /**
+   * Выбрать подсказку: Tab — только дописать; Enter — команда без аргументов, сервер или модель
+   * уходят сразу (как и уже набранное целиком), остальное дописывается.
+   */
+  const choose = (s: Suggestion, complete = false) => {
+    if (complete || (!s.send && s.text.trim() !== text.trim())) {
+      setText(s.text);
+      field.current?.focus();
+      return;
+    }
+    void chat.send(s.text.trim());
+    setText("");
+    setError(null);
+    field.current?.focus();
+  };
+
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (menuOpen && !e.nativeEvent.isComposing) {
+      const pick = matches[active]!;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        setSlashActive((active + step + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); choose(pick, true); return; }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); choose(pick); return; }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setSlashOff(text); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       // IME: Enter подтверждает набор, а не отправляет (keyCode 229 — старые WebView).
       if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -243,6 +297,27 @@ export function ChatComposer({
           })}
         </ul>
       )}
+      {menuOpen && (
+        // Подсказка команд (`.menu` Aurora) над полем: ↑ / ↓, Tab — дописать, Enter — выбрать, Esc — убрать.
+        <ul ref={menuRef} id={menuId} className="menu open chat-slash" role="listbox"
+          aria-label={text.startsWith("/") && !/\s/.test(text) ? "Команды" : "Варианты"}>
+          {matches.map((s, i) => (
+            <li key={s.key} id={`${menuId}-${i}`} data-index={i} role="option"
+              aria-selected={i === active} className={i === active ? "active" : undefined}
+              onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setSlashActive(i)}
+              onClick={() => choose(s)}>
+              <span className="chat-slash__name">{s.name}</span>
+              {s.hint && <span className="chat-slash__hint">{s.hint}</span>}
+              {s.tag && <span className={`${BADGE_CLASS.plain} chat-slash__tag`}>{s.tag}</span>}
+              {s.desc && <small className={`chat-slash__desc${s.warn ? " is-warn" : ""}`}>{s.desc}</small>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {ghost && (
+        // Призрак аргументов: что ждёт команда (`argumentHint` CLI, навыка или Meet).
+        <div className="chat-slash__ghost" aria-hidden="true">{ghost}</div>
+      )}
       <div className="chat-compose__row">
         {/* Скрепка — слева от поля (макет MeetLive). */}
         {inTauri() && (
@@ -251,8 +326,10 @@ export function ChatComposer({
         )}
         <textarea ref={field} className="chat-compose__field" rows={1} value={text} disabled={disabled}
           aria-label="Сообщение ассистенту"
+          aria-controls={menuOpen ? menuId : undefined} aria-expanded={menuOpen || undefined}
+          aria-activedescendant={menuOpen ? `${menuId}-${active}` : undefined} aria-autocomplete="list"
           placeholder={disabled ? "Писать ассистенту сейчас нельзя" : placeholder}
-          aria-description="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот"
+          aria-description="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот, «/» — команды"
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} />
         {chat.writing && (
           // Контурная, со словом «Стоп»: красная кнопка-значок в шапке останавливает запись, а не ответ.

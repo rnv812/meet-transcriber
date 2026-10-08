@@ -42,7 +42,7 @@
  */
 
 import {
-  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, type LucideIcon, Paperclip, ShieldQuestion,
+  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, Info, type LucideIcon, Paperclip,
   ThumbsDown, ThumbsUp, X,
 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -57,8 +57,10 @@ import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { Tip } from "../ui/Tip";
-import { type FeedItem, type Outgoing, REACTIONS, isFinalAgent } from "./chatModel";
+import { ConfirmCard } from "./ConfirmCard";
+import { type FeedItem, type Outgoing, REACTIONS, type ToolItem, isFinalAgent } from "./chatModel";
 import type { Source } from "./sources";
+import { ToolRows } from "./ToolRows";
 import { type Chat, EXPLAINING } from "./useChat";
 import "./chat.css";
 
@@ -76,83 +78,82 @@ const FLASH_MS = 1600;
 
 /** Подсказка у строки «Ассистент хотел … — запрос заблокирован». */
 export const GATE_TITLE = "Ассистент действует вне этой встречи только с вашего согласия — Meet заблокировал запрос без него";
-/** Решение по карточке подтверждения — словом. */
-export const CARD_DECIDED: Record<string, string> = {
-  allow: "Разрешено один раз", allow_meeting: "Разрешено до конца встречи", deny: "Отклонено", timeout: "Время вышло — не выполнено",
-  cancelled: "Отменено", expired: "Не дождались ответа — не выполнено",
-};
-/**
- * Карточка подтверждения Meet: что агент хочет выполнить — из настоящего вызова, не из его текста.
- * Резидент присылает вызов целиком (`args`, пробелы и переводы строк — видимыми пометками, невидимые
- * символы запрещены) и для длинного — начало и конец (`preview`, середина — пометкой «скрыто: …»),
- * так что хвост виден всегда. «Показать полностью» — по желанию. Ждёт решения (`open`) — кнопки
- * прямо в карточке: «Разрешить один раз», «Разрешать такое до конца встречи» (если Meet её
- * предлагает) и «Отклонить» (Esc); решена или срок вышел — итог словом.
- */
-function ConfirmCard({ m, chat, disabled, open }: {
-  m: ChatMessage; chat: Chat; disabled: boolean; open: boolean;
-}) {
-  const [full, setFull] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const args = m.args ?? "";
-  const decide = async (allow: boolean, meeting = false) => {
-    if (busy) return;
-    setBusy(true);
-    try { await chat.confirm(m.id, allow, meeting); } finally { setBusy(false); }
-  };
-  const onKey = (e: KeyboardEvent<HTMLElement>) => {
-    if (open && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); void decide(false); }
-  };
-  return (
-    <section className={`chat-card${open ? " chat-card--open" : ""}`} role="group"
-      aria-label={`Ассистент хочет выполнить: ${m.title ?? m.tool ?? ""}`} onKeyDown={onKey}>
-      <div className="chat-card__title">
-        <Icon as={ShieldQuestion} size="sm" className="chat-card__icon" />
-        <span>
-          Ассистент хочет выполнить: <b>{m.title ?? m.tool}</b>
-          {m.size && <span className="chat-card__size"> · {m.size}</span>}
-        </span>
-      </div>
-      {(m.warnings ?? []).map((w) => <div key={w} className="chat-card__warn" role="note">{w}</div>)}
-      {args && <pre className="chat-card__args" dir="ltr">{m.preview && !full ? m.preview : args}</pre>}
-      {m.preview && (
-        <Button variant="link" className="chat-card__more" aria-expanded={full} onClick={() => setFull(!full)}>
-          {full ? "Свернуть" : "Показать полностью"}
-        </Button>
-      )}
-      {open ? (
-        // «Разрешить один раз» — сильная без цвета; «до конца встречи» (шире всего) — тише; «Отклонить» (Esc) — контур.
-        <div className="chat-card__actions">
-          <Button variant="mono" className="chat-card__allow" disabled={disabled || busy}
-            onClick={() => void decide(true)}>
-            Разрешить один раз
-          </Button>
-          {m.grant && (
-            <Tip content={`Дальше до конца встречи без вопросов: ${m.grant.label}`}>
-              <Button variant="ghost" className="chat-card__allow-meeting" disabled={disabled || busy}
-                onClick={() => void decide(true, true)}>
-                Разрешать такое до конца встречи
-              </Button>
-            </Tip>
-          )}
-          <Button className="chat-card__deny" disabled={disabled || busy} onClick={() => void decide(false)}>
-            Отклонить
-          </Button>
-        </div>
-      ) : (
-        <div className="chat-card__done">{m.decision ? CARD_DECIDED[m.decision] ?? m.decision : CARD_DECIDED.expired}</div>
-      )}
-    </section>
-  );
-}
+export { CARD_DECIDED } from "./ConfirmCard";
 
-/** Новые готовые сообщения агента и его карточки подтверждения в ленте (их считает «↓ N новых»). */
+/** Новые готовые сообщения агента и его карточки подтверждения в ленте — и в строках вызовов (их считает «↓ N новых»). */
 function agentIds(items: FeedItem[]): string[] {
   const ids: string[] = [];
   for (const it of items) {
-    if (it.type === "message" && (isFinalAgent(it.message) || it.message.card === "confirm")) ids.push(it.message.id);
+    if (it.type !== "message") continue;
+    if (isFinalAgent(it.message) || it.message.card === "confirm") ids.push(it.message.id);
+    for (const t of it.tools ?? []) if (t.card) ids.push(t.card.id);
   }
   return ids;
+}
+
+/**
+ * Ответ слэш-команды Meet (0.4, `card: "command"`): список команд (`/help`), MCP-серверы (`/mcp` —
+ * у сбойных «Переподключить»), «Нет команды … — /help» с «Отправить как текст» (`//…`), иначе — текст.
+ */
+function CommandLine({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disabled: boolean }) {
+  const items = Array.isArray(m.items) ? m.items : [];
+  const servers = Array.isArray(m.servers) ? m.servers : [];
+  const error = m.level === "error";
+  return (
+    <div className={`chat-cmd${error ? " chat-cmd--error" : ""}`} role={error ? "alert" : undefined}>
+      {m.command && <span className="chat-cmd__name">/{m.command}</span>}
+      {items.length > 0 ? (
+        <ul className="chat-cmd__list">
+          {items.map((c) => (
+            <li key={`${c.source}:${c.name}`}>
+              <code className="chat-cmd__code">/{c.name}{c.hint ? ` ${c.hint}` : ""}</code>
+              {c.description && <span className="chat-cmd__desc">{c.description}</span>}
+              {c.source !== "meet" && (
+                <span className={`${BADGE_CLASS.plain} chat-cmd__src`}>{c.source === "skill" ? "навык" : "CLI"}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : servers.length > 0 ? (
+        <>
+          <ul className="chat-cmd__list">
+            {servers.map((s) => (
+              <li key={s.name} className={`chat-cmd__server is-${s.status}`}>
+                <code className="chat-cmd__code">{s.name}</code>
+                <span className="chat-cmd__desc">{SERVER_STATUS[s.status] ?? s.status}{s.error ? `: ${s.error}` : ""}</span>
+                {s.status === "failed" && (
+                  <Button size="xs" disabled={disabled} onClick={() => void chat.send(`/mcp reconnect ${s.name}`)}>
+                    Переподключить
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {extraLines(m.text ?? "", servers) && <div className="chat-cmd__text">{extraLines(m.text ?? "", servers)}</div>}
+        </>
+      ) : (
+        <div className="chat-cmd__text">{m.text}</div>
+      )}
+      {typeof m.unknown === "string" && m.unknown && (
+        <Button variant="link" disabled={disabled} onClick={() => void chat.send(`/${m.unknown}`)}>
+          Отправить как текст
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Состояние MCP-сервера словом (как у ассистента). */
+const SERVER_STATUS: Record<string, string> = {
+  connected: "подключён", failed: "ошибка", "needs-auth": "нужен вход — claude /mcp в терминале",
+  pending: "подключается", disabled: "выключен",
+};
+const STATUS_WORDS = ["подключён", "ошибка", "нужен вход", "подключается", "выключен"];
+
+/** Строки ответа `/mcp`, которых нет в таблице серверов (итог переподключения, пояснения). */
+function extraLines(text: string, servers: { name: string }[]): string {
+  return text.split("\n").filter((line) => !servers.some((s) => STATUS_WORDS.some((w) => line.startsWith(`${s.name} — ${w}`))))
+    .join("\n").trim();
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -256,8 +257,9 @@ function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; co
   );
 }
 
-function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
-  m: ChatMessage; chat: Chat; onTime?: (t: number) => void; onShow: (id: string) => void; compact: boolean; disabled: boolean;
+function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }: {
+  m: ChatMessage; tools?: ToolItem[]; chat: Chat; onTime?: (t: number) => void; onShow: (id: string) => void;
+  compact: boolean; disabled: boolean;
 }) {
   const writing = m.status === "writing";
   const partial = chat.state.partial[m.id];
@@ -278,12 +280,16 @@ function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
         {time && !compact && <span className="chat-msg__time num">{time}</span>}
         {m.pin && <span className={`${BADGE_CLASS.run} badge--plain chat-msg__tag`}>вопрос вам</span>}
         {typeof m.explains === "string" && <ExplainsRef id={m.explains} chat={chat} onShow={onShow} />}
+        {m.via === "command" && <span className={`${BADGE_CLASS.plain} chat-msg__tag`}>команда</span>}
         {writing && partial?.trim() && <span className="chat-msg__writing">пишет…</span>}
       </div>
+      {/* Ход работы (0.4): вызовы инструментов этого хода — строками, как в Claude CLI. */}
+      <ToolRows items={tools} chat={chat} disabled={disabled} />
       {writing ? (
         partial?.trim()
           ? <div className="chat-msg__text chat-msg__text--streaming">{partial}</div>
-          : <div className="chat-typing"><span className="chat-typing__dots" aria-hidden="true" />Пишет…</div>
+          : tools.length ? null
+            : <div className="chat-typing"><span className="chat-typing__dots" aria-hidden="true" />Пишет…</div>
       ) : text.trim() ? (
         <Markdown source={text} className="chat-msg__text" onTime={onTime} />
       ) : null}
@@ -342,6 +348,7 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
       data-key={m?.id ?? `out:${out?.client_id}`} title={compact && time ? time : undefined}>
       {m?.via === "button" && <div className="chat-msg__via">кнопка</div>}
       {m?.via === "reaction" && <div className="chat-msg__via">реакция</div>}
+      {m?.via === "command" && <div className="chat-msg__via">команда</div>}
       {text && <div className="chat-msg__text chat-msg__text--plain">{text}</div>}
       {atts.length > 0 && (compact ? (
         <span className="chat-msg__att-count" title={names} aria-label={`Вложения: ${names}`}>
@@ -368,7 +375,25 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
   if (it.type === "outgoing") return <UserMessage chat={chat} out={it.out} compact={compact} />;
   const m = it.message;
   if (m.kind === "agent") {
-    return <AgentMessage m={m} chat={chat} onTime={onTime} onShow={onShow} compact={compact} disabled={disabled} />;
+    return (
+      <AgentMessage m={m} tools={it.tools} chat={chat} onTime={onTime} onShow={onShow} compact={compact}
+        disabled={disabled} />
+    );
+  }
+  if (m.card === "command") {
+    return (
+      <li className="chat-sys chat-sys--command" data-id={m.id} data-key={m.id}>
+        <CommandLine m={m} chat={chat} disabled={disabled} />
+      </li>
+    );
+  }
+  if (m.notice) {
+    // Однократная строка (0.4): что изменилось у ассистента и где это вернуть.
+    return (
+      <li className="chat-sys chat-sys--notice" data-id={m.id} data-key={m.id}>
+        <Icon as={Info} size="sm" className="chat-sys__icon" />{m.text}
+      </li>
+    );
   }
   if (m.kind === "user") return <UserMessage m={m} chat={chat} compact={compact} />;
   if (m.kind === "meeting") {
@@ -438,8 +463,11 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   const ids = agentIds(chat.items);
   const outCount = chat.state.outbox.length;
   const last = chat.items.at(-1);
+  // Строки хода работы у ответов: появилась строка, сменилось состояние, пришла карточка.
+  const tools = chat.items.map((it) => (it.type === "message" && it.tools
+    ? it.tools.map((t) => `${t.row.status ?? ""}${t.card ? `/${t.card.decision ?? "?"}` : ""}`).join(",") : "")).join("|");
   const sig = `${chat.items.length}:${last?.type === "message" ? `${last.message.id}:${last.message.status}:${last.message.text?.length ?? 0}` : "o"}:${
-    Object.values(chat.state.partial).reduce((n, t) => n + t.length, 0)}`;
+    Object.values(chat.state.partial).reduce((n, t) => n + t.length, 0)}:${tools}`;
 
   const toBottom = () => {
     const el = box.current;
@@ -487,7 +515,7 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   // выбранное: не на каждый кусок текста ответа (ревью after-chat, M7).
   const shape = chat.items.map((it) => (it.type === "message"
     ? `${it.message.id}:${it.message.status ?? ""}:${it.message.buttons?.length ?? 0}:${it.message.text ? 1 : 0}:${it.message.decision ?? ""}`
-    : `o:${it.out.client_id}:${it.out.state}`)).join("|");
+    : `o:${it.out.client_id}:${it.out.state}`)).join("|") + tools;
   useLayoutEffect(() => {
     const all = rows();
     if (!all.length) return;

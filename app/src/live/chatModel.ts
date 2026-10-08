@@ -11,6 +11,8 @@
  * - записи-вложения (`attachment`) — их показывает сообщение, которое на них
  *   ссылается: вложение, добавленное в строку ввода и убранное, в ленте не
  *   появляется вовсе (ревью chat-api, M8);
+ * - строки хода работы (`tool`, `event: "call"`) сами по себе: они идут под ответом
+ *   своего хода (`reply`), а карточка согласия с тем же `tool_use_id` — в строке;
  * - служебные записи (`tool`) и ответы в скрытых статусах (`held`, `dropped`,
  *   `superseded`, `dismissed`) — правка может перевести ответ в скрытый
  *   статус, тогда он уходит из ленты;
@@ -30,7 +32,7 @@ import type { AgentInfo, ChatEvent, ChatMessage, ChatPartial, ChatReaction, Chat
 export const HIDDEN_STATUSES: ReadonlySet<string> = new Set(["held", "dropped", "superseded", "dismissed"]);
 /** Ответ человеку без текста показывается пузырём «Пишет…» не сразу, а через это время. */
 export const REVEAL_MS = 1500;
-/** Виды записей, которые лента показывает сами по себе. */
+/** Виды записей, которые лента показывает сами по себе (строки вызовов — под ответом своего хода). */
 const FEED_KINDS: ReadonlySet<string> = new Set(["agent", "user", "system", "meeting"]);
 /**
  * Реакции на сообщения агента. Ключ в журнале — эмодзи (как в 0.3.6), подпись —
@@ -251,7 +253,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 export function revealed(state: ChatState, m: ChatMessage, now: number): boolean {
   if (m.status !== "writing") return true;
   if (state.partial[m.id]?.trim()) return true;
-  return m.mode === "reply" && now - (state.seenAt[m.id] ?? now) >= REVEAL_MS;
+  if (m.mode !== "reply") return false;
+  // Ответ человеку уже вызывает инструменты — виден сразу (строки хода работы).
+  if (Object.values(state.byId).some((r) => r.reply === m.id && isToolRow(r))) return true;
+  return now - (state.seenAt[m.id] ?? now) >= REVEAL_MS;
 }
 
 /** Когда (мс) следующий ответ человеку станет пузырём «Пишет…»; null — ждать нечего. */
@@ -266,26 +271,74 @@ export function nextReveal(state: ChatState, now: number): number | null {
   return soon;
 }
 
-function shownInFeed(state: ChatState, m: ChatMessage, now: number): boolean {
+function shownInFeed(state: ChatState, m: ChatMessage, now: number, rows: Map<string, ChatMessage[]>): boolean {
   if (!FEED_KINDS.has(m.kind)) return false;
   if (m.kind !== "agent") return true;
   if (typeof m.status === "string" && HIDDEN_STATUSES.has(m.status)) return false;
+  // Ответ человеку, который уже что-то делает (строки вызовов), — виден сразу: как в CLI.
+  if (m.status === "writing" && m.mode === "reply" && rows.has(m.id)) return true;
   return revealed(state, m, now);
 }
 
-/** Пункт ленты: запись журнала или сообщение человека, которое ещё отправляется. */
+/** Строка вызова инструмента агента (ход работы, 0.4) и карточка согласия этого вызова, если она есть. */
+export type ToolItem = { row: ChatMessage; card?: ChatMessage };
+
+/**
+ * Пункт ленты: запись журнала (у ответа агента — строки вызовов его хода, `tools`) или
+ * сообщение человека, которое ещё отправляется.
+ */
 export type FeedItem =
-  | { type: "message"; message: ChatMessage }
+  | { type: "message"; message: ChatMessage; tools?: ToolItem[] }
   | { type: "outgoing"; out: Outgoing };
 
+/** Строка хода работы (`kind: "tool"`, `event: "call"`); запросы запасного пути — служебные. */
+export function isToolRow(m: ChatMessage): boolean {
+  return m.kind === "tool" && m.event === "call";
+}
+
+/** Строки вызовов по ответам агента (`reply`), по порядку журнала. */
+function rowsByReply(state: ChatState): Map<string, ChatMessage[]> {
+  const out = new Map<string, ChatMessage[]>();
+  for (const id of state.order) {
+    const m = state.byId[id];
+    if (!m || !isToolRow(m) || typeof m.reply !== "string") continue;
+    const list = out.get(m.reply);
+    if (list) list.push(m);
+    else out.set(m.reply, [m]);
+  }
+  return out;
+}
+
+/**
+ * Лента. Строки вызовов идут под ответом своего хода (без ответа в ленте — молчаливый ход по
+ * репликам — их не видно); карточка согласия с `tool_use_id` показанной строки — внутри строки.
+ */
 export function feedItems(state: ChatState, now: number): FeedItem[] {
+  const rows = rowsByReply(state);
+  const cards = new Map<string, ChatMessage>();
+  for (const id of state.order) {
+    const m = state.byId[id];
+    if (m?.card === "confirm" && typeof m.tool_use_id === "string") cards.set(m.tool_use_id, m);
+  }
+  const nested = new Set<string>();
   const items: FeedItem[] = [];
   for (const id of state.order) {
     const m = state.byId[id];
-    if (m && shownInFeed(state, m, now)) items.push({ type: "message", message: m });
+    if (!m || m.kind === "tool" || !shownInFeed(state, m, now, rows)) continue;
+    if (m.kind === "agent" && rows.has(m.id)) {
+      const tools = rows.get(m.id)!.map((row) => {
+        const card = typeof row.tool_use_id === "string" ? cards.get(row.tool_use_id) : undefined;
+        if (card) nested.add(card.id);
+        return card ? { row, card } : { row };
+      });
+      items.push({ type: "message", message: m, tools });
+    } else items.push({ type: "message", message: m });
   }
-  for (const out of state.outbox) items.push({ type: "outgoing", out });
-  return items;
+  const out = nested.size
+    ? items.filter((it) => !(it.type === "message" && nested.has(it.message.id)))
+    : items;
+  for (const o of state.outbox) out.push({ type: "outgoing", out: o });
+  return out;
 }
 
 /** Готовое сообщение агента (не пишется): его считают новым и показывают в свёрнутой панели. */
