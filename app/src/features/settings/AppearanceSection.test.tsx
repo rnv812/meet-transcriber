@@ -73,7 +73,12 @@ function trackPatches() {
       });
     });
   });
-  return { calls, maxInFlight: () => maxInFlight };
+  const at = (i: number) => {
+    const call = calls[i];
+    if (!call) throw new Error(`записи №${i} не было`);
+    return call;
+  };
+  return { calls, at, maxInFlight: () => maxInFlight };
 }
 
 function Harness({ onPreview }: { onPreview: (a: Appearance) => void }) {
@@ -88,10 +93,10 @@ test("два быстрых выбора: первый не записался, 
   await userEvent.click(screen.getByRole("radio", { name: "Светлая" }));
   await userEvent.click(screen.getByRole("radio", { name: "Тёмная" }));
   expect(patches.calls.map((c) => c.theme)).toEqual(["light"]);
-  await act(async () => patches.calls[0].settle.reject(new Error("занято")));
+  await act(async () => patches.at(0).settle.reject(new Error("занято")));
   await waitFor(() => expect(patches.calls).toHaveLength(2));
-  expect(patches.calls[1].theme).toBe("dark");
-  await act(async () => patches.calls[1].settle.resolve());
+  expect(patches.at(1).theme).toBe("dark");
+  await act(async () => patches.at(1).settle.resolve());
   expect(onPreview).toHaveBeenLastCalledWith({ ...DEFAULT_APPEARANCE, theme: "dark" });
   expect(screen.getByRole("radio", { name: "Тёмная" })).toBeChecked();
   expect(screen.queryByRole("alert")).toBeNull();
@@ -104,9 +109,9 @@ test("два быстрых выбора, оба не записались — �
   render(<Harness onPreview={onPreview} />);
   await userEvent.click(screen.getByRole("radio", { name: "Светлая" }));
   await userEvent.click(screen.getByRole("radio", { name: "Тёмная" }));
-  await act(async () => patches.calls[0].settle.reject(new Error("занято")));
+  await act(async () => patches.at(0).settle.reject(new Error("занято")));
   await waitFor(() => expect(patches.calls).toHaveLength(2));
-  await act(async () => patches.calls[1].settle.reject(new Error("Служба записи не отвечает")));
+  await act(async () => patches.at(1).settle.reject(new Error("Служба записи не отвечает")));
   expect(onPreview).toHaveBeenLastCalledWith(DEFAULT_APPEARANCE);
   expect(screen.getByRole("radio", { name: "Системная" })).toBeChecked();
   expect(screen.getByRole("alert")).toHaveTextContent("Служба записи не отвечает");
@@ -119,9 +124,9 @@ test("первый записался, второй нет — откат к п�
   render(<Harness onPreview={onPreview} />);
   await userEvent.click(screen.getByRole("radio", { name: "Светлая" }));
   await userEvent.click(screen.getByRole("radio", { name: "Тёмная" }));
-  await act(async () => patches.calls[0].settle.resolve());
+  await act(async () => patches.at(0).settle.resolve());
   await waitFor(() => expect(patches.calls).toHaveLength(2));
-  await act(async () => patches.calls[1].settle.reject(new Error("занято")));
+  await act(async () => patches.at(1).settle.reject(new Error("занято")));
   expect(onPreview).toHaveBeenLastCalledWith({ ...DEFAULT_APPEARANCE, theme: "light" });
   expect(screen.getByRole("radio", { name: "Светлая" })).toBeChecked();
 });
@@ -134,10 +139,10 @@ test("пока запись идёт, из ожидающих выборов у�
   await userEvent.click(screen.getByRole("radio", { name: "Системная" }));
   await userEvent.click(screen.getByRole("radio", { name: "Светлая" }));
   expect(patches.calls).toHaveLength(1);
-  await act(async () => patches.calls[0].settle.resolve());
+  await act(async () => patches.at(0).settle.resolve());
   await waitFor(() => expect(patches.calls).toHaveLength(2));
-  expect(patches.calls[1].theme).toBe("light");
-  await act(async () => patches.calls[1].settle.resolve());
+  expect(patches.at(1).theme).toBe("light");
+  await act(async () => patches.at(1).settle.resolve());
   expect(patches.calls).toHaveLength(2);
   expect(patches.maxInFlight()).toBe(1);
 });
