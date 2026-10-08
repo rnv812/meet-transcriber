@@ -18,6 +18,7 @@
 
 import { Fragment, useMemo, type ReactNode } from "react";
 import { LinkedText } from "../ui/LinkedText";
+import { looksLikePath, type PathActions, PathLink, splitPaths } from "../ui/PathLink";
 import { Tip } from "../ui/Tip";
 import { plainMarkdown } from "./agentRef";
 import type { JiraLinker } from "./jira";
@@ -198,6 +199,8 @@ export type ItemAction = (text: string, section: string | null) => ReactNode;
 type Ctx = {
   onTime?: (seconds: number) => void; itemAction?: ItemAction; section?: string | null; jira?: JiraLinker | null;
   tables?: TableClasses;
+  /** Пути к файлам — ссылками «открыть» / «показать в папке» (ответы ассистента, 0.5). */
+  paths?: PathActions | null;
 };
 /** Свои классы таблиц (итоги: карточка и таблица Aurora `.tbl`). */
 export type TableClasses = { wrap?: string; table?: string };
@@ -207,8 +210,20 @@ const isWord = (c: string | undefined) => c !== undefined && WORD.test(c);
 function inline(text: string, ctx: Ctx = {}): ReactNode[] {
   const out: ReactNode[] = [];
   let buf = "";
-  // Простой текст — с ключами задач Jira как ссылками (внутри `кода` — нет).
-  const plain = (t: string): ReactNode => (ctx.jira ? <LinkedText key={`l${out.length}`} text={t} linker={ctx.jira} /> : t);
+  // Простой текст — с ключами задач Jira как ссылками (внутри `кода` — нет) и путями (0.5).
+  const words = (t: string, key: string): ReactNode => (ctx.jira ? <LinkedText key={key} text={t} linker={ctx.jira} /> : t);
+  const plain = (t: string): ReactNode => {
+    const paths = ctx.paths;
+    if (!paths) return words(t, `l${out.length}`);
+    const parts = splitPaths(t);
+    if (parts.length === 1 && typeof parts[0] === "string") return words(t, `l${out.length}`);
+    return (
+      <Fragment key={`p${out.length}`}>
+        {parts.map((p, k) => (typeof p === "string" ? words(p, `w${k}`)
+          : <PathLink key={`f${k}`} path={p.path} actions={paths} />))}
+      </Fragment>
+    );
+  };
   const push = (node: ReactNode) => {
     if (buf) { out.push(plain(buf)); buf = ""; }
     out.push(node);
@@ -221,7 +236,10 @@ function inline(text: string, ctx: Ctx = {}): ReactNode[] {
     if (c === "\\" && (m = ESCAPE.exec(rest))) {
       buf += m[1];
     } else if (c === "`" && (m = CODE.exec(rest))) {
-      push(<code key={out.length}>{m[2]!.trim()}</code>);
+      const code = m[2]!.trim();
+      push(ctx.paths && looksLikePath(code)
+        ? <PathLink key={out.length} path={code} actions={ctx.paths} />
+        : <code key={out.length}>{code}</code>);
     } else if (c === "[" && ctx.onTime && (m = TIME.exec(rest))) {
       const seconds = Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
       const onTime = ctx.onTime;
@@ -326,7 +344,7 @@ function render(blocks: Block[], outer: Ctx = {}): ReactNode[] {
   });
 }
 
-export function Markdown({ source, className, onTime, itemAction, jira = null, tables }: {
+export function Markdown({ source, className, onTime, itemAction, jira = null, tables, paths = null }: {
   source: string;
   className?: string;
   /** Таймкоды «[мм:сс]» — кнопки; щелчок передаёт секунды. */
@@ -337,10 +355,12 @@ export function Markdown({ source, className, onTime, itemAction, jira = null, t
   jira?: JiraLinker | null;
   /** Свои классы таблиц: обёртки и самой таблицы. */
   tables?: TableClasses;
+  /** Пути к файлам — ссылками «открыть» / «показать в папке» (ответы ассистента, 0.5). */
+  paths?: PathActions | null;
 }) {
   const nodes = useMemo(
-    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira, tables }),
-    [source, onTime, itemAction, jira, tables],
+    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira, tables, paths }),
+    [source, onTime, itemAction, jira, tables, paths],
   );
   return <div className={className ? `md ${className}` : "md"}>{nodes}</div>;
 }

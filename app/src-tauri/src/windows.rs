@@ -6,7 +6,6 @@
 // роняло приложение на Windows.
 
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
 use std::process::Command;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -490,6 +489,73 @@ pub async fn open_material(path: String) -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
+/// Путь из ответа ассистента (0.5), по которому щёлкнули: локальный и
+/// абсолютный, без сетевого (`\\сервер`) и потока NTFS; есть на диске. Для
+/// «Открыть» — файл-документ (`MATERIAL_EXTS`, не `REFUSED_EXTS`); для
+/// «Показать в папке» — любой файл или папка (выделение ничего не запускает).
+pub fn user_path_allowed(path: &Path, reveal: bool) -> Option<PathBuf> {
+    let text = path.to_string_lossy();
+    if !path.is_absolute()
+        || text.contains('\0')
+        || has_stream(&text)
+        || text.starts_with(r"\\")
+        || text.starts_with("//")
+    {
+        return None;
+    }
+    let target = path.canonicalize().ok()?;
+    let plain = plain_path(&target);
+    if plain.starts_with(r"\\") || has_stream(&plain) {
+        return None;
+    }
+    if reveal {
+        return target.exists().then_some(target);
+    }
+    if !target.is_file() {
+        return None;
+    }
+    let ext = target
+        .extension()
+        .and_then(|ext| ext.to_str())?
+        .to_ascii_lowercase();
+    (!REFUSED_EXTS.contains(&ext.as_str()) && MATERIAL_EXTS.contains(&ext.as_str()))
+        .then_some(target)
+}
+
+/// Путь из ответа ассистента: открыть программой по умолчанию или показать в
+/// папке (Проводник с выделенным файлом, Finder `open -R`). Щелчок человека —
+/// само согласие; проверки — `user_path_allowed`.
+#[tauri::command]
+pub async fn open_user_path(path: String, reveal: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(target) = user_path_allowed(Path::new(&path), reveal) else {
+            return Err(if reveal {
+                "такой путь приложение не показывает".to_string()
+            } else {
+                "этот файл приложение не открывает — покажите его в папке".to_string()
+            });
+        };
+        let plain = plain_path(&target);
+        if reveal {
+            #[cfg(windows)]
+            let spawned = Command::new("explorer")
+                .arg(format!("/select,{plain}"))
+                .spawn();
+            #[cfg(not(windows))]
+            let spawned = Command::new("open").arg("-R").arg(&plain).spawn();
+            return spawned
+                .map(|_| ())
+                .map_err(|error| format!("папка не открылась: {error}"));
+        }
+        shell_execute(&plain).map_err(|code| match code {
+            31 => "нет программы для этого типа файла — покажите его в папке".to_string(),
+            code => format!("файл не открылся (код {code})"),
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Страницы, которые окно открывает в браузере: мастер (Hugging Face),
 /// подсказки «не найден — установите» в настройках ассистента, «Скачать
 /// новую версию» и «Что нового» в «О программе» — выпуски публичного
@@ -815,6 +881,32 @@ mod tests {
         assert!(!chat_attachable(Path::new("relative/План.pptx")));
         assert!(!chat_attachable(Path::new(r"\\server\share\План.pptx")));
         assert!(!chat_attachable(Path::new("//server/share/План.pptx")));
+    }
+
+    #[test]
+    fn user_path_opens_documents_and_reveals_anything_local() {
+        let tree = Tree::new("userpath");
+        let dir = tree.0.join("Загрузки");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["План.pdf", "run.exe", "tool.ps1", "noext"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        assert!(user_path_allowed(&dir.join("План.pdf"), false).is_some());
+        for name in ["run.exe", "tool.ps1", "noext"] {
+            assert!(
+                user_path_allowed(&dir.join(name), false).is_none(),
+                "{name}"
+            );
+            assert!(user_path_allowed(&dir.join(name), true).is_some(), "{name}");
+        }
+        assert!(user_path_allowed(&dir, true).is_some());
+        assert!(user_path_allowed(&dir, false).is_none());
+        assert!(user_path_allowed(&dir.join("нет.pdf"), true).is_none());
+        assert!(user_path_allowed(Path::new("relative/План.pdf"), false).is_none());
+        assert!(user_path_allowed(Path::new(r"\\server\share\План.pdf"), true).is_none());
+        assert!(user_path_allowed(Path::new("//server/share/План.pdf"), true).is_none());
+        let stream = format!("{}:evil.exe", dir.join("План.pdf").display());
+        assert!(user_path_allowed(Path::new(&stream), true).is_none());
     }
 
     #[test]

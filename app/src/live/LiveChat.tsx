@@ -50,7 +50,8 @@ import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef,
 import { plainMarkdown } from "../lib/agentRef";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
-import { inTauri, openFolder, openMaterial } from "../lib/shell";
+import { inTauri, openFolder, openMaterial, openUserPath } from "../lib/shell";
+import type { PathActions } from "../ui/PathLink";
 import type { ChatMessage, ChatReaction } from "../lib/types";
 import { AgentMark } from "../ui/AgentMark";
 import { BADGE_CLASS } from "../ui/badge";
@@ -77,6 +78,11 @@ const ACTIONS = "button, a[href], input, select, textarea, [tabindex]:not(li)";
 export const COPIED_MS = 1500;
 /** Сколько подсвечено сообщение, к которому перешли по «к сообщению …». */
 const FLASH_MS = 1600;
+/** Пути в ответах ассистента (0.5): открыть или показать в папке — оболочкой. */
+const PATH_ACTIONS: PathActions = {
+  open: (path) => openUserPath(path, false),
+  reveal: (path) => openUserPath(path, true),
+};
 
 /** Подсказка у строки «Ассистент хотел … — запрос заблокирован». */
 export const GATE_TITLE = "Ассистент действует вне этой встречи только с вашего согласия — Meet заблокировал запрос без него";
@@ -300,7 +306,7 @@ function AgentMessage({ m, tools = [], more, chat, onTime, onShow, compact, disa
           : tools.length ? null
             : <div className="chat-typing"><span className="chat-typing__dots" aria-hidden="true" />Пишет…</div>
       ) : text.trim() ? (
-        <Markdown source={text} className="chat-msg__text" onTime={onTime} />
+        <Markdown source={text} className="chat-msg__text" onTime={onTime} paths={inTauri() ? PATH_ACTIONS : null} />
       ) : null}
       {continuing && <div className="chat-msg__text chat-msg__text--streaming chat-msg__more">{continuing}</div>}
       {m.status === "cancelled" && <div className="chat-msg__note">Остановлено</div>}

@@ -54,6 +54,16 @@ export async function openMaterial(path: string): Promise<void> {
   await invoke<void>("open_material", { path });
 }
 
+/**
+ * Путь из ответа ассистента (0.5): открыть его программой (только документы,
+ * картинки, текст) или показать в папке. Оболочка проверяет путь сама
+ * (`open_user_path`); отказ — ошибкой с причиной. В браузере (dev) — ничего.
+ */
+export async function openUserPath(path: string, reveal: boolean): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("open_user_path", { path, reveal });
+}
+
 /** Перетаскивание файлов на окно (Tauri: HTML5-перетаскивание WebView2 перехватывает сам). */
 export type FileDrop =
   | { type: "enter" | "over"; x: number; y: number }

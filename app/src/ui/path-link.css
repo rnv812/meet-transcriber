@@ -1,0 +1,10 @@
+/* Путь в ответе ассистента (ui/PathLink, 0.5): моноширинная ссылка и значок папки. */
+.path-link { display: inline; }
+.path-link__open {
+  display: inline; padding: 0; border: 0; background: none; color: var(--link); cursor: pointer;
+  font-family: var(--font-code); font-size: 0.92em; text-align: left; overflow-wrap: anywhere;
+  text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px;
+}
+.path-link__open:hover { text-decoration-color: var(--ink-3); }
+.btn.path-link__reveal { vertical-align: middle; margin-left: 2px; }
+.path-link__error { display: block; color: var(--danger); font-size: var(--text-xs); }

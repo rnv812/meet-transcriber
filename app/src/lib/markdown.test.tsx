@@ -1,5 +1,34 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Markdown } from "./markdown";
+
+test("0.5: пути в ответе — ссылки «открыть» и «показать в папке» (в `коде` и простые без пробелов)", async () => {
+  const open = vi.fn(async () => {});
+  const reveal = vi.fn(async () => {});
+  render(<Markdown paths={{ open, reveal }}
+    source={"Файл `C:\\Users\\Анна\\Загрузки\\План встречи.pdf` и лог C:\\logs\\run.log, а ещё ~/notes/a.md.\n\nКод `npm test` — не путь."} />);
+  const links = screen.getAllByRole("button", { name: /^Открыть / });
+  expect(links.map((b) => b.textContent)).toEqual([
+    "C:\\Users\\Анна\\Загрузки\\План встречи.pdf", "C:\\logs\\run.log", "~/notes/a.md",
+  ]);
+  await userEvent.click(links[0]!);
+  expect(open).toHaveBeenCalledWith("C:\\Users\\Анна\\Загрузки\\План встречи.pdf");
+  await userEvent.click(screen.getAllByRole("button", { name: /^Показать в папке/ })[1]!);
+  expect(reveal).toHaveBeenCalledWith("C:\\logs\\run.log");
+  expect(screen.getByText("npm test").tagName).toBe("CODE");
+});
+
+test("0.5: без paths пути — обычный текст и код", () => {
+  render(<Markdown source={"`C:\\a\\b.pdf` и C:\\x\\y.txt"} />);
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+test("0.5: открыть не вышло — причина рядом с путём", async () => {
+  const open = vi.fn(async () => { throw new Error("этот файл приложение не открывает — покажите его в папке"); });
+  render(<Markdown paths={{ open, reveal: vi.fn(async () => {}) }} source={"`C:\\a\\run.exe`"} />);
+  await userEvent.click(screen.getByRole("button", { name: /^Открыть / }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("покажите его в папке");
+});
 
 test("заголовки: уровень markdown + 2, текст без решёток", () => {
   render(<Markdown source={"# Итоги встречи\n\n## Решения ##\n### Детали"} />);
