@@ -84,11 +84,11 @@ test("статусы провайдеров — из getAssistant().available: �
   const found = await within(await screen.findByRole("row", { name: "Claude Code" })).findByText("найден");
   expect(found).toHaveClass("badge", "badge--fresh");
   expect(found).toHaveAccessibleDescription("C:\\Users\\me\\.local\\bin\\claude.exe");
-  expect(within(option("Codex")).getByText("не найден")).toHaveClass("badge", "badge--error");
+  expect(within(option("Codex")).getByText("не найден")).toHaveClass("badge"); expect(within(option("Codex")).getByText("не найден")).not.toHaveClass("badge--error");
   expect(within(option("Codex")).getByText(/не найден — установите/)).toBeInTheDocument();
   expect(within(option("Codex")).getByText("github.com/openai/codex")).toBeInTheDocument();
   const local = within(option("Локальная (LM Studio / Ollama)")).getByText("недоступен");
-  expect(local).toHaveClass("badge--error");
+  expect(local).toHaveClass("badge"); expect(local).not.toHaveClass("badge--error");
   expect(local).toHaveAccessibleDescription("адрес: http://127.0.0.1:1234/v1");
   expect(within(option("Авто")).getByText("сейчас: Claude Code")).toHaveClass("badge", "badge--info");
 });

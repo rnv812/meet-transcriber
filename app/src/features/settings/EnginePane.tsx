@@ -43,7 +43,7 @@ export function EnginePane({ endpoint, onReinstall }: {
   return (
     <>
       <Row label="Состояние" hint="Без движка встречи записываются, но не расшифровываются">
-        <span className={`badge ${engine.installed ? "badge--fresh" : "badge--error"}`}>
+        <span className={`badge ${engine.installed ? "badge--fresh" : "badge--stale"}`}>
           {engine.installed ? "установлен" : "не установлен"}
         </span>
         {onReinstall && (
@@ -62,7 +62,7 @@ export function EnginePane({ endpoint, onReinstall }: {
         : engine.flavor === "mac" ? "Сборка для Apple Silicon (экспериментально)" : "Сборка для процессора (CPU)"}>
         <span className="tags tags--start">
           {engine.components.map((c) => (
-            <span key={c.module} className={`badge ${c.installed ? "badge--plain" : "badge--error"}`}>{c.title}</span>
+            <span key={c.module} className={`badge ${c.installed ? "badge--plain" : "badge--stale"}`}>{c.title}</span>
           ))}
         </span>
         {/* Почему компонента нет — строкой под бейджами, а не внутри бейджа. */}

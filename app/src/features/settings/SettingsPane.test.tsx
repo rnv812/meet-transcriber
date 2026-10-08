@@ -603,7 +603,7 @@ test("«Движок и модели»: движок без GigaAM — уста�
   await openEngine();
   expect(await screen.findByText("установлен")).toBeInTheDocument();
   // Компоненты — бейджами, почему нет — строкой под ними.
-  expect(screen.getByText("распознавание речи (GigaAM)")).toHaveClass("badge", "badge--error");
+  expect(screen.getByText("распознавание речи (GigaAM)")).toHaveClass("badge", "badge--stale");
   expect(screen.getByText("PyTorch")).toHaveClass("badge", "badge--plain");
   expect(screen.getByText("распознавание речи (GigaAM): не установлена — будет установлена при обновлении движка"))
     .toBeInTheDocument();

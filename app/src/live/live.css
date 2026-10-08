@@ -167,7 +167,7 @@
 .live-hint.is-pinned { border-color: var(--hairline-strong); }
 .live-hint--question { --kind: var(--info); }
 .live-hint--risk { --kind: var(--warning); }
-.live-hint--unanswered { --kind: var(--danger); }
+.live-hint--unanswered { --kind: var(--warning); } /* не ошибка — повод ответить (0.5: красный — только ошибки) */
 .live-hint--term { --kind: var(--ink-2); }
 .live-hint--followup { --kind: var(--success); }
 /* «Вам вопрос»: наверху, с полосой и черновиком ответа. */

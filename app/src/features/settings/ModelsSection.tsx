@@ -230,20 +230,20 @@ function ProviderState({ provider, info, check }: { provider: string; info: Assi
     // Codex, а не то, кого взял бы «Авто» (он предпочёл бы Claude Code).
     if (info.setting !== "auto") return null;
     if (info.provider) return <span className="badge badge--info">сейчас: {titleOf(info.provider)}</span>;
-    return info.checking ? <span className="badge">определяю…</span> : <span className="badge badge--error">нет доступного</span>;
+    return info.checking ? <span className="badge">определяю…</span> : <span className="badge badge--stale">нет доступного</span>;
   }
   const found = info.available[provider];
   if (!found) return null;
   if (provider === LOCAL) {
     return (
       <Tip content={`адрес: ${found.base_url ?? ""}`}>
-        <span className={`badge ${found.found ? "badge--fresh" : "badge--error"}`}>{found.found ? "доступен" : "недоступен"}</span>
+        <span className={`badge ${found.found ? "badge--fresh" : ""}`.trim()}>{found.found ? "доступен" : "недоступен"}</span>
       </Tip>
     );
   }
   return found.found
     ? <Tip content={found.path ?? ""}><span className="badge badge--fresh">найден</span></Tip>
-    : <span className="badge badge--error">не найден</span>;
+    : <span className="badge">не найден</span>;
 }
 
 /**
