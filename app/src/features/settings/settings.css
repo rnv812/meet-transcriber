@@ -76,6 +76,26 @@
 .amark .switch:disabled { opacity: 0.5; cursor: not-allowed; }
 .amark__note { display: block; margin-top: 4px; color: var(--ink-3); font-size: 12px; line-height: 1.4; }
 .amark__intro { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* «Поиск по настройкам» над меню: поле Aurora .search + .field--sm, выдача — вместо групп меню. */
+.ssearch { display: flex; flex-direction: column; gap: var(--s-2); }
+.ssearch__list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ssearch__list[hidden] { display: none; }
+.ssearch__item {
+  padding: 8px 10px; border-radius: var(--r-md); color: var(--ink-2); cursor: pointer;
+  font-size: var(--text-sm); line-height: 1.35; overflow-wrap: anywhere;
+}
+.ssearch__item[aria-selected="true"] { background: var(--surface-2); color: var(--ink); }
+.ssearch__section { color: var(--ink-3); }
+.ssearch__label { color: var(--ink); }
+.ssearch__empty { margin: 0; padding: 4px 10px; font-size: 12px; }
+
+/* Найденная поиском строка: фон --selection на 1,5 с (снимается классом); без анимации при reduced-motion. */
+.setting-found {
+  background: var(--selection); border-radius: var(--r-sm);
+  margin-inline: -8px; padding-inline: 8px; transition: background var(--d) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) { .setting-found { transition: none; } }
 @media (max-width: 1000px) {
   .settings__body { padding: 0 20px 24px; }
   .settings__state { max-width: 160px; }

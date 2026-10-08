@@ -15,6 +15,11 @@
  *
  * Прежние id разделов (глубокие ссылки трея, карточек, оболочки) ведут в новые
  * через `LEGACY_SECTION`.
+ *
+ * Над меню — «Поиск по настройкам» (SettingsSearch, Ctrl+F): выдача вместо
+ * меню; выбор открывает раздел, раскрывает «Тонкую настройку» (если строка в
+ * ней), прокручивает к строке и подсвечивает её на 1,5 с. Меню и индекс —
+ * `settingsIndex.ts`.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type MutableRefObject } from "react";
@@ -48,44 +53,15 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { JiraSection } from "./JiraSection";
 import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { ModelsSection, modelsChangesInvalid } from "./ModelsSection";
-import { SettingsCard, type Raw, type SetFn } from "./Section";
+import { RevealFineTuning, SettingsCard, type Raw, type SetFn } from "./Section";
+import { SettingsSearch } from "./SettingsSearch";
+import { MENU, MENU_GROUPS, type SectionId, type SettingsEntry } from "./settingsIndex";
 import { SoundSection } from "./SoundSection";
 import { SpeakersSection } from "./SpeakersSection";
 import "./settings.css";
 
 export { modelUsage } from "./AsrSection";
-
-export type SectionId =
-  | "appearance" | "app" | "sound" | "auto" | "asr" | "speakers" | "dictionary" | "engine"
-  | "models" | "assistant" | "analysis" | "categories" | "export" | "jira"
-  | "advanced" | "diagnostics" | "about";
-
-/** Меню: группы и их разделы (порядок — как в окне). */
-const MENU_GROUPS: { title: string; items: { id: SectionId; title: string }[] }[] = [
-  { title: "Общее", items: [{ id: "appearance", title: "Оформление" }, { id: "app", title: "Приложение" }] },
-  { title: "Запись", items: [{ id: "sound", title: "Звук" }, { id: "auto", title: "Автозапись" }] },
-  {
-    title: "Расшифровка",
-    items: [
-      { id: "asr", title: "Распознавание" }, { id: "speakers", title: "Спикеры" },
-      { id: "dictionary", title: "Словарь" }, { id: "engine", title: "Движок и модели" },
-    ],
-  },
-  {
-    title: "ИИ",
-    items: [{ id: "models", title: "Модели ИИ" }, { id: "assistant", title: "Ассистент" }, { id: "analysis", title: "Анализ встречи" }],
-  },
-  {
-    title: "Встречи",
-    items: [{ id: "categories", title: "Категории" }, { id: "export", title: "Экспорт" }, { id: "jira", title: "Jira" }],
-  },
-  {
-    title: "Система",
-    items: [{ id: "advanced", title: "Дополнительно" }, { id: "diagnostics", title: "Диагностика" }, { id: "about", title: "О программе" }],
-  },
-];
-
-const MENU = MENU_GROUPS.flatMap((g) => g.items);
+export type { SectionId } from "./settingsIndex";
 
 /**
  * Id разделов 0.3.7 → разделы 0.4: глубокие ссылки трея (`{section:"assistant"}`),
@@ -157,6 +133,37 @@ export type SettingsGuard = {
   save: () => Promise<boolean>;
 };
 
+/** Где Ctrl+F не уводит к поиску по настройкам: диалоги и всплывающие окна. */
+const FIND_IGNORED = "[role=dialog], [role=alertdialog], [aria-modal=true], .popover";
+/** Сколько раз и как часто искать строку, пока раздел догружает данные. */
+const FIND_TRIES = 20;
+const FIND_RETRY_MS = 100;
+/** Подсветка найденной строки (`--selection`). */
+export const HIGHLIGHT_MS = 1500;
+const FOUND_CLASS = "setting-found";
+const FOCUSABLE = "input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])";
+const FOCUSABLE_CONTROL = ["input", "select", "textarea", "button"]
+  .map((t) => `.srow__control ${t}:not([disabled])`).join(", ") + ", .amark__cell button:not([disabled])";
+
+const reducedMotion = () => typeof window.matchMedia === "function"
+  && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * Строка раздела по подписи (как в индексе поиска): `Row`/`Switch`/`Radio`,
+ * строка таблицы «Анализа встречи» или составной блок. Нет — null.
+ */
+export function findRow(root: ParentNode, label: string): HTMLElement | null {
+  for (const el of root.querySelectorAll<HTMLElement>(".srow__label")) {
+    if ((el.textContent ?? "").trim() !== label) continue;
+    return el.closest<HTMLElement>(".srow, .amark__row, .callapps, [role=group]") ?? el;
+  }
+  // Раздел без строк-подписей (список «Категории встреч») — по имени элемента.
+  for (const el of root.querySelectorAll<HTMLElement>("[aria-label]")) {
+    if (el.getAttribute("aria-label") === label) return el;
+  }
+  return null;
+}
+
 /** Меню разделов: тексту настроек справа остаётся не меньше 420 px. */
 const SETTINGS_MENU = { def: 220, min: 160, max: 360, reserve: 420 };
 
@@ -178,7 +185,28 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
    *  "engine" — сразу на шаг движка (переустановка в «Движке и моделях»). */
   onRunWizard?: (step?: "hardware" | "engine") => void;
 }) {
-  const [section, setSection] = useState<SectionId>(() => sectionOf(initial) ?? "app");
+  const [section, setSectionState] = useState<SectionId>(() => sectionOf(initial) ?? "app");
+  // Поиск по настройкам: запрос, найденная строка (прокрутить и подсветить) и
+  // просьба раскрыть «Тонкую настройку» (номер; 0 — нет, см. RevealFineTuning).
+  const [query, setQuery] = useState("");
+  const [jump, setJump] = useState<{ entry: SettingsEntry; tick: number } | null>(null);
+  const [reveal, setReveal] = useState(0);
+  const jumps = useRef(0);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  /** Перейти в раздел из меню, ссылки или по просьбе извне: «Тонкая настройка» — как была. */
+  const setSection = (id: SectionId) => {
+    setSectionState(id);
+    setReveal(0);
+  };
+  /** Выбор в выдаче поиска: раздел, при `advanced` — раскрыть «Тонкую настройку», затем строка. */
+  const pick = (entry: SettingsEntry) => {
+    const tick = ++jumps.current;
+    setQuery("");
+    setSectionState(entry.section);
+    setReveal(entry.advanced ? tick : 0);
+    setJump({ entry, tick });
+  };
   const [settings, setSettings] = useState<Raw | null>(null);
   const [draft, setDraft] = useState<Raw>({});
   const [processes, setProcesses] = useState<Processes | null>(null);
@@ -210,8 +238,49 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   // Повторная просьба открыть раздел (новый `initialTick`) — даже если он уже был запрошен.
   useEffect(() => {
     const asked = sectionOf(initial);
-    if (asked) setSection(asked);
+    if (asked) {
+      setSectionState(asked);
+      setReveal(0);
+    }
   }, [initial, initialTick]);
+
+  // Ctrl+F (⌘F) на панели настроек — к поиску по настройкам (по коду клавиши: и в русской раскладке).
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyF") return;
+      if (e.target instanceof Element && e.target.closest(FIND_IGNORED)) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Найденная строка: дождаться раздела (и данных), прокрутить к строке, подсветить на 1,5 с, фокус — на её элемент.
+  useEffect(() => {
+    if (!jump) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = () => {
+      const row = contentRef.current ? findRow(contentRef.current, jump.entry.label) : null;
+      if (!row) {
+        // Раздел ещё грузит свои данные (движок, «О программе») — подождать немного;
+        // строки так и нет (скрыта переключателем) — раздел открыт, и хватит.
+        if (++tries < FIND_TRIES) timer = setTimeout(attempt, FIND_RETRY_MS);
+        else setJump((cur) => (cur?.tick === jump.tick ? null : cur));
+        return;
+      }
+      row.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+      const control = row.querySelector<HTMLElement>(FOCUSABLE_CONTROL) ?? row.querySelector<HTMLElement>(FOCUSABLE);
+      control?.focus({ preventScroll: true });
+      row.classList.add(FOUND_CLASS);
+      setTimeout(() => row.classList.remove(FOUND_CLASS), HIGHLIGHT_MS);
+      setJump((cur) => (cur?.tick === jump.tick ? null : cur));
+    };
+    attempt();
+    return () => clearTimeout(timer);
+  }, [jump, section, settings]);
 
   const set: SetFn = (group, key, value) => {
     setNotice(null);
@@ -305,7 +374,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     <div className="settings">
       <nav className="settings__menu" aria-label="Разделы настроек">
         <span id={dirtyNoteId} className="sr-only">Есть несохранённые изменения</span>
-        {MENU_GROUPS.map((g, i) => (
+        <SettingsSearch query={query} onQuery={setQuery} onPick={pick} inputRef={searchRef} />
+        {/* Пока в поиске текст — выдача вместо меню. */}
+        {query.trim() === "" && MENU_GROUPS.map((g, i) => (
           <div key={g.title} role="group" aria-labelledby={`${menuId}-${i}`} className="settings__group">
             <span id={`${menuId}-${i}`} className="type-micro settings__group-title">{g.title}</span>
             {g.items.map((m) => (
@@ -348,7 +419,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
               onCancel={() => setAskReset(false)} onConfirm={() => { setAskReset(false); void reload(); }} />
           )}
           {error && <p className="error" role="alert">{error}</p>}
-          <div className="settings__content">
+          <div className="settings__content" ref={contentRef}>
+          <RevealFineTuning.Provider value={reveal}>
           {!settings && section !== "about" && section !== "diagnostics" && section !== "appearance" ? (
             error ? <EmptyState title="Настройки недоступны" /> : <Loading label="Загружаю настройки…" />
           ) : section === "appearance" ? (
@@ -403,6 +475,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           ) : (
             <AdvancedSection draft={draft} set={set} />
           )}
+          </RevealFineTuning.Provider>
           </div>
         </div>
       </div>
