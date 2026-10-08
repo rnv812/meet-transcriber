@@ -905,6 +905,20 @@ def _curl_grant(tool: str, words: list[str]) -> tuple[str, str] | None:
     return f"net:{tool}:curl:{host}:{method}", label
 
 
+# Объект MCP-вызова для разрешения «до конца встречи» (0.5): первый из этих ключей.
+_MCP_OBJECT_KEYS = ("issue_key", "issueKey", "issue_id", "key", "id", "path", "file_path", "url", "uri",
+                    "project", "project_key", "projectKey", "repo", "repository", "page_id", "channel", "name")
+
+
+def mcp_object(data: dict) -> tuple[str, str] | None:
+    """(ключ, значение) объекта MCP-вызова — по чему разрешать «такое же»; нет — None."""
+    for key in _MCP_OBJECT_KEYS:
+        value = data.get(key) if isinstance(data, dict) else None
+        if isinstance(value, (str, int)) and str(value).strip():
+            return key, str(value).strip()[:200]
+    return None
+
+
 def shell_grant(tool: str, command: str) -> tuple[str, str] | None:
     """Что разрешит «до конца встречи» для простой команды (None — каждая
     своей карточкой). Обычная программа — по первому слову («Bash: make»);
@@ -1334,7 +1348,8 @@ def shell_risk(tool: str, command: str, *, inside=None, _depth: int = 0) -> str:
 
 
 # Категории команд, которые «до конца встречи» не разрешаются: каждая — своей карточкой.
-_NO_GRANT = (DELETE, UNPARSED)
+# Удаление и отправка наружу — каждый раз карточкой (0.5), непонятное — тоже.
+_NO_GRANT = (DELETE, SEND, UNPARSED)
 
 
 def _worst(risks) -> str:
@@ -2097,15 +2112,20 @@ class ConsentGate:
 
     def grant_for(self, tool: str, data: dict) -> tuple[str, str] | None:
         """Что разрешит «до конца встречи» для такого вызова (None — не
-        предлагается): тот же MCP-инструмент; тот же домен WebFetch; то же
-        первое слово простой команды (удаление и команды без песочницы —
-        никогда); изменение файлов любым инструментом правки (Write, Edit,
-        MultiEdit, NotebookEdit) в рабочей папке или в папке, где запись уже
-        разрешали, — кроме закрытого внутри."""
+        предлагается). 0.5 — действие с тем же объектом: тот же
+        MCP-инструмент с тем же объектом (ключ задачи, id, путь, адрес; без
+        объекта — не предлагается); тот же домен WebFetch; та же команда
+        (`shell_grant`: программа и подкоманда, флаги из списка; удаление,
+        отправка наружу, команды без песочницы — никогда); изменение того же
+        файла любым инструментом правки — кроме закрытого."""
         data = data if isinstance(data, dict) else {}
         if tool.startswith("mcp__"):
             server, name = mcp_parts(tool)
-            return f"mcp:{tool}", f"MCP {server}: {name}"
+            obj = mcp_object(data)
+            if obj is None:
+                return None
+            key, value = obj
+            return f"mcp:{tool}:{key}={value}", f"MCP {server}: {name} → {_inline(value, True)}"
         if tool in WEB_FETCH:
             host = url_host(str(data.get("url") or ""))
             return (f"web:{host}", f"веб: {host}") if host else None
@@ -2122,10 +2142,11 @@ class ConsentGate:
                 return None
             with self._lock:
                 folders = [*self._own, *self._work, *self._approved_dirs]
-                shown = dict(self._dir_shown)
+            # Предлагается, как раньше, в рабочей папке или папке, где запись уже одобряли;
+            # разрешается — только этот файл (0.5), а не вся папка.
             for folder in folders:
                 if _inside(target, folder) and self._files_grantable(target, folder):
-                    return f"{FILES_GRANT}{folder}", f"изменение файлов в {_inline(shown.get(folder, folder), True)}"
+                    return f"{FILES_GRANT}{target}", f"изменение файла {_inline(target, True)}"
             return None
         return None
 

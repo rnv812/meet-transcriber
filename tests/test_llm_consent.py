@@ -734,17 +734,22 @@ def _grant(gate, tool, data):
 
 
 def test_meeting_grant_for_an_mcp_tool(dirs):
+    """0.5: «до конца встречи» — тот же MCP-инструмент с тем же объектом; без объекта — не предлагается."""
     gate = _gate(dirs, CONFIRM)
-    g = _grant(gate, "mcp__team-jira__jira_create_issue", {"summary": "a"})
-    assert g == {"key": "mcp:mcp__team-jira__jira_create_issue", "label": "MCP team-jira: jira_create_issue"}
-    assert gate.decide("mcp__team-jira__jira_create_issue", {"summary": "b"}).why == "granted"
-    assert gate.decide("mcp__team-jira__jira_update_issue", {}).outcome == ASK           # другой инструмент
-    assert gate.decide("mcp__team-jira__jira_create_issue", {"x": f"{dirs['home']}/.ssh/id"}).why == "sensitive"
+    assert gate.decide("mcp__team-jira__jira_create_issue", {"summary": "a"}).card["grant"] is None
+    g = _grant(gate, "mcp__team-jira__jira_update_issue", {"issue_key": "ABC-1", "summary": "a"})
+    assert g == {"key": "mcp:mcp__team-jira__jira_update_issue:issue_key=ABC-1",
+                 "label": "MCP team-jira: jira_update_issue → ABC-1"}
+    assert gate.decide("mcp__team-jira__jira_update_issue", {"issue_key": "ABC-1", "summary": "b"}).why == "granted"
+    assert gate.decide("mcp__team-jira__jira_update_issue", {"issue_key": "ABC-2"}).outcome == ASK      # другой объект
+    assert gate.decide("mcp__team-jira__jira_add_comment", {"issue_key": "ABC-1"}).outcome == ASK       # другой инструмент
+    assert gate.decide("mcp__team-jira__jira_update_issue",
+                       {"issue_key": "ABC-1", "x": f"{dirs['home']}/.ssh/id"}).why == "sensitive"
     gate.begin(NONE)
-    assert gate.decide("mcp__team-jira__jira_create_issue", {"summary": "c"}).outcome == DENY   # без просьбы — нет
+    assert gate.decide("mcp__team-jira__jira_update_issue", {"issue_key": "ABC-1"}).outcome == DENY   # без просьбы — нет
     gate.begin(USER)
     gate.remove_grant(g["key"])
-    assert gate.decide("mcp__team-jira__jira_create_issue", {"summary": "d"}).outcome == ASK
+    assert gate.decide("mcp__team-jira__jira_update_issue", {"issue_key": "ABC-1"}).outcome == ASK
 
 
 def test_meeting_grant_for_a_web_domain_also_frees_mcp_urls_there(dirs):
@@ -800,32 +805,35 @@ def test_network_tools_are_granted_per_exact_host_and_method(dirs):
     assert gate.decide("Bash", {"command": "curl -X POST https://api.example.com/v1"}).outcome == ASK
     assert gate.decide("Bash", {"command": "curl -d a=1 https://api.example.com/v1"}).outcome == ASK
     assert gate.decide("Bash", {"command": "wget https://api.example.com/x"}).outcome == ASK      # другой инструмент
-    post = gate.decide("Bash", {"command": "curl -X POST https://api.example.com/v1"}).card["grant"]
-    assert post["label"] == "Bash: curl → api.example.com (POST)"
+    # Отправка наружу (POST) — каждый раз карточкой: «до конца встречи» не предлагается (0.5).
+    assert gate.decide("Bash", {"command": "curl -X POST https://api.example.com/v1"}).card["grant"] is None
     assert gate.decide("Bash", {"command": "curl https://a.example https://b.example"}).card["grant"] is None
 
 
 def test_meeting_grant_for_writes_only_in_the_meeting_or_an_approved_folder(dirs):
+    """Предлагается в рабочей папке или папке, где запись уже одобряли; разрешается — этот файл (0.5)."""
     gate = _gate(dirs, CONFIRM, confirmer=lambda card: "allow")
     m, downloads = dirs["meeting"], dirs["downloads"]
     first = gate.decide("Write", {"file_path": str(downloads / "a.txt"), "content": "x"})
     assert first.card["grant"] is None                      # папку ещё не одобряли
     gate.check("Write", {"file_path": str(downloads / "a.txt"), "content": "x"}, tool_use_id="w1")
     g = gate.decide("Write", {"file_path": str(downloads / "b.txt"), "content": "x"}).card["grant"]
-    assert g and g["key"].startswith("write:files:")        # теперь — предлагается
-    assert g["label"] == f"изменение файлов в {downloads}"
+    assert g and g["key"] == f"write:files:{consent.resolve(downloads / 'b.txt')}"   # теперь — предлагается
+    assert g["label"] == f"изменение файла {consent.resolve(downloads / 'b.txt')}"
     g2 = _grant(gate, "Write", {"file_path": str(m / "notes.md"), "content": "x"})
-    assert gate.decide("Write", {"file_path": str(m / "sub" / "other.md"), "content": "y"}).why == "granted"
+    assert gate.decide("Edit", {"file_path": str(m / "notes.md"), "old_string": "x", "new_string": "y"}).why == "granted"
+    assert gate.decide("Write", {"file_path": str(m / "sub" / "other.md"), "content": "y"}).outcome == ASK  # другой файл
     assert gate.decide("Write", {"file_path": str(downloads / "c.txt"), "content": "z"}).outcome == ASK
-    assert g2["label"] == f"изменение файлов в {m}"
+    assert g2["label"] == f"изменение файла {consent.resolve(m / 'notes.md')}"
 
 
 def test_allow_for_the_meeting_answer_records_the_grant(dirs):
     gate = _gate(dirs, CONFIRM, confirmer=lambda card: consent.ALLOW_MEETING)
-    d = gate.check("mcp__team-jira__jira_add_comment", {"body": "x"}, tool_use_id="c1")
+    d = gate.check("mcp__team-jira__jira_add_comment", {"issue_key": "ABC-1", "body": "x"}, tool_use_id="c1")
     assert d.outcome == ALLOW and d.why == "granted-now"
-    assert "mcp:mcp__team-jira__jira_add_comment" in gate.grants()
-    assert gate.decide("mcp__team-jira__jira_add_comment", {"body": "y"}).why == "granted"
+    assert "mcp:mcp__team-jira__jira_add_comment:issue_key=ABC-1" in gate.grants()
+    assert gate.decide("mcp__team-jira__jira_add_comment", {"issue_key": "ABC-1", "body": "y"}).why == "granted"
+    assert gate.decide("mcp__team-jira__jira_add_comment", {"issue_key": "ABC-9", "body": "y"}).outcome == ASK
 
 
 # --- ревью round 3b: разрешённый вызов не расширить флагами ---------------------------------
@@ -863,10 +871,12 @@ def test_a_curl_grant_still_covers_harmless_flags(dirs):
 
 
 def test_a_post_grant_covers_a_body_but_not_another_method(dirs):
+    """0.5: отправка наружу — каждый раз; «до конца встречи» на POST не предлагается, а
+    такое разрешение из журнала 0.4 больше не действует."""
     gate = _gate(dirs, CONFIRM)
-    _grant(gate, "Bash", {"command": "curl -XPOST https://api.example.com/items"})
-    assert gate.decide("Bash", {"command": "curl -d a=1 https://api.example.com/items"}).why == "granted"
-    assert gate.decide("Bash", {"command": "curl -X post https://api.example.com/items"}).why == "granted"
+    assert gate.decide("Bash", {"command": "curl -XPOST https://api.example.com/items"}).card["grant"] is None
+    gate.add_grant("net:Bash:curl:api.example.com:POST", "Bash: curl → api.example.com (POST)")
+    assert gate.decide("Bash", {"command": "curl -d a=1 https://api.example.com/items"}).why != "granted"
     assert gate.decide("Bash", {"command": "curl -XDELETE https://api.example.com/items"}).outcome == ASK
 
 
@@ -919,7 +929,10 @@ def test_other_network_tools_are_never_granted(dirs):
 def test_a_curl_grant_never_covers_reading_a_file_with_at(dirs, grant, command):
     """Ревью F1: `@файл` у заголовка или тела — чтение файла (и мимо проверки путей) — карточкой."""
     gate = _gate(dirs, CONFIRM)
-    _grant(gate, "Bash", {"command": grant})
+    if "-XPOST" in grant:      # отправку «до конца» уже не дают (0.5) — старое разрешение из журнала
+        gate.add_grant("net:Bash:curl:api.example.com:POST", "Bash: curl → api.example.com (POST)")
+    else:
+        _grant(gate, "Bash", {"command": grant})
     d = gate.decide("Bash", {"command": command})
     assert d.outcome == ASK and d.why != "granted", (command, d)
 
@@ -936,15 +949,17 @@ def _edits(path):
 
 
 def test_a_write_grant_covers_every_file_change_tool_in_the_folder(dirs):
-    """Смоук: «Разрешать такое до конца встречи» на Write, следующая правка того же файла — Edit."""
+    """Смоук: «Разрешать такое до конца встречи» на Write — любые правки ЭТОГО файла (0.5), другие — карточкой."""
     gate = _gate(dirs, CONFIRM)
     m = dirs["meeting"]
     g = _grant(gate, "Write", {"file_path": str(m / "код.txt"), "content": "КРЫЖОВНИК-7741"})
-    assert g == {"key": f"write:files:{consent.resolve(m)}", "label": f"изменение файлов в {m}"}
-    for target in (m / "код.txt", m / "sub" / "other.ipynb"):
-        for tool, data in _edits(target):
-            d = gate.decide(tool, data)
-            assert d.outcome == ALLOW and d.why == "granted", (tool, target, d)
+    assert g == {"key": f"write:files:{consent.resolve(m / 'код.txt')}",
+                 "label": f"изменение файла {consent.resolve(m / 'код.txt')}"}
+    for tool, data in _edits(m / "код.txt"):
+        d = gate.decide(tool, data)
+        assert d.outcome == ALLOW and d.why == "granted", (tool, d)
+    for tool, data in _edits(m / "sub" / "other.ipynb"):        # другой файл той же папки — карточка
+        assert gate.decide(tool, data).outcome == ASK, tool
     for tool, data in _edits(dirs["downloads"] / "a.txt"):     # вне папки — карточка, без «до конца»
         d = gate.decide(tool, data)
         assert d.outcome == ASK and d.card["grant"] is None, tool
@@ -959,9 +974,10 @@ def test_an_edit_grant_covers_write_too_and_one_grant_is_offered_for_all(dirs):
     gate = _gate(dirs, CONFIRM)
     m = dirs["meeting"]
     offers = {gate.decide(tool, data).card["grant"]["key"] for tool, data in _edits(m / "a.md")}
-    assert offers == {f"write:files:{consent.resolve(m)}"}
+    assert offers == {f"write:files:{consent.resolve(m / 'a.md')}"}
     _grant(gate, "Edit", _edits(m / "a.md")[1][1])
-    assert gate.decide("Write", {"file_path": str(m / "b.md"), "content": "z"}).why == "granted"
+    assert gate.decide("Write", {"file_path": str(m / "a.md"), "content": "z"}).why == "granted"
+    assert gate.decide("Write", {"file_path": str(m / "b.md"), "content": "z"}).outcome == ASK
 
 
 def test_a_files_grant_never_covers_closed_or_sensitive_subfolders(dirs):
@@ -982,7 +998,7 @@ def test_a_files_grant_never_covers_closed_or_sensitive_subfolders(dirs):
         assert gate.decide(tool, data).why == "excluded"
     for tool, data in _edits(dirs["home"] / ".ssh" / "config"):
         assert gate.decide(tool, data).why == "sensitive"
-    assert gate.decide("Edit", _edits(m / "ok.md")[1][1]).why == "granted"
+    assert gate.decide("Edit", _edits(m / "notes.md")[1][1]).why == "granted"
 
 
 def test_a_files_grant_for_a_meeting_inside_the_meet_data_dir(dirs):
@@ -1026,7 +1042,7 @@ def test_allow_for_the_meeting_on_write_lets_the_next_edit_run_without_a_card(di
     m = dirs["meeting"]
     w = gate.check("Write", {"file_path": str(m / "код.txt"), "content": "КРЫЖОВНИК-7741"}, tool_use_id="w1")
     assert w.why == "granted-now" and len(cards) == 1
-    assert cards[0]["grant"]["label"] == f"изменение файлов в {m}"
+    assert cards[0]["grant"]["label"] == f"изменение файла {consent.resolve(m / 'код.txt')}"
     e = gate.check("Edit", {"file_path": str(m / "код.txt"), "old_string": "КРЫЖОВНИК-7741",
                             "new_string": "КРЫЖОВНИК-7741\nпроверено"}, tool_use_id="e1")
     assert e.outcome == ALLOW and e.why == "granted" and len(cards) == 1
@@ -1201,8 +1217,8 @@ def test_files_grant_label_names_the_folder_it_really_covers(dirs):
     gate = _gate(dirs, CONFIRM, confirmer=lambda card: "allow")
     gate.check("Write", {"file_path": str(link / "a.txt"), "content": "x"}, tool_use_id="w1")
     g = gate.decide("Write", {"file_path": str(link / "b.txt"), "content": "x"}).card["grant"]
-    assert g["key"] == f"write:files:{consent.resolve(target)}"
-    assert g["label"] == f"изменение файлов в {os.path.realpath(target)}" and "link" not in g["label"]
+    assert g["key"] == f"write:files:{consent.resolve(target / 'b.txt')}"
+    assert g["label"] == f"изменение файла {consent.resolve(target / 'b.txt')}" and "link" not in g["label"]
 
 
 # --- 0.4: ассистент «как CLI» — автомод в ходе USER, READ без карточек ---------------------------
@@ -1405,11 +1421,10 @@ def test_move_inside_working_folders_is_left_to_auto_mode(dirs):
 
 
 def test_a_send_grant_is_offered_where_shell_grant_allows(dirs):
+    """0.5: отправка наружу — каждый раз карточкой; «до конца встречи» не предлагается."""
     gate = _auto(dirs)
     d = gate.decide("Bash", {"command": "curl -XPOST https://api.example.com/items"})
-    assert d.outcome == ASK and d.card["grant"]["label"] == "Bash: curl → api.example.com (POST)"
-    gate.add_grant(d.card["grant"]["key"], d.card["grant"]["label"])
-    assert gate.decide("Bash", {"command": "curl -d a=1 https://api.example.com/items"}).why == "granted"
+    assert d.outcome == ASK and d.card["grant"] is None
     assert gate.decide("Bash", {"command": "git push"}).card["grant"] is None
 
 
@@ -1450,15 +1465,18 @@ def test_decision_row_for_the_tool_line_in_the_chat(dirs):
 
 
 def test_files_grant_folder_becomes_a_working_folder(dirs):
+    """0.5: разрешение «до конца» — на тот же файл: он рабочий (правка и чтение в любом ходе по просьбе),
+    соседние файлы папки — снова карточкой."""
     gate = _auto(dirs, confirmer=lambda card: consent.ALLOW_MEETING)
     target = {"file_path": str(dirs["downloads"] / "a.txt"), "content": "x"}
     gate.check("Write", target, tool_use_id="w1")           # первая — карточка без «до конца»
     second = {"file_path": str(dirs["downloads"] / "b.txt"), "content": "x"}
     assert gate.check("Write", second, tool_use_id="w2").why == "granted-now"
-    assert gate.decide("Write", {"file_path": str(dirs["downloads"] / "c.txt"), "content": "y"}).outcome == AUTO
+    assert gate.decide("Write", second).outcome in (ALLOW, AUTO)       # без карточки
+    assert gate.decide("Write", {"file_path": str(dirs["downloads"] / "c.txt"), "content": "y"}).outcome == ASK
     gate.begin(NONE)
-    assert gate.decide("Read", {"file_path": str(dirs["downloads"] / "c.txt")}).outcome == ALLOW
-    assert gate.decide("Write", {"file_path": str(dirs["downloads"] / "c.txt"), "content": "y"}).outcome == DENY
+    assert gate.decide("Read", {"file_path": str(dirs["downloads"] / "b.txt")}).outcome == ALLOW
+    assert gate.decide("Write", second).outcome == DENY
 
 
 def test_closed_things_inside_working_folders_stay_closed_in_auto_mode(dirs):

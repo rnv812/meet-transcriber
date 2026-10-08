@@ -546,10 +546,11 @@ def test_agent_buttons_that_mimic_the_card_are_dropped(tmp_path):
 # --- fix round 3: «Разрешать такое до конца встречи» ------------------------------------------
 
 
-def _mcp_card_turn(outcome, tool="mcp__team-jira__jira_create_issue"):
+def _mcp_card_turn(outcome, tool="mcp__team-jira__jira_update_issue"):
+    # 0.5: «до конца встречи» — тот же инструмент с тем же объектом (задача ABC-1).
     async def reply(conv, _text):
         gate = conv.kwargs["gate"]
-        outcome.append(await asyncio.to_thread(gate.check, tool, {"summary": "Нагрузка 3–7.11"},
+        outcome.append(await asyncio.to_thread(gate.check, tool, {"issue_key": "ABC-1", "summary": "Нагрузка 3–7.11"},
                                                tool_use_id=f"t{len(outcome)}", via="hook"))
         return SILENT
     return reply
@@ -565,8 +566,8 @@ def test_allow_for_the_meeting_records_a_grant_and_the_next_call_has_no_card(tmp
         turn = asyncio.ensure_future(h.p.tick())
         await _wait(lambda: _cards(h))
         card = _cards(h)[0]
-        assert card["grant"] == {"key": "mcp:mcp__team-jira__jira_create_issue",
-                                 "label": "MCP team-jira: jira_create_issue"}
+        assert card["grant"] == {"key": "mcp:mcp__team-jira__jira_update_issue:issue_key=ABC-1",
+                                 "label": "MCP team-jira: jira_update_issue → ABC-1"}
         await h.p.confirm(card["id"], True, meeting=True)
         await turn
         await h.p.post_user_message("и ещё одну")
@@ -579,20 +580,21 @@ def test_allow_for_the_meeting_records_a_grant_and_the_next_call_has_no_card(tmp
     assert [d.why for d in outcome] == ["granted-now", "granted"]
     assert len(_cards(h)) == 1 and _cards(h)[0]["decision"] == "allow_meeting"
     grants = [m for m in h.chat.messages() if m["kind"] == "system" and isinstance(m.get("grant"), str)]
-    assert grants[0]["text"] == "Разрешено до конца встречи: MCP team-jira: jira_create_issue"
-    assert view["grants"] == [{"id": grants[0]["id"], "label": "MCP team-jira: jira_create_issue"}]
+    assert grants[0]["text"] == "Разрешено до конца встречи: MCP team-jira: jira_update_issue → ABC-1"
+    assert view["grants"] == [{"id": grants[0]["id"], "label": "MCP team-jira: jira_update_issue → ABC-1"}]
 
 
 def test_grants_survive_a_restart_in_the_meeting_and_can_be_revoked(tmp_path):
     folder = tmp_path / "lib" / "2026-10-07_10-00"
     folder.mkdir(parents=True)
-    ChatLog(folder).append("system", grant="mcp:mcp__team-jira__jira_create_issue", label="MCP team-jira: create",
-                           text="Разрешено до конца встречи: MCP team-jira: create", after_meeting=False)
+    ChatLog(folder).append("system", grant="mcp:mcp__team-jira__jira_update_issue:issue_key=ABC-1",
+                           label="MCP team-jira: update → ABC-1",
+                           text="Разрешено до конца встречи: MCP team-jira: update → ABC-1", after_meeting=False)
     seen = []
 
     def probe(conv, _text):
         gate = conv.kwargs["gate"]
-        seen.append(gate.decide("mcp__team-jira__jira_create_issue", {"summary": "x"}).outcome)
+        seen.append(gate.decide("mcp__team-jira__jira_update_issue", {"issue_key": "ABC-1", "summary": "x"}).outcome)
         return SILENT
 
     h = _make(tmp_path, script=[probe, probe], freedom=True, folder=folder)
@@ -670,8 +672,8 @@ def test_temporary_meeting_with_freedom_keeps_the_gate_and_stores_grants_only_in
     assert h.p.resumable is False
     assert [d.why for d in outcome] == ["granted-now", "granted"]
     grants = [m for m in h.chat.messages() if m["kind"] == "system" and isinstance(m.get("grant"), str)]
-    assert len(grants) == 1 and view["grants"] == [{"id": grants[0]["id"], "label": "MCP team-jira: jira_create_issue"}]
-    journal = [p for p in h.folder.rglob("*") if p.is_file() and "jira_create_issue" in p.read_text(encoding="utf-8", errors="ignore")]
+    assert len(grants) == 1 and view["grants"] == [{"id": grants[0]["id"], "label": "MCP team-jira: jira_update_issue → ABC-1"}]
+    journal = [p for p in h.folder.rglob("*") if p.is_file() and "jira_update_issue" in p.read_text(encoding="utf-8", errors="ignore")]
     assert journal and all(p.is_relative_to(h.folder) for p in journal)
     assert not (h.folder / "assistant" / "sessions.json").exists()
 
