@@ -58,6 +58,38 @@ def test_claude_tool_events_become_rows_under_the_turns_reply(tmp_path):
     assert not any("git status" in line for line in h.logs)                       # и ни слова в журнал процесса
 
 
+def test_agents_own_skill_call_in_a_user_turn_goes_auto_and_is_a_skill_row(tmp_path):
+    from meet.llm.claude_stream import _gate_event
+
+    seen = []
+
+    def work(conv, _text):
+        gate = conv.kwargs["gate"]
+        decision = gate.check("Skill", {"skill": "summeet"}, tool_use_id="toolu_s", via="hook")
+        seen.append(decision.outcome)
+        conv.on_event({"type": "tool_use", "id": "toolu_s", "name": "Skill", "server": None, "tool": "Skill",
+                       "input": {"skill": "summeet"}, "parent": None})
+        conv.on_event(_gate_event(decision, "Skill", "toolu_s", "hook"))
+        conv.on_event({"type": "tool_result", "id": "toolu_s", "ok": True, "output": "Launching skill: summeet",
+                       "truncated": False, "duration_ms": 40, "parent": None})
+        return say("Итоги готовы")
+
+    h = _make(tmp_path, script=[work], freedom=True)
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("сделай итоги навыком summeet")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert seen == ["auto"]                                    # без карточки: решает автомод CLI
+    assert not [m for m in h.chat.messages() if m.get("card") == "confirm"]
+    (row,) = _rows(h)
+    assert (row["label"], row["summary"], row["status"]) == ("Навык", "summeet", "done")
+    assert row["gate"]["label"] == "разрешено автоматически"
+
+
 def test_codex_tools_arrive_after_the_call(tmp_path):
     reply = AgentReply(text='{"say": "Готово"}', tools=[
         {"type": "tool_use", "id": "i1", "name": "Bash", "server": None, "tool": "Bash",

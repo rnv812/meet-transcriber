@@ -22,10 +22,14 @@ class CtlConv(tap.FakeConversation):
 
     def __init__(self, script, ids, **kwargs):
         super().__init__(script, ids, **kwargs)
+        # Как ответ `initialize` и `system/init` на 2.1.293 (пробник): навык пользователя —
+        # и в `commands`, и в `slash_commands`, и в `skills`.
         self.commands = [{"name": "context", "description": "Заполнение контекста", "hint": ""},
-                         {"name": "review", "description": "Ревью", "hint": "[PR]"}]
-        self.models = [{"value": "opus"}, {"value": "sonnet"}]
-        self.slash_commands = ["context", "review", "my-deploy"]
+                         {"name": "review", "description": "Ревью", "hint": "[PR]"},
+                         {"name": "summeet", "description": "Итоги встречи по транскрипту", "hint": "[файл]"}]
+        self.models = [{"value": "opus", "displayName": "Opus"}, {"value": "sonnet", "displayName": "Sonnet"}]
+        self.slash_commands = ["context", "review", "my-deploy", "summeet"]
+        self.skills = ["summeet"]
         self.mcp_servers = [{"name": "team-jira", "status": "failed", "error": "Connection closed"},
                             {"name": "gitlab", "status": "connected"}]
         self.controls = []
@@ -243,6 +247,51 @@ def test_cli_command_goes_verbatim_as_a_user_level_turn(tmp_path):
     assert reply["re"] == [m for m in h.chat.messages() if m["kind"] == "user"][0]["id"]
     later = conv.sent[1][0]
     assert "Обсуждаем релиз" in later and "Сейчас на встрече" in later   # затравка после хода-команды
+
+
+def test_user_skill_is_a_command_shown_apart_and_passed_through(tmp_path):
+    h = _make(tmp_path, script=[AgentReply(text="Итоги: …")], freedom=True)
+
+    async def main():
+        await h.p.start()
+        await _post(h, "/help")
+        await _post(h, "/summeet встреча.md")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    view = {c["name"]: c for c in h.p.view()["commands"]}
+    assert view["summeet"]["source"] == "skill" and view["summeet"]["hint"] == "[файл]"
+    assert view["context"]["source"] == "cli"
+    (line,) = _lines(h, "help")
+    assert "Навыки:\n/summeet [файл] — Итоги встречи по транскрипту" in line["text"]
+    assert h.made[0].sent[0][0] == "/summeet встреча.md" and h.made[0].levels[0] == consent.USER
+
+
+def test_claude_stream_reads_skills_from_init():
+    from meet.llm.claude_stream import Conversation
+
+    conv = Conversation(system_prompt="x")
+    conv._observe({"type": "system", "subtype": "init", "slash_commands": ["compact", "summeet"],
+                   "skills": ["summeet", {"name": "meet-probe-skill"}, ""]}, [])
+    assert conv.skills == ["summeet", "meet-probe-skill"] and "summeet" in conv.slash_commands
+
+
+def test_view_has_mcp_servers_and_models_for_argument_completion(tmp_path):
+    h = _make(tmp_path, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await _post(h, "/mcp")
+        before = h.p.view()["mcp_servers"]
+        await _post(h, "/mcp reconnect team-jira")
+        await h.p.shutdown()
+        return before
+
+    before = run(main())
+    assert before == [{"name": "team-jira", "status": "failed"}, {"name": "gitlab", "status": "connected"}]
+    assert h.p.view()["mcp_servers"][0] == {"name": "team-jira", "status": "connected"}   # после переподключения
+    assert h.p.view()["models"] == [{"value": "opus", "label": "Opus"}, {"value": "sonnet", "label": "Sonnet"}]
 
 
 def test_compact_reports_the_boundary(tmp_path):

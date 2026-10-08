@@ -492,6 +492,7 @@ class Conversation:
         self.commands: list[dict] = []
         self.models: list[dict] = []
         self.slash_commands: list[str] | None = None
+        self.skills: list[str] | None = None        # навыки из `system/init` (`skills`)
         # Обратный вызов событий хода работы (`send(on_event=…)`), пока идёт ход.
         self._on_event = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -684,6 +685,10 @@ class Conversation:
                     self.mcp_servers = _servers(msg["mcp_servers"])
                 if isinstance(msg.get("slash_commands"), list):
                     self.slash_commands = [str(x) for x in msg["slash_commands"] if x]
+                if isinstance(msg.get("skills"), list):
+                    # Навыки пользователя (личные, проекта, плагинов): имена — `/имя` в чате.
+                    self.skills = [str(x.get("name") if isinstance(x, dict) else x) for x in msg["skills"]
+                                   if (x.get("name") if isinstance(x, dict) else x)]
         for event in events:
             self._emit(event)
 

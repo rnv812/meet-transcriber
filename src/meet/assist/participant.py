@@ -548,6 +548,8 @@ class Participant:
         # Слэш-команды (0.4, `slash`): команды CLI из `initialize`, смена
         # модели `/model`, затравка после хода-команды или `/clear`.
         self._cli_cmds: list[dict] = []
+        self._models: list[dict] = []
+        self._servers: list[dict] = []
         self.model_override: str | None = None
         self._model_configured = self._model
         self._needs_seed = False
@@ -644,8 +646,11 @@ class Participant:
                 "model_mismatch": self.model_mismatch,
                 # `/model имя` (0.4): модель, выбранная командой до конца сессии.
                 "model_override": self.model_override,
-                # Слэш-команды для подсказки в строке ввода (`slash`).
+                # Слэш-команды для подсказки в строке ввода (`slash`) и дополнение
+                # аргументов: MCP-серверы с состоянием (`/mcp reconnect …`), модели (`/model …`).
                 "commands": self.commands_view(),
+                "mcp_servers": [dict(s) for s in self._servers],
+                "models": [dict(m) for m in self._models],
                 "deny_enforced": self.deny_enforced,
                 "frequency": self.frequency, "profile": self.profile,
                 "session": self.session_state,
@@ -689,17 +694,24 @@ class Participant:
         return slash.help_items(self.provider, self._cli_cmds)
 
     def _update_commands(self, session) -> bool:
-        """Команды CLI из ответа `initialize` (Claude Code) — в `view()`."""
+        """Команды CLI из ответа `initialize` (Claude Code) — в `view()`;
+        навыки пользователя (`system/init` → `skills`, проверено пробником на
+        2.1.293: личные, проекта и плагинов есть и в `commands`) помечены
+        `skill`. Модели (`initialize` → `models`) — для дополнения `/model`."""
         conv = getattr(session, "conv", None)
         found = getattr(conv, "commands", None) if conv is not None else None
         if not isinstance(found, list):
             return False
+        skills = set(getattr(conv, "skills", None) or ())
         cmds = [{"name": str(c["name"]).lstrip("/"), "hint": str(c.get("hint") or ""),
-                 "description": str(c.get("description") or "")}
+                 "description": str(c.get("description") or ""),
+                 **({"skill": True} if str(c["name"]).lstrip("/") in skills else {})}
                 for c in found if isinstance(c, dict) and c.get("name")]
-        if cmds == self._cli_cmds:
+        models = [{"value": str(m["value"]), "label": str(m.get("displayName") or m.get("description") or "")}
+                  for m in getattr(conv, "models", None) or () if isinstance(m, dict) and m.get("value")]
+        if cmds == self._cli_cmds and models == self._models:
             return False
-        self._cli_cmds = cmds
+        self._cli_cmds, self._models = cmds, models
         return True
 
     def _update_mcp(self, session) -> None:
@@ -721,6 +733,12 @@ class Participant:
                      if isinstance(x, dict) and x.get("name") and x.get("status") not in ("failed", "disabled")]
             if names != self._mcp:
                 self._mcp = names
+                changed = True
+            # Все серверы с состоянием — для дополнения `/mcp reconnect …` в окне.
+            full = [{"name": str(x["name"]), "status": str(x.get("status") or "")}
+                    for x in servers if isinstance(x, dict) and x.get("name")]
+            if full != self._servers:
+                self._servers = full
                 changed = True
         if changed:
             self._changed()
@@ -1974,9 +1992,7 @@ class Participant:
         self._changed()
 
     def model_choices(self) -> list[str]:
-        conv = getattr(self._session, "conv", None)
-        models = getattr(conv, "models", None) or []
-        return [str(m.get("value")) for m in models if isinstance(m, dict) and m.get("value")]
+        return [m["value"] for m in self._models]
 
     async def model_text(self) -> str:
         if self.provider == "claude-code":

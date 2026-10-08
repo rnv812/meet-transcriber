@@ -27,7 +27,10 @@
   «Контекст сжат (было N токенов)»), у прочих — «недоступно».
 
 **Команды CLI** (Claude Code: `commands` ответа `initialize`, `slash_commands`
-`system/init` — свои `.claude/commands`, навыки, `/context`, `/review`…)
+`system/init` — свои `.claude/commands`, `/context`, `/review`…) и **навыки**
+пользователя (личные `~/.claude/skills`, проекта, плагинов: пробник на
+2.1.293 — они есть и в `commands`, и в `slash_commands`, и в `skills`
+`system/init`; в списке окна и `/help` — отдельно, «навык»)
 уходят отдельным «ходом-командой» дословно, без дельты и затравки, уровень
 хода — USER (`via: "command"`); ответ — текстом CLI в ленту. Своя команда
 пользователя с `` !`команда` `` проходит тоже: это его собственная настройка,
@@ -147,23 +150,26 @@ def help_items(provider: str, cli: list[dict]) -> list[dict]:
     for c in cli:
         if c.get("name") and c["name"] not in seen:
             items.append({"name": c["name"], "hint": c.get("hint") or "", "description": c.get("description") or "",
-                          "source": "cli"})
+                          "source": "skill" if c.get("skill") else "cli"})
             seen.add(c["name"])
     return items
 
 
 def help_text(items: list[dict], label: str) -> str:
+    """Команды Meet, команды CLI и навыки пользователя — отдельными списками."""
     meet = [i for i in items if i["source"] == "meet"]
-    cli = [i for i in items if i["source"] == "cli"]
     lines = ["Команды Meet:"]
     lines += [f"/{i['name']}{' ' + i['hint'] if i['hint'] else ''} — {i['description']}" for i in meet]
-    if cli:
-        lines.append(f"Команды {label}:")
-        for i in cli[:CLI_HINT_MAX]:
+    for source, title in (("cli", f"Команды {label}:"), ("skill", "Навыки:")):
+        group = [i for i in items if i["source"] == source]
+        if not group:
+            continue
+        lines.append(title)
+        for i in group[:CLI_HINT_MAX]:
             desc = f" — {i['description']}" if i["description"] else ""
             lines.append(f"/{i['name']}{' ' + i['hint'] if i['hint'] else ''}{desc}")
-        if len(cli) > CLI_HINT_MAX:
-            lines.append(f"… и ещё {len(cli) - CLI_HINT_MAX}")
+        if len(group) > CLI_HINT_MAX:
+            lines.append(f"… и ещё {len(group) - CLI_HINT_MAX}")
     lines.append("Текст, который начинается с «/», — через «//».")
     return "\n".join(lines)
 

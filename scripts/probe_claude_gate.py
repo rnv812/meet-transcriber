@@ -456,6 +456,11 @@ async def _probe_cli(work: Path, port: int, exe: str, out=print) -> int:
                                         "Out: !`echo BANG-ALLOWED-RAN`\n", encoding="utf-8")
     (commands / "bangask.md").write_text("---\ndescription: bang needs approval\n---\n"
                                          "Out: !`echo x > bang-marker.txt`\n", encoding="utf-8")
+    # Навыки (вопрос пользователя «а skill будет работать?»): проекта и личный.
+    skill = "---\nname: {0}\ndescription: probe skill {0}\n---\nSay {0}.\n"
+    for root, name in ((cwd / ".claude" / "skills", "meet-probe-skill"), (cfg / "skills", "meet-personal-skill")):
+        (root / name).mkdir(parents=True, exist_ok=True)
+        (root / name / "SKILL.md").write_text(skill.format(name), encoding="utf-8")
     popen = _popen_for(cfg, port)
     gate = _ScriptGate()
     events: list[dict] = []
@@ -478,7 +483,13 @@ async def _probe_cli(work: Path, port: int, exe: str, out=print) -> int:
               any(c["name"] == "hello" and c["hint"] == "name" for c in conv.commands),
               f"{len(conv.commands)} команд")
         check("initialize → models", bool(conv.models), ", ".join(m.get("value", "") for m in conv.models))
+        names = {c["name"] for c in conv.commands}
+        for sk in ("meet-probe-skill", "meet-personal-skill"):
+            fact(f"initialize → commands содержит навык {sk}", sk in names)
         reply = await turn("hello")
+        for sk in ("meet-probe-skill", "meet-personal-skill"):
+            fact(f"system/init → slash_commands / skills содержат {sk}",
+                 f"{sk in (conv.slash_commands or [])} / {sk in (conv.skills or [])}")
         check("system/init → permissionMode, slash_commands, mcp_servers",
               conv.permission_mode == "auto" and "compact" in (conv.slash_commands or [])
               and {s["name"] for s in conv.mcp_servers or []} == {"fakejira", "deadsrv"},
