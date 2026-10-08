@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
-  FREEDOM_FILES_NOTE, FREEDOM_LABEL, FREEDOM_OFF_HINT, KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL,
+  AGENT_MODE_HINTS, AGENT_MODE_LABEL, FREEDOM_FILES_NOTE, FREEDOM_LABEL, FREEDOM_OFF_HINT, KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL,
   VISION_NOTE,
 } from "./ParticipantRows";
 import * as api from "../../lib/api";
@@ -181,8 +181,8 @@ test("расширенные возможности по согласию: вк�
   const row = sw.closest(".srow")!;
   // Под переключателем — одна строка; подробности и оговорки — в «?».
   expect(row).toHaveTextContent("с вашими правами");
-  expect(row).toHaveTextContent("действия — только после «Разрешить»");
-  expect(row).toHaveTextContent("Без вашей просьбы — только эта встреча и вложения");
+  expect(row).toHaveTextContent("файлы, команды, веб");
+  expect(row).toHaveTextContent("Без вашей просьбы — только чтение этой встречи и вложений");
   await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Что дают расширенные возможности" }));
   const tip = screen.getByRole("tooltip");
   expect(tip).toHaveTextContent("«Разрешить один раз»");
@@ -194,6 +194,24 @@ test("расширенные возможности по согласию: вк�
   expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_OFF_HINT);
   await save();
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { agent_freedom: false } }));
+});
+
+test("0.4: «Действия ассистента» — автомод по умолчанию, «Спрашивать каждое» сохраняется; без возможностей строки нет", async () => {
+  open();
+  const group = await screen.findByRole("radiogroup", { name: AGENT_MODE_LABEL });
+  const auto = within(group).getByRole("radio", { name: "Сам, рискованное — спрашивает" });
+  expect(auto).toHaveAttribute("aria-checked", "true");
+  const row = group.closest(".srow")!;
+  expect(row).toHaveTextContent(AGENT_MODE_HINTS.auto);
+  expect(row).toHaveTextContent("Ход по одной речи встречи ничего не меняет");
+  await userEvent.click(within(group).getByRole("radio", { name: "Спрашивать каждое" }));
+  expect(screen.getByRole("radiogroup", { name: AGENT_MODE_LABEL }).closest(".srow")!).toHaveTextContent(AGENT_MODE_HINTS.confirm);
+  await userEvent.click(screen.getByRole("switch", { name: FREEDOM_LABEL }));
+  expect(screen.queryByRole("radiogroup", { name: AGENT_MODE_LABEL })).toBeNull();
+  await userEvent.click(screen.getByRole("switch", { name: FREEDOM_LABEL }));
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    assist: expect.objectContaining({ agent_mode: "confirm" }) }));
 });
 
 test("расширенные возможности у Codex: только чтение файлов по просьбе, MCP и веб — только с Claude Code", async () => {

@@ -18,6 +18,9 @@
  *   (`assist.agent_freedom`, 0.3.7, по умолчанию вкл.): всё, что умеет CLI модели, но без
  *   просьбы — только эта встреча и вложения, изменения — после отдельной кнопки;
  *   выключено — как в 0.3.6 (только чтение встречи и базы знаний);
+ * - «Действия ассистента» (`assist.agent_mode`, 0.4, при расширенных возможностях):
+ *   «Сам, рискованное — спрашивает» (`auto`, по умолчанию — автомод Claude Code) или
+ *   «Спрашивать каждое» (`confirm`, как 0.3.7);
  * - какие модели видят картинки (пометка).
  *
  * «Только сводка» (`assist.activity: summary`) выключает и агента — если она
@@ -67,8 +70,20 @@ export const DENY_NOTE = "исключения — только просьба";
 export const FREEDOM_LABEL = "Расширенные возможности ассистента (файлы вне встречи, MCP, веб) — по согласию";
 /** Подсказка под переключателем — одна строка; подробности и оговорки — в «?» (FreedomTip). */
 export const FREEDOM_ON_HINT =
-  "По вашей просьбе — файлы, веб и ваши MCP с вашими правами; действия — только после «Разрешить». "
-  + "Без вашей просьбы — только эта встреча и вложения";
+  "По вашей просьбе — файлы, команды, веб и ваши MCP с вашими правами. "
+  + "Без вашей просьбы — только чтение этой встречи и вложений";
+/** Как ассистент действует по просьбе (`assist.agent_mode`, 0.4): сам, как автомод Claude Code, или спрашивает каждое действие. */
+type AgentMode = "auto" | "confirm";
+export const AGENT_MODE_LABEL = "Действия ассистента";
+const AGENT_MODE_OPTIONS: { value: AgentMode; label: string }[] = [
+  { value: "auto", label: "Сам, рискованное — спрашивает" },
+  { value: "confirm", label: "Спрашивать каждое" },
+];
+export const AGENT_MODE_HINTS: Record<AgentMode, string> = {
+  auto: "По вашей просьбе действует сам, как автомод Claude Code; удаление, запись вне рабочих папок и отправку "
+    + "наружу — только с вашего разрешения. Ход по одной речи встречи ничего не меняет",
+  confirm: "Каждое действие — карточкой «Разрешить» в чате, как в 0.3.7. Ход по одной речи встречи ничего не меняет",
+};
 export const FREEDOM_FILES_NOTE = "Codex/OpenCode: только чтение файлов по вашей просьбе; MCP, веб и действия — только с Claude Code";
 /** Закрытые папки и чувствительные пути у моделей без проверки каждого вызова. */
 export const FREEDOM_CLOSED_NOTE: Record<string, string> = {
@@ -109,12 +124,12 @@ function FreedomTip() {
         на чтение по этой просьбе: файлы, поиск в вебе, чтение через MCP.
       </TipLine>
       <TipLine>
-        По просьбе он, как обычный агент, сразу читает, смотрит через MCP (что ничего не меняет) и выполняет
-        простые команды чтения. Остальное — другую команду, запись файла, создание или правку задачи, открытие
-        веб-страницы, навык — Meet показывает карточкой с точным вызовом: «Разрешить один раз», «Разрешать
-        такое до конца встречи» или «Отклонить». Кнопки самого ассистента («Да, создай») действия не разрешают.
-        Без ответа за 2 минуты — не выполняется. Лишнее Meet блокирует — в чате появится строка «Ассистент хотел
-        … — запрос заблокирован».
+        По просьбе он действует сам, как Claude Code в автомоде: читает, правит файлы в рабочих папках, выполняет
+        команды, зовёт MCP — каждый вызов виден строкой в чате. Рискованное — удаление, запись вне рабочих папок,
+        отправку наружу, изменения через MCP — Meet показывает карточкой с точным вызовом: «Разрешить один раз»,
+        «Разрешать такое до конца встречи» или «Отклонить». «Действия ассистента» → «Спрашивать каждое» —
+        карточка на каждое действие. Без ответа за 2 минуты — не выполняется. Лишнее Meet блокирует — в чате
+        появится строка «Ассистент хотел … — запрос заблокирован».
       </TipLine>
       <TipLine>
         MCP-инструменты, чьё имя не похоже на запись, выполняются без вопроса. «git commit» и «git pull»,
@@ -215,6 +230,7 @@ export function ParticipantRows({ draft, set, provider }: {
   const profile = profileOf(assist.profile);
   const sees = provider ? provider in VISION : null;
   const freedom = assist.agent_freedom !== false;
+  const agentMode: AgentMode = assist.agent_mode === "confirm" ? "confirm" : "auto";
   const filesOnly = provider ? FILES_ONLY[provider] : undefined;
   return (
     <>
@@ -237,13 +253,16 @@ export function ParticipantRows({ draft, set, provider }: {
           <Segmented label="Как часто писать" value={frequency} options={FREQUENCIES}
             hint="Просьба к ассистенту в инструкции; меняется и в панели встречи"
             onChange={(v) => set("assist", "frequency", v)} />
-          {/* Место для «Режима агента» (`assist.agent_mode`: auto | confirm) — такой же строкой
-              `Segmented` здесь, между частотой и расширенными возможностями (и строкой в settingsIndex). */}
           <Switch label={FREEDOM_LABEL} help={<FreedomTip />} value={freedom}
             onChange={(v) => set("assist", "agent_freedom", v)}
             hint={freedom
               ? (filesOnly && provider ? `${FREEDOM_FILES_NOTE}. ${FREEDOM_CLOSED_NOTE[provider]}` : FREEDOM_ON_HINT)
               : FREEDOM_OFF_HINT} />
+          {/* Как действует по просьбе (`assist.agent_mode`, 0.4) — только с расширенными возможностями. */}
+          {freedom && (
+            <Segmented label={AGENT_MODE_LABEL} value={agentMode} options={AGENT_MODE_OPTIONS}
+              hint={AGENT_MODE_HINTS[agentMode]} onChange={(v) => set("assist", "agent_mode", v)} />
+          )}
           <p className="muted sdesc participant__vision">
             {VISION_NOTE}
             {sees === false && provider ? `. ${LABELS[provider] ?? provider} картинки не видит` : ""}
