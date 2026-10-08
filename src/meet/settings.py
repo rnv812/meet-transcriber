@@ -1123,6 +1123,8 @@ class Assist:
     agent_freedom: bool = True
     agent_mode: str = "auto"
     agent_mode_noticed: bool = False
+    # Нажимать кнопки ассистента голосом (0.5): своя реплика с надписью кнопки.
+    voice_buttons: bool = True
 
     @property
     def participant_on(self) -> bool:
@@ -1157,6 +1159,7 @@ class Assist:
             agent_freedom=as_flag(raw.get("agent_freedom"), True),
             agent_mode=as_choice(raw.get("agent_mode"), AGENT_MODES, "auto"),
             agent_mode_noticed=as_flag(raw.get("agent_mode_noticed"), False),
+            voice_buttons=as_flag(raw.get("voice_buttons"), True),
         )
 
     def to_raw(self) -> dict:
@@ -1181,6 +1184,7 @@ class Assist:
             "agent_freedom": self.agent_freedom,
             "agent_mode": self.agent_mode,
             "agent_mode_noticed": self.agent_mode_noticed,
+            "voice_buttons": self.voice_buttons,
         }
 
 
@@ -1990,7 +1994,7 @@ def save(settings: Settings, path: Path | None = None) -> None:
 
 
 # Флаги ассистента, чьё значение по умолчанию в файл не пишется.
-_UNSET_DEFAULTS = ("participant", "agent_freedom", "agent_mode", "agent_mode_noticed")
+_UNSET_DEFAULTS = ("participant", "agent_freedom", "agent_mode", "agent_mode_noticed", "voice_buttons")
 
 
 def _keep_default_participant_unset(merged: dict, before: dict) -> None:

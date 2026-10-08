@@ -65,6 +65,10 @@ const LABELS: Record<string, string> = {
 };
 export const PARTICIPANT_LABEL = "Ассистент — участник встречи";
 export const KB_MAP_LABEL = "Показывать ассистенту карту: базу знаний и прошлые встречи группы";
+/** Нажатие кнопок голосом (0.5, `assist.voice_buttons`). */
+export const VOICE_BUTTONS_LABEL = "Нажимать кнопки ассистента голосом";
+export const VOICE_BUTTONS_HINT = "Скажите вслух надпись кнопки под последним сообщением (в течение 30 с) — "
+  + "Meet нажмёт её через 10 с, отменить можно в чате. Слушается только ваш микрофон";
 export const VISION_NOTE = "Картинки видят Claude Code и Codex; OpenCode и локальная модель получают только текст сообщения";
 export const DENY_NOTE = "исключения — только просьба";
 export const FREEDOM_LABEL = "Расширенные возможности ассистента (файлы вне встречи, MCP, веб) — по согласию";
@@ -268,6 +272,8 @@ export function ParticipantRows({ draft, set, provider }: {
             <Segmented label={AGENT_MODE_LABEL} value={agentMode} options={AGENT_MODE_OPTIONS}
               hint={AGENT_MODE_HINTS[agentMode]} onChange={(v) => set("assist", "agent_mode", v)} />
           )}
+          <Switch label={VOICE_BUTTONS_LABEL} value={assist.voice_buttons !== false} hint={VOICE_BUTTONS_HINT}
+            onChange={(v) => set("assist", "voice_buttons", v)} />
           <p className="muted sdesc participant__vision">
             {VISION_NOTE}
             {sees === false && provider ? `. ${LABELS[provider] ?? provider} картинки не видит` : ""}

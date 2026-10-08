@@ -714,5 +714,7 @@ def test_confirm_for_the_meeting_and_revoke_routes(tmp_path):
             assert state.chat.get(card["id"])["decision"] == "allow_meeting"
             r = await client.post("/chat/m99/revoke", json={})
             assert r.status == 400                      # нет такого разрешения
+            r = await client.post("/chat/m99/voice-cancel", json={})
+            assert r.status == 400                      # нечего отменять (0.5)
 
     _run(scenario())

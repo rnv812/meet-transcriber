@@ -12,7 +12,7 @@
  */
 
 import {
-  type Endpoint, attachChatFile, cancelJob, clickChat, confirmChat, revokeChatGrant, continueChat, getChat, getRecordingChat,
+  type Endpoint, attachChatFile, cancelJob, clickChat, confirmChat, revokeChatGrant, cancelVoicePress, continueChat, getChat, getRecordingChat,
   pasteChatImage, postChat, reactChat, recordingChatAttach, recordingChatClick, recordingChatConfirm,
   recordingChatPaste, recordingChatReact,
   recordingChatRemove, removeChatAttachment, setAgentFrequency, setAgentProfile, stopChat,
@@ -32,6 +32,8 @@ export type ChatBackend = {
   confirm: (ep: Endpoint, id: string, allow: boolean, meeting?: boolean) => Promise<unknown>;
   /** Отозвать разрешение «до конца встречи». */
   revoke: (ep: Endpoint, id: string) => Promise<unknown>;
+  /** Отменить нажатие кнопки голосом (0.5). */
+  cancelVoice: (ep: Endpoint, id: string) => Promise<unknown>;
   /** «Стоп» у ответа, который пишется. */
   stop: (ep: Endpoint, id?: string) => Promise<unknown>;
   frequency: (ep: Endpoint, label: AgentFrequencyLabel) => Promise<unknown>;
@@ -52,6 +54,7 @@ export const LIVE_CHAT: ChatBackend = {
   react: (ep, id, emoji, on) => reactChat(ep, id, emoji, on),
   confirm: (ep, id, allow, meeting) => confirmChat(ep, id, allow, meeting),
   revoke: (ep, id) => revokeChatGrant(ep, id),
+  cancelVoice: (ep, id) => cancelVoicePress(ep, id),
   stop: (ep, id) => stopChat(ep, id),
   frequency: (ep, label) => setAgentFrequency(ep, label),
   profile: (ep, profile) => setAgentProfile(ep, profile),
@@ -79,6 +82,7 @@ export function recordingChatBackend(id: string, job: () => Job | null,
     react: (ep, mid, emoji, on) => recordingChatReact(ep, id, mid, emoji, on),
     confirm: (ep, mid, allow, meeting) => recordingChatConfirm(ep, id, mid, allow, meeting),
     revoke: async () => undefined,
+    cancelVoice: async () => undefined,      // после встречи голосом не нажимают
     stop: async (ep) => {
       const running = job();
       if (!running) throw new Error("ответ уже не готовится");

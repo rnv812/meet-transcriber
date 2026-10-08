@@ -1751,6 +1751,10 @@ class TrayControl:
             raise _bad_request("allow, meeting — true или false")
         return self._live_call(self.live.chat_confirm, mid, {"allow": allow, "meeting": meeting})
 
+    def live_chat_voice_cancel(self, mid: str, body: dict | None = None) -> dict:
+        """«Отменить» у «Засчитано голосом» — ребёнку ассистента (0.5)."""
+        return self._live_call(self.live.chat_voice_cancel, _chat_mid(mid))
+
     def live_chat_revoke(self, mid: str, body: dict | None = None) -> dict:
         """Отозвать разрешение «до конца встречи» (× в шапке чата)."""
         return self._live_call(self.live.chat_revoke, _chat_mid(mid))

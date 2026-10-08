@@ -691,6 +691,9 @@ export const confirmChat = (ep: Endpoint, id: string, allow: boolean, meeting = 
 /** Отозвать «Разрешать такое до конца встречи». */
 export const revokeChatGrant = (ep: Endpoint, id: string) =>
   json<{ ok: boolean }>(ep, `/live/chat/${enc(id)}/revoke`, body("POST", {}));
+/** «Отменить» у «Засчитано голосом» (0.5): нажатие кнопки голосом не выполнится. */
+export const cancelVoicePress = (ep: Endpoint, id: string) =>
+  json<{ ok: boolean }>(ep, `/live/chat/${enc(id)}/voice-cancel`, body("POST", {}));
 /** Реакция на сообщение агента; `on` — поставить/снять, без него — переключить. */
 export const reactChat = (ep: Endpoint, id: string, emoji: ChatReaction, on?: boolean) =>
   json<{ ok: boolean; changed: boolean }>(ep, `/live/chat/${enc(id)}/react`,

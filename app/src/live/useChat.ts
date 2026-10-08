@@ -134,6 +134,8 @@ export type Chat = {
   confirm: (id: string, allow: boolean, meeting?: boolean) => Promise<void>;
   /** Отозвать разрешение «до конца встречи». */
   revokeGrant: (id: string) => Promise<void>;
+  /** «Отменить» у «Засчитано голосом» (0.5). */
+  cancelVoice: (id: string) => Promise<void>;
   /** Карточки подтверждения, которые ждут решения (над лентой). */
   cards: ChatMessage[];
   react: (id: string, emoji: ChatReaction) => Promise<void>;
@@ -331,6 +333,15 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     }
   }, [ep, backend]);
 
+  const cancelVoice = useCallback(async (id: string) => {
+    if (!ep) return;
+    try {
+      await backend.cancelVoice(ep, id);
+    } catch (e) {
+      setNote(`Не отменено: ${errorText(e)}`);
+    }
+  }, [ep, backend]);
+
   const react = useCallback(async (id: string, emoji: ChatReaction) => {
     if (!ep) return;
     const on = !stateRef.current.byId[id]?.reactions?.[emoji];
@@ -521,7 +532,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     attachment: (id) => state.byId[id],
     preview: (id) => previews.current.get(id),
     used: (id) => used.get(id) ?? null,
-    send, retry, click, confirm, revokeGrant, cards: pendingCards(state, now), react, stop, setFrequency, setProfile,
+    send, retry, click, confirm, revokeGrant, cancelVoice, cards: pendingCards(state, now), react, stop, setFrequency, setProfile,
     paste, attach,
     removeAttachment, hidePin, sources, open, more, composer, sink,
     commands: agent?.commands?.length ? agent.commands : MEET_COMMANDS,

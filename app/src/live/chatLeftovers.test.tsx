@@ -9,6 +9,7 @@ vi.mock("../lib/api", async (orig) => ({
   getState: vi.fn(),
   liveStop: vi.fn(),
   pasteChatImage: vi.fn(),
+  cancelVoicePress: vi.fn(),
   newChatClientId: vi.fn(() => "c1"),
 }));
 vi.mock("../lib/shell", async (orig) => ({
@@ -18,7 +19,7 @@ vi.mock("../lib/shell", async (orig) => ({
   onLiveWindow: vi.fn(async () => () => {}),
   onFileDrop: vi.fn(async () => () => {}),
 }));
-import { getChat, getState, pasteChatImage } from "../lib/api";
+import { cancelVoicePress, getChat, getState, pasteChatImage } from "../lib/api";
 import { invoke } from "../lib/shell";
 import type { ChatMessage, ChatSnapshot, LiveStatus, Snapshot } from "../lib/types";
 import { agentInfo, agentMsg, attMsg, userMsg } from "../test/chatFixtures";
@@ -181,6 +182,23 @@ test("0.5 (пропадающее сообщение): ход, что допиш
   expect(rows()[0]).toBe(first);
   expect(first.querySelector(".chat-msg__more")).toBeNull();
   expect(first).toHaveTextContent("Второе");
+});
+
+test("0.5: «Засчитано голосом» — с «Отменить», пока ждёт; после — нажато или отменено", async () => {
+  const cancel = vi.mocked(cancelVoicePress).mockResolvedValue({ ok: true });
+  render(<Host />);
+  const voice = (o: Partial<ChatMessage>) => ({ ...agentMsg("v1"), kind: "system" as const, text: "Засчитано голосом: «Да, проверь»",
+    voice: { re: "m1", label: "Да, проверь" }, state: "pending", undo_s: 10, at: Date.now() / 1000, ...o });
+  load([agentMsg("m1", { buttons: ["Да, проверь", "Не надо"] }), voice({})]);
+  const row = rows().find((r) => r.dataset.key === "v1")!;
+  expect(row).toHaveTextContent("Засчитано голосом: «Да, проверь»");
+  await userEvent.click(within(row).getByRole("button", { name: "Отменить" }));
+  expect(cancel).toHaveBeenCalledWith(ep, "v1");
+  load([agentMsg("m1", { buttons: ["Да, проверь", "Не надо"] }), voice({ state: "cancelled" })], 60);
+  expect(rows().find((r) => r.dataset.key === "v1")).toHaveTextContent("Голосовое нажатие отменено");
+  expect(screen.queryByRole("button", { name: "Отменить" })).toBeNull();
+  load([agentMsg("m1", { buttons: ["Да, проверь", "Не надо"] }), voice({ state: "pressed" })], 61);
+  expect(rows().find((r) => r.dataset.key === "v1")).toHaveTextContent("Нажато голосом: «Да, проверь»");
 });
 
 test("M15: «Не отвлекать» — лента молчит, но вопрос к вам объявляется", () => {

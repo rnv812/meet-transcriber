@@ -901,6 +901,92 @@ def test_effort_goes_to_the_claude_session_and_to_the_header(tmp_path):
     assert plain.p.view()["effort"] is None
 
 
+def test_voice_match_is_nearly_word_for_word():
+    from meet.assist.participant import voice_match
+
+    labels = ["Да, проверь", "Не надо"]
+    assert voice_match("да проверь", labels) == "Да, проверь"
+    assert voice_match("Да, проверь.", labels) == "Да, проверь"
+    assert voice_match("не надо", labels) == "Не надо"
+    assert voice_match("ну да, проверь", labels) == "Да, проверь"          # слово-связка в начале
+    for text in ("да", "проверь потом задачу ABC-123 в джире и напиши", "надо подумать", ""):
+        assert voice_match(text, labels) is None, text
+
+
+def _offer(h, buttons=("Да, проверь", "Не надо")):
+    """Сообщение агента с кнопками в 5 с."""
+    h.script.append(AgentReply(text=json.dumps({"say": "Проверить ABC-1?", "buttons": list(buttons)},
+                                               ensure_ascii=False)))
+    h.script.extend([SILENT] * 8)                         # ходы после — молча
+    publish(h, 1, "Олег", "задача ABC-1")
+    h.clock.t = 5
+
+
+def test_voice_press_waits_ten_seconds_with_undo_then_presses(tmp_path):
+    """0.5: своя реплика с надписью кнопки (30 с) — «засчитано голосом», через 10 с — нажатие."""
+    h = _make(tmp_path, script=[])
+
+    async def main():
+        _offer(h)
+        await h.p.tick()
+        publish(h, 7, "Марина", "да, проверь", at=8)       # своя реплика (владелец)
+        await h.p.tick()
+        pending = [m for m in h.chat.messages() if m.get("voice")]
+        assert len(pending) == 1 and pending[0]["voice"]["label"] == "Да, проверь"
+        assert pending[0]["state"] == "pending"
+        assert not [m for m in h.chat.messages() if m.get("via") == "button"]   # ещё не нажато
+        h.clock.t = 17.9
+        await h.p.tick()
+        assert not [m for m in h.chat.messages() if m.get("via") == "button"]
+        h.clock.t = 18.1
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    clicks = [m for m in h.chat.messages() if m.get("via") == "button"]
+    assert [c["text"] for c in clicks] == ["Да, проверь"]
+    assert [m for m in h.chat.messages() if m.get("voice")][0]["state"] == "pressed"
+
+
+def test_voice_press_can_be_cancelled_and_others_or_late_speech_never_press(tmp_path):
+    h = _make(tmp_path, script=[])
+
+    async def main():
+        _offer(h)
+        await h.p.tick()
+        publish(h, 6, "Олег", "да, проверь", at=6)          # чужой голос — нет
+        await h.p.tick()
+        assert not [m for m in h.chat.messages() if m.get("voice")]
+        publish(h, 7, "Марина", "да, проверь", at=8)
+        await h.p.tick()
+        vid = [m for m in h.chat.messages() if m.get("voice")][0]["id"]
+        await h.p.cancel_voice(vid)
+        h.clock.t = 30
+        await h.p.tick()
+        publish(h, 40, "Марина", "не надо", at=40)           # позже 30 с — нет
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    voice = [m for m in h.chat.messages() if m.get("voice")]
+    assert len(voice) == 1 and voice[0]["state"] == "cancelled"
+    assert not [m for m in h.chat.messages() if m.get("via") == "button"]
+
+
+def test_voice_press_is_off_in_settings(tmp_path):
+    h = _make(tmp_path, script=[], voice_buttons=False)
+
+    async def main():
+        _offer(h)
+        await h.p.tick()
+        publish(h, 7, "Марина", "да, проверь", at=8)
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert not [m for m in h.chat.messages() if m.get("voice")]
+
+
 def test_several_says_in_one_reply_are_merged_within_the_window(tmp_path):
     two = AgentReply(text='{"say": "Первое", "buttons": ["А"]}\n{"say": "Второе", "buttons": ["Б"]}')
     h = _make(tmp_path, script=[two])

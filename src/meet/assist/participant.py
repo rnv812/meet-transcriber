@@ -105,6 +105,15 @@ PAUSE_S = 4.0            # лента молчит столько — пауза
 MAX_INTERVAL_S = 25.0    # речь идёт — ход не реже
 MIN_GAP_S = 8.0          # ход по паузе — не чаще (ASR отдаёт реплики пачками)
 MERGE_WINDOW_S = 15.0    # не больше одного нового сообщения агента за столько
+# Нажатие кнопки голосом (0.5): своя реплика почти дословно повторяет надпись кнопки
+# под последним сообщением агента не позже VOICE_WINDOW_S после него; нажатие — через
+# VOICE_UNDO_S («засчитано голосом», можно отменить). Длиннее VOICE_MAX_WORDS слов — речь.
+VOICE_WINDOW_S = 30.0
+VOICE_UNDO_S = 10.0
+VOICE_MAX_WORDS = 8
+VOICE_RATIO = 0.85
+# Слова-связки в начале, которые не мешают совпадению («ну да, проверь»).
+_VOICE_FILLERS = ("ну", "так", "давай", "хорошо", "окей", "ок", "ага", "пожалуйста")
 TURN_TIMEOUT_S = 180.0   # ход агента (с чтением файлов) — не дольше
 PARTIAL_EVERY_S = 0.1    # chat_partial — не чаще 10 раз в секунду
 BACKOFF_S = (10.0, 30.0, 60.0, 120.0)
@@ -335,6 +344,35 @@ class _RunnerSession:
         pass
 
 
+def _voice_norm(text: str) -> str:
+    text = str(text or "").lower().replace("ё", "е")
+    return " ".join(re.sub(r"[^\w\s-]", " ", text).split())
+
+
+def voice_match(text: str, labels) -> str | None:
+    """Надпись кнопки, которую почти дословно произнесли (0.5); нет — None.
+    Регистр, знаки и «ё» не важны; слова-связки в начале («ну», «давай»…)
+    отбрасываются; длиннее VOICE_MAX_WORDS слов — это речь, а не нажатие."""
+    import difflib
+
+    said = _voice_norm(text)
+    words = said.split()
+    if not words or len(words) > VOICE_MAX_WORDS:
+        return None
+    while len(words) > 1 and words[0] in _VOICE_FILLERS:
+        words = words[1:]
+    said = " ".join(words)
+    best, score = None, 0.0
+    for label in labels or ():
+        want = _voice_norm(label)
+        if not want or abs(len(want.split()) - len(words)) > 1:
+            continue
+        ratio = 1.0 if said == want else difflib.SequenceMatcher(None, said, want).ratio()
+        if ratio > score:
+            best, score = label, ratio
+    return best if score >= VOICE_RATIO else None
+
+
 def _default_conversation(**kwargs):
     from meet.llm.claude_stream import Conversation, workdir
 
@@ -437,7 +475,7 @@ class Participant:
                  profile=pp.DEFAULT_PROFILE, ephemeral: bool = False,
                  freedom: bool = False, agent_mode: str = consent.MODE_AUTO,
                  roles=None, mode_notice: bool = False, on_mode_notice=None,
-                 effort: str | None = None) -> None:
+                 effort: str | None = None, voice_buttons: bool = True) -> None:
         from meet import llm
         from meet.assist.tool_rows import ToolRows
 
@@ -467,6 +505,12 @@ class Participant:
         # Уровень рассуждений из «Моделей ИИ» (0.5): Claude Code — `--effort` сеанса,
         # Codex — уже в его вызове (runner_for); в шапке — рядом с моделью.
         self.effort = effort or None
+        # Нажатие кнопки голосом (0.5): последнее сообщение с кнопками (id, надписи,
+        # когда показано), ожидающее нажатие и курсор просмотренных реплик.
+        self.voice_buttons = bool(voice_buttons)
+        self._offer: tuple[str, list[str], float] | None = None
+        self._voice: dict | None = None
+        self._voice_cursor = 0
         self._call_kwargs = dict(call_kwargs or {})
         self._glossary = glossary or ""
         self._task_context = task_context or ""
@@ -1231,6 +1275,63 @@ class Participant:
             pass
         return out
 
+    async def _voice_step(self, now: float) -> None:
+        """Нажатие кнопки голосом (0.5): срок ожидающего — нажать; новые свои
+        реплики — сверить с надписями кнопок последнего сообщения."""
+        if self._voice is not None and now >= self._voice["due"]:
+            voice, self._voice = self._voice, None
+            state = "pressed"
+            try:
+                await self.click(voice["mid"], voice["label"], client_id=f"voice-{voice['id']}")
+            except ValueError:
+                state = "missed"           # кнопку уже нажали руками — голосовое не нужно
+            await self._voice_patch(voice["id"], {"state": state})
+        size = self._bus.size()
+        if size <= self._voice_cursor:
+            return
+        entries, _ = self._bus.entries_since(self._voice_cursor)
+        self._voice_cursor = size
+        offer = self._offer
+        if (not self.voice_buttons or self._voice is not None or offer is None
+                or now - offer[2] > VOICE_WINDOW_S):
+            return
+        for entry in entries:
+            if not self._owner(entry).get("owner"):
+                continue
+            label = voice_match(str(entry.get("text") or ""), offer[1])
+            if label is None:
+                continue
+            try:
+                added = await self._io(self._chatlog.append, "system", text=f"Засчитано голосом: «{label}»",
+                                       voice={"re": offer[0], "label": label}, state="pending",
+                                       undo_s=VOICE_UNDO_S)
+            except (OSError, RuntimeError, ValueError) as e:
+                self._log(f"агент: голосовое нажатие не записано ({type(e).__name__})")
+                return
+            self._emit_chat([added.event])
+            self._voice = {"id": added.message["id"], "mid": offer[0], "label": label, "due": now + VOICE_UNDO_S}
+            self._offer = None
+            self._changed()
+            return
+
+    async def _voice_patch(self, vid: str, changes: dict) -> None:
+        try:
+            ev = await self._io(self._chatlog.patch, vid, changes)
+        except (OSError, RuntimeError, ValueError) as e:
+            self._log(f"агент: голосовое нажатие — отметка не записана ({type(e).__name__})")
+            return
+        if ev:
+            self._emit_chat([ev])
+
+    async def cancel_voice(self, vid: str) -> dict:
+        """«Отменить» у «Засчитано голосом» (10 с). Нечего отменять — ValueError."""
+        if self._voice is None or self._voice["id"] != vid:
+            raise ValueError(f"{vid}: нечего отменять")
+        self._voice = None
+        await self._voice_patch(vid, {"state": "cancelled"})
+        self._changed()
+        return {"ok": True}
+
     async def revoke_grant(self, gid: str) -> dict:
         """Отозвать «разрешать до конца встречи» (× в шапке). Нет такого — ValueError."""
         if gid not in self._grant_ids:
@@ -1366,11 +1467,16 @@ class Participant:
 
     def _wake_in(self, now: float) -> float | None:
         """Через сколько секунд ход может стать нужен без нового сигнала."""
+        voice = max(self._voice["due"] - now, 0.01) if self._voice is not None else None
         if self._turn is not None:
-            return None
+            return voice
+        wake_voice = [voice] if voice is not None else []
+        return self._wake_turn(now, wake_voice)
+
+    def _wake_turn(self, now: float, wake: list[float]) -> float | None:
         if self._first_pending_at is not None and not self._has_lines():
             self._first_pending_at = None
-        wake: list[float] = []
+        wake = list(wake)
         held = max(self._retry_at if self._failures else 0.0, self._quiet_until)
         if held > now and (self._user or self._reactions or self._tool_results or self._has_lines()):
             wake.append(held - now)
@@ -1400,6 +1506,7 @@ class Participant:
             while not stop.is_set():
                 now = self._clock()
                 self._scan()
+                await self._voice_step(now)
                 if self.turn_due(now):
                     self._start_turn(now)
                 waiter = asyncio.ensure_future(signal.wait(seen, self._wake_in(now)))
@@ -1421,6 +1528,7 @@ class Participant:
         await self.start()
         now = self._clock()
         self._scan()
+        await self._voice_step(now)
         if not self.turn_due(now):
             return False
         turn = self._start_turn(now)
@@ -2154,6 +2262,9 @@ class Participant:
                 self._shown[mid] = dict(fields)
                 self._agent_texts[mid] = fields["text"]
                 target = self._last_shown = (mid, now)
+            if fields.get("buttons"):
+                held = target[0] if target is not None else mid
+                self._offer = (held, list((self._shown.get(held) or {}).get("buttons") or fields["buttons"]), now)
             first = False
 
     async def _merge(self, mid: str, fields: dict) -> None:
@@ -2234,6 +2345,7 @@ class Participant:
 
         text = text if isinstance(text, str) else ""
         command = slash.parse(text, attachments)
+        self._offer = None          # написали сами — голосовое нажатие по прежним кнопкам не нужно
         if client_id:
             old = await self._io(self._chatlog.by_client_id, client_id)
             if old is not None:
@@ -2307,6 +2419,7 @@ class Participant:
         надписью. Нет такой кнопки — ValueError."""
         t = self._now_t()
         added = await self._io(self._chatlog.click_button, mid, label, client_id=client_id, t=t)
+        self._offer = None
         if added.created:
             self._emit_chat([added.event])
             if mid not in self._agent_texts:     # цитата своего сообщения агенту
@@ -2706,6 +2819,7 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
         owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
         frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
         effort=llm.agent_effort(provider, cfg),
+        voice_buttons=getattr(cfg.assist, "voice_buttons", True),
         proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
         profile=session_profile(chatlog, cfg.assist.profile, profile),
         freedom=getattr(cfg.assist, "agent_freedom", False),

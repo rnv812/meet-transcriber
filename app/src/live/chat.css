@@ -400,6 +400,10 @@ button.chat-tool__line:hover { background: var(--surface-3); }
   border-radius: var(--r-md); background: var(--info-soft); color: var(--ink); text-align: left;
 }
 .chat-sys__icon { flex: none; margin-top: 2px; color: var(--info); }
+/* Нажатие кнопки голосом (0.5): строка с «Отменить», пока ждёт. */
+.chat-sys--voice { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.chat-sys--voice.is-pending { color: var(--ink-2); }
+.btn.chat-sys__undo { font-variant-numeric: tabular-nums; }
 
 /* --- Подсказка слэш-команд над полем ввода (`.menu` Aurora, раскрыта вверх) --- */
 .chat-compose .menu.chat-slash {

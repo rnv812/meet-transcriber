@@ -79,6 +79,16 @@ test("участник включён (по умолчанию): частота,
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { frequency: "less", kb_map: false } }));
 });
 
+test("0.5: «Нажимать кнопки ассистента голосом» — включено по умолчанию, выключение сохраняется", async () => {
+  open();
+  const voice = await screen.findByRole("switch", { name: "Нажимать кнопки ассистента голосом" });
+  expect(voice).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByText(/Слушается только ваш микрофон/)).toBeInTheDocument();
+  await userEvent.click(voice);
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { assist: { voice_buttons: false } }));
+});
+
 test("«Профиль по умолчанию»: рабочая встреча, если не задан; личный сохраняется ключом", async () => {
   open();
   const group = await screen.findByRole("radiogroup", { name: PROFILE_DEFAULT_LABEL });

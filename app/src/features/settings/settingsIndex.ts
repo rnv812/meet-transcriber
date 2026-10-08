@@ -126,6 +126,10 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: ["mcp", "веб", "свобода", "согласие"],
   },
   {
+    section: "assistant", label: "Нажимать кнопки ассистента голосом", hint: "Сказать надпись кнопки вслух",
+    keywords: ["голос", "кнопки", "voice_buttons", "вслух"],
+  },
+  {
     section: "assistant", label: "Действия ассистента", hint: "Действует сам или спрашивает каждое действие",
     keywords: ["автомод", "разрешить", "подтверждение", "agent_mode"],
   },

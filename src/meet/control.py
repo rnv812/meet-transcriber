@@ -108,6 +108,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_chat_click(id, body) / live_chat_react(id, body) / live_chat_stop(body)
     live_chat_confirm(id, body)           карточка подтверждения Meet {"allow", "meeting"?}
     live_chat_revoke(id)                  отозвать разрешение «до конца встречи»
+    live_chat_voice_cancel(id)            отменить нажатие кнопки голосом (0.5)
     live_chat_remove(id)                  вложение убрали из строки ввода до отправки
     agent_frequency(body)                 «Как часто писать»: в настройки и агенту
     live_profile(body)                    профиль идущей сессии (только она, не настройки)
@@ -988,6 +989,8 @@ _PATTERNS = (
      lambda h, p, rid, mid: _server_of(h).state.recording_chat_confirm(unquote(rid), unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/revoke$"),
      lambda h, p, mid: _server_of(h).state.live_chat_revoke(unquote(mid), h._body())),
+    ("POST", re.compile(r"^/live/chat/([^/]+)/voice-cancel$"),
+     lambda h, p, mid: _server_of(h).state.live_chat_voice_cancel(unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/confirm$"),
      lambda h, p, mid: _server_of(h).state.live_chat_confirm(unquote(mid), h._body())),
     ("POST", re.compile(r"^/live/chat/([^/]+)/react$"),

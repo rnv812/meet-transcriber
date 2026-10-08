@@ -42,7 +42,7 @@
  */
 
 import {
-  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, Info, type LucideIcon, Paperclip,
+  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, Info, type LucideIcon, Mic, Paperclip,
   ThumbsDown, ThumbsUp, X,
 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -346,6 +346,36 @@ function AgentMessage({ m, tools = [], more, chat, onTime, onShow, compact, disa
   );
 }
 
+/**
+ * Нажатие кнопки голосом (0.5): «Засчитано голосом: «…»» и «Отменить» с отсчётом,
+ * пока ждёт (10 с); потом — «Нажато голосом» или «отменено».
+ */
+function VoiceRow({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disabled: boolean }) {
+  const label = m.voice?.label ?? "";
+  const pending = m.state === "pending";
+  const due = (typeof m.at === "number" ? m.at * 1000 : Date.now()) + (m.undo_s ?? 10) * 1000;
+  const [left, setLeft] = useState(() => Math.max(0, Math.ceil((due - Date.now()) / 1000)));
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(() => setLeft(Math.max(0, Math.ceil((due - Date.now()) / 1000))), 1000);
+    return () => clearInterval(t);
+  }, [pending, due]);
+  const text = m.state === "pressed" ? `Нажато голосом: «${label}»`
+    : m.state === "cancelled" ? "Голосовое нажатие отменено"
+      : m.state === "missed" ? `Кнопку «${label}» уже нажали` : m.text;
+  return (
+    <li className={`chat-sys chat-sys--voice${pending ? " is-pending" : ""}`} data-id={m.id} data-key={m.id}>
+      <Icon as={Mic} size="sm" className="chat-sys__icon" />{text}
+      {pending && (
+        <Button variant="ghost" size="xs" className="chat-sys__undo" disabled={disabled}
+          onClick={() => void chat.cancelVoice(m.id)}>
+          Отменить{left > 0 && <span className="chat-sys__left" aria-hidden="true"> · {left}</span>}
+        </Button>
+      )}
+    </li>
+  );
+}
+
 function AttachmentChip({ id, chat }: { id: string; chat: Chat }) {
   const a = chat.attachment(id);
   const preview = chat.preview(id);
@@ -452,6 +482,7 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
       </li>
     );
   }
+  if (m.voice) return <VoiceRow m={m} chat={chat} disabled={disabled} />;
   if (m.gate) {
     // Ворота согласия заблокировали вызов агента (0.3.7): та же тихая строка, с пояснением.
     return <Tip content={GATE_TITLE}><li className="chat-sys chat-sys--gate" data-id={m.id} data-key={m.id}>{m.text}</li></Tip>;

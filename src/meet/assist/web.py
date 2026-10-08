@@ -1427,6 +1427,12 @@ def build_app(state) -> web.Application:
         await _guarded(participant.revoke_grant(_message_id(request)))
         return _json_response({"ok": True})
 
+    async def chat_voice_cancel(request):
+        # «Отменить» у «Засчитано голосом» (0.5): нажатие кнопки голосом не выполнится.
+        participant = _participant(state)
+        await _guarded(participant.cancel_voice(_message_id(request)))
+        return _json_response({"ok": True})
+
     async def chat_stop(request):
         participant = _participant(state)
         body = await _json_body(request)
@@ -1509,6 +1515,7 @@ def build_app(state) -> web.Application:
         web.post("/chat/{mid}/react", chat_react),
         web.post("/chat/{mid}/confirm", chat_confirm),
         web.post("/chat/{mid}/revoke", chat_revoke),
+        web.post("/chat/{mid}/voice-cancel", chat_voice_cancel),
         web.put("/agent/frequency", agent_frequency),
         web.put("/agent/profile", agent_profile),
     ])

@@ -1084,6 +1084,18 @@ def test_existing_config_is_kept_on_macos(tmp_path, monkeypatch):
 # --- OpenCode: своя модель в виде провайдер/модель ---
 
 
+def test_voice_buttons_on_by_default_and_not_written_until_changed(tmp_path):
+    """0.5: нажатие кнопок голосом — по умолчанию включено, в файл не пишется, пока не меняли."""
+    import json
+
+    assert settings.Settings.from_raw({}).assist.voice_buttons is True
+    f = tmp_path / "config.json"
+    settings.patch({"assist": {"frequency": "less"}}, f)
+    assert "voice_buttons" not in json.loads(f.read_text(encoding="utf-8"))["assist"]
+    assert settings.patch({"assist": {"voice_buttons": False}}, f).assist.voice_buttons is False
+    assert json.loads(f.read_text(encoding="utf-8"))["assist"]["voice_buttons"] is False
+
+
 def test_effort_defaults_empty_round_trips_and_garbage_is_default(tmp_path):
     """0.5: уровень рассуждений Claude Code и Codex; пусто — «по умолчанию» (как было)."""
     cfg = settings.Settings.from_raw({})

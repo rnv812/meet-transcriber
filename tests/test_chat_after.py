@@ -499,3 +499,9 @@ def test_confirm_for_the_meeting_after_the_meeting(state, app, tmp_path):
 def test_control_route_for_revoking_a_grant(server):
     _call(server, "/live/chat/m7/revoke", {})
     assert server.state_obj.calls[-1] == ("live_chat_revoke", "m7", {})
+
+
+def test_control_route_for_cancelling_a_voice_press(server):
+    """0.5: «Отменить» у «Засчитано голосом» — резидент передаёт ребёнку ассистента."""
+    _call(server, "/live/chat/m8/voice-cancel", {})
+    assert server.state_obj.calls[-1] == ("live_chat_voice_cancel", "m8", {})

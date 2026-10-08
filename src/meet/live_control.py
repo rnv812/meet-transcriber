@@ -1274,6 +1274,10 @@ class LiveControl:
         return self._request(self._active_port(), f"/chat/{mid}/confirm", payload,
                              REQUEST_TIMEOUT_S)
 
+    def chat_voice_cancel(self, mid: str) -> dict:
+        """Отменить нажатие кнопки голосом (0.5)."""
+        return self._request(self._active_port(), f"/chat/{mid}/voice-cancel", {}, REQUEST_TIMEOUT_S)
+
     def chat_revoke(self, mid: str) -> dict:
         """Отозвать разрешение «до конца встречи»."""
         return self._request(self._active_port(), f"/chat/{mid}/revoke", {}, REQUEST_TIMEOUT_S)

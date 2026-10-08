@@ -930,6 +930,10 @@ export type ChatMessage = {
   merged_into?: string;
   /** Ход по расшифровке (`writing`), который допишется к этому сообщению (0.5): окно пишет его под ним. */
   merge_into?: string;
+  /** Нажатие кнопки голосом (0.5): какая кнопка какого сообщения; `state` — pending/pressed/cancelled/missed. */
+  voice?: { re: string; label: string };
+  state?: string;
+  undo_s?: number;
   /** Системная строка ворот согласия: «Ассистент хотел … — запрос заблокирован» (0.3.7). */
   gate?: boolean | ToolGate;
   /**
