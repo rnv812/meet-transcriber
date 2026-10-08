@@ -29,7 +29,7 @@
 }
 .spk__preview { color: var(--ink-2); font-size: var(--text-sm); line-height: 1.45; }
 .spk__note { font-size: var(--text-xs); }
-.spk__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.spk__actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; }
 
 /* Карточка спикера: имя, доля времени, «Назначить…»; полоса доли — цветом человека. */
 .spk-row {
@@ -155,7 +155,7 @@
 .spk-split__modes { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
 .spk-split__mode { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); font-size: var(--text-sm); cursor: pointer; }
 .spk-split__k { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: var(--text-sm); }
-.spk-split__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.spk-split__actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; }
 .spk-split__people {
   display: flex; flex-direction: column; gap: 4px; padding: 6px;
   border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--surface-2);

@@ -14,7 +14,10 @@
 .sheet .confirm__title { font-size: var(--text-lg); }
 .confirm--inline .confirm__title { font-weight: 500; }
 .confirm__text { color: var(--ink-2); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
-.confirm__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s-2); margin-top: 4px; }
+/* Кнопки — всегда одной строкой (0.5): отмена слева от действия, длинная подпись переносится внутри кнопки. */
+.confirm__actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; align-items: stretch; gap: var(--s-2); margin-top: 4px; }
+.confirm__actions > .btn { flex: 0 1 auto; min-width: 0; height: auto; min-height: var(--control-sm); }
+.confirm__actions > .btn .btn__label { white-space: normal; text-align: center; line-height: 1.25; padding-block: 4px; }
 .confirm--inline .confirm__actions { margin-top: 2px; }
 
 /* --- Полоска прогресса -------------------------------------------------- */

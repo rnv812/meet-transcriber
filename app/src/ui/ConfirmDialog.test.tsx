@@ -1,7 +1,29 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useRef, useState } from "react";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { ConfirmDialog, useConfirm } from "./ConfirmDialog";
+
+test("кнопки окна подтверждения — одной строкой: ряд не переносится, длинная подпись — внутри кнопки (0.5)", () => {
+  const css = readFileSync(join(process.cwd(), "src", "ui", "primitives.css"), "utf8");
+  expect(css).toMatch(/\.confirm__actions \{[^}]*flex-wrap: nowrap/);
+  expect(css).toMatch(/\.confirm__actions > \.btn \.btn__label \{[^}]*white-space: normal/);
+});
+
+test("кнопка подтверждения называет действие, а не «ОК»/«Да» (0.5): во всём окне", () => {
+  const bad: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(name) && !/\.test\./.test(name)
+        && /confirmLabel\s*[:=]\s*\{?\s*"(ОК|Ок|OK|Да|Подтвердить)"/.test(readFileSync(p, "utf8"))) bad.push(p);
+    }
+  };
+  walk(join(process.cwd(), "src"));
+  expect(bad).toEqual([]);
+});
 
 const base = { title: "Удалить запись?", message: "Звук и расшифровка будут удалены.", confirmLabel: "Удалить" };
 

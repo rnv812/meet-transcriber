@@ -27,4 +27,4 @@
 .sheet .redia__summary { color: var(--ink); line-height: 1.5; }
 .redia__list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .redia__list .spk-row { margin-top: 0; gap: 4px; }
-.redia__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.redia__actions { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; }
