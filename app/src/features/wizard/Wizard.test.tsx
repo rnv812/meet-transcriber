@@ -5,6 +5,7 @@ import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { EngineStatus } from "../../lib/shell";
 import type { OwnerVoiceStatus } from "../../lib/types";
+import { TERMS_ACCEPTED_EVENT, TERMS_VERSION } from "../../lib/terms";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -343,7 +344,7 @@ test("«Готово»: оболочка без автозапуска — пе�
 });
 
 test("«Пропустить» мастер доступен на каждом шаге и закрывает его", async () => {
-  for (const start of ["hardware", "engine", "hf", "models", "devices", "voice"] as const) {
+  for (const start of ["hardware", "engine", "hf", "models", "devices", "voice", "terms"] as const) {
     const { onClose, unmount } = show({ start, endpoint: ep });
     await userEvent.click(screen.getByRole("button", { name: "Пропустить мастер" }));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -520,7 +521,7 @@ test("после «Запись» — необязательный шаг «Ва
   expect(await screen.findByText(/Утро выдалось тихим/)).toBeInTheDocument();
   expect(screen.getByText(/Хранится только отпечаток голоса/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Позже, в настройках" }));
-  expect(screen.getByRole("heading", { name: "Готово" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Условия", level: 1 })).toBeInTheDocument();
 });
 
 test("«Ваш голос» без модели или токена — только «Позже, в настройках»", async () => {
@@ -531,23 +532,23 @@ test("«Ваш голос» без модели или токена — толь
   expect(screen.queryByRole("button", { name: "Начать запись" })).toBeNull();
   expect(screen.queryByText(/Утро выдалось тихим/)).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Позже, в настройках" }));
-  expect(screen.getByRole("heading", { name: "Готово" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Условия", level: 1 })).toBeInTheDocument();
 });
 
-test("левая колонка: «Шаг N из 7», семь шагов с отметкой текущего и «Пропустить мастер» внизу", async () => {
+test("левая колонка: «Шаг N из 8», восемь шагов с отметкой текущего и «Пропустить мастер» внизу", async () => {
   show({ endpoint: ep });
   const side = screen.getByRole("complementary", { name: "Первый запуск" });
   const list = within(side).getByRole("list", { name: "Шаги мастера" });
   const items = within(list).getAllByRole("listitem");
-  expect(items).toHaveLength(7);
-  expect(items.map((li) => li.getAttribute("aria-current"))).toEqual(["step", null, null, null, null, null, null]);
+  expect(items).toHaveLength(8);
+  expect(items.map((li) => li.getAttribute("aria-current"))).toEqual(["step", null, null, null, null, null, null, null]);
   expect(within(items[0]!).getByText("Ваш компьютер")).toBeInTheDocument();
-  expect(screen.getByText("Шаг 1 из 7")).toBeInTheDocument();
+  expect(screen.getByText("Шаг 1 из 8")).toBeInTheDocument();
   expect(within(side).getByRole("button", { name: "Пропустить мастер" })).toBeEnabled();
   await userEvent.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByText("Шаг 2 из 7")).toBeInTheDocument();
+  expect(screen.getByText("Шаг 2 из 8")).toBeInTheDocument();
   const after = within(screen.getByRole("list", { name: "Шаги мастера" })).getAllByRole("listitem");
-  expect(after.map((li) => li.getAttribute("aria-current"))).toEqual([null, "step", null, null, null, null, null]);
+  expect(after.map((li) => li.getAttribute("aria-current"))).toEqual([null, "step", null, null, null, null, null, null]);
   // Пройденный шаг помечен для диктора, не только значком.
   expect(within(after[0]!).getByText("пройден")).toBeInTheDocument();
 });
@@ -570,4 +571,65 @@ test("подсказки про повторный запуск называют
   vi.mocked(api.getOwnerVoice).mockResolvedValue(voiceStatus({ ready: false, reason: "Нужен токен Hugging Face" }));
   show({ start: "voice", endpoint: ep });
   expect(await screen.findByText(/Настройки → Спикеры → «Мой голос»/)).toBeInTheDocument();
+});
+
+const acceptedSettings = () => ({ ui: { terms_accepted: TERMS_VERSION } });
+
+test("«Условия» перед «Готово»: текст разделами, «Далее» после флажка сохраняет согласие", async () => {
+  const heard = vi.fn();
+  window.addEventListener(TERMS_ACCEPTED_EVENT, heard);
+  try {
+    show({ start: "terms", endpoint: ep });
+    expect(screen.getByText("Шаг 7 из 8")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Условия", level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Данные и провайдеры моделей", level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Запись встреч", level: 2 })).toBeInTheDocument();
+    const next = screen.getByRole("button", { name: "Далее" });
+    expect(next).toBeDisabled();
+    const box = screen.getByRole("checkbox", { name: "Я прочитал(а) и принимаю эти условия" });
+    expect(box).toHaveClass("cb");
+    await userEvent.click(box);
+    await userEvent.click(next);
+    expect(await screen.findByRole("heading", { name: "Готово" })).toBeInTheDocument();
+    expect(api.patchSettings).toHaveBeenCalledWith(ep, { ui: { terms_accepted: TERMS_VERSION } });
+    expect(heard).toHaveBeenCalledTimes(1);
+  } finally {
+    window.removeEventListener(TERMS_ACCEPTED_EVENT, heard);
+  }
+});
+
+test("«Условия»: согласие не сохранилось — ошибка в шаге, шаг остаётся, можно повторить", async () => {
+  vi.mocked(api.patchSettings).mockRejectedValueOnce(new api.ApiError(500, "сбой"));
+  show({ start: "terms", endpoint: ep });
+  await userEvent.click(screen.getByRole("checkbox"));
+  await userEvent.click(screen.getByRole("button", { name: "Далее" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/Не удалось сохранить согласие/);
+  expect(screen.getByRole("heading", { name: "Условия", level: 1 })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Далее" }));
+  expect(await screen.findByRole("heading", { name: "Готово" })).toBeInTheDocument();
+});
+
+test("условия уже приняты — шага нет: семь шагов, после «Ваш голос» сразу «Готово»", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(acceptedSettings());
+  show({ start: "voice", endpoint: ep });
+  await waitFor(() => expect(screen.getByText("Шаг 6 из 7")).toBeInTheDocument());
+  const list = screen.getByRole("list", { name: "Шаги мастера" });
+  expect(within(list).queryByText("Условия")).toBeNull();
+  await userEvent.click(await screen.findByRole("button", { name: "Позже, в настройках" }));
+  expect(screen.getByRole("heading", { name: "Готово" })).toBeInTheDocument();
+  expect(api.patchSettings).not.toHaveBeenCalledWith(ep, expect.objectContaining({ ui: expect.anything() }));
+});
+
+test("мастер открыт на «Условиях», а они уже приняты — сразу «Готово»", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(acceptedSettings());
+  show({ start: "terms", endpoint: ep });
+  expect(await screen.findByRole("heading", { name: "Готово" })).toBeInTheDocument();
+});
+
+test("резидента ещё нет (до установки движка) — шаг условий в списке, настройки не читаются", () => {
+  show();
+  const list = screen.getByRole("list", { name: "Шаги мастера" });
+  expect(within(list).getByText("Условия")).toBeInTheDocument();
+  expect(screen.getByText("Шаг 1 из 8")).toBeInTheDocument();
+  expect(api.getSettings).not.toHaveBeenCalled();
 });

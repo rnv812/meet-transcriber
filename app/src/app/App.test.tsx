@@ -49,7 +49,10 @@ vi.mock("../features/wizard/Wizard", () => ({
 }));
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
-  getSettings: vi.fn(async () => ({ ui: { wizard_done: false } })),
+  // Условия приняты: заслонка условий (features/legal/TermsGate) окну не мешает.
+  getSettings: vi.fn(async () => ({
+    ui: { wizard_done: false, terms_accepted: (await import("../lib/terms")).TERMS_VERSION },
+  })),
   // По умолчанию — резидент без групп (как до 0.3.5): интерфейс групп скрыт.
   getGroups: vi.fn(async () => { throw new (await import("../lib/api")).ApiError(404, "нет"); }),
   getParticipants: vi.fn(async () => []),
@@ -759,4 +762,31 @@ test("«Фильтры» в области группы: счётчики — в
   expect(within(panel).queryByText("Группа", { selector: "legend" })).toBeNull();
   expect(within(panel).getByText("Есть", { selector: "legend" })).toBeInTheDocument();
   expect(panel).toHaveTextContent("Число встреч — в «Альфа»");
+});
+
+test("условия не приняты — поверх окна заслонка «Прежде чем продолжить», окно под ней inert", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue({ ui: { wizard_done: true } });
+  residentState.current = online();
+  const { container } = render(<App />);
+  const dialog = await screen.findByRole("dialog", { name: "Прежде чем продолжить" });
+  expect(within(dialog).getByRole("button", { name: "Продолжить" })).toBeDisabled();
+  expect(container.querySelector(".app")?.closest("[inert]")).not.toBeNull();
+});
+
+test("пока открыт мастер со своим шагом условий, заслонка ждёт; закрыли мастер — появляется", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue({ ui: { wizard_done: true } });
+  residentState.current = online();
+  render(<App />);
+  await screen.findByRole("dialog", { name: "Прежде чем продолжить" });
+  // Событие «приняты» убирает заслонку, но настройки резидента так и говорят «не приняты»:
+  // после мастера заслонка перечитает их и появится снова.
+  window.dispatchEvent(new Event("meet:terms-accepted"));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "Запустить мастер" }));
+  expect(screen.getByTestId("wizard")).toBeInTheDocument();
+  await act(async () => {});
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "закрыть мастер" }));
+  expect(await screen.findByRole("dialog", { name: "Прежде чем продолжить" })).toBeInTheDocument();
 });

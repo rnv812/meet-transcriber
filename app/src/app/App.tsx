@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useCategories } from "../state/useCategories";
 import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
@@ -23,6 +23,7 @@ import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Wizard } from "../features/wizard/Wizard";
 import { useWizardGate } from "../features/wizard/useWizardGate";
+import { TermsGate } from "../features/legal/TermsGate";
 import { STORAGE_MISSING_TITLE, StorageMissing } from "../features/settings/StorageMissing";
 import { StorageNotices } from "../features/settings/StorageNotices";
 import { GroupsLayer } from "../features/groups/GroupsLayer";
@@ -192,10 +193,16 @@ export function App() {
     return () => { gone = true; unlisten?.(); };
   }, []);
 
+  // Условия использования — поверх всего окна, и мастера тоже. У мастера свой шаг условий:
+  // пока он открыт, заслонка ждёт, а после него перечитывает настройки.
+  const terms = (content: ReactNode) => (
+    <TermsGate endpoint={resident.endpoint ?? null} deferred={gate.wizard !== null}>{content}</TermsGate>
+  );
+
   if (gate.wizard) {
-    return (
+    return terms(
       <Wizard start={gate.wizard} engine={gate.engine} endpoint={resident.endpoint ?? null} recording={recording}
-        onRefreshEngine={gate.refreshEngine} onInstallStarted={gate.installStarted} onClose={gate.close} />
+        onRefreshEngine={gate.refreshEngine} onInstallStarted={gate.installStarted} onClose={gate.close} />,
     );
   }
 
@@ -208,7 +215,7 @@ export function App() {
       action={<Button variant="primary" onClick={() => gate.open("engine")}>Установить</Button>} />
   ) : <OfflineState />;
 
-  return (
+  return terms(
     // Шапки нет (0.4): кнопка записи и предупреждения — в рейке, группы встреч — кнопкой-списком
     // над списком записей (features/groups/GroupsPicker).
     <div className="app">
@@ -304,7 +311,7 @@ export function App() {
         <LeaveSettings guard={settingsGuard.current} onStay={() => { leaving.stay?.(); setLeaving(null); }}
           onLeave={() => { const { go } = leaving; setLeaving(null); go(); }} />
       )}
-    </div>
+    </div>,
   );
 }
 

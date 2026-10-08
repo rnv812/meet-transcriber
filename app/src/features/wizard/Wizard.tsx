@@ -1,6 +1,7 @@
 /**
  * Мастер первого запуска: железо → движок → Hugging Face → модели → запись →
- * ваш голос (необязательно) → готово. Шаги 1–2 работают без резидента (команды оболочки); шагам 3–5 он
+ * ваш голос (необязательно) → условия → готово. Шаг условий — только пока они
+ * не приняты (уже приняли — его нет в списке). Шаги 1–2 работают без резидента (команды оболочки); шагам 3–5 он
  * нужен — после установки оболочка поднимает его сама, мастер ждёт до 90 с.
  *
  * «Пропустить мастер» есть на каждом шаге: сам он больше не откроется (флаг
@@ -8,10 +9,11 @@
  */
 
 import { useEffect, useId, useState } from "react";
-import { type Endpoint, getState, resolveEndpoint } from "../../lib/api";
+import { type Endpoint, getSettings, getState, resolveEndpoint } from "../../lib/api";
 import type { Profile } from "../../lib/estimate";
 import { IS_MAC } from "../../lib/platform";
 import { type EngineStatus, openLogs, residentStatus } from "../../lib/shell";
+import { termsAccepted } from "../../lib/terms";
 import { X, Check } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { Icon } from "../../ui/Icon";
@@ -23,6 +25,7 @@ import { type InstallPhase, StepEngine } from "./StepEngine";
 import { StepHardware } from "./StepHardware";
 import { StepHf } from "./StepHf";
 import { StepModels } from "./StepModels";
+import { StepTerms } from "./StepTerms";
 import { StepVoice } from "./StepVoice";
 import type { WizardStep } from "./useWizardGate";
 // Переключатели, запись голоса и «?» шагов живут в настройках и берут их стили.
@@ -36,9 +39,10 @@ const STEPS: { id: WizardStep; title: string }[] = [
   { id: "models", title: "Модели" },
   { id: "devices", title: "Запись" },
   { id: "voice", title: "Ваш голос" },
+  { id: "terms", title: "Условия" },
   { id: "done", title: "Готово" },
 ];
-const NEEDS_RESIDENT: WizardStep[] = ["hf", "models", "devices", "voice"];
+const NEEDS_RESIDENT: WizardStep[] = ["hf", "models", "devices", "voice", "terms"];
 
 /** Ждём резидент после установки: раз в секунду, до 90 попыток. */
 export const SERVICE_POLL_MS = 1000;
@@ -88,6 +92,27 @@ function useService(fallback: Endpoint | null, active: boolean) {
   return { endpoint, failed, retry: () => setRound((n) => n + 1) };
 }
 
+/**
+ * Приняты ли условия текущей версии: undefined — ещё не знаем (резидента нет
+ * или он не ответил; шаг тогда в списке). Читаем один раз, когда появится
+ * резидент: согласие, данное в самом шаге, список шагов уже не меняет.
+ */
+function useTermsAccepted(endpoint: Endpoint | null): boolean | undefined {
+  const [accepted, setAccepted] = useState<boolean | undefined>(undefined);
+  const base = endpoint?.base ?? null;
+  const token = endpoint?.token ?? null;
+  const known = accepted !== undefined;
+  useEffect(() => {
+    if (base === null || known) return;
+    let live = true;
+    getSettings({ base, token })
+      .then((s) => { if (live) setAccepted(termsAccepted(s)); })
+      .catch((cause) => console.warn("ui.terms_accepted:", cause));
+    return () => { live = false; };
+  }, [base, token, known]);
+  return accepted;
+}
+
 export function Wizard({
   start = "hardware", engine, endpoint, recording, onRefreshEngine, onInstallStarted, onClose,
 }: {
@@ -106,12 +131,15 @@ export function Wizard({
 }) {
   const [step, setStep] = useState<WizardStep>(start);
   const headingId = useId();
-  const index = STEPS.findIndex((s) => s.id === step);
-  const go = (id: WizardStep) => setStep(id);
-  const next = () => go(STEPS[Math.min(index + 1, STEPS.length - 1)]!.id);
   // macOS — всегда «Apple Silicon»: видеокарты NVIDIA там не бывает.
   const profile: Profile = IS_MAC ? "mac" : engine?.gpu ? "cuda" : "cpu";
   const service = useService(endpoint, NEEDS_RESIDENT.includes(step));
+  const accepted = useTermsAccepted(service.endpoint);
+  const steps = accepted === true ? STEPS.filter((s) => s.id !== "terms") : STEPS;
+  const shown: WizardStep = accepted === true && step === "terms" ? "done" : step;
+  const index = steps.findIndex((s) => s.id === shown);
+  const go = (id: WizardStep) => setStep(id);
+  const next = () => go(steps[Math.min(index + 1, steps.length - 1)]!.id);
   const [installing, setInstalling] = useState(false);
   const installPhase = (phase: InstallPhase) => {
     setInstalling(phase === "running");
@@ -119,7 +147,7 @@ export function Wizard({
   };
 
   let body;
-  if (NEEDS_RESIDENT.includes(step) && !service.endpoint) {
+  if (NEEDS_RESIDENT.includes(shown) && !service.endpoint) {
     body = service.failed === "crashed" ? (
       <>
         <p className="wizard__error">Служба записи не запустилась</p>
@@ -143,7 +171,7 @@ export function Wizard({
     ) : <p className="muted wizard__wait">Запуск службы записи…</p>;
   } else {
     const ep = service.endpoint!;
-    switch (step) {
+    switch (shown) {
       case "hardware":
         body = <StepHardware engine={engine} profile={profile} onNext={next} />;
         break;
@@ -163,6 +191,9 @@ export function Wizard({
       case "voice":
         body = <StepVoice endpoint={ep} onNext={next} />;
         break;
+      case "terms":
+        body = <StepTerms endpoint={ep} onNext={next} />;
+        break;
       case "done":
         body = <StepDone onFinish={onClose} />;
         break;
@@ -178,7 +209,7 @@ export function Wizard({
             <b>Первый запуск</b>
           </div>
           <ol className="wizard__steps" aria-label="Шаги мастера">
-            {STEPS.map((s, i) => (
+            {steps.map((s, i) => (
               <li key={s.id} aria-current={i === index ? "step" : undefined}
                 className={i < index ? "is-done" : i === index ? "is-current" : undefined}>
                 <span className="wizard__num">
@@ -189,7 +220,7 @@ export function Wizard({
               </li>
             ))}
           </ol>
-          {step !== "done" && (
+          {shown !== "done" && (
             <Tip content={installing ? "Дождитесь окончания установки"
               : "Мастер можно запустить снова: Настройки → Приложение → «Мастер первого запуска»"}>
               <Button className="wizard__skip-all" variant="ghost" icon={X} aria-label="Пропустить мастер"
@@ -201,8 +232,8 @@ export function Wizard({
         </aside>
         <section className="wizard__step" aria-labelledby={headingId}>
           <header className="wizard__title">
-            <span className="wizard__count">Шаг {index + 1} из {STEPS.length}</span>
-            <h1 id={headingId}>{STEPS[index]!.title}</h1>
+            <span className="wizard__count">Шаг {index + 1} из {steps.length}</span>
+            <h1 id={headingId}>{steps[index]!.title}</h1>
           </header>
           {body}
         </section>
