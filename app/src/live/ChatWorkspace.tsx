@@ -27,8 +27,10 @@
  * область — зона перетаскивания вложений (`data-chat-drop`).
  */
 
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Icon } from "../ui/Icon";
 import { PaneResizer } from "../ui/PaneResizer";
 import { ChatComposer } from "./ChatComposer";
 import { LiveChat } from "./LiveChat";
@@ -164,7 +166,7 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
             aria-label={hidden ? "Показать расшифровку" : "Убрать расшифровку"}
             title={hidden ? "Показать расшифровку" : "Убрать расшифровку — останется только чат"}
             onClick={() => setHidden(!hidden)}>
-            <span aria-hidden="true">{hidden ? "›" : "‹"}</span>
+            <Icon as={hidden ? ChevronRight : ChevronLeft} size="sm" />
           </button>
         </div>
         <div ref={column} className="chat-ws__main">

@@ -27,7 +27,7 @@
  * подключена — лента видна, строка ввода недоступна с причиной.
  */
 
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Endpoint, cancelJob } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
@@ -67,8 +67,9 @@ export function activeChatJob(jobs: Job[], folder: string): Job | null {
 /** Задача ответа идёт, пузыря ещё нет: «думает…» и «Стоп» — и пока задача в очереди (ревью M8). */
 function Thinking({ job, onStop }: { job: Job; onStop: () => void }) {
   const stop = (
-    <button type="button" className="chat-compose__stop" aria-label="Остановить ответ"
-      title="Снять задачу ответа ассистента" onClick={onStop}>Стоп</button>
+    // Как «Стоп» строки ввода чата (ChatComposer): контурная кнопка со значком и словом.
+    <Button size="sm" icon={Square} className="chat-compose__stop" aria-label="Остановить ответ"
+      title="Снять задачу ответа ассистента" onClick={onStop}>Стоп</Button>
   );
   if (job.state === "running" && isModelProgress(job)) {
     return (

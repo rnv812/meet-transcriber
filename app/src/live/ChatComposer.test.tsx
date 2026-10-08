@@ -159,6 +159,23 @@ test("«Стоп» — пока ответ пишется и виден", async 
   expect(stopChat).toHaveBeenCalledWith(ep, "m1");
 });
 
+test("Atlas Aurora: строка ввода — aurora-edge; быстрые вопросы — кнопки над полем; «Стоп» — кнопка со значком", () => {
+  render(<Host />);
+  load([agentMsg("m1", { status: "writing", text: "" })]);
+  const box = field().closest(".chat-compose")!;
+  expect(box).toHaveClass("aurora-edge");
+  const quick = screen.getByRole("group", { name: "Быстрые вопросы" });
+  for (const b of within(quick).getAllByRole("button")) expect(b).toHaveClass("btn", "btn--outline");
+  // Над полем: группа идёт в документе раньше поля.
+  expect(quick.compareDocumentPosition(field()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  act(() => chat.sink.onChatPartial({ id: "m1", text: "Сейчас" }));
+  const stop = screen.getByRole("button", { name: "Остановить ответ" });
+  expect(stop).toHaveClass("btn", "btn--outline");
+  expect(stop).toHaveTextContent(/^Стоп$/);
+  expect(stop.querySelector("svg")).not.toBeNull();
+  expect(stop).toHaveAttribute("title", "Остановить ответ ассистента");
+});
+
 test("агент выключен — поле недоступно и видно почему", () => {
   render(<Host reason="Ассистент выключен" />);
   expect(field()).toBeDisabled();

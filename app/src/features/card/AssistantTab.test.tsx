@@ -73,7 +73,7 @@ test("журнал встречи: та же лента — сообщения, 
   expect(await within(await ready()).findByText("15 ноября")).toBeInTheDocument();
   expect(within(log()).getByText("Что решили по срокам?")).toBeInTheDocument();
   expect(within(log()).getByRole("button", { name: "Копировать" })).toBeInTheDocument();
-  await userEvent.click(within(log()).getByRole("button", { name: "👍 Полезно" }));
+  await userEvent.click(within(log()).getByRole("button", { name: "Полезно" }));
   expect(recordingChatReact).toHaveBeenCalledWith(ep, ID, "m2", "👍", true);
   await userEvent.click(within(log()).getByRole("button", { name: "Подробнее" }));
   expect(recordingChatClick).toHaveBeenCalledWith(ep, ID, "m2", "Подробнее", "c1");
@@ -307,7 +307,11 @@ test("«Стоп» и пока ответ в очереди: снимает за
   vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal.slice(0, 1), seq: 1 }));
   render(<Tab jobs={[chatJob("queued")]} />);
   expect(await screen.findByText("Ассистент думает…")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Остановить ответ" }));
+  const stop = screen.getByRole("button", { name: "Остановить ответ" });
+  // Atlas Aurora: та же кнопка, что у строки ввода чата, — контур, значок и слово «Стоп».
+  expect(stop).toHaveClass("btn", "btn--outline");
+  expect(stop).toHaveTextContent(/^Стоп$/);
+  await userEvent.click(stop);
   expect(cancelJob).toHaveBeenCalledWith(ep, "j1");
 });
 
@@ -315,7 +319,7 @@ test("❓ после встречи — просьба пояснить: реа�
   vi.mocked(getRecordingChat).mockResolvedValue(answer({ messages: journal, seq: 2 }));
   const view = render(<Tab />);
   await within(await ready()).findByText("15 ноября");
-  await userEvent.click(within(log()).getByRole("button", { name: "❓ Поясни" }));
+  await userEvent.click(within(log()).getByRole("button", { name: "Поясни" }));
   expect(recordingChatReact).toHaveBeenCalledWith(ep, ID, "m2", "❓", true);
   vi.mocked(getRecordingChat).mockResolvedValue(answer({
     seq: 4, messages: [...journal, userMsg("m3", { text: "❓ Поясни это сообщение", via: "reaction", re: "m2", t: undefined })],
@@ -331,13 +335,13 @@ test("после встречи: отклик на 👎, ❓ «поясняет�
   const view = render(<Tab />);
   await within(await ready()).findByText("15 ноября");
   const m2 = () => within(log()).getByText("15 ноября").closest("li")!;
-  await userEvent.click(within(m2()).getByRole("button", { name: "👎 Не по теме" }));
+  await userEvent.click(within(m2()).getByRole("button", { name: "Не по теме" }));
   expect(within(m2()).getByText("Учту: скорректирую, о чём пишу")).toBeInTheDocument();
-  await userEvent.click(within(m2()).getByRole("button", { name: "👎 Не по теме" }));   // сняли — отклик ушёл
+  await userEvent.click(within(m2()).getByRole("button", { name: "Не по теме" }));   // сняли — отклик ушёл
   expect(within(m2()).queryByText(/Учту/)).toBeNull();
 
   const now = Date.now() / 1000;
-  await userEvent.click(within(m2()).getByRole("button", { name: "❓ Поясни" }));
+  await userEvent.click(within(m2()).getByRole("button", { name: "Поясни" }));
   expect(within(m2()).getByText("Ассистент поясняет…")).toBeInTheDocument();
   const asked = { ...journal[1]!, reactions: { "❓": now } };
   vi.mocked(getRecordingChat).mockResolvedValue(answer({

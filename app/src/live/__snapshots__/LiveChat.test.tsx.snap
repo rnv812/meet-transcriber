@@ -14,7 +14,7 @@ exports[`карточка WebFetch: настоящий хост первой с�
       открыть адрес
     </b>
     <span
-      class="chat-card__size muted"
+      class="chat-card__size"
     >
        · 
       5 строк, 135 симв.
@@ -40,16 +40,26 @@ exports[`карточка WebFetch: настоящий хост первой с�
     class="chat-card__actions"
   >
     <button
-      class="chat-btn chat-card__allow"
+      class="btn btn--mono btn--sm chat-card__allow"
+      data-density="compact"
       type="button"
     >
-      Разрешить один раз
+      <span
+        class="btn__label"
+      >
+        Разрешить один раз
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__deny"
+      class="btn btn--outline btn--sm chat-card__deny"
+      data-density="compact"
       type="button"
     >
-      Отклонить
+      <span
+        class="btn__label"
+      >
+        Отклонить
+      </span>
     </button>
   </div>
 </section>
@@ -69,7 +79,7 @@ exports[`карточка записи: начало и конец с помет
       запись в файл
     </b>
     <span
-      class="chat-card__size muted"
+      class="chat-card__size"
     >
        · 
       17 строк, 263 симв.
@@ -99,32 +109,51 @@ exports[`карточка записи: начало и конец с помет
   </pre>
   <button
     aria-expanded="true"
-    class="chat-card__more"
+    class="btn btn--link chat-card__more"
     type="button"
   >
-    Свернуть
+    <span
+      class="btn__label"
+    >
+      Свернуть
+    </span>
   </button>
   <div
     class="chat-card__actions"
   >
     <button
-      class="chat-btn chat-card__allow"
+      class="btn btn--mono btn--sm chat-card__allow"
+      data-density="compact"
       type="button"
     >
-      Разрешить один раз
+      <span
+        class="btn__label"
+      >
+        Разрешить один раз
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__allow-meeting"
+      class="btn btn--ghost btn--sm chat-card__allow-meeting"
+      data-density="compact"
       title="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
       type="button"
     >
-      Разрешать такое до конца встречи
+      <span
+        class="btn__label"
+      >
+        Разрешать такое до конца встречи
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__deny"
+      class="btn btn--outline btn--sm chat-card__deny"
+      data-density="compact"
       type="button"
     >
-      Отклонить
+      <span
+        class="btn__label"
+      >
+        Отклонить
+      </span>
     </button>
   </div>
 </section>
@@ -144,7 +173,7 @@ exports[`карточки по инструменту: запись, правк�
       правку файла
     </b>
     <span
-      class="chat-card__size muted"
+      class="chat-card__size"
     >
        · 
       5 строк, 159 симв.
@@ -164,16 +193,26 @@ exports[`карточки по инструменту: запись, правк�
     class="chat-card__actions"
   >
     <button
-      class="chat-btn chat-card__allow"
+      class="btn btn--mono btn--sm chat-card__allow"
+      data-density="compact"
       type="button"
     >
-      Разрешить один раз
+      <span
+        class="btn__label"
+      >
+        Разрешить один раз
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__deny"
+      class="btn btn--outline btn--sm chat-card__deny"
+      data-density="compact"
       type="button"
     >
-      Отклонить
+      <span
+        class="btn__label"
+      >
+        Отклонить
+      </span>
     </button>
   </div>
 </section>
@@ -193,7 +232,7 @@ exports[`карточки по инструменту: запись, правк�
       MCP team-jira → jira_create_issue
     </b>
     <span
-      class="chat-card__size muted"
+      class="chat-card__size"
     >
        · 
       6 строк, 125 симв.
@@ -214,16 +253,26 @@ exports[`карточки по инструменту: запись, правк�
     class="chat-card__actions"
   >
     <button
-      class="chat-btn chat-card__allow"
+      class="btn btn--mono btn--sm chat-card__allow"
+      data-density="compact"
       type="button"
     >
-      Разрешить один раз
+      <span
+        class="btn__label"
+      >
+        Разрешить один раз
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__deny"
+      class="btn btn--outline btn--sm chat-card__deny"
+      data-density="compact"
       type="button"
     >
-      Отклонить
+      <span
+        class="btn__label"
+      >
+        Отклонить
+      </span>
     </button>
   </div>
 </section>
@@ -243,7 +292,7 @@ exports[`карточки по инструменту: запись, правк�
       запись в файл
     </b>
     <span
-      class="chat-card__size muted"
+      class="chat-card__size"
     >
        · 
       17 строк, 263 симв.
@@ -267,32 +316,51 @@ exports[`карточки по инструменту: запись, правк�
   </pre>
   <button
     aria-expanded="false"
-    class="chat-card__more"
+    class="btn btn--link chat-card__more"
     type="button"
   >
-    Показать полностью
+    <span
+      class="btn__label"
+    >
+      Показать полностью
+    </span>
   </button>
   <div
     class="chat-card__actions"
   >
     <button
-      class="chat-btn chat-card__allow"
+      class="btn btn--mono btn--sm chat-card__allow"
+      data-density="compact"
       type="button"
     >
-      Разрешить один раз
+      <span
+        class="btn__label"
+      >
+        Разрешить один раз
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__allow-meeting"
+      class="btn btn--ghost btn--sm chat-card__allow-meeting"
+      data-density="compact"
       title="Дальше до конца встречи без вопросов: изменение файлов в C:\\Users\\demo\\Встречи\\2026-10-07_11-00"
       type="button"
     >
-      Разрешать такое до конца встречи
+      <span
+        class="btn__label"
+      >
+        Разрешать такое до конца встречи
+      </span>
     </button>
     <button
-      class="chat-btn chat-card__deny"
+      class="btn btn--outline btn--sm chat-card__deny"
+      data-density="compact"
       type="button"
     >
-      Отклонить
+      <span
+        class="btn__label"
+      >
+        Отклонить
+      </span>
     </button>
   </div>
 </section>

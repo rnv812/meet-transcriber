@@ -430,7 +430,9 @@ describe("исправления 1", () => {
     });
     render(<Host live={makeLive({ agent: agentInfo() })} wide />);
     load();
-    expect(screen.getByRole("button", { name: "👍 Полезно" })).toHaveTextContent(/^👍$/);
+    const like = screen.getByRole("button", { name: "Полезно" });
+    expect(like).toHaveTextContent(/^$/);                                            // только значок
+    expect(like.querySelector("svg")).not.toBeNull();
     expect(screen.getByText(/видит:/)).toBeInTheDocument();                         // шапка — по всей области
   });
 

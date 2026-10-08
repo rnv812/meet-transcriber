@@ -6,9 +6,10 @@ vi.mock("../lib/api", async (orig) => ({
   clickChat: vi.fn(async () => ({ ok: true, id: "m9" })),
   reactChat: vi.fn(async () => ({ ok: true, changed: true })),
   confirmChat: vi.fn(async () => ({ ok: true })),
+  postChat: vi.fn(async () => ({ id: "m5", queued: false, attachments: [] })),
   newChatClientId: vi.fn(() => "c1"),
 }));
-import { clickChat, confirmChat, reactChat } from "../lib/api";
+import { clickChat, confirmChat, postChat, reactChat } from "../lib/api";
 import type { ChatMessage, ChatSnapshot } from "../lib/types";
 import { agentInfo, agentMsg, attMsg, userMsg } from "../test/chatFixtures";
 import { GATE_TITLE, LiveChat } from "./LiveChat";
@@ -69,9 +70,9 @@ test("кнопки, нажатые раньше (в журнале), показ�
 test("реакции 👍 👎 ❓: переключатели, уходят reactChat; поставленная видна нажатой", async () => {
   render(<Host />);
   load([agentMsg("m1")]);
-  const like = screen.getByRole("button", { name: "👍 Полезно" });
-  expect(screen.getByRole("button", { name: "👎 Не по теме" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "❓ Поясни" })).toBeInTheDocument();
+  const like = screen.getByRole("button", { name: "Полезно" });
+  expect(screen.getByRole("button", { name: "Не по теме" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Поясни" })).toBeInTheDocument();
   await userEvent.click(like);
   expect(reactChat).toHaveBeenCalledWith(ep, "m1", "👍", true);
   expect(like).toHaveAttribute("aria-pressed", "true");
@@ -84,8 +85,8 @@ test("реакция не дошла — откат и заметка", async ()
   vi.mocked(reactChat).mockRejectedValueOnce(new Error("409"));
   render(<Host />);
   load([agentMsg("m1")]);
-  await userEvent.click(screen.getByRole("button", { name: "❓ Поясни" }));
-  expect(screen.getByRole("button", { name: "❓ Поясни" })).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(screen.getByRole("button", { name: "Поясни" }));
+  expect(screen.getByRole("button", { name: "Поясни" })).toHaveAttribute("aria-pressed", "false");
   expect(chat.note).toMatch(/Реакция не дошла/);
 });
 
@@ -193,7 +194,7 @@ test("live-область отклика на реакции есть с сам�
   expect(announced()).toHaveAttribute("role", "status");
   expect(announced()).toHaveAttribute("aria-live", "polite");
   expect(announced()).toBeEmptyDOMElement();
-  fireEvent.click(screen.getByRole("button", { name: "👍 Полезно" }));
+  fireEvent.click(screen.getByRole("button", { name: "Полезно" }));
   expect(announced()).toHaveTextContent("Учту: такое полезно");
   expect(within(msgRow("Сообщение m1")).queryByRole("status")).toBeNull();
 });
@@ -202,7 +203,7 @@ test("непоставленные реакции вне наведения сп
   render(<Host />);
   load([agentMsg("m1", { reactions: { "👍": 1 } })]);
   const row = msgRow("Сообщение m1");
-  for (const name of ["👍 Полезно", "👎 Не по теме", "❓ Поясни"]) {
+  for (const name of ["Полезно", "Не по теме", "Поясни"]) {
     expect(within(row).getByRole("button", { name })).toBeInTheDocument();
   }
 });
@@ -211,26 +212,31 @@ test("реакции: формальные подписи у кнопок, в п
   render(<Host />);
   load([agentMsg("m1")]);
   const row = msgRow("Сообщение m1");
-  const like = within(row).getByRole("button", { name: "👍 Полезно" });
-  const dislike = within(row).getByRole("button", { name: "👎 Не по теме" });
-  const explain = within(row).getByRole("button", { name: "❓ Поясни" });
+  const like = within(row).getByRole("button", { name: "Полезно" });
+  const dislike = within(row).getByRole("button", { name: "Не по теме" });
+  const explain = within(row).getByRole("button", { name: "Поясни" });
   expect(like).toHaveAttribute("title", "Полезно — ассистент будет писать больше такого");
   expect(dislike).toHaveAttribute("title", "Не по теме — ассистент поймёт, что промахнулся, и скорректирует, о чём писать");
   expect(explain).toHaveAttribute("title", "Поясни — ассистент объяснит, на что опирался");
-  // подпись рядом с эмодзи (видна при наведении и фокусе — CSS), прежних «норм» нет
-  expect(like).toHaveTextContent("👍Полезно");
-  expect(dislike).toHaveTextContent("👎Не по теме");
-  expect(explain).toHaveTextContent("❓Поясни");
+  // подпись рядом со значком Lucide (видна при наведении и фокусе — CSS), без эмодзи; прежних «норм» нет
+  for (const [btn, label] of [[like, "Полезно"], [dislike, "Не по теме"], [explain, "Поясни"]] as const) {
+    expect(btn).toHaveTextContent(new RegExp(`^${label}$`));
+    expect(btn.querySelector("svg.lucide")).not.toBeNull();
+  }
+  expect(row.querySelector(".chat-msg__tools")).not.toHaveTextContent(/[👍👎❓]/u);
   expect(row).not.toHaveTextContent(/норм|вопрос/);
 });
 
-test("узкая панель: у реакций только эмодзи, подпись и что будет — в подсказке и aria", () => {
+test("узкая панель: у реакций только значок, подпись и что будет — в подсказке и aria", () => {
   render(<Host compact />);
   load([agentMsg("m1")]);
-  const like = screen.getByRole("button", { name: "👍 Полезно" });
-  expect(like).toHaveTextContent(/^👍$/);
+  const like = screen.getByRole("button", { name: "Полезно" });
+  expect(like).toHaveTextContent(/^$/);
+  expect(like.querySelector("svg.lucide-thumbs-up")).not.toBeNull();
   expect(like).toHaveAttribute("title", "Полезно — ассистент будет писать больше такого");
-  expect(screen.getByRole("button", { name: "👎 Не по теме" })).toHaveTextContent(/^👎$/);
+  const dislike = screen.getByRole("button", { name: "Не по теме" });
+  expect(dislike).toHaveTextContent(/^$/);
+  expect(dislike.querySelector("svg.lucide-thumbs-down")).not.toBeNull();
 });
 
 test("👍 — отклик «Учту: такое полезно» сразу, гаснет, кнопка остаётся нажатой", async () => {
@@ -238,7 +244,7 @@ test("👍 — отклик «Учту: такое полезно» сразу, 
   try {
     render(<Host />);
     load([agentMsg("m1")]);
-    const like = screen.getByRole("button", { name: "👍 Полезно" });
+    const like = screen.getByRole("button", { name: "Полезно" });
     fireEvent.click(like);
     expect(within(msgRow("Сообщение m1")).getByText("Учту: такое полезно")).toBeInTheDocument();
     expect(announced()).toHaveTextContent("Учту: такое полезно");
@@ -253,7 +259,7 @@ test("👍 — отклик «Учту: такое полезно» сразу, 
 test("👎 — отклик «Учту: скорректирую, о чём пишу»; частота ассистента не меняется", async () => {
   render(<Host />);
   load([agentMsg("m1")]);
-  await userEvent.click(screen.getByRole("button", { name: "👎 Не по теме" }));
+  await userEvent.click(screen.getByRole("button", { name: "Не по теме" }));
   expect(reactChat).toHaveBeenCalledWith(ep, "m1", "👎", true);
   expect(within(msgRow("Сообщение m1")).getByText("Учту: скорректирую, о чём пишу")).toBeInTheDocument();
   expect(announced()).toHaveTextContent("Учту: скорректирую, о чём пишу");
@@ -263,11 +269,11 @@ test("👎 — отклик «Учту: скорректирую, о чём пи
 test("снять реакцию — без отклика; реакция не дошла — отклик уходит", async () => {
   render(<Host />);
   load([agentMsg("m1", { reactions: { "👍": 1 } })]);
-  await userEvent.click(screen.getByRole("button", { name: "👍 Полезно" }));
+  await userEvent.click(screen.getByRole("button", { name: "Полезно" }));
   expect(reactChat).toHaveBeenLastCalledWith(ep, "m1", "👍", false);
   expect(within(msgRow("Сообщение m1")).queryByText(/Учту/)).toBeNull();
   vi.mocked(reactChat).mockRejectedValueOnce(new Error("409"));
-  await userEvent.click(screen.getByRole("button", { name: "👎 Не по теме" }));
+  await userEvent.click(screen.getByRole("button", { name: "Не по теме" }));
   expect(within(msgRow("Сообщение m1")).queryByText(/Учту/)).toBeNull();
   expect(chat.note).toMatch(/Реакция не дошла/);
 });
@@ -276,7 +282,7 @@ test("❓ — «Ассистент поясняет…», пока не прид
   const now = Date.now() / 1000;
   render(<Host />);
   load([agentMsg("m1", { text: "Риск: интеграция **без владельца**, а от неё зависит запуск 15.11", at: now - 60 })]);
-  await userEvent.click(screen.getByRole("button", { name: "❓ Поясни" }));
+  await userEvent.click(screen.getByRole("button", { name: "Поясни" }));
   const row = () => msgRow("без владельца");
   expect(within(row()).getByText("Ассистент поясняет…")).toBeInTheDocument();
   expect(within(row()).queryByText(/Учту/)).toBeNull();
@@ -442,4 +448,102 @@ test("решённая или просроченная карточка уход
   expect(cards()).toBeNull();
   expect(log()).toHaveTextContent("Разрешено один раз");
   expect(log()).toHaveTextContent("Время вышло — не выполнено");
+});
+
+// --- Atlas Aurora (0.4, этап 5, задача 2): вид ленты; роли, подписи и поведение — прежние ---------
+
+describe("Atlas Aurora", () => {
+  test("сообщение агента — карточка aurora-wash со знаком агента; пишет — знак «пишет»", () => {
+    render(<Host />);
+    load([agentMsg("m1"), userMsg("m3", { text: "мой вопрос" }), { ...agentMsg("s1"), kind: "system", text: "Сбой" },
+      agentMsg("m2", { status: "writing", text: "" })]);
+    const done = msgRow("Сообщение m1");
+    expect(done).toHaveClass("chat-msg--agent", "card", "aurora-wash");
+    expect(done.querySelector(".chat-msg__head .agent-mark")).toHaveAttribute("data-state", "rest");
+    act(() => chat.sink.onChatPartial({ id: "m2", text: "Сроки по встрече" }));
+    const writing = within(log()).getByText("Сроки по встрече").closest("li")!;
+    expect(writing).toHaveClass("card", "aurora-wash");
+    expect(writing.querySelector(".chat-msg__head .agent-mark")).toHaveAttribute("data-state", "write");
+    // Ваши сообщения и системные строки — без сияния.
+    expect(msgRow("мой вопрос")).not.toHaveClass("aurora-wash");
+    expect(within(log()).getByText("Сбой")).not.toHaveClass("aurora-wash");
+  });
+
+  test("кнопки агента — .filter с aria-pressed; у нажатой — без символа «✓» в подписи", async () => {
+    render(<Host />);
+    load([agentMsg("m1", { buttons: ["Глянь", "Только сроки"] })]);
+    const group = screen.getByRole("group", { name: "Ответить ассистенту" });
+    for (const b of within(group).getAllByRole("button")) {
+      expect(b).toHaveClass("filter");
+      expect(b).toHaveAttribute("aria-pressed", "false");
+    }
+    await userEvent.click(within(group).getByRole("button", { name: "Только сроки" }));
+    const used = within(group).getByRole("button", { name: "Только сроки" });
+    expect(used).toHaveAttribute("aria-pressed", "true");
+    expect(used).toHaveTextContent(/^Только сроки$/);
+  });
+
+  test("реакции и копирование — кнопки Aurora; поставленная — нажатая (aria-pressed)", () => {
+    render(<Host />);
+    load([agentMsg("m1", { reactions: { "👎": 1 } })]);
+    const row = msgRow("Сообщение m1");
+    const group = within(row).getByRole("group", { name: "Реакция" });
+    for (const b of within(group).getAllByRole("button")) expect(b).toHaveClass("btn", "btn--ghost");
+    expect(within(group).getByRole("button", { name: "Не по теме" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "Поясни" }).querySelector("svg")).not.toBeNull();
+    expect(within(row).getByRole("button", { name: "Копировать" })).toHaveClass("btn");
+  });
+
+  test("источник под сообщением — кнопка Aurora со значком и именем", () => {
+    render(<Host />);
+    load([attMsg("a1", { type: "doc", name: "Регламент API.pdf", path: "C:/r/x/assistant/files/a1.pdf" }),
+      userMsg("m0", { text: "вот", attachments: ["a1"] }),
+      agentMsg("m1", { text: "См. Регламент API.pdf" })]);
+    const src = within(msgRow("См. Регламент API.pdf")).getByRole("button", { name: "Источник: Регламент API.pdf" });
+    expect(src).toHaveClass("btn", "btn--outline");
+    expect(src).toHaveTextContent("Регламент API.pdf");
+    expect(src.querySelector("svg")).not.toBeNull();
+  });
+
+  test("закреплённый вопрос: метка «Вопрос вам», кнопки — .filter, «Показать в ленте» ведёт к сообщению", async () => {
+    render(<Host />);
+    load([agentMsg("m1", { text: "Сказать Анне про срок?", pin: true, buttons: ["Да", "Нет"] })]);
+    const pin = screen.getByRole("region", { name: "Вопрос вам" });
+    expect(pin.querySelector(".badge")).toHaveTextContent("Вопрос вам");
+    for (const b of within(pin).getAllByRole("button", { name: /^(Да|Нет)$/ })) expect(b).toHaveClass("filter");
+    const row = within(log()).getByText("Сказать Анне про срок?").closest("li")!;
+    const scrolled = vi.fn();
+    row.scrollIntoView = scrolled;
+    await userEvent.click(within(pin).getByRole("button", { name: "Показать в ленте" }));
+    expect(scrolled).toHaveBeenCalled();
+    expect(within(pin).getByRole("button", { name: "Убрать из закреплённых" })).toHaveClass("btn");
+  });
+
+  test("не отправлено — «Повторить» ссылкой Aurora, сообщение с рамкой ошибки", async () => {
+    vi.mocked(postChat).mockRejectedValueOnce(new Error("нет связи"));
+    render(<Host />);
+    load([agentMsg("m1")]);
+    act(() => void chat.send("что с бюджетом?"));
+    const failed = await within(log()).findByText(/^Не отправлено/);
+    expect(failed.closest("li")).toHaveClass("chat-msg--user", "is-failed");
+    expect(within(failed).getByRole("button", { name: "Повторить" })).toHaveClass("btn", "btn--link");
+  });
+
+  test("«↓ N новых» — кнопка Aurora с прежней подписью", () => {
+    render(<Host />);
+    load([agentMsg("m1"), agentMsg("m2")]);
+    scrollTo(log().parentElement!, { top: 100 });
+    act(() => chat.sink.onChat({ seq: 21, op: "add", message: agentMsg("m3") }));
+    expect(screen.getByRole("button", { name: "↓ 1 новое" })).toHaveClass("btn", "chat__new");
+  });
+
+  test("карточка подтверждения: кнопки Aurora, «Показать полностью» — ссылкой; подписи прежние", () => {
+    render(<Host />);
+    load([card("m2", { grant: { key: "k", label: "Bash npm" }, preview: "ls…", args: "ls -la" })]);
+    const region = cards()!;
+    for (const name of ["Разрешить один раз", "Разрешать такое до конца встречи", "Отклонить"]) {
+      expect(within(region).getByRole("button", { name })).toHaveClass("btn");
+    }
+    expect(within(region).getByRole("button", { name: "Показать полностью" })).toHaveClass("btn", "btn--link");
+  });
 });

@@ -16,9 +16,9 @@
  * в долгой встрече не прячется за десятками кнопок. Реакции видны при
  * наведении и фокусе, поставленные — всегда.
  *
- * Реакции 👍 «Полезно», 👎 «Не по теме», ❓ «Поясни»: в подсказке — что будет,
- * при наведении и фокусе рядом с эмодзи — подпись (в узкой — только эмодзи и
- * подсказка). После нажатия 👍 / 👎 — заметка окна «Учту: …» (`chat.ack`),
+ * Реакции 👍 «Полезно», 👎 «Не по теме», ❓ «Поясни» (эмодзи — ключи протокола;
+ * на экране — значки Lucide): в подсказке — что будет, при наведении и фокусе
+ * рядом со значком — подпись (в узкой — только значок и подсказка). После нажатия 👍 / 👎 — заметка окна «Учту: …» (`chat.ack`),
  * гаснет в нажатую кнопку; ❓ — «Ассистент поясняет…», пока не пришло
  * пояснение. У пояснения — метка «пояснение» и ссылка «к сообщению …»:
  * щелчок — к поясняемому сообщению.
@@ -28,22 +28,34 @@
  * (`open_material`). В узкой панели у чипа только значок.
  *
  * Узкая панель (`compact`): время сообщения — в подсказке, вложения
- * сообщения — счётчиком «📎 N» (ревью live-chat, M7).
+ * сообщения — счётчиком (скрепка и число; ревью live-chat, M7).
+ *
+ * Вид — Atlas Aurora (0.4): сообщение агента — карточка `.card.aurora-wash` со
+ * знаком агента, его кнопки — `.filter` (aria-pressed), реакции, источники и
+ * действия — кнопки Aurora (`Button`).
  */
 
-import { BookOpen, Copy, FileText, Image as ImageIcon, X } from "lucide-react";
+import {
+  BookOpen, CircleHelp, Copy, CornerDownRight, FileText, Image as ImageIcon, type LucideIcon, Paperclip, ThumbsDown, ThumbsUp, X,
+} from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { plainMarkdown } from "../lib/agentRef";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, ChatReaction } from "../lib/types";
+import { AgentMark } from "../ui/AgentMark";
+import { BADGE_CLASS } from "../ui/badge";
+import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { type FeedItem, type Outgoing, REACTIONS, isFinalAgent } from "./chatModel";
 import type { Source } from "./sources";
 import { type Chat, EXPLAINING } from "./useChat";
 import "./chat.css";
+
+/** Значки реакций (Lucide): ключ протокола — эмодзи, на экране — значок и подпись. */
+const REACTION_ICON: Record<ChatReaction, LucideIcon> = { "👍": ThumbsUp, "👎": ThumbsDown, "❓": CircleHelp };
 
 /** Насколько от низа ещё считается «внизу». */
 const BOTTOM_SLACK_PX = 24;
@@ -88,33 +100,34 @@ function ConfirmCard({ m, chat, disabled, pinned = false }: {
       aria-label={`Ассистент хочет выполнить: ${m.title ?? m.tool ?? ""}`} onKeyDown={onKey}>
       <div className="chat-card__title">
         Ассистент хочет выполнить: <b>{m.title ?? m.tool}</b>
-        {m.size && <span className="chat-card__size muted"> · {m.size}</span>}
+        {m.size && <span className="chat-card__size"> · {m.size}</span>}
       </div>
       {(m.warnings ?? []).map((w) => <div key={w} className="chat-card__warn" role="note">{w}</div>)}
       {args && <pre className="chat-card__args" dir="ltr">{m.preview && !full ? m.preview : args}</pre>}
       {m.preview && (
-        <button type="button" className="chat-card__more" aria-expanded={full} onClick={() => setFull(!full)}>
+        <Button variant="link" className="chat-card__more" aria-expanded={full} onClick={() => setFull(!full)}>
           {full ? "Свернуть" : "Показать полностью"}
-        </button>
+        </Button>
       )}
       {open ? (
+        // «Разрешить один раз» — сильная без цвета; «до конца встречи» (шире всего) — тише; «Отклонить» (Esc) — контур.
         <div className="chat-card__actions">
-          <button type="button" className="chat-btn chat-card__allow" disabled={disabled || busy}
+          <Button variant="mono" size="xs" className="chat-card__allow" disabled={disabled || busy}
             onClick={() => void decide(true)}>
             Разрешить один раз
-          </button>
+          </Button>
           {m.grant && (
-            <button type="button" className="chat-btn chat-card__allow-meeting" disabled={disabled || busy}
+            <Button variant="ghost" size="xs" className="chat-card__allow-meeting" disabled={disabled || busy}
               title={`Дальше до конца встречи без вопросов: ${m.grant.label}`} onClick={() => void decide(true, true)}>
               Разрешать такое до конца встречи
-            </button>
+            </Button>
           )}
-          <button type="button" className="chat-btn chat-card__deny" disabled={disabled || busy} onClick={() => void decide(false)}>
+          <Button size="xs" className="chat-card__deny" disabled={disabled || busy} onClick={() => void decide(false)}>
             Отклонить
-          </button>
+          </Button>
         </div>
       ) : (
-        <div className="chat-card__done muted">{m.decision ? CARD_DECIDED[m.decision] ?? m.decision : "Ждёт вашего решения — над лентой"}</div>
+        <div className="chat-card__done">{m.decision ? CARD_DECIDED[m.decision] ?? m.decision : "Ждёт вашего решения — над лентой"}</div>
       )}
     </section>
   );
@@ -143,7 +156,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** Кнопки сообщения агента: нажатие — ваш ответ; после — видно, какую нажали. */
+/** Кнопки сообщения агента (`.filter` Aurora): нажатие — ваш ответ; нажатая — aria-pressed, остальные гаснут. */
 function AgentButtons({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disabled: boolean }) {
   const buttons = (m.buttons ?? []).filter((b) => typeof b === "string" && b.trim()).slice(0, 3);
   if (!buttons.length) return null;
@@ -155,11 +168,11 @@ function AgentButtons({ m, chat, disabled }: { m: ChatMessage; chat: Chat; disab
         // aria-disabled, а не disabled: фокус остаётся на нажатой кнопке.
         const off = used !== null || disabled;
         return (
-          <button key={label} type="button" className={`chat-btn${on ? " is-used" : ""}`} aria-pressed={on}
+          <button key={label} type="button" className="filter" aria-pressed={on}
             aria-disabled={off || undefined}
             title={on ? "Вы ответили этим" : used !== null ? "Уже ответили" : undefined}
             onClick={() => { if (!off) void chat.click(m.id, label); }}>
-            {on && <span aria-hidden="true">✓ </span>}{label}
+            {label}
           </button>
         );
       })}
@@ -173,12 +186,12 @@ function Reactions({ m, chat, disabled, compact }: { m: ChatMessage; chat: Chat;
       {REACTIONS.map(({ emoji, label, hint }) => {
         const on = !!m.reactions?.[emoji];
         return (
-          <button key={emoji} type="button" className={`chat-react__btn${on ? " is-on" : ""}`} aria-pressed={on}
-            aria-label={`${emoji} ${label}`} title={hint} disabled={disabled}
+          <Button key={emoji} variant="ghost" size="xs" icon={REACTION_ICON[emoji]}
+            className={`chat-react__btn${on ? " is-on" : ""}${compact ? " btn--icon" : ""}`} aria-pressed={on}
+            aria-label={label} title={hint} disabled={disabled}
             onClick={() => void chat.react(m.id, emoji)}>
-            <span aria-hidden="true">{emoji}</span>
             {!compact && <span className="chat-react__label" aria-hidden="true">{label}</span>}
-          </button>
+          </Button>
         );
       })}
     </span>
@@ -198,7 +211,7 @@ function ExplainsRef({ id, chat, onShow }: { id: string; chat: Chat; onShow: (id
   const quote = quoteOf(chat.state.byId[id]);
   return (
     <>
-      <span className="chat-msg__tag chat-msg__tag--explain">пояснение</span>
+      <span className={`${BADGE_CLASS.plain} chat-msg__tag`}>пояснение</span>
       <button type="button" className="chat-msg__ref" title="Показать сообщение, которое поясняет ассистент"
         onClick={() => onShow(id)}>
         к сообщению{quote ? ` ${quote}` : ""}
@@ -213,11 +226,11 @@ function Sources({ sources, chat, compact }: { sources: Source[]; chat: Chat; co
   return (
     <div className="chat-msg__sources" role="group" aria-label="Источники">
       {sources.map((s) => (
-        <button key={s.key} type="button" className="chat-src" aria-label={`Источник: ${s.label}`}
+        <Button key={s.key} size="xs" icon={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText}
+          className={`chat-src${compact ? " btn--icon" : ""}`} aria-label={`Источник: ${s.label}`}
           title={`Открыть «${s.label}»`} onClick={() => void chat.open(s)}>
-          <Icon as={s.kind === "image" ? ImageIcon : s.kind === "kb" ? BookOpen : FileText} size="sm" />
           {!compact && <span className="chat-src__name">{s.label}</span>}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -234,12 +247,14 @@ function AgentMessage({ m, chat, onTime, onShow, compact, disabled }: {
   const ack = chat.ack(m.id);
   const explaining = !disabled && !writing && chat.explaining(m.id);
   return (
-    <li className={`chat-msg chat-msg--agent${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
+    // Карточка Aurora с отсветом сияния (вывод ИИ) и знаком агента; пока пишет — знак «пишет».
+    <li className={`chat-msg chat-msg--agent card aurora-wash${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
       data-id={m.id} data-key={m.id} aria-busy={writing || undefined} title={compact && time ? time : undefined}>
       <div className="chat-msg__head">
+        <AgentMark state={writing ? "write" : "rest"} size={14} />
         <span className="chat-msg__who">Ассистент</span>
         {time && !compact && <span className="chat-msg__time num">{time}</span>}
-        {m.pin && <span className="chat-msg__tag">вопрос вам</span>}
+        {m.pin && <span className={`${BADGE_CLASS.run} badge--plain chat-msg__tag`}>вопрос вам</span>}
         {typeof m.explains === "string" && <ExplainsRef id={m.explains} chat={chat} onShow={onShow} />}
         {writing && partial?.trim() && <span className="chat-msg__writing">пишет…</span>}
       </div>
@@ -300,7 +315,9 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
       {m?.via === "reaction" && <div className="chat-msg__via">реакция</div>}
       {text && <div className="chat-msg__text chat-msg__text--plain">{text}</div>}
       {atts.length > 0 && (compact ? (
-        <span className="chat-msg__att-count" title={names} aria-label={`Вложения: ${names}`}>📎 {atts.length}</span>
+        <span className="chat-msg__att-count" title={names} aria-label={`Вложения: ${names}`}>
+          <Icon as={Paperclip} size="sm" />{atts.length}
+        </span>
       ) : (
         <div className="chat-msg__atts">{atts.map((id) => <AttachmentChip key={id} id={id} chat={chat} />)}</div>
       ))}
@@ -309,7 +326,7 @@ function UserMessage({ m, chat, out, compact = false }: { m?: ChatMessage; chat:
       {out?.state === "failed" && (
         <div className="chat-msg__error" role="alert">
           Не отправлено: {out.error}{" "}
-          <button type="button" className="link" onClick={() => void chat.retry(out.client_id)}>Повторить</button>
+          <Button variant="link" onClick={() => void chat.retry(out.client_id)}>Повторить</Button>
         </div>
       )}
     </li>
@@ -338,14 +355,16 @@ function Item({ it, chat, onTime, onShow, compact, disabled }: {
   return <li className="chat-sys" data-id={m.id} data-key={m.id}>{m.text}</li>;
 }
 
-/** Закреплённый вопрос агента — над лентой; щелчок по тексту — к сообщению в ленте. */
+/** Закреплённый вопрос агента — над лентой (макет MeetLive): метка, «Показать в ленте», «×»; текст и кнопки агента. */
 function Pinned({ m, chat, onTime, onShow, onHide, disabled }: {
   m: ChatMessage; chat: Chat; onTime?: (t: number) => void; onShow: () => void; onHide: () => void; disabled: boolean;
 }) {
   return (
     <section className="chat-pin" aria-label="Вопрос вам">
       <div className="chat-pin__head">
-        <button type="button" className="chat-pin__title" onClick={onShow} title="Показать в ленте">Вопрос вам</button>
+        <span className={`${BADGE_CLASS.run} badge--plain chat-pin__badge`}><Icon as={CircleHelp} size="sm" />Вопрос вам</span>
+        <span className="chat-pin__gap" />
+        <Button variant="ghost" size="xs" icon={CornerDownRight} onClick={onShow}>Показать в ленте</Button>
         <IconButton icon={X} size="xs" label="Убрать из закреплённых" onClick={onHide} />
       </div>
       <Markdown source={m.text ?? ""} className="chat-pin__text" onTime={onTime} />
@@ -475,11 +494,8 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
     row.classList.add("is-flash");
     setTimeout(() => row.classList.remove("is-flash"), FLASH_MS);
   };
-  const showPinned = () => {
-    if (!pinned) return;
-    const row = box.current?.querySelector<HTMLElement>(`[data-id="${pinned.id}"]`);
-    row?.scrollIntoView?.({ block: "center" });
-  };
+  // «Показать в ленте» у закреплённого вопроса — как «к сообщению …»: прокрутить, подсветить, фокус.
+  const showPinned = () => { if (pinned) showMessage(pinned.id); };
 
   return (
     <div className={`chat${compact ? " chat--compact" : ""}`}>
@@ -523,9 +539,9 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
         </ol>
       </div>
       {unread > 0 && (
-        <button type="button" className="chat__new" onClick={toBottom}>
+        <Button variant="deep" size="xs" className="chat__new" onClick={toBottom}>
           ↓ {unread} {unread === 1 ? "новое" : "новых"}
-        </button>
+        </Button>
       )}
     </div>
   );
