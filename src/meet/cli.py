@@ -223,7 +223,7 @@ def _add_library_parsers(sub) -> None:
                       help="файл результата (без него — в stdout)")
 
     p_vo = sub.add_parser("voices", help="база голосов: список, переименовать, "
-                                         "слить, удалить, фото")
+                                         "слить, удалить, фото, роль")
     vo = p_vo.add_subparsers(dest="voices_command", metavar="команда",
                            required=True)
     vo.add_parser("list", parents=[as_json],
@@ -243,6 +243,11 @@ def _add_library_parsers(sub) -> None:
     p_av.add_argument("name")
     p_av.add_argument("picture", nargs="?", help="картинка (png, jpg, …)")
     p_av.add_argument("--clear", action="store_true", help="убрать фото")
+    p_ro = vo.add_parser("role", parents=[as_json],
+                         help="кто это: роль или короткая заметка (до 160 символов)")
+    p_ro.add_argument("name")
+    p_ro.add_argument("text", nargs="?", default=None,
+                      help='текст роли; "" — убрать; без текста — показать текущую')
 
     p_su = sub.add_parser("summary", parents=[as_json],
                           help="итоги встречи моделью → summary.md")

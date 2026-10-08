@@ -914,6 +914,45 @@ def test_set_avatar_unknown_person(voices_state):
     assert state.set_avatar("Никто", _png_bytes()) == {"error": "человека нет"}
 
 
+def test_person_role_set_read_and_clear(voices_state, monkeypatch, tmp_path):
+    state, voices = voices_state
+    monkeypatch.setattr(state, "_root", lambda: tmp_path / "recordings")
+    assert state.people()["items"][0]["role"] == ""
+    assert state.person("Демьян")["role"] == ""
+    assert state.set_role("Демьян", {"role": "  CTO\nAcme "}) == {"ok": True, "role": "CTO Acme"}
+    assert state.people()["items"][0]["role"] == "CTO Acme"
+    assert state.person("Демьян")["role"] == "CTO Acme"
+    assert state.set_role("Демьян", {"role": ""}) == {"ok": True, "role": ""}
+    assert state.person("Демьян")["role"] == ""
+    assert json.loads((voices / "Демьян.json").read_text(encoding="utf-8")) == {"samples": []}
+
+
+def test_person_role_errors_are_text(voices_state):
+    from meet import control
+
+    state, _ = voices_state
+    assert state.set_role("Никто", {"role": "x"}) == {"error": "человека нет"}
+    with pytest.raises(control.BadRequest):
+        state.set_role("a/b", {"role": "x"})
+    with pytest.raises(control.BadRequest, match="role"):
+        state.set_role("Демьян", {"role": 5})
+    with pytest.raises(control.BadRequest, match="role"):
+        state.set_role("Демьян", {})
+
+
+def test_person_role_survives_rename_merge_and_goes_with_delete(voices_state, monkeypatch, tmp_path):
+    state, voices = voices_state
+    monkeypatch.setattr(state, "_root", lambda: tmp_path / "recordings")
+    (voices / "Пётр.json").write_text('{"samples": []}', encoding="utf-8")
+    state.set_role("Демьян", {"role": "заказчик"})
+    assert state.person_action("Демьян", "rename", {"to": "Демьян Петров"}) == {"ok": True}
+    assert state.person("Демьян Петров")["role"] == "заказчик"
+    assert state.person_action("Пётр", "merge", {"into": "Демьян Петров"}) == {"ok": True}
+    assert state.person("Демьян Петров")["role"] == "заказчик"
+    state.person_action("Демьян Петров", "delete")
+    assert state.people()["items"] == []
+
+
 def test_shutdown_saves_recording_and_requests_exit(control_state, app, monkeypatch):
     calls = []
     monkeypatch.setattr(app, "stop_recording", lambda discard=False, hook=True:

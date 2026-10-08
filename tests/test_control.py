@@ -35,6 +35,12 @@ class FakeState:
         self.calls.append(("avatar", name, len(data)))
         return {"ok": True}
 
+    def set_role(self, name, body):
+        if not isinstance(body.get("role"), str):
+            raise control.BadRequest("role: нужна строка")
+        self.calls.append(("role", name, body["role"]))
+        return {"ok": True, "role": body["role"].strip()}
+
     def snapshot(self) -> dict:
         return {"status": "recording" if self.recording else "idle",
                 "folder": "C:/rec/2026-08-18_11-00" if self.recording else None,
@@ -1123,6 +1129,26 @@ def test_put_avatar_passes_raw_bytes_and_decodes_name(server):
     with urllib.request.urlopen(req, timeout=5) as r:
         assert json.loads(r.read()) == {"ok": True}
     assert ("avatar", "Демьян", 8) in server.state_obj.calls
+
+
+def test_put_role_decodes_name_and_passes_body(server):
+    def put(body, token=None):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/voices/%D0%94%D0%B5%D0%BC%D1%8C%D1%8F%D0%BD/role",
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="PUT",
+            headers={"Authorization": f"Bearer {token or server.token}",
+                     "Content-Type": "application/json"})
+        return urllib.request.urlopen(req, timeout=5)
+
+    with put({"role": " CTO "}) as r:
+        assert json.loads(r.read()) == {"ok": True, "role": "CTO"}
+    assert ("role", "Демьян", " CTO ") in server.state_obj.calls
+    with pytest.raises(urllib.error.HTTPError) as e:
+        put({"role": 5})
+    assert e.value.code == 400
+    with pytest.raises(urllib.error.HTTPError) as e:
+        put({"role": "x"}, token="wrong")
+    assert e.value.code == 401
 
 
 def test_missing_avatar_is_404(server):

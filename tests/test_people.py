@@ -442,3 +442,141 @@ def test_listing_reparses_only_changed_transcripts(tmp_path, monkeypatch):
     assert reads == ["2026-09-21_10-00"] and (got["meetings"], got["seconds"]) == (2, 14)
     assert str(library.transcript_path(folders[2])) not in people._speech_cache
     assert str(library.transcript_path(folders[0])) in people._speech_cache
+
+
+# --- роль человека («Кто это») ---------------------------------------------------
+
+
+def test_role_is_empty_by_default_and_old_files_read_fine(tmp_path):
+    voices, rec = tmp_path / "voices", tmp_path / "rec"
+    _voice(voices, "Демьян", [tmp_path / "a"])
+    assert people.role_of("Демьян", voices) == ""
+    assert people.listing(voices, rec)[0]["role"] == ""
+    assert people.person("Демьян", voices, rec)["role"] == ""
+    assert people.roles(voices) == {}
+
+
+def test_set_role_keeps_samples_and_other_keys(tmp_path):
+    voices, rec = tmp_path / "voices", tmp_path / "rec"
+    _voice(voices, "Демьян", [tmp_path / "a"])
+    f = voices / "Демьян.json"
+    f.write_text(json.dumps({**json.loads(f.read_text(encoding="utf-8")), "extra": 1}),
+                 encoding="utf-8")
+    assert people.set_role("Демьян", "  CTO Acme ", voices) == "CTO Acme"
+    data = json.loads(f.read_text(encoding="utf-8"))
+    assert data["role"] == "CTO Acme" and data["extra"] == 1
+    assert len(data["samples"]) == 1
+    assert people.role_of("Демьян", voices) == "CTO Acme"
+    assert people.listing(voices, rec)[0]["role"] == "CTO Acme"
+    assert people.person("Демьян", voices, rec)["role"] == "CTO Acme"
+    assert sorted(p.name for p in voices.iterdir()) == ["Демьян.json"]  # без .tmp
+
+
+def test_empty_role_clears_the_key(tmp_path):
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    people.set_role("Демьян", "заказчик", voices)
+    assert people.set_role("Демьян", "   ", voices) == ""
+    assert "role" not in json.loads((voices / "Демьян.json").read_text(encoding="utf-8"))
+    assert people.role_of("Демьян", voices) == ""
+
+
+def test_role_newlines_become_spaces_and_length_is_capped(tmp_path):
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    assert people.set_role("Демьян", "CTO\r\nSmart\n\n  Monitor\tи т.д.", voices) == "CTO Acme и т.д."
+    got = people.set_role("Демьян", "я" * 500, voices)
+    assert len(got) == people.MAX_ROLE == 160
+    assert people.role_of("Демьян", voices) == got
+    # Не строка — пусто, а не падение.
+    assert people.set_role("Демьян", None, voices) == ""
+
+
+def test_role_of_unknown_or_bad_name_is_empty_and_set_raises(tmp_path):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    assert people.role_of("Никто", voices) == ""
+    assert people.role_of("a/b", voices) == ""
+    with pytest.raises(KeyError):
+        people.set_role("Никто", "x", voices)
+    with pytest.raises(ValueError):
+        people.set_role("a/b", "x", voices)
+
+
+def test_garbled_role_value_in_file_reads_as_empty(tmp_path):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    (voices / "Демьян.json").write_text(json.dumps({"samples": [], "role": 5}), encoding="utf-8")
+    (voices / "Пётр.json").write_text("not json", encoding="utf-8")
+    assert people.role_of("Демьян", voices) == ""
+    assert people.role_of("Пётр", voices) == ""
+    assert people.roles(voices) == {}
+
+
+def test_roles_by_name(tmp_path):
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    _voice(voices, "Пётр", [])
+    _voice(voices, "Ира", [])
+    people.set_role("Демьян", "CTO", voices)
+    people.set_role("Пётр", "заказчик", voices)
+    assert people.roles(voices) == {"Демьян": "CTO", "Пётр": "заказчик"}
+    assert people.roles(voices, ["Пётр", "Ира", "Вы", "Никто"]) == {"Пётр": "заказчик"}
+    assert people.roles(tmp_path / "нет-папки") == {}
+
+
+def test_rename_carries_the_role(tmp_path):
+    voices, rec = tmp_path / "voices", tmp_path / "rec"
+    _voice(voices, "Аркаша", [])
+    people.set_role("Аркаша", "команда интеграции", voices)
+    people.rename("Аркаша", "Аркадий", voices, rec)
+    assert people.role_of("Аркадий", voices) == "команда интеграции"
+    assert people.role_of("Аркаша", voices) == ""
+
+
+def test_case_only_rename_keeps_the_role(tmp_path):
+    voices, rec = tmp_path / "voices", tmp_path / "rec"
+    _voice(voices, "демьян", [])
+    people.set_role("демьян", "CTO", voices)
+    people.rename("демьян", "Демьян", voices, rec)
+    assert people.role_of("Демьян", voices) == "CTO"
+
+
+def test_merge_keeps_target_role_or_takes_the_source_one(tmp_path):
+    voices, rec = tmp_path / "voices", tmp_path / "rec"
+    _voice(voices, "Аркаша", [tmp_path / "a"])
+    _voice(voices, "Аркадий", [tmp_path / "b"])
+    people.set_role("Аркаша", "из источника", voices)
+    people.set_role("Аркадий", "в кого сливают", voices)
+    people.merge("Аркаша", "Аркадий", voices, rec)
+    assert people.role_of("Аркадий", voices) == "в кого сливают"
+    assert len(json.loads((voices / "Аркадий.json").read_text(encoding="utf-8"))["samples"]) == 2
+
+    _voice(voices, "Дима", [tmp_path / "c"])
+    _voice(voices, "Демьян", [tmp_path / "d"])
+    people.set_role("Дима", "заказчик", voices)
+    people.merge("Дима", "Демьян", voices, rec)
+    assert people.role_of("Демьян", voices) == "заказчик"
+
+    _voice(voices, "Лена", [])
+    _voice(voices, "Елена", [])
+    people.merge("Лена", "Елена", voices, rec)
+    assert people.role_of("Елена", voices) == ""
+
+
+def test_delete_removes_the_role(tmp_path):
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    people.set_role("Демьян", "CTO", voices)
+    people.delete("Демьян", voices)
+    assert people.role_of("Демьян", voices) == "" and people.roles(voices) == {}
+
+
+def test_new_samples_do_not_drop_the_role(tmp_path):
+    from meet import voices as voices_db
+
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    people.set_role("Демьян", "CTO", voices)
+    voices_db.enroll_sample("Демьян", [0.1, 0.2], "src", "2026-10-01", voices)
+    assert people.role_of("Демьян", voices) == "CTO"

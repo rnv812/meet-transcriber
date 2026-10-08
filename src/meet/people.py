@@ -3,6 +3,7 @@
 
 Голоса хранит voices.py (`<voices>/<имя>.json`); здесь — всё, что про человека,
 а не про эмбеддинги. Аватар — `<voices>/<имя>.png`, квадрат 256×256.
+Роль («Кто это», до 160 символов) — ключ `role` в файле голоса.
 Статистика не хранится, а считается по transcript.json всех записей
 библиотеки — по репликам, где спикер назван именем человека (узнан ли он сам
 или назван вручную, неважно): файлы — источник истины, и копия папки с другой
@@ -22,6 +23,9 @@ from meet import library
 
 AVATAR_SIZE = 256
 MAX_NAME = 80
+# «Кто это»: короткая строка, не абзац.
+MAX_ROLE = 160
+_ROLE_JUNK = re.compile(r"[\x00-\x1f\x7f  ]")
 # Недопустимое в имени файла Windows плюс управляющие символы.
 _BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Чтение-правка-запись файла голоса (<voices>/<имя>.json): образцы
@@ -63,6 +67,86 @@ def _samples(path: Path) -> list[dict]:
         return [s for s in data.get("samples", []) if isinstance(s, dict)]
     except (OSError, ValueError, AttributeError):
         return []
+
+
+# --- роль человека («Кто это») ---------------------------------------------------
+# Лежит в файле голоса ключом `role` рядом с `samples`: отдельный файл в папке
+# голосов попал бы в `*.json`-перечисления (voices.load_voices, listing) как
+# «человек». Прочие ключи файла все пишущие (voices._write_samples, merge)
+# сохраняют, поэтому образцы роль не стирают, а переименование (переезд файла)
+# переносит её само. Старые файлы без ключа читаются как «роли нет».
+
+
+def clean_role(text) -> str:
+    """Роль как её хранят: строка в одну строку (любые переводы строк и
+    пробельные серии — один пробел), без управляющих символов, не длиннее
+    MAX_ROLE. Не строка или пусто — ""."""
+    if not isinstance(text, str):
+        return ""
+    cleaned = " ".join(_ROLE_JUNK.sub(" ", text).split())
+    return cleaned[:MAX_ROLE].rstrip()
+
+
+def _read_role(path: Path) -> str:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return clean_role(data.get("role")) if isinstance(data, dict) else ""
+
+
+def role_of(name: str, voices: Path) -> str:
+    """Роль человека по имени; нет человека, недопустимое имя, битый файл — ""."""
+    try:
+        return _read_role(_voice_file(name, voices))
+    except ValueError:
+        return ""
+
+
+def roles(voices: Path, names=None) -> dict[str, str]:
+    """{имя: роль} только для тех, у кого роль задана; `names` ограничивает
+    выборку (имена, которых нет в базе, пропускаются). Для ассистента: роль —
+    данные, не команда, ограждать их должен вызывающий."""
+    if names is None:
+        if not voices.is_dir():
+            return {}
+        pairs = [(f.stem, f) for f in sorted(voices.glob("*.json"), key=lambda p: p.stem.lower())]
+    else:
+        pairs = []
+        for name in dict.fromkeys(names):
+            try:
+                pairs.append((name, _voice_file(name, voices)))
+            except (ValueError, TypeError, AttributeError):
+                continue
+    out = {}
+    for name, f in pairs:
+        role = _read_role(f)
+        if role:
+            out[name] = role
+    return out
+
+
+def set_role(name: str, text, voices: Path) -> str:
+    """Задать роль (пустая — убрать ключ); возвращает сохранённый текст.
+    Нет такого человека — KeyError, недопустимое имя — ValueError."""
+    role = clean_role(text)
+    f = _voice_file(name, voices)
+    with VOICE_FILE_LOCK:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise KeyError(valid_name(name)) from None
+        except (OSError, ValueError):
+            # Не затираем файл с образцами, который не удалось разобрать.
+            raise ValueError("файл голоса повреждён") from None
+        if not isinstance(data, dict):
+            raise ValueError("файл голоса повреждён")
+        if role:
+            data["role"] = role
+        else:
+            data.pop("role", None)
+        _write_json(f, data)
+    return role
 
 
 def _duration(t: dict) -> float | None:
@@ -153,6 +237,7 @@ def listing(voices: Path, recordings: Path) -> list[dict]:
             "seconds": round(seconds),
             "has_avatar": (voices / f"{name}.png").exists(),
             "color": color(name),
+            "role": _read_role(f),
         })
     return out
 
@@ -181,6 +266,7 @@ def person(name: str, voices: Path, recordings: Path) -> dict:
         "color": color(name),
         "has_avatar": avatar_path(name, voices).exists(),
         "samples": len(_samples(voice)),
+        "role": _read_role(voice),
         "meetings": meetings,
     }
 
@@ -403,6 +489,10 @@ def merge(src_name: str, into: str, voices: Path, recordings: Path) -> None:
             kept = {k: v for k, v in kept.items() if k != "samples"} if isinstance(kept, dict) else {}
         except (OSError, ValueError):
             kept = {}
+        # Роль того, в кого сливают, главнее; нет её — берём роль сливаемого.
+        role = _read_role(dst) or _read_role(src)
+        if role:
+            kept["role"] = role
         # Атомарно: оборванная запись не должна оставить into без голоса.
         tmp = dst.with_suffix(".json.tmp")
         tmp.write_text(json.dumps({**kept, "samples": merged}, ensure_ascii=False), encoding="utf-8")
@@ -412,6 +502,6 @@ def merge(src_name: str, into: str, voices: Path, recordings: Path) -> None:
 
 
 def delete(name: str, voices: Path) -> None:
-    """Удалить человека: голос и аватар."""
+    """Удалить человека: голос (с ролью — она в том же файле) и аватар."""
     _voice_file(name, voices).unlink(missing_ok=True)
     clear_avatar(name, voices)

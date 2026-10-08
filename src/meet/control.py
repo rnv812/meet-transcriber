@@ -1041,6 +1041,9 @@ _PATTERNS = (
      lambda h, p, n: _server_of(h).state.person_sample(unquote(n))),
     ("PUT", re.compile(r"^/voices/([^/]+)/avatar$"),
      lambda h, p, n: _server_of(h).state.set_avatar(unquote(n), h._raw_body())),
+    # {"role": "…"} → {"ok", "role"}; пустая строка — очистить, не строка — 400.
+    ("PUT", re.compile(r"^/voices/([^/]+)/role$"),
+     lambda h, p, n: _server_of(h).state.set_role(unquote(n), h._body())),
     ("DELETE", re.compile(r"^/voices/([^/]+)/avatar$"),
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "clear-avatar")),
     ("POST", re.compile(r"^/voices/([^/]+)/rename$"),

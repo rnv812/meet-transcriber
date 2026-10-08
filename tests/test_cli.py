@@ -292,6 +292,36 @@ def test_voices_list_table(env, capsys):
     assert row.split() == ["Демьян", "1", "0.0", "да"]
 
 
+def test_voices_role_set_show_in_list_and_clear(env, capsys):
+    _voice(env, "Демьян")
+    _voice(env, "Пётр")
+    assert _main(["voices", "role", "Демьян", "  CTO\nAcme ", "--json"]) == 0
+    assert _json_out(capsys) == {"ok": True, "name": "Демьян", "role": "CTO Acme"}
+    assert _main(["voices", "list", "--json"]) == 0
+    by_name = {p["name"]: p for p in _json_out(capsys)}
+    assert by_name["Демьян"]["role"] == "CTO Acme" and by_name["Пётр"]["role"] == ""
+    assert _main(["voices", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "роль" in out.splitlines()[0]
+    assert "CTO Acme" in next(line for line in out.splitlines() if line.startswith("Демьян"))
+    assert _main(["voices", "role", "Демьян", ""]) == 0
+    assert "Роль убрана" in capsys.readouterr().out
+    assert "role" not in json.loads((env["voices"] / "Демьян.json").read_text(encoding="utf-8"))
+
+
+def test_voices_role_without_text_shows_the_current_one(env, capsys):
+    _voice(env, "Демьян")
+    assert _main(["voices", "role", "Демьян", "заказчик"]) == 0
+    capsys.readouterr()
+    assert _main(["voices", "role", "Демьян"]) == 0
+    assert capsys.readouterr().out.strip() == "заказчик"
+
+
+def test_voices_role_unknown_is_exit_1(env, capsys):
+    assert _main(["voices", "role", "Никто", "x"]) == 1
+    assert "Нет такого человека" in capsys.readouterr().err
+
+
 def test_voices_list_empty_base(env, capsys):
     assert _main(["voices", "list"]) == 0
     assert "пуста" in capsys.readouterr().out

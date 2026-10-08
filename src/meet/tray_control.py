@@ -4776,6 +4776,24 @@ class TrayControl:
             raise RuntimeError(f"не удалось сохранить аватар: {e}") from e
         return {"ok": True}
 
+    def set_role(self, name: str, body: dict | None) -> dict:
+        """`PUT /voices/{имя}/role` `{"role": "…"}` — «Кто это»; пустая строка
+        очищает. Ответ — сохранённый (нормализованный) текст. В журналы текст
+        роли не пишется."""
+        from meet import people
+
+        role = (body or {}).get("role")
+        if not isinstance(role, str):
+            raise _bad_request('role: нужна строка (пустая — очистить)')
+        try:
+            return {"ok": True, "role": people.set_role(name, role, self._voices())}
+        except KeyError:
+            return {"error": "человека нет"}
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except OSError as e:
+            raise RuntimeError(f"не удалось сохранить роль: {e}") from e
+
     def person_action(self, name: str, action: str, body: dict | None = None) -> dict:
         """rename / merge / delete / clear-avatar — одним входом, ошибки текстом."""
         from meet import people

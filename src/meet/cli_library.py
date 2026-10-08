@@ -348,10 +348,10 @@ def _voices_list(args, cfg) -> None:
     if args.json or not items:
         _result(args, items, f"База голосов пуста: {voices}\n")
         return
-    rows = [("имя", "встреч", "мин речи", "фото")] + [
+    rows = [("имя", "встреч", "мин речи", "фото", "роль")] + [
         (p["name"], str(p["meetings"]), f"{p['seconds'] / 60:.1f}",
-         "да" if p["has_avatar"] else "нет") for p in items]
-    widths = [max(len(row[i]) for row in rows) for i in range(4)]
+         "да" if p["has_avatar"] else "нет", p.get("role") or "") for p in items]
+    widths = [max(len(row[i]) for row in rows) for i in range(5)]
     _out("".join("  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip() + "\n"
                  for row in rows))
 
@@ -408,6 +408,26 @@ def _voices_delete(args, cfg) -> None:
     name = _person(args.name, cfg.recording.voices)
     _people_call(people.delete, name, cfg.recording.voices)
     _result(args, {"ok": True, "name": name}, f"Удалено: {name}\n")
+
+
+def _voices_role(args, cfg) -> None:
+    """Роль («Кто это»): без текста — показать, с текстом — задать, "" — убрать."""
+    from meet import people
+
+    voices = cfg.recording.voices
+    name = _person(args.name, voices)
+    if args.text is None:
+        role = people.role_of(name, voices)
+        _result(args, {"name": name, "role": role}, f"{role}\n" if role else "Роли нет\n")
+        return
+    try:
+        role = people.set_role(name, args.text, voices)
+    except ValueError as e:
+        raise CliError(str(e))
+    except OSError as e:
+        raise CliError(f"Не удалось сохранить роль: {e}")
+    _result(args, {"ok": True, "name": name, "role": role},
+            f"Роль: {name} — {role}\n" if role else f"Роль убрана: {name}\n")
 
 
 def _voices_avatar(args, cfg) -> None:
@@ -986,4 +1006,5 @@ _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
              "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix,
              "analyze": _analyze, "title": _title, "improve": _improve, "category": _category}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
-           "delete": _voices_delete, "avatar": _voices_avatar}
+           "delete": _voices_delete, "avatar": _voices_avatar,
+           "role": _voices_role}
