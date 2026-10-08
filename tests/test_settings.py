@@ -1084,6 +1084,25 @@ def test_existing_config_is_kept_on_macos(tmp_path, monkeypatch):
 # --- OpenCode: своя модель в виде провайдер/модель ---
 
 
+def test_effort_defaults_empty_round_trips_and_garbage_is_default(tmp_path):
+    """0.5: уровень рассуждений Claude Code и Codex; пусто — «по умолчанию» (как было)."""
+    cfg = settings.Settings.from_raw({})
+    assert (cfg.llm.effort, cfg.llm.codex_effort) == ("", "")
+    raw = {"llm": {"effort": "high", "codex_effort": "xhigh"}}
+    again = settings.Settings.from_raw(settings.Settings.from_raw(raw).to_raw())
+    assert (again.llm.effort, again.llm.codex_effort) == ("high", "xhigh")
+    for bad in ("ultra", 3, "minimal"):          # minimal — только у Codex
+        assert settings.Settings.from_raw({"llm": {"effort": bad}}).llm.effort == ""
+    assert settings.Settings.from_raw({"llm": {"codex_effort": "max"}}).llm.codex_effort == ""
+    f = tmp_path / "config.json"
+    assert settings.patch({"llm": {"effort": "max"}}, f).llm.effort == "max"
+    assert settings.patch({"llm": {"effort": ""}}, f).llm.effort == ""
+    with pytest.raises(ValueError, match="уровень рассуждений"):
+        settings.patch({"llm": {"effort": "ultra"}}, f)
+    with pytest.raises(ValueError, match="уровень рассуждений"):
+        settings.patch({"llm": {"codex_effort": "max"}}, f)
+
+
 def test_opencode_model_default_empty_and_round_trip():
     cfg = settings.Settings.from_raw({})
     assert cfg.llm.opencode_model == ""

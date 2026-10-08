@@ -436,7 +436,8 @@ class Participant:
                  after_meeting: bool = False, seed_until: str | None = None,
                  profile=pp.DEFAULT_PROFILE, ephemeral: bool = False,
                  freedom: bool = False, agent_mode: str = consent.MODE_AUTO,
-                 roles=None, mode_notice: bool = False, on_mode_notice=None) -> None:
+                 roles=None, mode_notice: bool = False, on_mode_notice=None,
+                 effort: str | None = None) -> None:
         from meet import llm
         from meet.assist.tool_rows import ToolRows
 
@@ -463,6 +464,9 @@ class Participant:
         # Какая модель на самом деле отвечает (`system/init` Claude Code).
         self.model_actual: str | None = None
         self._proxy = proxy
+        # Уровень рассуждений из «Моделей ИИ» (0.5): Claude Code — `--effort` сеанса,
+        # Codex — уже в его вызове (runner_for); в шапке — рядом с моделью.
+        self.effort = effort or None
         self._call_kwargs = dict(call_kwargs or {})
         self._glossary = glossary or ""
         self._task_context = task_context or ""
@@ -649,6 +653,7 @@ class Participant:
                 "model_mismatch": self.model_mismatch,
                 # `/model имя` (0.4): модель, выбранная командой до конца сессии.
                 "model_override": self.model_override,
+                "effort": self.effort,
                 # Слэш-команды для подсказки в строке ввода (`slash`) и дополнение
                 # аргументов: MCP-серверы с состоянием (`/mcp reconnect …`), модели (`/model …`).
                 "commands": self.commands_view(),
@@ -1055,7 +1060,7 @@ class Participant:
                 system_prompt=self.system_prompt(), model=self._model, proxy=self._proxy,
                 log=self._log, responder=True, add_dirs=dirs, deny_paths=deny,
                 persist=not self.ephemeral, resume=self._stored_sid, on_model=self._on_model,
-                **extra)
+                **({"effort": self.effort} if self.effort else {}), **extra)
             self._session = _ConversationSession(conv, self._gate)
         else:
             if self._runner is None:
@@ -2700,6 +2705,7 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
         owner_name=cfg.recording.speaker_name, owner_speaker=cfg.recording.speaker_name,
         owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
         frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
+        effort=llm.agent_effort(provider, cfg),
         proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
         profile=session_profile(chatlog, cfg.assist.profile, profile),
         freedom=getattr(cfg.assist, "agent_freedom", False),

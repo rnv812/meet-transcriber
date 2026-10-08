@@ -926,6 +926,10 @@ class Llm:
     opencode_model: str = ""
     enabled: tuple[str, ...] = LLM_AUTO_ORDER
     local_via_proxy: bool = False
+    # Уровень рассуждений (0.5): Claude Code (`--effort`, все вызовы и ассистент) и
+    # Codex (`model_reasoning_effort`); "" — по умолчанию CLI, как было.
+    effort: str = ""
+    codex_effort: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "enabled", _enabled(self.enabled, self.provider))
@@ -954,6 +958,8 @@ class Llm:
             opencode_model=_opencode_model(raw.get("opencode_model")),
             enabled=tuple(enabled),
             local_via_proxy=raw.get("local_via_proxy") is True,
+            effort=_effort(raw.get("effort"), CLAUDE_EFFORTS),
+            codex_effort=_effort(raw.get("codex_effort"), CODEX_EFFORTS),
         )
 
     @staticmethod
@@ -979,6 +985,9 @@ class Llm:
                 raise ValueError(f"неизвестная модель: {', '.join(unknown)}")
         if "local_via_proxy" in update and not isinstance(update["local_via_proxy"], bool):
             raise ValueError("«Локальную модель — через прокси» — да или нет")
+        for key, allowed in (("effort", CLAUDE_EFFORTS), ("codex_effort", CODEX_EFFORTS)):
+            if key in update and update[key] not in ("", None, *allowed):
+                raise ValueError(f"неизвестный уровень рассуждений: {update[key]}")
 
     @staticmethod
     def check_merged(merged: dict) -> None:
@@ -1004,7 +1013,19 @@ class Llm:
             "opencode_model": self.opencode_model,
             "enabled": list(self.enabled),
             "local_via_proxy": self.local_via_proxy,
+            "effort": self.effort,
+            "codex_effort": self.codex_effort,
         }
+
+
+# Уровни рассуждений (0.5): Claude Code `--effort`, Codex `model_reasoning_effort`.
+CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+
+
+def _effort(value, allowed: tuple[str, ...]) -> str:
+    """Уровень из файла: известный — он, иначе "" (по умолчанию CLI)."""
+    return value if isinstance(value, str) and value in allowed else ""
 
 
 def _enabled(values, provider: str) -> tuple[str, ...]:

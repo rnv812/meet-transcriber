@@ -18,6 +18,7 @@
 import { BookOpen, X } from "lucide-react";
 import { useId, useState } from "react";
 
+import { effortText } from "../lib/effort";
 import { plural } from "../lib/format";
 import type { AgentFrequencyLabel, AgentInfo, AgentProfile, LiveSummary as Summary } from "../lib/types";
 import { BADGE_CLASS } from "../ui/badge";
@@ -273,7 +274,7 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
       {/* Модель может быть срезана многоточием — полное имя (и предупреждение) в подсказке. */}
       <Tip content={warning ? `${warning}. ${MODEL_TITLE}` : agent.label || agent.provider}>
         <span className={`session-bar__model${warning ? " session-bar__model--warn" : ""}`}>
-          {agent.label || agent.provider}
+          {agent.label || agent.provider}{effortText(agent.effort) ? ` · ${effortText(agent.effort)}` : ""}
           {compact && warning && <span className="sr-only"> ({warning})</span>}
         </span>
       </Tip>
@@ -325,7 +326,7 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
         <Popover anchor={anchor} onClose={() => setAnchor(null)} label="Что я знаю" width={340} align="end" anchorToggles>
           <div className="session-know">
             <div className="session-know__facts">
-              <p className="session-know__line"><span className="session-know__key">Модель:</span> {agent.label || agent.provider}</p>
+              <p className="session-know__line"><span className="session-know__key">Модель:</span> {agent.label || agent.provider}{effortText(agent.effort) ? `, уровень рассуждений — ${effortText(agent.effort)}` : ""}</p>
               <p className="session-know__line"><span className="session-know__key">Профиль:</span> {PROFILE_LABELS[profile]}</p>
               <p className="session-know__line"><span className="session-know__key">Видит:</span> {sees}</p>
               {mode && (

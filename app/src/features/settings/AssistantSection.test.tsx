@@ -431,6 +431,26 @@ test("модель Claude Code: правка уходит в llm.model; Claude C
   expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
 });
 
+test("0.5: уровень рассуждений — рядом с моделью Claude Code и строкой у Codex; «по умолчанию» — пусто", async () => {
+  open();
+  const effort = await screen.findByRole("combobox", { name: "Уровень рассуждений Claude Code" });
+  expect(effort).toHaveTextContent("По умолчанию");
+  expect(effort.closest(".model-effort")).toContainElement(screen.getByRole("textbox", { name: "Модель Claude Code" }));
+  await userEvent.click(effort);
+  await userEvent.click(screen.getByRole("option", { name: /^высокий/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { effort: "high" } }));
+  // Codex включён — своя строка с его уровнями (есть «минимальный», нет «максимального»).
+  if (!screen.queryByRole("combobox", { name: "Уровень рассуждений Codex" })) {
+    await userEvent.click(screen.getByRole("switch", { name: "Включить: Codex" }));
+  }
+  const codex = screen.getByRole("combobox", { name: "Уровень рассуждений Codex" });
+  await userEvent.click(codex);
+  const names = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(names.some((n) => n?.startsWith("минимальный"))).toBe(true);
+  expect(names.some((n) => n?.startsWith("максимальный"))).toBe(false);
+});
+
 test("OpenCode: не найден — ссылка opencode.ai/docs/; найден — путь", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue({
     ...structuredClone(info),

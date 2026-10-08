@@ -126,6 +126,13 @@ test("компактная: без «видит» и частоты в стро�
   expect(pop).toHaveTextContent("Модель не видит изображения");
 });
 
+test("0.5: модель и уровень рассуждений рядом — в шапке и в «Что я знаю»", async () => {
+  render(<SessionBar agent={agentInfo({ effort: "high" })} summary={summary} onFrequency={() => {}} />);
+  expect(bar()).toHaveTextContent("Claude Code (sonnet) · высокий");
+  const pop = await know();
+  expect(pop).toHaveTextContent("Модель: Claude Code (sonnet), уровень рассуждений — высокий");
+});
+
 test("что видит: картинки и пусто", () => {
   expect(seesText(agentInfo({ sees: { conversation: true, kb: false, materials: 1, images: 2 } })))
     .toBe("разговор, 1 материал, 2 изображения");

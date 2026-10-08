@@ -884,6 +884,23 @@ def test_a_long_turn_started_in_the_window_still_merges(tmp_path):
     assert first["text"] == "Первое\n\nВторое"
 
 
+def test_effort_goes_to_the_claude_session_and_to_the_header(tmp_path):
+    """0.5: уровень рассуждений из настроек — флагом сеанса Claude Code и в шапке рядом с моделью."""
+    h = _make(tmp_path, script=[SILENT], effort="high")
+
+    async def main():
+        publish(h, 5, "Олег", "реплика")
+        h.clock.t = 10
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert h.made[0].kwargs["effort"] == "high"
+    assert h.p.view()["effort"] == "high"
+    plain = _make(tmp_path / "b", script=[])
+    assert plain.p.view()["effort"] is None
+
+
 def test_several_says_in_one_reply_are_merged_within_the_window(tmp_path):
     two = AgentReply(text='{"say": "Первое", "buttons": ["А"]}\n{"say": "Второе", "buttons": ["Б"]}')
     h = _make(tmp_path, script=[two])

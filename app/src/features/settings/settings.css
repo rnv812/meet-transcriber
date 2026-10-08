@@ -162,6 +162,9 @@
 }
 .proxy { display: flex; flex-direction: column; gap: 4px; width: 100%; padding-left: calc(var(--check) + 10px); }
 .proxy__error { flex-basis: 100%; font-size: var(--text-sm); }
+/* Модель и уровень рассуждений — в одной строке (0.5). */
+.model-effort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.model-effort > .field { flex: 1 1 160px; min-width: 0; }
 
 /* Пути и папки. */
 .tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }

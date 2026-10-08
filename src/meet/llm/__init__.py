@@ -82,6 +82,16 @@ def agent_model(provider: str | None, cfg: "Settings") -> str | None:
     return tier_kwargs(provider, "agent", cfg.llm.model).get("model")
 
 
+def agent_effort(provider: str | None, cfg: "Settings") -> str | None:
+    """Уровень рассуждений из настроек (0.5): Claude Code — `llm.effort`, Codex —
+    `llm.codex_effort`; у остальных и «по умолчанию» — None (флаг не передаётся)."""
+    if provider == "claude-code":
+        return cfg.llm.effort or None
+    if provider == "codex":
+        return cfg.llm.codex_effort or None
+    return None
+
+
 def runner_for(name: str, cfg: "Settings") -> Runner:
     """Функция вызова модели для провайдера (без проверки доступности).
 
@@ -91,10 +101,11 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
     # Ссылка на модуль, а не на функцию: тесты подменяют `claude.run`.
     if name == "claude-code":
         from meet.llm import claude
-        return partial(_call, claude, proxy=cfg.llm.proxy, model=claude_model(cfg.llm.model))
+        return partial(_call, claude, proxy=cfg.llm.proxy, model=claude_model(cfg.llm.model),
+                       effort=cfg.llm.effort or None)
     if name == "codex":
         from meet.llm import codex
-        return partial(_call, codex, proxy=cfg.llm.proxy)
+        return partial(_call, codex, proxy=cfg.llm.proxy, effort=cfg.llm.codex_effort or None)
     if name == "opencode":
         from meet.llm import opencode
         return partial(_call, opencode, proxy=cfg.llm.proxy, model=cfg.llm.opencode_model or None)

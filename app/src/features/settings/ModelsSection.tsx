@@ -21,7 +21,9 @@ import { type Endpoint, checkProvider, getAssistant } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { openUrl } from "../../lib/shell";
 import type { AssistantInfo, ProxyInfo } from "../../lib/types";
+import { CLAUDE_EFFORTS, CODEX_EFFORTS, EFFORT_DEFAULT, effortOptions } from "../../lib/effort";
 import { Button } from "../../ui/Button";
+import { Select } from "../../ui/Select";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Tip } from "../../ui/Tip";
 import { fieldClass } from "./fields";
@@ -42,6 +44,7 @@ const PROVIDERS: Provider[] = [
 const LOCAL = "openai-compatible";
 const OPENCODE = "opencode";
 const CLAUDE = "claude-code";
+const CODEX = "codex";
 /** Настоящие модели в порядке окна (как `llm.enabled` у резидента). */
 const CONCRETE = PROVIDERS.filter((p) => p.value !== "auto").map((p) => p.value);
 /** Кандидаты «Авто» — его выбор у конфига без списка включённых. */
@@ -83,6 +86,11 @@ export function privacyLine(provider: string, baseUrl: string): string {
 
 /** Подпись `llm.model`: на неё ссылаются подсказки других разделов. */
 export const MODEL_LABEL = "Модель Claude Code";
+/** Уровень рассуждений (0.5): у Claude Code — в строке модели, у Codex — своей строкой. */
+export const EFFORT_LABEL = "Уровень рассуждений Claude Code";
+export const CODEX_EFFORT_LABEL = "Уровень рассуждений Codex";
+const CLAUDE_EFFORT_OPTIONS = effortOptions(CLAUDE_EFFORTS);
+const CODEX_EFFORT_OPTIONS = effortOptions(CODEX_EFFORTS);
 
 function ModelTip() {
   return (
@@ -432,9 +440,22 @@ export function ModelsSection({ draft, saved, set, endpoint }: {
         {on(CLAUDE) && (
           <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
             hint="Готовит итоги и анализ, отвечает на вопросы и ведёт живого ассистента">
-            <input id="llm-model" type="text" className={fieldClass()} placeholder="sonnet"
-              value={String(llm("model") ?? "")}
-              onChange={(e) => set("llm", "model", e.target.value)} />
+            <span className="model-effort">
+              <input id="llm-model" type="text" className={fieldClass()} placeholder="sonnet"
+                value={String(llm("model") ?? "")}
+                onChange={(e) => set("llm", "model", e.target.value)} />
+              {/* Уровень рассуждений — рядом с моделью (0.5). */}
+              <Select aria-label={EFFORT_LABEL} options={CLAUDE_EFFORT_OPTIONS}
+                value={String(llm("effort") || EFFORT_DEFAULT)}
+                onChange={(v) => set("llm", "effort", v === EFFORT_DEFAULT ? "" : v)} />
+            </span>
+          </Row>
+        )}
+        {on(CODEX) && (
+          <Row label={CODEX_EFFORT_LABEL} hint="Сколько Codex думает над ответом: дольше — точнее">
+            <Select aria-label={CODEX_EFFORT_LABEL} options={CODEX_EFFORT_OPTIONS}
+              value={String(llm("codex_effort") || EFFORT_DEFAULT)}
+              onChange={(v) => set("llm", "codex_effort", v === EFFORT_DEFAULT ? "" : v)} />
           </Row>
         )}
         {on(OPENCODE) && (

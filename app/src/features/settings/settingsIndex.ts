@@ -111,7 +111,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "engine", label: "Папка моделей GigaAM", keywords: ["gigaam"] },
   // ИИ
   { section: "models", label: "Модели", hint: "Какие включены и какая по умолчанию", keywords: ["провайдер", "claude", "codex", "opencode", "локальная"] },
-  { section: "models", label: "Модель Claude Code", keywords: ["sonnet", "opus", "haiku"] },
+  { section: "models", label: "Модель Claude Code", keywords: ["sonnet", "opus", "haiku", "уровень рассуждений", "effort"] },
+  { section: "models", label: "Уровень рассуждений Codex", keywords: ["effort", "reasoning", "думает"] },
   { section: "models", label: "Модель OpenCode" },
   { section: "models", label: "Адрес сервера", hint: "Локальная модель: LM Studio, Ollama, vLLM", keywords: ["ollama", "lm studio", "url"] },
   { section: "models", label: "Имя модели", hint: "Локальная модель", keywords: ["ollama", "qwen"] },

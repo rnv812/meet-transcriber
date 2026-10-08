@@ -159,6 +159,7 @@ async def run(
     images=(),
     keep_session: bool = False,
     deny_paths=(),
+    effort: str | None = None,
 ) -> AgentReply:
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
     системный промпт, без настроек проекта; ошибки — в AgentReply.error.
@@ -224,6 +225,8 @@ async def run(
         extra_args={} if persist else dict(NO_PERSISTENCE),
         include_partial_messages=on_text is not None,
         thinking={"type": thinking} if thinking else None,
+        # Уровень рассуждений из «Моделей ИИ» (0.5); нет — по умолчанию CLI.
+        **({"effort": effort} if effort else {}),
     )
 
     # can_use_tool в этой версии SDK требует streaming-режима ввода: строка-prompt

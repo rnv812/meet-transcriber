@@ -100,6 +100,32 @@ def test_runner_and_tiers_always_carry_the_configured_model(monkeypatch):
     assert llm.agent_model("claude-code", blank) == "sonnet"
 
 
+def test_effort_from_settings_reaches_claude_and_codex_calls(monkeypatch):
+    """0.5: уровень рассуждений из «Моделей ИИ» — во все вызовы; «Быстрее» перекрывает его."""
+    from meet.llm import codex
+
+    seen = []
+
+    async def fake_run(prompt, **kwargs):
+        seen.append(kwargs)
+        return AgentReply(text="ок")
+
+    monkeypatch.setattr(claude, "run", fake_run)
+    monkeypatch.setattr(codex, "run", fake_run)
+    cfg = Settings.from_raw({"llm": {"effort": "high", "codex_effort": "xhigh"}})
+    asyncio.run(llm.runner_for("claude-code", cfg)("x", system_prompt="s"))
+    assert seen[-1]["effort"] == "high"
+    asyncio.run(llm.runner_for("codex", cfg)("x", system_prompt="s"))
+    assert seen[-1]["effort"] == "xhigh"
+    asyncio.run(llm.runner_for("codex", cfg)("x", system_prompt="s", **llm.tier_kwargs("codex", "fast")))
+    assert seen[-1]["effort"] == "low"
+    assert llm.agent_effort("claude-code", cfg) == "high" and llm.agent_effort("codex", cfg) == "xhigh"
+    assert llm.agent_effort("opencode", cfg) is None
+    # По умолчанию — без флага (как было).
+    asyncio.run(llm.runner_for("claude-code", Settings.from_raw({}))("x", system_prompt="s"))
+    assert seen[-1].get("effort") is None
+
+
 # --- SDK: итоги, анализ, названия, вопросы, «Проверить» ---
 
 def _sdk_command(monkeypatch, init_model=None, **kw):
