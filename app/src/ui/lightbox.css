@@ -1,0 +1,16 @@
+/* Просмотр картинки поверх окна (ui/Lightbox, 0.5): затемнение Aurora (.backdrop), картинка
+   по центру — вписана в окно, под ней — строка с именем и кнопками на плотной поверхности. */
+.lightbox {
+  z-index: var(--z-modal); display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--s-3); padding: var(--s-6);
+}
+.lightbox__img {
+  max-width: 100%; max-height: calc(100% - 64px); min-height: 0; object-fit: contain;
+  border-radius: var(--r-md); box-shadow: var(--elev-3); background: var(--surface-1);
+}
+.lightbox__bar {
+  display: flex; align-items: center; gap: var(--s-2); max-width: 100%; padding: 6px 6px 6px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--surface-1); box-shadow: var(--elev-2);
+}
+.lightbox__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: var(--text-sm); }
+.lightbox__error { color: var(--danger); font-size: var(--text-sm); }

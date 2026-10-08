@@ -210,6 +210,8 @@
   height: var(--control-sm); max-width: 100%; padding: 0 10px 0 4px; gap: 6px; border-radius: var(--r-sm);
 }
 .chat-att.is-failed, .chat-draft--failed { box-shadow: inset 0 0 0 1px var(--danger); }
+/* Превью картинки — кнопка (0.5): раскрыть поверх окна. */
+.chat-att__open { display: inline-flex; flex: none; padding: 0; border: 0; border-radius: var(--r-xs); background: none; cursor: zoom-in; }
 .chat-att__thumb, .chat-draft__thumb { width: 32px; height: 24px; flex: none; object-fit: cover; border-radius: var(--r-xs); }
 .chat-att__name, .chat-draft__name { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .chat-att__note, .chat-draft__status { color: var(--ink-3); white-space: nowrap; }

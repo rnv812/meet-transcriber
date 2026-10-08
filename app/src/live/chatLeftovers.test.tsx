@@ -149,6 +149,23 @@ test("M14: миниатюр вставленных картинок не бол�
   URL.revokeObjectURL = real.revoke;
 });
 
+test("0.5: превью вставленной картинки — кнопка: раскрыть поверх окна, Esc — закрыть", async () => {
+  const real = URL.createObjectURL;
+  URL.createObjectURL = (() => "blob:shot") as never;
+  vi.mocked(pasteChatImage).mockResolvedValue(
+    { id: "a1", status: "ready", attachment: attMsg("a1", { path: "D:/rec/r1/assistant/files/a1.png" }) } as never);
+  render(<Host />);
+  load([]);
+  await act(async () => { await chat.paste(new Blob(["x"], { type: "image/png" })); });
+  load([attMsg("a1", { path: "D:/rec/r1/assistant/files/a1.png" }), userMsg("u1", { text: "вот", attachments: ["a1"] })]);
+  await userEvent.click(screen.getByRole("button", { name: "Открыть изображение Скриншот.png" }));
+  const view = screen.getByRole("dialog", { name: "Скриншот.png" });
+  expect(within(view).getByRole("img", { name: "Скриншот.png" })).toHaveAttribute("src", "blob:shot");
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  URL.createObjectURL = real;
+});
+
 test("M15: «Не отвлекать» — лента молчит, но вопрос к вам объявляется", () => {
   render(<Host quiet />);
   load([agentMsg("m1", { text: "Сказать про **срок**?", pin: true })]);

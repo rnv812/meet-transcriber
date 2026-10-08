@@ -50,12 +50,14 @@ import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef,
 import { plainMarkdown } from "../lib/agentRef";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
+import { inTauri, openFolder, openMaterial } from "../lib/shell";
 import type { ChatMessage, ChatReaction } from "../lib/types";
 import { AgentMark } from "../ui/AgentMark";
 import { BADGE_CLASS } from "../ui/badge";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
+import { Lightbox } from "../ui/Lightbox";
 import { Tip } from "../ui/Tip";
 import { ConfirmCard } from "./ConfirmCard";
 import { type FeedItem, type Outgoing, REACTIONS, type ToolItem, isFinalAgent } from "./chatModel";
@@ -330,16 +332,30 @@ function AttachmentChip({ id, chat }: { id: string; chat: Chat }) {
   const name = a?.name || "вложение";
   const failed = a?.status === "failed";
   const note = failed ? `не разобрано${a?.error ? `: ${a.error}` : ""}` : a?.note;
+  // Превью картинки (0.5) — кнопка: раскрыть поверх окна; с файлом на диске — «Открыть файл», «Показать в папке».
+  const [open, setOpen] = useState(false);
+  const path = a?.path;
+  const folder = path ? path.replace(/[\\/][^\\/]*$/, "") : "";
   return (
-    <Tip content={note || name} describe={false}>
-      <span className={`${BADGE_CLASS.plain} chat-att${failed ? " is-failed" : ""}`}>
-        {preview && a?.type === "image"
-          ? <img className="chat-att__thumb" src={preview} alt={name} />
-          : <Icon as={a?.type === "image" ? ImageIcon : FileText} size="sm" />}
-        <span className="chat-att__name">{name}</span>
-        {note && <span className="chat-att__note">{note}</span>}
-      </span>
-    </Tip>
+    <>
+      <Tip content={note || name} describe={false}>
+        <span className={`${BADGE_CLASS.plain} chat-att${failed ? " is-failed" : ""}`}>
+          {preview && a?.type === "image" ? (
+            <button type="button" className="chat-att__open" aria-label={`Открыть изображение ${name}`}
+              onClick={() => setOpen(true)}>
+              <img className="chat-att__thumb" src={preview} alt="" />
+            </button>
+          ) : <Icon as={a?.type === "image" ? ImageIcon : FileText} size="sm" />}
+          <span className="chat-att__name">{name}</span>
+          {note && <span className="chat-att__note">{note}</span>}
+        </span>
+      </Tip>
+      {open && preview && (
+        <Lightbox src={preview} name={name} onClose={() => setOpen(false)}
+          onOpen={path && inTauri() ? () => openMaterial(path) : undefined}
+          onReveal={folder && inTauri() ? () => openFolder(folder) : undefined} />
+      )}
+    </>
   );
 }
 

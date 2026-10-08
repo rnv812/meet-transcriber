@@ -470,10 +470,12 @@ fn plain_path(path: &Path) -> String {
 #[tauri::command]
 pub async fn open_material(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = resident::read_endpoint()
+        let mut roots = resident::read_endpoint()
             .and_then(|endpoint| Client::new(&endpoint).get_state().ok())
             .map(|state| material_roots(&state))
             .unwrap_or_default();
+        // Временная встреча (вне библиотеки): её вложения — «Открыть файл» в просмотре картинки (0.5).
+        roots.push(resident::data_dir().join("tmp-meetings"));
         let Some(target) = material_allowed(Path::new(&path), &roots) else {
             shell_log!("open_material: отказ: {path}");
             return Err("этот файл приложение не открывает".to_string());

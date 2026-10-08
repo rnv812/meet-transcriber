@@ -1000,7 +1000,10 @@ export type AgentMcpServer = { name: string; status: string };
 export type AgentModel = { value: string; label: string };
 
 /** Вложение — запись журнала `kind: "attachment"` (id `a<N>`). */
-export type ChatAttachment = ChatMessage & { kind: "attachment"; name: string; status: "parsing" | "ready" | "failed" | "removed" };
+/** Вложение журнала; `path` — файл на диске (картинка — в `assistant/files/`), `type` — `image` или документ. */
+export type ChatAttachment = ChatMessage & {
+  kind: "attachment"; name: string; status: "parsing" | "ready" | "failed" | "removed"; path?: string; type?: string;
+};
 
 /** «Как часто писать»: ключ настроек (`assist.frequency`). */
 export type AgentFrequency = "less" | "normal" | "more";
