@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 use tauri::window::Color;
-use tauri::{AppHandle, Emitter, Manager, Theme};
+use tauri::{AppHandle, Emitter, Manager, Runtime, Theme, WebviewWindow};
 
 use crate::logs::shell_log;
 use crate::resident;
@@ -70,6 +70,39 @@ pub fn canvas(theme: Option<Theme>) -> Color {
     }
 }
 
+/// Скрипт до любого скрипта страницы (`initialization_script`, CSP на него не
+/// действует): тема, которую оболочка решила по `config.json`. Нужна, пока в
+/// окне нет кеша оформления (первый запуск 0.4): без неё обновившийся на
+/// светлой ОС увидел бы светлое окно до ответа резидента
+/// (`public/appearance-boot.js`, `readCached`).
+pub fn theme_hint_script(theme: Option<Theme>) -> String {
+    let name = match theme {
+        Some(Theme::Dark) => "dark",
+        Some(Theme::Light) => "light",
+        _ => "system",
+    };
+    format!("window.__MEET_THEME__ = \"{name}\";")
+}
+
+/// Фон окна под тему. У «Системной» холст до загрузки страницы тёмный
+/// (`canvas(None)`), поэтому после создания окна берём тему, которую окно
+/// взяло у ОС, — иначе на светлой ОС каждое открытие мигает тёмным.
+pub fn paint_canvas<R: Runtime>(window: &WebviewWindow<R>, theme: Option<Theme>) {
+    let actual = match theme {
+        Some(theme) => Some(theme),
+        None => match window.theme() {
+            Ok(os) => Some(os),
+            Err(error) => {
+                shell_log!("тема ОС не определилась: {error}");
+                None
+            }
+        },
+    };
+    if let Err(error) = window.set_background_color(Some(canvas(actual))) {
+        shell_log!("фон окна не сменился: {error}");
+    }
+}
+
 /// Окно настроек сменило оформление: рамка главного окна — в новую тему,
 /// остальным окнам — событие (панель ассистента и панель трея применят сами).
 #[tauri::command]
@@ -80,7 +113,7 @@ pub fn set_appearance(app: AppHandle, appearance: Value) {
         if let Err(error) = main.set_theme(theme) {
             shell_log!("тема окна не сменилась: {error}");
         }
-        let _ = main.set_background_color(Some(canvas(theme)));
+        paint_canvas(&main, theme);
     }
     if let Err(error) = app.emit(EVENT, appearance) {
         shell_log!("оформление не разослано окнам: {error}");
@@ -129,6 +162,22 @@ mod tests {
         assert_eq!(theme_pref(&json!({})), None);
         assert_eq!(theme_pref(&json!(null)), None);
         assert_eq!(theme_pref(&json!({"ui": {"theme": "розовая"}})), None);
+    }
+
+    #[test]
+    fn theme_hint_script_tells_the_page_the_startup_theme() {
+        assert_eq!(
+            theme_hint_script(Some(Theme::Dark)),
+            "window.__MEET_THEME__ = \"dark\";"
+        );
+        assert_eq!(
+            theme_hint_script(Some(Theme::Light)),
+            "window.__MEET_THEME__ = \"light\";"
+        );
+        assert_eq!(
+            theme_hint_script(None),
+            "window.__MEET_THEME__ = \"system\";"
+        );
     }
 
     #[test]

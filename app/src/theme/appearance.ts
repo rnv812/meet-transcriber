@@ -58,17 +58,36 @@ export function applyAppearance(root: HTMLElement, a: Appearance, systemDark: bo
   else root.dataset.motion = "paused";
 }
 
+/**
+ * Тема, которую оболочка решила по config.json до загрузки страницы
+ * (`window.__MEET_THEME__`, appearance::theme_hint_script); нет или мусор — null.
+ */
+function shellThemeHint(): ThemePref | null {
+  try {
+    const hint = (globalThis as { __MEET_THEME__?: unknown }).__MEET_THEME__;
+    return typeof hint === "string" && (THEMES as readonly string[]).includes(hint) ? (hint as ThemePref) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Умолчания, когда кеша нет или он негодный: тема — из подсказки оболочки. */
+function fallbackAppearance(): Appearance {
+  const theme = shellThemeHint();
+  return theme ? { ...DEFAULT_APPEARANCE, theme } : DEFAULT_APPEARANCE;
+}
+
 export function readCached(storage?: Storage): Appearance {
   try {
     const text = (storage ?? globalThis.localStorage)?.getItem(CACHE_KEY);
-    if (!text) return DEFAULT_APPEARANCE;
+    if (!text) return fallbackAppearance();
     const v: unknown = JSON.parse(text);
     if (!isRecord(v) || !THEMES.includes(v.theme as ThemePref) || !PALETTES.includes(v.aurora as Palette)) {
-      return DEFAULT_APPEARANCE;
+      return fallbackAppearance();
     }
     return fromFields(v, "auroraStyle");
   } catch {
-    return DEFAULT_APPEARANCE;
+    return fallbackAppearance();
   }
 }
 

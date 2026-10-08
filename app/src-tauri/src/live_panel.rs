@@ -573,7 +573,12 @@ pub fn open_live(app: &AppHandle) {
             // Откреплённую панель другие окна могут закрыть — тогда её
             // находят на панели задач.
             .skip_taskbar(geometry.pinned)
-            .focused(false);
+            .focused(false)
+            // Тема — странице до её скриптов: панель может открыться раньше
+            // главного окна, когда кеша оформления ещё нет.
+            .initialization_script(crate::appearance::theme_hint_script(
+                crate::appearance::startup_theme(),
+            ));
     // macOS: прозрачное окно требует частного API (фича macos-private-api);
     // она включена ради панели записи (`tray_panel.rs`), но эта панель там
     // пока непрозрачная — углы квадратные, остальное то же.

@@ -102,13 +102,21 @@ pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&st
     // Рамка — в тему окна («Оформление»): у «Системной» — как в Windows.
     .theme(theme)
     .background_color(crate::appearance::canvas(theme))
+    // Решение о теме — странице до её скриптов: кеша оформления может ещё не быть.
+    .initialization_script(crate::appearance::theme_hint_script(theme))
     .inner_size(1180.0, 760.0)
     .min_inner_size(820.0, 520.0)
     .center()
     .build();
     match built {
-        // Значок окна — кадр icon.ico под размер, а не растянутый 16 px.
-        Ok(window) => crate::app_icon::apply(&window),
+        Ok(window) => {
+            // «Системная»: холст — по теме ОС, а не тёмный по умолчанию.
+            if theme.is_none() {
+                crate::appearance::paint_canvas(&window, None);
+            }
+            // Значок окна — кадр icon.ico под размер, а не растянутый 16 px.
+            crate::app_icon::apply(&window);
+        }
         Err(error) => shell_log!("окно не открылось: {error}"),
     }
 }

@@ -456,7 +456,11 @@ fn build(app: &AppHandle) -> Option<WebviewWindow> {
     .visible_on_all_workspaces(true)
     .visible(false)
     .focused(true)
-    .transparent(true);
+    .transparent(true)
+    // Тема — странице до её скриптов: кеша оформления может ещё не быть.
+    .initialization_script(crate::appearance::theme_hint_script(
+        crate::appearance::startup_theme(),
+    ));
     #[cfg(target_os = "macos")]
     let builder = {
         use tauri::window::{Effect, EffectState, EffectsBuilder};

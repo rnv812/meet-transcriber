@@ -90,8 +90,21 @@ const CACHE_FIXTURES: ReadonlyArray<readonly [string, string | null]> = [
   ["JSON массив", "[]"],
 ];
 
+// Подсказка оболочки (window.__MEET_THEME__, initialization_script): решение
+// startup_theme() из config.json; берётся только когда кеша нет или он негодный.
+const HINTS: readonly unknown[] = [undefined, "dark", "light", "system", "розовая", 1];
+
 const PARITY_CASES = CACHE_FIXTURES.flatMap(([label, raw]) =>
-  [true, false].map((systemDark) => [label, raw, systemDark] as const));
+  HINTS.flatMap((hint) => [true, false].map((systemDark) => [label, raw, hint, systemDark] as const)));
+
+type HintHost = { __MEET_THEME__?: unknown };
+
+function setHint(hint: unknown): () => void {
+  const host = globalThis as HintHost;
+  if (hint === undefined) delete host.__MEET_THEME__;
+  else host.__MEET_THEME__ = hint;
+  return () => { delete host.__MEET_THEME__; };
+}
 
 function stubMatchMedia(dark: boolean): () => void {
   const original = window.matchMedia;
@@ -105,22 +118,81 @@ function stubMatchMedia(dark: boolean): () => void {
 const clearAttrs = (root: HTMLElement) => ATTRS.forEach((n) => root.removeAttribute(n));
 const snapshot = (root: HTMLElement) => ATTRS.map((n) => root.getAttribute(n));
 
-test.each(PARITY_CASES)("ранний старт совпадает с readCached: %s, система тёмная: %s", (_label, raw, systemDark) => {
+/** Атрибуты <html> после раннего старта. */
+function bootAttrs(raw: string | null, hint: unknown, systemDark: boolean): (string | null)[] {
   const root = document.documentElement;
   if (raw === null) localStorage.removeItem(CACHE_KEY);
   else localStorage.setItem(CACHE_KEY, raw);
-  const restore = stubMatchMedia(systemDark);
+  const restoreMedia = stubMatchMedia(systemDark);
+  const restoreHint = setHint(hint);
   try {
     clearAttrs(root);
     new Function(BOOT_SRC)();
-    const fromBoot = snapshot(root);
-    expect(fromBoot[0]).not.toBeNull();
+    return snapshot(root);
+  } finally {
+    restoreHint();
+    restoreMedia();
     clearAttrs(root);
-    applyAppearance(root, readCached(localStorage), systemDark);
-    expect(snapshot(root)).toEqual(fromBoot);
+  }
+}
+
+test.each(PARITY_CASES)("ранний старт совпадает с readCached: %s, подсказка %s, система тёмная: %s",
+  (_label, raw, hint, systemDark) => {
+    const root = document.documentElement;
+    const fromBoot = bootAttrs(raw, hint, systemDark);
+    expect(fromBoot[0]).not.toBeNull();
+    const restoreHint = setHint(hint);
+    try {
+      clearAttrs(root);
+      applyAppearance(root, readCached(localStorage), systemDark);
+      expect(snapshot(root)).toEqual(fromBoot);
+    } finally {
+      restoreHint();
+      clearAttrs(root);
+    }
+  });
+
+test("подсказка оболочки: обновившийся без кеша на светлой ОС открывается тёмным", () => {
+  expect(bootAttrs(null, "dark", false)[0]).toBe("dark");
+  const restore = setHint("dark");
+  try {
+    expect(readCached(localStorage)).toEqual({ ...DEFAULT_APPEARANCE, theme: "dark" });
   } finally {
     restore();
-    clearAttrs(root);
+  }
+});
+
+test("подсказка оболочки: негодный кеш — тема из подсказки, остальное — умолчания", () => {
+  const bad = JSON.stringify({ theme: "x", aurora: "amber", auroraStyle: "waves", motion: false });
+  expect(bootAttrs(bad, "light", true)).toEqual(["light", "violet", "glow", null]);
+  localStorage.setItem(CACHE_KEY, bad);
+  const restore = setHint("light");
+  try {
+    expect(readCached(localStorage)).toEqual({ ...DEFAULT_APPEARANCE, theme: "light" });
+  } finally {
+    restore();
+  }
+});
+
+test("подсказка оболочки: годный кеш важнее подсказки, мусорная подсказка не действует", () => {
+  const cached = JSON.stringify({ theme: "light", aurora: "green", auroraStyle: "glow", motion: true });
+  expect(bootAttrs(cached, "dark", true)[0]).toBe("light");
+  expect(bootAttrs(null, "розовая", false)[0]).toBe("light");
+  localStorage.setItem(CACHE_KEY, cached);
+  const restore = setHint("dark");
+  try {
+    expect(readCached(localStorage).theme).toBe("light");
+  } finally {
+    restore();
+  }
+});
+
+test("подсказка оболочки за бросающим геттером не роняет readCached", () => {
+  Object.defineProperty(globalThis, "__MEET_THEME__", { configurable: true, get() { throw new Error("нет"); } });
+  try {
+    expect(readCached(localStorage)).toEqual(DEFAULT_APPEARANCE);
+  } finally {
+    delete (globalThis as HintHost).__MEET_THEME__;
   }
 });
 
