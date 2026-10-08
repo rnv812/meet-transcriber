@@ -110,6 +110,12 @@ test("разбор: тень на кнопке без пары с рамкой �
   expect(shadowBad(".a__swatch { box-shadow: 0 0 0 1px red } .a__swatch:focus-visible { box-shadow: 0 0 0 2px blue }")).toEqual([".a__swatch"]);
 });
 
+test("вкладка «Агент» (tabIndex=-1, фокус программно) рамку фокуса не показывает", () => {
+  // Не общее правило для [tabindex="-1"]: у пунктов меню с перебором стрелками рамка нужна.
+  const agent = readFileSync(join(SRC, "features", "card", "agent.css"), "utf8");
+  expect(rules(agent).some((r) => r.selector === ".agent:focus-visible" && /box-shadow\s*:\s*none/.test(r.body))).toBe(true);
+});
+
 test("своя тень не прячет рамку фокуса у кнопок, пунктов и переключателей окна", () => {
   const bad: string[] = [];
   for (const f of css(SRC).filter((x) => !relative(SRC, x).startsWith(AURORA))) {

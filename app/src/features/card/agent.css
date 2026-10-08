@@ -58,5 +58,7 @@
   color: var(--text-2); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
 }
 .agent__pending > span { flex: 1; min-width: 200px; }
-/* Фокус на саму вкладку — после «Спросить агента», пока терминал не готов: без рамки. */
+/* Фокус на саму вкладку — после «Спросить агента», пока терминал не готов: без рамки.
+   Рамка Aurora — box-shadow в :focus-visible, её гасит второе правило. */
 .agent:focus { outline: none; }
+.agent:focus-visible { box-shadow: none; }
