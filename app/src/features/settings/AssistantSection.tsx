@@ -56,7 +56,7 @@ export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: 
           onChange={(v) => set("assistant", "knowledge_dir", v)} />
         <KnowledgeRows draft={draft} set={set} provider={provider} />
       </SettingsCard>
-      <FineTuning>
+      <FineTuning pinned={win !== undefined && windowInvalid(win)}>
         <Row label="Окно живой расшифровки, с" htmlFor="assist-window" help={<LiveWindowTip min={WINDOW_MIN} max={WINDOW_MAX} />}
           hint="Как часто расшифровывается новый звук. Применяется со следующего запуска ассистента">
           <input id="assist-window" type="number" className="num" min={WINDOW_MIN} max={WINDOW_MAX} step={5}

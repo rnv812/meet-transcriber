@@ -7,7 +7,8 @@
  * (`analysis.title`, `assistant.auto_title`) и категория (`analysis.category`).
  *
  * Выключенная часть не запрашивается у модели (промпт короче) и не
- * показывается в карточке, поэтому «Показывать» без «Размечать» недоступно.
+ * показывается в карточке, поэтому «Показывать» без «Размечать» недоступно
+ * (кроме ссылок на задачи: ключи в тексте узнаются и без анализа).
  * «Ссылки на задачи: показывать» — тот же ключ `transcript_view.jira`, что
  * «Ссылки на задачи Jira» в разделе «Jira». Анализ делает тот же агент, что
  * итоги, — провайдер выбирается в разделе «Модели ИИ».
@@ -20,7 +21,11 @@ import { PlayerKeysTip } from "../card/PlayerKeysTip";
 import { Radio, SeeAlso, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 
 /** Строка таблицы: подпись, ключ в `analysis` (размечать) и в `transcript_view` (показывать). */
-export type MarkShowItem = { label: string; mark: string; show: string; hint: string };
+export type MarkShowItem = {
+  label: string; mark: string; show: string; hint: string;
+  /** «Показывать» не зависит от разметки (ссылки на задачи по тексту работают и без анализа). */
+  independent?: boolean;
+};
 
 /** Таблица «Размечать / Показывать» (порядок — как в окне). */
 export const MARK_SHOW: MarkShowItem[] = [
@@ -41,9 +46,10 @@ export const MARK_SHOW: MarkShowItem[] = [
     hint: "Противоречия, на что обратить внимание, что сделать после встречи. В карточке — блок над лентой реплик",
   },
   {
-    label: "Ссылки на задачи", mark: "issues", show: "jira",
-    hint: "Задачи Jira, названные неполно или неразборчиво («тот баг про экспорт, сорок четыре пятьдесят два»). "
-      + "Показ — те же ссылки на задачи Jira, что в разделе «Jira»",
+    label: "Ссылки на задачи", mark: "issues", show: "jira", independent: true,
+    hint: "Разметка — задачи Jira, названные неполно или неразборчиво («тот баг про экспорт, сорок четыре "
+      + "пятьдесят два»). Показ — ссылки на задачи Jira, как в разделе «Jira»: ключи вида ABC-123 в тексте "
+      + "работают и без разметки, если в разделе «Jira» заданы проекты",
   },
 ];
 
@@ -100,7 +106,10 @@ export function MarkupTip() {
         Разметку делает анализ встречи: типы реплик, важность, главы, наблюдения и ссылки на задачи. «Показывать в
         карточке» выбирает, что из размеченного видно в карточке записи.
       </TipLine>
-      <TipLine>Выключенное в «Размечать» у модели не запрашивается — показывать нечего.</TipLine>
+      <TipLine>
+        Выключенное в «Размечать» у модели не запрашивается — показывать нечего. Исключение — ссылки на задачи:
+        ключи вида ABC-123 в тексте становятся ссылками и без разметки.
+      </TipLine>
       <TipLine>Пока анализа нет, расшифровка и плеер выглядят как обычно.</TipLine>
     </HelpTip>
   );
@@ -145,6 +154,7 @@ function MarkShowTable({ draft, set }: { draft: Raw; set: SetFn }) {
       <tbody>
         {MARK_SHOW.map((item) => {
           const mark = marked(item.mark);
+          const locked = !mark && !item.independent;
           const note = `${id}-${item.mark}`;
           return (
             <tr key={item.mark} className="amark__row">
@@ -157,9 +167,9 @@ function MarkShowTable({ draft, set }: { draft: Raw; set: SetFn }) {
                   onChange={(x) => set("analysis", item.mark, x)} />
               </td>
               <td className="amark__cell">
-                <CellSwitch label={`${item.label}: показывать`} value={shown(item.show)} disabled={!mark}
-                  describedBy={mark ? undefined : note} onChange={(x) => set("transcript_view", item.show, x)} />
-                {!mark && <span id={note} className="amark__note">{MARK_FIRST}</span>}
+                <CellSwitch label={`${item.label}: показывать`} value={shown(item.show)} disabled={locked}
+                  describedBy={locked ? note : undefined} onChange={(x) => set("transcript_view", item.show, x)} />
+                {locked && <span id={note} className="amark__note">{MARK_FIRST}</span>}
               </td>
             </tr>
           );

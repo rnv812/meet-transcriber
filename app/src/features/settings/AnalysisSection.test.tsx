@@ -93,6 +93,20 @@ test("«Показывать» недоступно, пока «Размечат
   expect(screen.queryByText("Сначала включите разметку")).toBeNull();
 });
 
+test("«Ссылки на задачи: показывать» доступно и без разметки: ключи в тексте узнаются без анализа", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue({
+    ...structuredClone(settings), analysis: { ...settings.analysis, issues: false },
+  });
+  open();
+  const show = await toggle("Ссылки на задачи: показывать");
+  expect(show).toBeEnabled();
+  expect(show).not.toHaveAccessibleDescription("Сначала включите разметку");
+  expect(screen.queryByText("Сначала включите разметку")).toBeNull();
+  await userEvent.click(show);
+  await save();
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { transcript_view: { jira: false } }));
+});
+
 test("«Ссылки на задачи: показывать» — тот же ключ, что «Ссылки на задачи Jira» в разделе «Jira»", async () => {
   open();
   await userEvent.click(await toggle("Ссылки на задачи: показывать"));

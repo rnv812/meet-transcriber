@@ -230,6 +230,9 @@ test("окно живой расшифровки уходит в assist.window_s
   await userEvent.clear(win);
   await userEvent.type(win, "200");
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  // Ошибку, из-за которой не сохранить, нельзя свернуть.
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
+  expect(screen.getByText("От 5 до 120 секунд")).toBeVisible();
   await userEvent.clear(win);
   await userEvent.type(win, "30");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));

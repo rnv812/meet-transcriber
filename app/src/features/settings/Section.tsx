@@ -132,9 +132,12 @@ export const RevealFineTuning = createContext(0);
 /**
  * «Тонкая настройка» (0.4): свёрнутый блок внизу раздела для редкого. Раскрыт
  * сразу, если `defaultOpen` (например, в нём уже есть заданное значение), и
- * по просьбе поиска (`RevealFineTuning`).
+ * по просьбе поиска (`RevealFineTuning`). `pinned` — не сворачивается (в нём
+ * ошибка, из-за которой «Сохранить» недоступно: её нельзя спрятать).
  */
-export function FineTuning({ defaultOpen = false, children }: { defaultOpen?: boolean; children: ReactNode }) {
+export function FineTuning({ defaultOpen = false, pinned = false, children }: {
+  defaultOpen?: boolean; pinned?: boolean; children: ReactNode;
+}) {
   const reveal = useContext(RevealFineTuning);
   const [open, setOpen] = useState(defaultOpen);
   const [seen, setSeen] = useState(0);
@@ -145,7 +148,7 @@ export function FineTuning({ defaultOpen = false, children }: { defaultOpen?: bo
   }
   return (
     <section className="card scard sfine">
-      <Disclosure title="Тонкая настройка" open={open} onToggle={setOpen}>{children}</Disclosure>
+      <Disclosure title="Тонкая настройка" open={open || pinned} onToggle={(x) => setOpen(x || pinned)}>{children}</Disclosure>
     </section>
   );
 }
