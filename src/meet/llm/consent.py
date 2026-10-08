@@ -45,6 +45,7 @@
 
 import ipaddress
 import json
+import ntpath
 import os
 import posixpath
 import re
@@ -384,8 +385,10 @@ def _path_ok(arg: str) -> bool:
     """Путь в команде чтения: только абсолютный и буквальный (без `$`,
     шаблонов, `~` и обратных кавычек) — иначе не знаем, что прочтётся.
     Без `,` и `;` (в PowerShell `a,b` — два файла: проверялся бы один путь,
-    а читались бы оба, I1) и `@` (развёртка аргументов PowerShell)."""
-    return _abs_path(arg) and not any(ch in arg for ch in "$*?[]~`,;@")
+    а читались бы оба, I1) и `@` (развёртка аргументов PowerShell). Не
+    сетевой и не путь устройства: `//хост/…`, `\\\\хост\\…`, `\\\\?\\…` (I2)."""
+    return (_abs_path(arg) and not any(ch in arg for ch in "$*?[]~`,;@")
+            and not re.match(r"^[\\/]{2}", arg))
 
 
 def _ps_paths(positional: list[str], values: dict, *, positional_max: int = 1) -> list[str] | None:
@@ -1207,6 +1210,12 @@ def _command_risk(words: list[str], tool: str, inside, cd: bool, depth: int) -> 
     words = _strip_wrappers(words)
     if not words:
         return ""
+    for w in words:
+        for piece in re.split(r"[=,]", w):
+            if _NETWORK_WORD.match(piece):
+                return SEND                     # сетевой путь — соединение с чужим хостом (I2)
+            if _DEVICE_PREFIX.match(piece) and not _DRIVE.match(piece[4:]):
+                return UNPARSED                 # канал, диск целиком, том…
     prog = _program(words[0])
     for w in words[1:]:
         for code in _inner_code(w):
@@ -1401,19 +1410,50 @@ def _path_words(text: str, base: str | None = None) -> str:
     return " ".join(found)
 
 
+# Сетевой путь (UNC): `\\host…`, `//host…`, `\\?\UNC\…`, `\\.\UNC\…`. Открыть
+# его на Windows — соединение SMB с чужим хостом (и хеш NTLM ему), I2.
+_NETWORK_PATH = re.compile(r"^[\\/]{2}(?:[?.][\\/]UNC(?:[\\/]|$)|(?![?.][\\/])[^\\/])", re.IGNORECASE)
+# То же словом в команде: хост и ресурс (`//TODO` в шаблоне поиска — не путь).
+_NETWORK_WORD = re.compile(r"^[\\/]{2}(?:[?.][\\/]UNC[\\/])?[^\\/?.\s][^\\/\s]*[\\/][^\\/\s]", re.IGNORECASE)
+# Путь устройства `\\?\…`, `\\.\…`: за ним допустим только диск (`\\?\C:\…`).
+_DEVICE_PREFIX = re.compile(r"^[\\/]{2}[?.][\\/]")
+_DRIVE = re.compile(r"^[A-Za-z]:(?:[\\/]|$)")
+
+
+def network_path(text: str) -> bool:
+    """Путь сетевой (UNC) или устройства не на диске (`\\\\.\\pipe\\…`) — ворота его
+    не открывают и не разбирают через `realpath` (I2)."""
+    text = str(text or "")
+    if _NETWORK_PATH.match(text):
+        return True
+    return bool(_DEVICE_PREFIX.match(text)) and not _DRIVE.match(text[4:])
+
+
+def _unc_text(path) -> str | None:
+    """Сетевой путь для сравнения — только по тексту, без обращения к сети:
+    `\\\\?\\UNC\\` снят, `.` и `..` разобраны (выше ресурса `\\\\хост\\ресурс`
+    не уйти), `/`, без регистра на Windows. Не сетевой — None."""
+    text = os.path.expandvars(str(path or "")).replace("/", "\\")
+    m = re.match(r"^\\\\[?.]\\UNC\\", text, re.IGNORECASE)
+    if m:
+        text = "\\\\" + text[m.end():]
+    if not re.match(r"^\\\\[^\\?.][^\\]*\\[^\\]+", text):
+        return None
+    return _norm_text(ntpath.normpath(text))
+
+
 def resolve(path, cwd=None) -> str | None:
     """Путь для сравнения: `~` и переменные среды раскрыты, относительный —
     от `cwd` (рабочей папки CLI), без префикса `\\\\?\\`, через `realpath`
     (8.3-имена, соединения, ссылки), с `/`, без учёта регистра на Windows.
-    Не вышло — None (вызывающий отказывает)."""
+    Не вышло — None (вызывающий отказывает). Сетевой путь и путь устройства
+    — тоже None, до `realpath`: ворота в сеть не ходят никогда (I2)."""
     try:
         text = os.path.expandvars(os.path.expanduser(str(path)))
-        for prefix in ("\\\\?\\UNC\\", "//?/UNC/"):
-            if text.upper().startswith(prefix.upper()):
-                text = "\\\\" + text[len(prefix):]
-        for prefix in ("\\\\?\\", "//?/", "\\\\.\\", "//./"):
-            if text.startswith(prefix):
-                text = text[len(prefix):]
+        if network_path(text):
+            return None
+        if _DEVICE_PREFIX.match(text):
+            text = text[4:]                                   # `\\?\C:\…` → `C:\…`
         if sys.platform == "win32":
             m = re.match(r"^/([a-zA-Z])(/.*)?$", text)     # git bash: /d/KB → D:/KB
             if m:
@@ -1421,6 +1461,8 @@ def resolve(path, cwd=None) -> str | None:
         p = Path(text)
         if not p.is_absolute():
             p = Path(cwd or os.getcwd()) / p
+        if network_path(str(p)) or _DEVICE_PREFIX.match(str(p)):
+            return None
         return _norm_text(os.path.realpath(str(p)))
     except (OSError, ValueError, TypeError):
         return None
@@ -1873,6 +1915,8 @@ def _shown_dir(folder: str, written=None, cwd=None, *, parent: bool = False) -> 
             text = os.path.join(str(cwd), text)
         if parent:
             text = os.path.dirname(os.path.normpath(text))
+        if network_path(text) or network_path(folder):
+            return os.path.normpath(folder)       # сетевая папка — без обращения к сети
         real = os.path.realpath(text)
         for prefix in ("\\\\?\\", "//?/"):
             if real.startswith(prefix):
@@ -1914,19 +1958,22 @@ class ConsentGate:
     def __init__(self, *, own_dirs=(), work_dirs=(), deny_paths=(), sensitive=None, cwd=None, log=None,
                  confirmer=None, mode: str = MODE_AUTO, ask_text: str = ASK_FIRST) -> None:
         self._cwd = str(cwd) if cwd else None
-        self._own = [r for r in (resolve(d, self._cwd) for d in own_dirs or () if d) if r]
-        self._work = [r for r in (resolve(d, self._cwd) for d in work_dirs or () if d) if r]
+        self._own = [r for r in (self._root(d) for d in own_dirs or () if d) if r]
+        self._work = [r for r in (self._root(d) for d in work_dirs or () if d) if r]
+        # Папки на сетевом диске, которые задал человек (база знаний на `\\nas\kb`):
+        # пути внутри них сравниваются по тексту, без обращения к сети (I2).
+        self._unc_roots = [r for r in (*self._own, *self._work) if r.startswith("//")]
         # Папка для подписи разрешения — настоящая (после ссылок), с регистром и «\».
         self._dir_shown = {r: _shown_dir(r, d, self._cwd) for d in (*(own_dirs or ()), *(work_dirs or ())) if d
-                           for r in [resolve(d, self._cwd)] if r}
+                           for r in [self._root(d)] if r}
         if self._cwd:
             own_cwd = resolve(self._cwd)
             if own_cwd:
                 self._own.append(own_cwd)
                 self._dir_shown.setdefault(own_cwd, _shown_dir(own_cwd, self._cwd))
-        self._deny = [r for r in (resolve(d, self._cwd) for d in deny_paths or () if d) if r]
+        self._deny = [r for r in (self._root(d) for d in deny_paths or () if d) if r]
         sens = sensitive_paths() if sensitive is None else sensitive
-        self._sensitive = [r for r in (resolve(d, self._cwd) for d in sens or () if d) if r]
+        self._sensitive = [r for r in (self._root(d) for d in sens or () if d) if r]
         self._mode = mode if mode in MODES else MODE_AUTO
         self._ask_text = ask_text or ASK_FIRST
         self._attached: set[str] = set()
@@ -1942,6 +1989,21 @@ class ConsentGate:
         self._log = log or (lambda _m: None)
         self.confirmer = confirmer
         self.calls = 0
+
+    def _root(self, folder) -> str | None:
+        """Папка из настроек (запись, база, закрытая): как `resolve`, а
+        сетевая — по тексту (`_unc_text`), без обращения к сети."""
+        return resolve(folder, self._cwd) or _unc_text(folder)
+
+    def _resolve(self, path) -> str | None:
+        """Путь из вызова агента: `resolve`; сетевой — только внутри сетевой
+        рабочей папки, которую задал человек (по тексту), иначе None (отказ)."""
+        r = resolve(path, self._cwd)
+        if r is None and self._unc_roots:
+            unc = _unc_text(path)
+            if unc and any(_inside(unc, root) for root in self._unc_roots):
+                return unc
+        return r
 
     @property
     def level(self) -> str:
@@ -1968,7 +2030,7 @@ class ConsentGate:
 
     def allow_paths(self, paths) -> None:
         with self._lock:
-            self._attached.update(p for p in (resolve(x, self._cwd) for x in paths or () if x) if p)
+            self._attached.update(p for p in (self._root(x) for x in paths or () if x) if p)
 
     def add_grant(self, key: str, label: str = "") -> None:
         with self._lock:
@@ -2027,7 +2089,7 @@ class ConsentGate:
         return None
 
     def _write_target(self, data: dict) -> str | None:
-        return resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
+        return self._resolve(data.get("file_path") or data.get("notebook_path") or "")
 
     def _files_grantable(self, target: str, folder: str) -> bool:
         """Разрешение на правки в `folder` покрывает `target`, только если
@@ -2045,7 +2107,7 @@ class ConsentGate:
                                     for d in self._work_roots())
 
     def _inside_work(self, path: str) -> bool:
-        return self._writable(resolve(path, self._cwd))
+        return self._writable(self._resolve(path))
 
     def _granted(self, tool: str, data: dict) -> bool:
         with self._lock:
@@ -2102,25 +2164,25 @@ class ConsentGate:
         cwd = self._cwd
         for key in ("file_path", "notebook_path"):
             if isinstance(data.get(key), str) and data[key].strip():
-                out.append(resolve(data[key], cwd))
+                out.append(self._resolve(data[key]))
         base = data.get("path") if isinstance(data.get("path"), str) and data["path"].strip() else None
         if tool == "Glob":
             pattern = data.get("pattern") if isinstance(data.get("pattern"), str) else ""
             root, escapes = _glob_root(pattern)
-            start = resolve(base, cwd) if base else resolve(cwd or os.getcwd())
+            start = self._resolve(base) if base else resolve(cwd or os.getcwd())
             expanded = os.path.expanduser(root) if root else ""
             if escapes:
                 out.append(None)
             elif expanded and (os.path.isabs(expanded) or re.match(r"^[A-Za-z]:", expanded)
                                or expanded.startswith(("/", "\\"))):
-                out.append(resolve(expanded, cwd))
+                out.append(self._resolve(expanded))
             elif start:
-                out.append(resolve(os.path.join(start, root), cwd) if root else start)
+                out.append(self._resolve(os.path.join(start, root)) if root else start)
             else:
                 out.append(None)
         elif tool in FILE_READ or tool in FILE_WRITE:
             if base:
-                out.append(resolve(base, cwd))
+                out.append(self._resolve(base))
             elif tool in ("Grep", "LS"):
                 out.append(resolve(cwd or os.getcwd()))
         return out
@@ -2193,7 +2255,7 @@ class ConsentGate:
         if plan is None:
             return None
         paths_, recursive = plan
-        resolved = [resolve(x, self._cwd) for x in paths_]
+        resolved = [self._resolve(x) for x in paths_]
         for r in resolved:
             why = self._protected(r)
             if why:
@@ -2319,7 +2381,7 @@ class ConsentGate:
             if re.search(r"(^|[\\/])\.\.([\\/]|$)", value):
                 if os.path.isabs(value.strip()) or re.match(r"^\s*[A-Za-z]:", value):
                     normalized = os.path.normpath(value.strip())
-                    why = self._mentions(normalized) or self._protected(resolve(normalized, self._cwd))
+                    why = self._mentions(normalized) or self._protected(self._resolve(normalized))
                     if why and why != "unresolved":
                         return why, False
                 else:
@@ -2327,8 +2389,8 @@ class ConsentGate:
             stripped = value.strip()
             if not stripped:
                 continue
-            if re.match(r"(?i)file:", stripped):
-                card = True
+            if re.match(r"(?i)file:", stripped) or re.match(r"^[\\/]{2}[^\\/\s]", stripped):
+                card = True               # `file:` и сетевой путь (`\\хост\…`, I2)
                 continue
             if kind == "mcp-resource" and key == "uri" and not re.match(r"(?i)https?://", stripped):
                 continue          # свои схемы ресурсов (jira://…) — чтение
@@ -2406,7 +2468,7 @@ class ConsentGate:
                 for k in {key, canonical}:
                     self._approved[k] = self._approved.get(k, 0) + 1
                 if tool in FILE_WRITE:
-                    target = resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
+                    target = self._resolve(data.get("file_path") or data.get("notebook_path") or "")
                     if target:
                         folder = target.rsplit("/", 1)[0]
                         self._approved_dirs.add(folder)

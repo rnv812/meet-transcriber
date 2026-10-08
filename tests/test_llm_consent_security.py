@@ -13,6 +13,25 @@ import pytest
 from meet.llm import consent
 from meet.llm.consent import ALLOW, ASK, DENY, NONE, READ, USER, ConsentGate
 
+_UNC_START = ("\\\\", "//", "/\\", "\\/")
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Ворота не открывают сетевые пути никогда: `realpath` на `\\\\host\\…`
+    на Windows идёт по SMB (и отдаёт хеш NTLM чужому хосту)."""
+    calls = []
+    real = os.path.realpath
+
+    def guarded(path, *a, **kw):
+        if str(path).startswith(_UNC_START):
+            calls.append(str(path))
+            raise AssertionError(f"realpath на сетевом пути: {path}")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(consent.os.path, "realpath", guarded)
+    return calls
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -147,3 +166,85 @@ def test_sensitive_paths_are_found_after_normalising(env, tool, command):
     for level in (READ, USER):
         d = _decide(env, level, tool, command)
         assert d.outcome == DENY and d.why == "sensitive", (level, command, d)
+
+
+# --- I2: сетевые пути (UNC) и пути устройств ------------------------------------------------------
+
+_UNC = ["//evil.example/share/x", r"\\evil.example\share\x", r"\\?\UNC\evil.example\share\x",
+        "//?/UNC/evil.example/share/x", r"\\.\UNC\evil.example\share\x", "/\\evil.example\\share\\x"]
+_DEVICES = [r"\\.\pipe\meet", r"\\.\PhysicalDrive0", r"\\?\GLOBALROOT\Device\X", r"\\?\Volume{1}\x"]
+
+
+@pytest.mark.parametrize("path", _UNC + _DEVICES)
+def test_resolve_never_touches_a_network_or_device_path(path, no_network):
+    assert consent.resolve(path) is None
+    assert no_network == []
+
+
+def test_resolve_keeps_a_local_path_with_a_device_prefix(env):
+    rec = env["rec"].replace("/", "\\")
+    assert consent.resolve("\\\\?\\" + rec + "\\a.txt") == consent.resolve(env["rec"] + "/a.txt")
+
+
+@pytest.mark.parametrize("level", [NONE, READ, USER])
+@pytest.mark.parametrize("tool,key", [("Read", "file_path"), ("Grep", "path"), ("Glob", "path"),
+                                      ("LS", "path"), ("Write", "file_path")])
+@pytest.mark.parametrize("path", _UNC + _DEVICES)
+def test_file_tools_on_network_paths_are_denied_at_every_level(env, level, tool, key, path):
+    gate = env["gate"]
+    gate.begin(level)
+    data = {key: path, **({"pattern": "*"} if tool in ("Grep", "Glob") else {})}
+    d = gate.decide(tool, data)
+    assert d.outcome == DENY and d.why == "sensitive", (tool, path, d)
+
+
+@pytest.mark.parametrize("pattern", ["//evil.example/share/*", r"\\evil.example\share\**\*.md"])
+def test_glob_patterns_on_network_paths_are_denied(env, pattern):
+    gate = env["gate"]
+    gate.begin(USER)
+    assert gate.decide("Glob", {"pattern": pattern}).outcome == DENY
+
+
+@pytest.mark.parametrize("tool,command", [
+    ("Bash", "cat //evil.example/share/x"), ("Bash", "cat '\\\\evil.example\\share\\x'"),
+    ("Bash", "head -n 5 //evil.example/share/x"), ("Bash", "ls //evil.example/share"),
+    ("PowerShell", "Get-Content //evil.example/share/x"), ("PowerShell", r"Get-Content \\evil.example\share\x"),
+    ("PowerShell", r"Get-ChildItem \\?\UNC\evil.example\share"), ("PowerShell", r"type \\.\pipe\meet"),
+])
+def test_shell_reads_of_network_paths_are_not_reads_and_ask_as_sending(env, tool, command):
+    assert consent.read_plan(tool, command) is None, command
+    assert _decide(env, READ, tool, command).outcome == DENY
+    d = _decide(env, USER, tool, command)
+    assert d.outcome == ASK and d.why in (consent.SEND, consent.UNPARSED), (command, d)
+
+
+def test_shell_text_with_slashes_is_not_a_network_path(env):
+    for command in ("grep -n '//TODO' {rec}/a.txt", "echo https://example.com/a"):
+        assert consent.shell_risk("Bash", _cmd(env, command)) == "", command
+
+
+def test_mcp_arguments_with_network_paths_need_a_card(env):
+    gate = env["gate"]
+    gate.begin(USER)
+    for value in (r"\\evil.example\share\x", "//evil.example/share/x"):
+        d = gate.decide("mcp__fs__read_file", {"path": value})
+        assert d.outcome == ASK, (value, d)
+    gate.begin(READ)
+    assert gate.decide("mcp__fs__read_file", {"path": r"\\evil.example\share\x"}).outcome == DENY
+
+
+def test_working_folders_on_a_network_share_still_work_without_touching_the_network(env):
+    """База знаний на сетевом диске (`\\\\nas\\kb`), настроенная человеком:
+    сравнение — по тексту пути, без обращения к сети; закрытая папка внутри — закрыта."""
+    sensitive = consent.sensitive_paths(data_dir=env["root"] / "data", library_root=env["root"] / "lib",
+                                        home=env["home"])
+    gate = ConsentGate(own_dirs=[env["rec"]], work_dirs=[r"\\nas\kb"], deny_paths=[r"\\nas\kb\Личное"],
+                       sensitive=sensitive, cwd=env["root"] / "cwd")
+    gate.begin(NONE)
+    assert gate.decide("Read", {"file_path": r"\\nas\kb\План.md"}).outcome == ALLOW
+    assert gate.decide("Read", {"file_path": "//NAS/kb/sub/../План.md"}).outcome == ALLOW
+    assert gate.decide("Read", {"file_path": r"\\nas\kb\Личное\a.md"}).why == "excluded"
+    assert gate.decide("Read", {"file_path": r"\\nas\other\a.md"}).why == "sensitive"
+    assert gate.decide("Read", {"file_path": r"\\evil\kb\a.md"}).why == "sensitive"
+    gate.begin(USER)
+    assert gate.decide("Write", {"file_path": r"\\nas\kb\new.md", "content": "x"}).outcome == consent.AUTO
