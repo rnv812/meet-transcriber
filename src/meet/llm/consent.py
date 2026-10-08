@@ -1736,6 +1736,12 @@ _WHY_LABELS = {
 }
 
 
+def why_label(why: str) -> str:
+    """Причина решения ворот словами («закрытые данные», «удаление»…); нет
+    такой — пусто (строка вызова в чате, `assist.tool_rows.gate_view`)."""
+    return _WHY_LABELS.get(why or "", "")
+
+
 @dataclass
 class Decision:
     """`outcome`: allow (Meet пропускает сам) / auto (решает CLI: правила

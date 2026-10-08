@@ -440,3 +440,30 @@ def test_attach_timeout_does_not_leave_an_orphan_material(tmp_path, monkeypatch)
     assert materials.records(rec) == []
     assert not list(materials.materials_dir(rec).glob("a*.*"))
     assert chat.messages() == []
+
+
+def test_after_meeting_the_agent_knows_the_recordings_people_and_their_roles(folder, tmp_path):
+    from meet import paths, settings
+
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    (voices / "Демьян.json").write_text(json.dumps({"samples": [], "role": "тимлид интеграции"}),
+                                       encoding="utf-8")
+    settings.patch({"recording": {"voices_dir": str(voices)}}, paths.config_path())
+    log = ChatLog(folder)
+    log.append("user", text="Кто такой Демьян?", after_meeting=True)
+    runner = Runner('{"say": "Тимлид интеграции."}')
+    assert job_worker._chat(str(folder), "m1", runner=runner, provider="codex") == 0
+    prompt = runner.calls[0][0]
+    assert "- Демьян — тимлид интеграции" in prompt and "Олег —" not in prompt
+
+
+def test_after_meeting_slash_command_answers_without_the_model(folder):
+    log = ChatLog(folder)
+    log.append("user", text="/help", after_meeting=True)
+    runner = Runner()
+    assert job_worker._chat(str(folder), "m1", runner=runner, provider="codex") == 0
+    assert runner.calls == []
+    line = [m for m in log.messages() if m["kind"] == "system" and m.get("card") == "command"][0]
+    assert line["re"] == "m1" and "/clear" in line["text"]
+    assert not any(m.get("text") == "Ассистенту нечего добавить" for m in log.messages())

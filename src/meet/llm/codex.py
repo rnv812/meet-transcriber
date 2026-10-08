@@ -252,6 +252,63 @@ def parse_events(stdout: str) -> tuple[str | None, list[str]]:
     return sid, errors
 
 
+def tool_events(stdout: str) -> list[dict]:
+    """Ход работы для чата (0.4, `assist.tool_rows`) из событий `codex exec
+    --json`: законченные элементы (`item.completed`) — команды
+    (`command_execution` → Bash), правки файлов (`file_change` →
+    `apply_patch`), вызовы MCP (`mcp_tool_call` → `mcp__сервер__инструмент`)
+    и веб-поиск (`web_search` → WebSearch) — парами событий `tool_use` и
+    `tool_result`, как у `claude_stream`. Остановить вызов до выполнения Codex
+    не даёт, поэтому строки приходят после вызова. Чужие строки и поля
+    пропускаются."""
+    out: list[dict] = []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "item.completed":
+            continue
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        kind, iid = item.get("type"), str(item.get("id") or "")
+        if not iid:
+            continue
+        error = item.get("error") if isinstance(item.get("error"), dict) else {}
+        failed = item.get("status") == "failed"
+        if kind == "command_execution":
+            name, data = "Bash", {"command": str(item.get("command") or "")}
+            output = str(item.get("aggregated_output") or "")
+            ok = not failed and item.get("exit_code") in (0, None)
+        elif kind == "file_change":
+            changes = [{"path": str(c.get("path")), "kind": str(c.get("kind") or "")}
+                       for c in item.get("changes") or () if isinstance(c, dict) and c.get("path")]
+            name, data = "apply_patch", {"changes": changes}
+            output = "\n".join(f"{c['kind']}: {c['path']}" for c in changes)
+            ok = not failed
+        elif kind == "mcp_tool_call":
+            server, tool = str(item.get("server") or "?"), str(item.get("tool") or "?")
+            name = f"mcp__{server}__{tool}"
+            data = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            result = item.get("result")
+            output = str(error.get("message") or "") if failed else (
+                json.dumps(result, ensure_ascii=False) if result is not None else "")
+            ok = not failed
+        elif kind == "web_search":
+            name, data = "WebSearch", {"query": str(item.get("query") or "")}
+            output, ok = "", not failed
+        else:
+            continue
+        server, tool = (name[5:].split("__", 1) if name.startswith("mcp__") else (None, name))
+        out.append({"type": "tool_use", "id": iid, "name": name, "server": server, "tool": tool,
+                    "input": data, "parent": None})
+        out.append({"type": "tool_result", "id": iid, "ok": ok, "output": output, "truncated": False,
+                    "duration_ms": None, "parent": None})
+    return out
+
+
 def session_from(*streams: str) -> str | None:
     """Id сеанса из шапки `codex exec` (`session id: <uuid>`)."""
     for text in streams:
@@ -316,6 +373,15 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
         except OSError:
             text = ""
     event_sid, event_errors = parse_events(stdout)
+    tools = tool_events(stdout)
+    reply = _reply(proc, stdout, stderr, text, event_sid, event_errors, keep_session, resume, call)
+    reply.tools = tools
+    return reply
+
+
+def _reply(proc, stdout: str, stderr: str, text: str, event_sid, event_errors, keep_session: bool,
+           resume: str | None, call) -> AgentReply:
+    """Ответ вызова по его выводу (без событий хода работы)."""
     reported = event_sid or session_from(stderr, stdout)
     if call is not None and call.cancelled:
         return AgentReply(text="", error=CANCELLED_ERROR, cancelled=True,

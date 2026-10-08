@@ -146,6 +146,9 @@ GATE_GAP = "мимо проверки согласия"
 GATE_GAP_LINE = ("Meet остановил ход ассистента: инструмент выполнился мимо проверки согласия. "
                  "Обновите Meet или Claude Code; до этого лучше выключить расширенные возможности.")
 _ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
+# Однократная строка первой сессии после обновления до 0.4 (спец. §7, решение 1).
+MODE_NOTICE = ("Ассистент теперь сам выполняет обычные действия, рискованные — с вашего разрешения. "
+               "Вернуть подтверждение каждого действия — Настройки → Ассистент.")
 
 
 # --- разбор потока: текст сообщения, который уже можно показать ---
@@ -209,6 +212,8 @@ class _ConversationSession:
     def __init__(self, conversation, gate=None) -> None:
         self.conv = conversation
         self.gate = gate
+        # Ход работы в чате (`send(on_event=…)`) — если диалог его умеет.
+        self._events = _accepts(conversation.send, "on_event")
 
     @property
     def session_id(self) -> str | None:
@@ -226,11 +231,22 @@ class _ConversationSession:
         return bool(getattr(self.conv, "has_context", False))
 
     async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S,
-                   level: str = consent.NONE):
+                   level: str = consent.NONE, on_event=None):
         if self.gate is not None:
             self.gate.begin(level)
+        extra = {"on_event": on_event} if on_event is not None and self._events else {}
         try:
-            return await self.conv.send(text, images=list(images or ()), on_text=on_text, timeout_s=timeout_s)
+            try:
+                return await self.conv.send(text, images=list(images or ()), on_text=on_text,
+                                            timeout_s=timeout_s, **extra)
+            except TypeError as e:
+                # Диалог без хода работы (обёртка `**kw` над старым `send`):
+                # аргумент отвергнут ещё до хода — без него.
+                if not extra or "on_event" not in str(e):
+                    raise
+                self._events = False
+                return await self.conv.send(text, images=list(images or ()), on_text=on_text,
+                                            timeout_s=timeout_s)
         finally:
             if self.gate is not None:
                 self.gate.end()
@@ -281,7 +297,7 @@ class _RunnerSession:
         return []   # у Codex и OpenCode отказов по вызовам Meet не видит
 
     async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S,
-                   level: str = consent.NONE):
+                   level: str = consent.NONE, on_event=None):
         extra = {}
         if self._resumable:
             extra = {"resume": self.session_id} if self.session_id else {"keep_session": True}
@@ -299,7 +315,15 @@ class _RunnerSession:
                 self.session_id = None
             elif reply.session_id:
                 self.session_id = reply.session_id
+        # Ход работы Codex и OpenCode виден только после вызова (их события).
+        if on_event is not None:
+            for event in getattr(reply, "tools", None) or ():
+                on_event(event)
         return reply
+
+    def set_model(self, model: str) -> None:
+        """`/model имя`: модель следующих вызовов."""
+        self._kwargs["model"] = model
 
     async def interrupt(self) -> bool:
         return False   # вызов отменяется задачей (провайдер убивает процесс)
@@ -408,8 +432,10 @@ class Participant:
                  min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S,
                  after_meeting: bool = False, seed_until: str | None = None,
                  profile=pp.DEFAULT_PROFILE, ephemeral: bool = False,
-                 freedom: bool = False, agent_mode: str = consent.MODE_AUTO) -> None:
+                 freedom: bool = False, agent_mode: str = consent.MODE_AUTO,
+                 roles=None, mode_notice: bool = False, on_mode_notice=None) -> None:
         from meet import llm
+        from meet.assist.tool_rows import ToolRows
 
         self._bus = bus
         self._chatlog = chatlog
@@ -516,6 +542,25 @@ class Participant:
         self._kicked: asyncio.Event | None = None
         self._background: set = set()
         self.turns = 0
+        # Ход работы в чате (0.4): строки вызовов инструментов (`tool_rows`).
+        self._rows = ToolRows()
+        self._row_writes: set = set()
+        # Слэш-команды (0.4, `slash`): команды CLI из `initialize`, смена
+        # модели `/model`, затравка после хода-команды или `/clear`.
+        self._cli_cmds: list[dict] = []
+        self.model_override: str | None = None
+        self._model_configured = self._model
+        self._needs_seed = False
+        self._seed_history = True
+        # Участники встречи (роли из «Голосов», 0.4): `roles(имена) → {имя: роль}`;
+        # какие роли агент уже знает и какие имена уже проверены.
+        self._roles = roles
+        self._people_sent: dict[str, str] = {}
+        self._people_checked: set[str] = set()
+        # Однократная строка «Ассистент теперь сам выполняет обычные действия…»
+        # (первая сессия после обновления до 0.4, `assist.agent_mode_noticed`).
+        self._mode_notice = bool(mode_notice) and self.freedom and self.agent_mode == consent.MODE_AUTO
+        self._on_mode_notice = on_mode_notice
 
     # --- события ---
 
@@ -565,9 +610,15 @@ class Participant:
 
     @property
     def model_mismatch(self) -> bool:
-        """CLI запустил не ту модель, что задана в настройках."""
+        """CLI запустил не ту модель, что задана в настройках (или командой
+        `/model` — тогда сверяется с ней: смену выбрал сам человек)."""
         return (self.provider == "claude-code" and self.model_actual is not None
                 and not model_matches(self._model, self.model_actual))
+
+    @property
+    def provider_label(self) -> str:
+        """Имя провайдера словами («Claude Code», «Codex»)."""
+        return self._name
 
     def _on_model(self, actual) -> None:
         """Модель из `system/init`: показать окну (и предупредить, если не та)."""
@@ -589,8 +640,12 @@ class Participant:
         return {"state": self.state, "error": self.error, "provider": self.provider,
                 "label": self.label, "vision": self.vision, "tools": self.tools,
                 "model": self.model_actual if claude else None,
-                "model_configured": self._model if claude else None,
+                "model_configured": self._model_configured if claude else None,
                 "model_mismatch": self.model_mismatch,
+                # `/model имя` (0.4): модель, выбранная командой до конца сессии.
+                "model_override": self.model_override,
+                # Слэш-команды для подсказки в строке ввода (`slash`).
+                "commands": self.commands_view(),
                 "deny_enforced": self.deny_enforced,
                 "frequency": self.frequency, "profile": self.profile,
                 "session": self.session_state,
@@ -626,8 +681,32 @@ class Participant:
             return {"mode": mode, "mcp": None, "agent_mode": self.agent_mode}
         return {"mode": "read" if self.tools else "meet", "mcp": None}
 
+    def commands_view(self) -> list[dict]:
+        """Команды для подсказки на «/» (`[{name, hint, description, source}]`):
+        команды Meet этого провайдера и команды CLI, если он их назвал."""
+        from meet.assist import slash
+
+        return slash.help_items(self.provider, self._cli_cmds)
+
+    def _update_commands(self, session) -> bool:
+        """Команды CLI из ответа `initialize` (Claude Code) — в `view()`."""
+        conv = getattr(session, "conv", None)
+        found = getattr(conv, "commands", None) if conv is not None else None
+        if not isinstance(found, list):
+            return False
+        cmds = [{"name": str(c["name"]).lstrip("/"), "hint": str(c.get("hint") or ""),
+                 "description": str(c.get("description") or "")}
+                for c in found if isinstance(c, dict) and c.get("name")]
+        if cmds == self._cli_cmds:
+            return False
+        self._cli_cmds = cmds
+        return True
+
     def _update_mcp(self, session) -> None:
-        """После хода: MCP-серверы и режим, в котором CLI на деле работает."""
+        """После хода: MCP-серверы и режим, в котором CLI на деле работает;
+        команды CLI (для подсказки «/»)."""
+        if self._update_commands(session):
+            self._changed()
         if not self.freedom:
             return
         changed = False
@@ -647,15 +726,36 @@ class Participant:
             self._changed()
 
     def on_tool_event(self, event: dict) -> None:
-        """Точка подключения хода работы в чате (0.4, спец. §3 «Ход работы —
-        как в Claude CLI»): события вызова инструмента от `claude_stream`
-        (`send(on_event=…)`: `tool_use`, `tool_result`, `gate`, `hook`; общий
-        ключ — `id` вызова) станут записями журнала `kind: "tool"` (патчи по
-        `id`: `name`, `server`, `summary`, `input_preview`, `status`,
-        `output_preview`, `duration_ms`, `gate` — `consent.Decision.row()`).
-        Запись в журнал и окно — следующая задача; пока события не хранятся.
-        В журнал процесса — только вид и исход вызова, без текста (CLAUDE.md)."""
-        return None
+        """Ход работы в чате (0.4, спец. §3 «как в Claude CLI»): событие вызова
+        инструмента (`claude_stream` — `send(on_event=…)` по мере хода: `tool_use`,
+        `gate`, `tool_result`, `hook`; Codex и OpenCode — после вызова, из их
+        событий) → запись журнала `kind: "tool"`, `event: "call"` и её патчи по
+        id вызова (`tool_rows.ToolRows`), `reply` — реплика агента этого хода.
+        Зовётся в цикле событий; журнал пишется в его потоке по порядку
+        событий, событие `chat` окну — по готовности. В журнал процесса —
+        ничего из вызова (CLAUDE.md: ни команд, ни вывода)."""
+        if not isinstance(event, dict):
+            return
+        turn = self._turn
+        reply = turn.reply_id if turn is not None else None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        future = loop.run_in_executor(self._io_pool, partial(
+            self._rows.apply, self._chatlog, event, reply=reply, t=self._now_t()))
+        self._row_writes.add(future)
+        future.add_done_callback(self._row_written)
+
+    def _row_written(self, future) -> None:
+        self._row_writes.discard(future)
+        if future.cancelled():
+            return
+        exc = future.exception()
+        if exc is not None:
+            self._log(f"агент: строка хода работы не записана ({type(exc).__name__})")
+            return
+        self._emit_chat(future.result())
 
     async def snapshot(self, limit: int | None = 200) -> dict:
         """Лента (`ChatLog.snapshot(feed=True)`), состояние агента и текст,
@@ -682,6 +782,26 @@ class Participant:
             self._log(f"агент: журнал не прочитан при старте ({type(e).__name__}: {e})")
         await self._save_profile()
         await self._load_info()
+        if self._mode_notice:
+            await self._note_mode_change()
+
+    async def _note_mode_change(self) -> None:
+        """Однократная строка первой сессии после обновления до 0.4: ассистент
+        теперь действует сам (автомод), где вернуть подтверждение каждого
+        действия. Флаг «показано» — у вызывающего (`on_mode_notice`,
+        настройка `assist.agent_mode_noticed`)."""
+        self._mode_notice = False
+        try:
+            added = await self._io(self._chatlog.append, "system", text=MODE_NOTICE, notice="agent_mode")
+        except (OSError, RuntimeError, ValueError) as e:
+            self._log(f"агент: строка об автомоде не записана ({type(e).__name__})")
+            return
+        self._emit_chat([added.event])
+        if self._on_mode_notice is not None:
+            try:
+                await asyncio.to_thread(self._on_mode_notice)
+            except Exception as e:
+                self._log(f"агент: отметка о строке автомода не сохранена ({type(e).__name__})")
 
     async def _load_info(self) -> None:
         """Карта, запреты, материалы — один раз на сессию (в потоке): шапка
@@ -997,6 +1117,9 @@ class Participant:
         for key in ("preview", "warnings", "grant"):
             if card.get(key):
                 fields[key] = card[key]
+        if card.get("tool_use_id"):
+            # Окно ставит карточку в строку этого вызова (ход работы, 0.4).
+            fields["tool_use_id"] = str(card["tool_use_id"])
         t = self._now_t()
         if t is not None:
             fields["t"] = t
@@ -1281,6 +1404,23 @@ class Participant:
         return True
 
     def _collect(self) -> _Inputs:
+        # Ход-команда (слэш-команда CLI, `slash`) — отдельным ходом и одна:
+        # без реплик и прочего ввода (они уйдут следующим ходом). Сообщения
+        # перед ней — своим ходом раньше неё.
+        at = next((i for i, m in enumerate(self._user) if m.get("_command")), None)
+        if at == 0:
+            command = self._user.pop(0)
+            self._user_fresh = bool(self._user)
+            return _Inputs(start=self._cursor, end=self._cursor, user=[command])
+        later: list[dict] = []
+        if at is not None:
+            self._user, later = self._user[:at], self._user[at:]
+        inputs = self._collect_all()
+        self._user = later
+        self._user_fresh = bool(later)
+        return inputs
+
+    def _collect_all(self) -> _Inputs:
         lines, end = self._take_lines(self._cursor)
         inputs = _Inputs(lines=lines, start=self._cursor, end=end,
                          first_pending_at=self._first_pending_at,
@@ -1389,6 +1529,9 @@ class Participant:
 
     async def _turn_body(self, turn: _Turn) -> None:
         inputs = turn.inputs
+        if inputs.user and inputs.user[0].get("_command"):
+            await self._command_turn(turn)
+            return
         await self._fresh_audio(turn)
         session = turn.session = await self._ensure_session()
         if turn.stop:          # прервали, пока ход собирался
@@ -1447,28 +1590,66 @@ class Participant:
         и дельта. Блокирующее (журнал) — в потоке журнала."""
         inputs = turn.inputs
         parts = []
-        if force_seed or not session.has_context:
-            journal = (_JournalUntil(self._chatlog, self._seed_until) if self._seed_until
-                       else self._chatlog)
+        if force_seed or not session.has_context or self._needs_seed:
+            # После `/clear` — без переписки чата: новый разговор (спец. §6).
+            journal = None
+            if self._seed_history:
+                journal = (_JournalUntil(self._chatlog, self._seed_until) if self._seed_until
+                           else self._chatlog)
+            self._needs_seed, self._seed_history = False, True
+            history = self._history(inputs.start)
+            # Новый сеанс не знает участников: все узнанные с ролью — в затравку.
+            self._people_sent, self._people_checked = {}, set()
+            people = self._new_people([*history, *inputs.lines])
             seed = pp.seed(journal, "", self._materials_summary(),
                            pp.ParticipantSettings(frequency=self.frequency,
                                                   owner_speaker=self._owner_speaker,
                                                   profile=self.profile),
-                           transcript=self._history(inputs.start), t=self._now_t())
+                           transcript=history, t=self._now_t(), people=people)
             parts.append(seed)
-            self.session_state = "seeded" if self._chatlog_has_history() else "new"
+            self.session_state = "seeded" if journal is not None and self._chatlog_has_history() else "new"
         elif self.session_state is None:
             self.session_state = "resumed"
         delta = pp.delta(inputs.lines, inputs.user, (), inputs.reactions,
                          owner_speaker=self._owner_speaker, tool_results=inputs.tools,
                          notes=inputs.notes, frequency=inputs.frequency,
                          agent_texts=self._agent_texts, profile=self.profile,
-                         profile_changed=inputs.profile)
+                         profile_changed=inputs.profile, people=self._new_people(inputs.lines))
         # Карта при возврате в «Рабочую встречу» — только системным промптом:
         # сеанс к этому ходу пересоздан с ним (Codex, OpenCode — новый сеанс).
         if delta:
             parts.append(delta)
         return "\n\n".join(parts)
+
+    def _new_people(self, entries) -> dict[str, str]:
+        """Узнанные участники с ролью («Голоса», 0.4), которых агент ещё не
+        знает: имена говорящих в `entries` (кроме владельца и «Спикер N» —
+        у них роли нет) → `{имя: роль}`. Каждое имя проверяется один раз за
+        сеанс. Блокирующее (файлы базы голосов) — в потоке журнала. В журнал
+        процесса — только счётчик (CLAUDE.md: без текста ролей)."""
+        if self._roles is None:
+            return {}
+        names = []
+        for e in entries or ():
+            if not isinstance(e, dict) or e.get("owner"):
+                continue
+            name = str(e.get("speaker") or "").strip()
+            if name and name not in self._owner_names and name not in self._people_checked and name not in names:
+                names.append(name)
+        if not names:
+            return {}
+        self._people_checked.update(names)
+        try:
+            found = self._roles(names) or {}
+        except Exception as e:
+            self._log(f"агент: роли участников не прочитаны ({type(e).__name__})")
+            return {}
+        new = {str(k): str(v) for k, v in found.items()
+               if str(k) in names and isinstance(v, str) and v.strip() and self._people_sent.get(str(k)) != v}
+        if new:
+            self._people_sent.update(new)
+            self._log(f"агент: роли участников агенту: {len(new)}")
+        return new
 
     def _chatlog_has_history(self) -> bool:
         try:
@@ -1508,7 +1689,8 @@ class Participant:
         kwargs = {"level": self.consent_level(turn.inputs)} if self.freedom else {}
         task = asyncio.ensure_future(session.send(
             text, images=turn.inputs.images if self.vision else (),
-            on_text=partial(self._on_text, turn), timeout_s=self._turn_timeout, **kwargs))
+            on_text=partial(self._on_text, turn), timeout_s=self._turn_timeout,
+            on_event=self.on_tool_event, **kwargs))
         turn.send_task = task
         try:
             await asyncio.wait({task})
@@ -1523,9 +1705,12 @@ class Participant:
                 # которого их показали, уже не выполнится; ревью R4).
                 with _quiet():
                     await self._cancel_cards()
-            self._update_mcp(session)
             with _quiet():
                 await self._note_denials(session)
+        self._update_mcp(session)
+        # Строки хода работы этого хода — в журнале раньше конца ответа.
+        if self._row_writes:
+            await asyncio.gather(*list(self._row_writes), return_exceptions=True)
         if task.cancelled():
             return AgentReply(text="".join(turn.raw), error=CANCELLED_ERROR, cancelled=True)
         exc = task.exception()
@@ -1618,6 +1803,213 @@ class Participant:
         self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
                                         status=status, text="", error=error)])
         self._failed(error)
+
+    # --- ход-команда (слэш-команда CLI, `slash`) ---
+
+    async def _command_turn(self, turn: _Turn) -> None:
+        """Команда CLI отдельным ходом: дословно, без затравки и дельты,
+        уровень USER (`via: "command"`); ответ — текстом CLI в ленту (не
+        протокол JSON). Ход сжатия (`/compact`) — строкой «Контекст сжат».
+        Сбой хода не повторяется (команду человек повторит сам)."""
+        msg = turn.inputs.user[0]
+        text = str(msg["_command"])
+        name = text.split()[0] if text.split() else text
+        turn.answered = True          # сбой — строкой, без повтора хода
+        session = turn.session = await self._ensure_session()
+        if turn.stop:
+            return
+        had = session.has_context
+        fields = {"mode": "reply", "re": turn.re, "via": "command"}
+        t = self._now_t()
+        if t is not None:
+            fields["t"] = t
+        began = await self._io(self._chatlog.begin_reply, **fields)
+        turn.reply_id = began.message["id"]
+        self._emit_chat([began.event])
+        self._set_state(WRITING)
+        reply = await self._send(turn, session, text)
+        await self._store_session(session)
+        if not had:
+            # Сеанс начался командой: обычный ход потом получит затравку.
+            self._needs_seed = True
+        if reply.cancelled or turn.stop:
+            self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, status="cancelled",
+                                            text=reply.text or "", note="остановлено пользователем")])
+            self.log_command(name.lstrip("/"), "остановлена")
+            self._set_state(LISTENING)
+            return
+        if reply.error:
+            self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, status="failed",
+                                            text="", error=reply.error[:300])])
+            self.log_command(name.lstrip("/"), "ошибка")
+            self._set_state(LISTENING)
+            return
+        self.turns += 1
+        self._failures = 0
+        compacted = getattr(reply, "compacted", None)
+        body = (reply.text or "").strip()
+        if compacted or not body:
+            self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, status="dropped",
+                                            silent=True, note="ход-команда")])
+            pre = (compacted or {}).get("pre_tokens")
+            line = (f"Контекст сжат (было {pre} токенов)" if isinstance(pre, int) else "Контекст сжат") \
+                if compacted else f"Команда {name} выполнена"
+            await self.command_line(msg, None, line, command=name.lstrip("/"))
+        else:
+            self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, status="shown",
+                                            text=body, buttons=[], pin=False)])
+        self.log_command(name.lstrip("/"), "выполнена")
+        self._set_state(LISTENING)
+
+    # --- слэш-команды: что нужно `slash` ---
+
+    async def _slash(self, msg: dict, cmd) -> None:
+        from meet.assist import slash
+
+        try:
+            how = await slash.run(self, msg, cmd)
+        except Exception as e:      # команда не роняет ассистента
+            self._log(f"агент: команда /{cmd.name} упала ({type(e).__name__})")
+            with _quiet():
+                await self.command_line(msg, cmd, f"/{cmd.name} не выполнена: {e}", level="error")
+            return
+        self.log_command(cmd.name, how)
+
+    def log_command(self, name: str, outcome: str) -> None:
+        """В журнал процесса — имя команды и исход, без аргументов."""
+        self._log(f"агент: команда /{name} — {outcome}")
+
+    async def command_line(self, msg: dict, cmd, text: str, *, level: str | None = None, **fields) -> None:
+        """Ответ команды — системная строка ленты (`card: "command"`, `re` —
+        сообщение пользователя: «Продолжить разговор» видит ответ)."""
+        record = {"text": text, "card": "command", "re": msg.get("id"), **fields}
+        if cmd is not None:
+            record.setdefault("command", cmd.name)
+        if level:
+            record["level"] = level
+        t = self._now_t()
+        if t is not None:
+            record["t"] = t
+        added = await self._io(self._chatlog.append, "system", **record)
+        self._emit_chat([added.event])
+
+    def queue_command(self, msg: dict, cmd) -> None:
+        """Команда CLI — в очередь отдельным ходом (идущий ход не прерывается)."""
+        self._queue_user({**msg, "text": cmd.text, "via": "command", "_command": cmd.text})
+        self._kick()
+
+    async def conversation(self):
+        """Диалог Claude Code этой сессии (поднимается, модель не зовётся)."""
+        session = await self._ensure_session()
+        conv = getattr(session, "conv", None)
+        if conv is None:
+            raise RuntimeError(f"у {self._name} нет управления сессией")
+        return conv
+
+    async def cli_commands(self) -> list[dict]:
+        """Команды CLI (Claude Code, ответ `initialize`). Ещё не известны —
+        процесс поднимается без хода модели (`mcp_status`)."""
+        if self.provider != "claude-code":
+            return []
+        if not self._cli_cmds and self.freedom:
+            try:
+                conv = await self.conversation()
+                await conv.mcp_status()
+            except Exception as e:
+                self._log(f"агент: команды Claude Code не получены ({type(e).__name__})")
+            if self._session is not None and self._update_commands(self._session):
+                self._changed()
+        return list(self._cli_cmds)
+
+    async def cli_command_names(self) -> set[str]:
+        names = {c["name"] for c in await self.cli_commands()}
+        conv = getattr(self._session, "conv", None)
+        names.update(str(n).lstrip("/") for n in getattr(conv, "slash_commands", None) or () if n)
+        return names
+
+    def codex_mcp(self):
+        """MCP-серверы Codex (`codex mcp list`). Блокирующее."""
+        from meet.llm import codex
+
+        return codex.mcp_servers(refresh=True)
+
+    def mcp_changed(self) -> None:
+        if self._session is not None:
+            self._update_mcp(self._session)
+
+    def need_seed(self) -> None:
+        """Процесс перезапущен без прежнего контекста: следующий ход — с затравкой."""
+        self._needs_seed = True
+
+    async def halt_turn(self) -> None:
+        """Остановить идущий ход и дождаться его конца (`/clear`, `/model`)."""
+        turn = self._turn
+        if turn is None or turn.task is None or turn.task.done():
+            return
+        await self._interrupt(turn, "stop")
+        await asyncio.wait({turn.task}, timeout=TURN_TIMEOUT_S)
+
+    async def clear_session(self) -> None:
+        """`/clear`: новый разговор с агентом — сеанс провайдера забыт (id —
+        в `past`), процесс закрыт; затравка следующего хода без переписки
+        чата. Лента, разрешения «до конца встречи» и вложения остаются."""
+        await self.halt_turn()
+        session = self._session
+        if session is not None:
+            session.forget()
+            await asyncio.to_thread(self.close)
+        self._session = None
+        self._session_profile = None
+        if self.resumable and not self.ephemeral:
+            try:
+                await self._io(self._chatlog.set_session_id, self.provider, None)
+            except (OSError, ValueError) as e:
+                self._log(f"агент: прежний сеанс не забыт ({type(e).__name__}: {e})")
+        self._stored_sid = None
+        self._seed_history = False
+        self._needs_seed = False
+        self._notes = []
+        self._people_sent, self._people_checked = {}, set()
+        self.session_state = None
+        self._changed()
+
+    def model_choices(self) -> list[str]:
+        conv = getattr(self._session, "conv", None)
+        models = getattr(conv, "models", None) or []
+        return [str(m.get("value")) for m in models if isinstance(m, dict) and m.get("value")]
+
+    async def model_text(self) -> str:
+        if self.provider == "claude-code":
+            await self.cli_commands()       # список моделей — из того же `initialize`
+            lines = [f"Модель: {self.model_actual or self._model}",
+                     f"В настройках: {self._model_configured}"]
+        else:
+            current = self._call_kwargs.get("model") or "как в настройках"
+            lines = [f"Модель: {current}"]
+        choices = self.model_choices()
+        if choices:
+            lines.append("Можно: " + ", ".join(choices))
+        if self.provider in ("claude-code", "codex", "opencode"):
+            lines.append("Сменить: /model <имя>")
+        return "\n".join(lines)
+
+    async def set_model(self, name: str) -> str:
+        """`/model имя`: Claude Code — `set_model` до конца сессии (новые
+        процессы — с ней же); Codex, OpenCode — на следующие вызовы."""
+        if self.provider == "claude-code":
+            conv = await self.conversation()
+            resolved = await conv.set_model(name)
+            self._model = claude_model(name)
+            self.model_override = name
+            self._changed()
+            return str(resolved or name)
+        self._call_kwargs["model"] = name
+        session = self._session
+        if session is not None and hasattr(session, "set_model"):
+            session.set_model(name)
+        self.model_override = name
+        self._changed()
+        return name
 
     # --- ответ ---
 
@@ -1794,8 +2186,16 @@ class Participant:
         очереди: идущий ход по репликам прерывается. Вложение — id записи
         журнала (`a3`), путь к файлу или папке, `{"path"}`, `{"data": bytes,
         "name"}` (вставленная картинка). → `{"id", "queued", "attachments",
-        "duplicate"?}`."""
+        "duplicate"?, "command"?}`.
+
+        Слэш-команда (`slash.parse`: `/имя …` без вложений) — тоже запись
+        журнала (`via: "command"`), но не ход по сообщению: команда Meet
+        выполняется сразу (в фоне — ответ окну не ждёт), команда CLI встаёт в
+        очередь отдельным ходом. `//текст` — обычный текст `/текст`."""
+        from meet.assist import slash
+
         text = text if isinstance(text, str) else ""
+        command = slash.parse(text, attachments)
         if client_id:
             old = await self._io(self._chatlog.by_client_id, client_id)
             if old is not None:
@@ -1813,6 +2213,8 @@ class Participant:
                 images.append(image)
                 image_ids[str(image)] = record["id"]
         fields = {"text": text, "attachments": ids}
+        if command is not None:
+            fields["via"] = "command"
         t = self._now_t()
         if t is not None:
             fields["t"] = t
@@ -1820,7 +2222,10 @@ class Participant:
         if not added.created:
             return {"id": added.message["id"], "queued": False, "duplicate": True, "attachments": ids}
         self._emit_chat([added.event])
-        msg = {**added.message, "attachments": described, "_images": images,
+        if command is not None:
+            self._background_task(self._slash(dict(added.message), command))
+            return {"id": added.message["id"], "queued": False, "attachments": ids, "command": command.name}
+        msg = {**added.message, "text": slash.unescape(text), "attachments": described, "_images": images,
                "_image_ids": image_ids}
         self._queue_user(msg)
         self._interrupt_for_user()
@@ -1926,9 +2331,26 @@ class Participant:
         (резидент после встречи: «Продолжить разговор»), — в ближайший ход,
         как `post_user_message`, но без новой записи. Нет такого сообщения
         пользователя — ValueError."""
+        from meet.assist import slash
+
         message = await self._io(self._chatlog.get, mid)
         if message is None or message.get("kind") != "user":
             raise ValueError(f"{mid}: нет такого сообщения пользователя")
+        command = None
+        if message.get("via") in (None, "command"):
+            command = slash.parse(message.get("text"), message.get("attachments"))
+        if command is not None:
+            # «Продолжить разговор» слэш-командой (0.4): та же команда, что в живой панели.
+            if message.get("via") != "command":
+                with _quiet():
+                    ev = await self._io(self._chatlog.patch, mid, {"via": "command"})
+                    if ev:
+                        self._emit_chat([ev])
+                message = {**message, "via": "command"}
+            await self._slash(message, command)
+            return message
+        if isinstance(message.get("text"), str):
+            message = {**message, "text": slash.unescape(message["text"])}
         described, images, image_ids = [], [], {}
         for aid in message.get("attachments") or ():
             if not isinstance(aid, str):
@@ -2208,13 +2630,17 @@ def _agent_spoke(chatlog) -> bool:
 
 def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None,
                   glossary: str = "", on_fresh_audio=None, log=print, chatlog=None,
-                  profile=None, **kwargs) -> "Participant":
+                  profile=None, mode_notice: bool = False, **kwargs) -> "Participant":
     """Агент-участник записи по настройкам (`assist.*`, `recording.*`,
     `llm.*`): журнал папки записи, база знаний на сессию (карта, исключения,
     запасные запросы), библиотека — папка, где лежит запись. Так его собирают
     и живой ассистент, и задача «Продолжить разговор» после встречи.
     `profile` — профиль, выбранный при старте; нет — из журнала встречи или
-    `assist.profile` (`session_profile`)."""
+    `assist.profile` (`session_profile`). Роли участников — из базы голосов
+    (`recording.voices`, `people.roles`). `mode_notice` — живой ассистент:
+    однократная строка об автомоде, пока `assist.agent_mode_noticed` не
+    отмечен (первая сессия после обновления до 0.4)."""
+    from meet import people
     from meet import llm
     from meet.assist.chatlog import ChatLog
     from meet.assist.kb_prep import KnowledgeBase
@@ -2230,6 +2656,11 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
     kb = KnowledgeBase(knowledge, exclude=cfg.assist.kb_exclude, library_root=library_root,
                        show_map=cfg.assist.kb_map)
     chatlog = chatlog if chatlog is not None else ChatLog(folder, log=log)
+    voices = cfg.recording.voices
+    kwargs.setdefault("roles", lambda names: people.roles(voices, names))
+    if mode_notice and not getattr(cfg.assist, "agent_mode_noticed", True):
+        kwargs.setdefault("mode_notice", True)
+        kwargs.setdefault("on_mode_notice", _mark_mode_noticed)
     return Participant(
         bus, chatlog, provider=provider,
         folder=folder, runner=runner, kb=kb, library_root=library_root,
@@ -2239,8 +2670,14 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
         proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
         profile=session_profile(chatlog, cfg.assist.profile, profile),
         freedom=getattr(cfg.assist, "agent_freedom", False),
-        # `assist.agent_mode` (0.4) заводит задача настроек; до неё — автомод.
         agent_mode=getattr(cfg.assist, "agent_mode", consent.MODE_AUTO), **kwargs)
+
+
+def _mark_mode_noticed() -> None:
+    """Строку об автомоде показали — больше не показывать (`config.json`)."""
+    from meet import settings
+
+    settings.patch({"assist": {"agent_mode_noticed": True}})
 
 
 # --- помощники ---
@@ -2325,6 +2762,18 @@ def _max_images() -> int:
     from meet.assist import attachments as att
 
     return att.MAX_PER_MESSAGE
+
+
+def _accepts(fn, name: str) -> bool:
+    """Принимает ли вызов именованный аргумент `name` (поддельные диалоги
+    тестов и диалоги старого вида — нет)."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 class _quiet:

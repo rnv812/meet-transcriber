@@ -130,6 +130,10 @@ class AgentReply:
     # Контекст сжат в этом ходе (`/compact` или авто-сжатие Claude Code,
     # `system/compact_boundary`): `{"trigger", "pre_tokens", "post_tokens"}`.
     compacted: dict | None = None
+    # Ход работы провайдера без живого потока событий (Codex, OpenCode — после
+    # вызова): события `tool_use` / `tool_result`, как у `claude_stream`
+    # (строки вызовов в чате, `assist.tool_rows`).
+    tools: list[dict] = field(default_factory=list)
 
 
 def resume_failure(detail: str | None) -> AgentReply:

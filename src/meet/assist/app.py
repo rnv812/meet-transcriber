@@ -1095,9 +1095,10 @@ def _make_participant(cfg, bus: TranscriptBus, out_dir: Path, provider: str, run
     выбранный при старте профиль (None — из журнала встречи или настроек)."""
     from meet.assist.participant import from_settings
 
+    # mode_notice: однократная строка «Ассистент теперь сам выполняет…» (0.4).
     participant = from_settings(cfg, bus, out_dir, provider, runner, knowledge_dir=knowledge_dir,
                                 glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
-                                profile=profile)
+                                profile=profile, mode_notice=True)
     # Новое в чате и у агента — сигнал окнам (SSE `state`, `chat`, `chat_partial`, `agent`).
     participant.add_listener(lambda _name, _data: bus.changed.notify())
     print(f"агент-участник: {participant.label}, «Как часто писать»: {participant.frequency}, "

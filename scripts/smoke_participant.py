@@ -459,6 +459,10 @@ class _Counted:
         return getattr(self._inner, name)
 
     async def send(self, *args, **kwargs):
+        from meet.assist.participant import _accepts
+
+        if "on_event" in kwargs and not _accepts(self._inner.send, "on_event"):
+            kwargs.pop("on_event")      # поддельный диалог без хода работы (0.4)
         self._smoke.calls += 1
         try:
             return await self._inner.send(*args, **kwargs)

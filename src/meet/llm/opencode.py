@@ -403,6 +403,52 @@ def parse_events(out: str) -> Events:
     return found
 
 
+# Инструменты OpenCode → имена Claude Code (вид строки в чате), ключи аргументов — тоже.
+_TOOL_NAMES = {"bash": "Bash", "read": "Read", "edit": "Edit", "write": "Write", "grep": "Grep", "glob": "Glob",
+               "list": "LS", "webfetch": "WebFetch", "websearch": "WebSearch", "patch": "apply_patch",
+               "task": "Task", "todowrite": "TodoWrite", "todoread": "TodoRead"}
+_ARG_NAMES = {"filePath": "file_path", "oldString": "old_string", "newString": "new_string"}
+
+
+def tool_events(out: str) -> list[dict]:
+    """Ход работы для чата (0.4, `assist.tool_rows`) из событий `opencode run
+    --format json`: событие `tool_use` (part: `tool`, `callID`, `state` —
+    `status`, `input`, `output`/`error`, `time.start/end` в мс) → пара
+    `tool_use` / `tool_result`, как у `claude_stream`. Строки приходят после
+    вызова. Чужие строки и поля пропускаются."""
+    events: list[dict] = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "tool_use":
+            continue
+        part = event.get("part") if isinstance(event.get("part"), dict) else {}
+        state = part.get("state") if isinstance(part.get("state"), dict) else {}
+        cid = str(part.get("callID") or part.get("id") or "")
+        raw = str(part.get("tool") or "")
+        if not cid or not raw:
+            continue
+        name = _TOOL_NAMES.get(raw, raw)
+        data = state.get("input") if isinstance(state.get("input"), dict) else {}
+        data = {_ARG_NAMES.get(k, k): v for k, v in data.items()}
+        ok = state.get("status") != "error"
+        output = str(state.get("output") or "") if ok else str(state.get("error") or "ошибка")
+        times = state.get("time") if isinstance(state.get("time"), dict) else {}
+        start, end = times.get("start"), times.get("end")
+        duration = (int(end - start) if isinstance(start, (int, float)) and isinstance(end, (int, float))
+                    else None)
+        events.append({"type": "tool_use", "id": cid, "name": name, "server": None, "tool": name,
+                       "input": data, "parent": None})
+        events.append({"type": "tool_result", "id": cid, "ok": ok, "output": output, "truncated": False,
+                       "duration_ms": duration, "parent": None})
+    return events
+
+
 # --- служебные папки и уборка сеансов ------------------------------------------------
 
 
@@ -545,6 +591,7 @@ class _Call:
     def __init__(self) -> None:
         self.proc = None
         self.cancelled = False
+        self.tools: list[dict] = []     # ход работы вызова (`tool_events`)
 
     def cancel(self) -> None:
         self.cancelled = True
@@ -590,7 +637,9 @@ def _exec(exe: str, root: Path, model: str | None, stdin_text: str, timeout_s: f
                 out, err = proc.communicate(timeout=10)
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 out, err = b"", b""
-        events = parse_events((out or b"").decode("utf-8", errors="replace"))
+        decoded = (out or b"").decode("utf-8", errors="replace")
+        events = parse_events(decoded)
+        call.tools = tool_events(decoded)
         if timed_out:
             return AgentReply(text="", error=TIMEOUT_ERROR)
         if call.cancelled:
@@ -674,6 +723,7 @@ async def run(
         call.cancel()
         raise
     reply.error = netproxy.with_hint(reply.error)
+    reply.tools = list(call.tools)
     sent = [str(i) for i in images or () if i]
     if sent:
         reply.dropped_images, reply.notes = sent, [NO_VISION_NOTE]

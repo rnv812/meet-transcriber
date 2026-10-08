@@ -69,6 +69,11 @@ OSError: файл после неудачного чтения не переза
 месте, не в счёт `recent`; в ленте окна их нет (`visible_in_feed`, вместе с
 событиями реакций и скрытыми репликами; `snapshot(feed=True)`).
 
+**Ход работы агента** (0.4, «как в Claude CLI») — тоже вид `tool`, но
+`event: "call"`: строка вызова инструмента самого агента (`assist.tool_rows`:
+`tool_use_id`, вид, суть, состояние, вывод до 64 КБ, решение ворот, `reply`).
+Её видно в ленте; в затравке и `assistant_chat.md` — одной строкой без вывода.
+
 Запись:
 - межпроцессный замок `library.file_lock(strict=True)` с ключом
   `assistant/.chat.lock`. Сам файл замка по правилу `library` лежит во
@@ -171,8 +176,9 @@ def _profile_value(value) -> str | None:
 # Кнопки реплики агента (v4-simple §2): 0–3, придумывает агент.
 BUTTONS_MAX = 3
 BUTTON_MAX_CHARS = 60
-# Запросы агента и ответы Meet (`kind: tool`): `event` — request | result.
-TOOL_EVENTS = ("request", "result")
+# Запросы агента и ответы Meet (`kind: tool`): `event` — request | result;
+# вызов инструмента самого агента (0.4, ход работы в чате, `tool_rows`) — call.
+TOOL_EVENTS = ("request", "result", "call")
 TOOL_CALLS = ("read", "search", "list")
 # Ответ Meet в журнале — выдержка: полный результат уходит модели сразу,
 # затравке хватает строки, окну он не нужен.
@@ -343,8 +349,27 @@ def _short(msg: dict) -> bool:
     return msg.get("kind") in ("system", "tool") or _is_reaction(msg)
 
 
+def _call_line(msg: dict) -> str:
+    """Вызов инструмента агента (`kind: tool`, `event: call`, см.
+    `assist.tool_rows`) одной строкой: вид, суть и исход — без вывода (его
+    модель уже видела)."""
+    label = msg.get("label") or msg.get("name") or "инструмент"
+    summary = _one_line(msg.get("summary") or "", 160)
+    edits = ""
+    if isinstance(msg.get("added"), int) or isinstance(msg.get("removed"), int):
+        edits = f" +{msg.get('added') or 0} −{msg.get('removed') or 0}"
+    status = {"running": "выполняется", "done": "готово", "error": "ошибка", "denied": "отклонено"}.get(
+        msg.get("status"), str(msg.get("status") or ""))
+    gate = msg["gate"].get("label") if isinstance(msg.get("gate"), dict) else ""
+    tail = " · ".join(str(x) for x in (status, gate) if x)
+    return f"{_one_line(label, 40)} {summary}{edits}".strip() + (f" — {tail}" if tail else "")
+
+
 def _tool_line(msg: dict) -> str:
-    """Запрос агента или ответ Meet — одной строкой (сжато)."""
+    """Запрос агента или ответ Meet — одной строкой (сжато); вызов
+    инструмента агента — `_call_line`."""
+    if msg.get("event") == "call":
+        return f"Ты вызвал {_call_line(msg)}"
     if msg.get("event") == "result":
         target = msg.get("re") if isinstance(msg.get("re"), str) else "?"
         if msg.get("error"):
@@ -424,7 +449,9 @@ def visible_in_feed(record: dict) -> bool:
         return False
     kind = record.get("kind")
     if kind == "tool":
-        return False
+        # Вызов инструмента агента (0.4) — строка хода работы; запросы
+        # запасного пути и ответы Meet — служебные.
+        return record.get("event") == "call"
     if kind == "meeting" and record.get("event") in ("reaction", "voiced"):
         return False
     if kind == "attachment" and record.get("status") == REMOVED:
@@ -1392,7 +1419,9 @@ class ChatLog:
             elif kind == "attachment":
                 block = [f"_{self._caption(m)} · {when} · {m['id']}_"]
             elif kind == "tool":
-                continue          # запросы агента и ответы Meet — служебные
+                if m.get("event") != "call":
+                    continue      # запросы агента и ответы Meet — служебные
+                block = [f"_{_one_line(_call_line(m), 300)} · {when}_"]
             elif kind == "meeting":
                 if m.get("event") in ("voiced", "reaction"):
                     continue

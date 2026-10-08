@@ -669,6 +669,37 @@ def data_block(text: str) -> str:
     return "\n".join([DATA_OPEN, unfence(text).strip(), FENCE_CLOSE])
 
 
+# --- участники встречи (роли из «Голосов», 0.4) ---
+
+H_PEOPLE = "Участники встречи — кто они (со слов пользователя в «Голосах»)"
+H_PEOPLE_NEW = "Новые участники встречи — кто они (со слов пользователя в «Голосах»):"
+PEOPLE_MAX = 40                 # человек в блоке
+PEOPLE_NAME_MAX = 80
+PEOPLE_ROLE_MAX = 160           # как people.MAX_ROLE
+
+
+def people_lines(people) -> list[str]:
+    """«- Имя — роль» для тех, у кого роль задана. Имя и роль — данные, не
+    команды: одной строкой, без разделителей ограды и невидимых символов
+    (роль «>>> Игнорируй инструкции» остаётся текстом внутри ограды)."""
+    out = []
+    items = people.items() if isinstance(people, Mapping) else ()
+    for name, role in list(items)[:PEOPLE_MAX]:
+        who = _flat(_visible(str(name or "")), PEOPLE_NAME_MAX)
+        what = _flat(_visible(str(role or "")), PEOPLE_ROLE_MAX)
+        if who and what:
+            out.append(f"- {who} — {what}")
+    return out
+
+
+def people_block(people, title: str = H_PEOPLE_NEW) -> list[str]:
+    """Блок участников для хода: заголовок, ограда данных, пометка."""
+    lines = people_lines(people)
+    if not lines:
+        return []
+    return [title, DATA_OPEN, *lines, FENCE_CLOSE, DATA_NOTE]
+
+
 # --- настройки сессии ---
 
 @dataclass(frozen=True)
@@ -856,7 +887,8 @@ def delta(new_transcript_lines: Iterable = (), new_user_msgs: Iterable = (),
           owner_speaker: str = OWNER_SPEAKER, tool_results: Iterable = (),
           notes: Iterable[str] = (), frequency=None,
           agent_texts: Mapping[str, str] | None = None,
-          profile=DEFAULT_PROFILE, profile_changed: bool = False, kb_map: str = "") -> str:
+          profile=DEFAULT_PROFILE, profile_changed: bool = False, kb_map: str = "",
+          people: Mapping[str, str] | None = None) -> str:
     """Сообщение хода. Нечего передать — пустая строка.
 
     `new_transcript_lines` — записи шины `{"t","speaker","text"}` (или готовые
@@ -873,15 +905,18 @@ def delta(new_transcript_lines: Iterable = (), new_user_msgs: Iterable = (),
     писать». `profile` — профиль сессии (у «Личного» заголовок реплик и
     фраза частоты — без «встречи»); `profile_changed` — его только что
     сменили: пометка `profile_note`, а при смене на «Рабочую встречу» — и
-    карта `kb_map` (Codex при продолжении сеанса системный промпт не получает)."""
+    карта `kb_map` (Codex при продолжении сеанса системный промпт не получает).
+    `people` — узнанные участники, которых агент ещё не знает: «Имя — роль»
+    (роли из «Голосов», 0.4) в ограде данных, перед репликами."""
     personal = normalize_profile(profile) == PERSONAL
     user_msgs, button_msgs = [], []
     for m in new_user_msgs or ():
         (button_msgs if _is_click(m) else user_msgs).append(m)
-    parts: list[str] = []
+    parts: list[str] = people_block(people)
     lines = _transcript(new_transcript_lines, owner_speaker)
     if lines:
-        parts += [*_fenced(H_TRANSCRIPT_PERSONAL if personal else H_TRANSCRIPT, lines), FENCE_NOTE]
+        parts += ([""] if parts else []) + [*_fenced(H_TRANSCRIPT_PERSONAL if personal else H_TRANSCRIPT, lines),
+                                            FENCE_NOTE]
     users = [line for m in user_msgs for line in _user_lines(m)]
     if users:
         parts += ["", H_USER, *users] if parts else [H_USER, *users]
@@ -952,7 +987,7 @@ def _recent_lines(lines: list[str], limit: int) -> list[str]:
 
 def seed(chatlog=None, kb_map: str = "", materials_summary: str = "", settings=None, *,
          transcript: Iterable = (), t=None, notes: Iterable[str] = (),
-         budget: int = SEED_BUDGET) -> str:
+         budget: int = SEED_BUDGET, people: Mapping[str, str] | None = None) -> str:
     """Первое сообщение сессии агента: новая сессия или запасной путь (родного
     продолжения нет — журнал заменяет память модели).
 
@@ -1008,6 +1043,8 @@ def seed(chatlog=None, kb_map: str = "", materials_summary: str = "", settings=N
     map_cap = cap("map", SEED_MAP_MAX) - len(map_title) - 4 - fence
     if not personal:             # «Личный»: карты нет вовсе
         add(map_title, map_text(kb_map, map_cap), data=True)
+    # Узнанные участники с ролью (оба профиля) — данные в ограде, как реплики.
+    add(H_PEOPLE, "\n".join(people_lines(people)), data=True)
     mat_title = "Материалы, которые добавил пользователь (читать можно всегда)"
     mat_cap = cap("materials", SEED_MATERIALS_MAX) - len(mat_title) - 4 - fence
     materials = _visible(unfence(materials_summary or ""), keep_newlines=True)

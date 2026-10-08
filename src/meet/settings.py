@@ -199,6 +199,9 @@ KB_EXCLUDE_DEFAULT = ("Личное/", ".trash/")
 HINTS_MODELS = ("agent", "fast")
 # «Как часто писать» агента-участника (0.3.6): реже / обычно / чаще.
 ASSIST_FREQUENCIES = ("less", "normal", "more")
+# Как действует ассистент по просьбе (0.4, `assist.agent_mode`): сам, как
+# автомод Claude Code (`auto`), или спрашивает каждое действие (`confirm`, 0.3.7).
+AGENT_MODES = ("auto", "confirm")
 # «Как часто писать»: ключ настроек → подпись, которую видят агент и окно
 # (`participant_prompts.FREQUENCIES`). Обратное — `frequency_key`.
 FREQUENCY_LABELS = {"less": "реже", "normal": "обычно", "more": "чаще"}
@@ -1064,7 +1067,16 @@ class Assist:
     (`meet.llm.consent`). По умолчанию включено (решение пользователя);
     выключено — как в 0.3.6 (только чтение встречи, базы знаний и
     библиотеки). Как и `participant`, значение по умолчанию в файл не
-    пишется."""
+    пишется.
+
+    `agent_mode` (0.4) — как ассистент действует по просьбе (при
+    `agent_freedom`): `auto` — сам, как автомод Claude Code, спрашивает
+    только рискованное (удаление, запись вне рабочих папок, отправка наружу);
+    `confirm` — «Спрашивать перед каждым действием» (как 0.3.7). По умолчанию
+    `auto` — и у обновившегося пользователя (решение спецификации: просили
+    убрать постоянные «Разрешить»; ход по одной речи встречи по-прежнему
+    только читает), в файл не пишется. `agent_mode_noticed` — однократная
+    строка в чате первой сессии после обновления показана."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -1086,6 +1098,8 @@ class Assist:
     frequency: str = "more"
     profile: str = DEFAULT_PROFILE
     agent_freedom: bool = True
+    agent_mode: str = "auto"
+    agent_mode_noticed: bool = False
 
     @property
     def participant_on(self) -> bool:
@@ -1118,6 +1132,8 @@ class Assist:
             frequency=as_choice(raw.get("frequency"), ASSIST_FREQUENCIES, "more"),
             profile=profile_key(raw.get("profile")) or DEFAULT_PROFILE,
             agent_freedom=as_flag(raw.get("agent_freedom"), True),
+            agent_mode=as_choice(raw.get("agent_mode"), AGENT_MODES, "auto"),
+            agent_mode_noticed=as_flag(raw.get("agent_mode_noticed"), False),
         )
 
     def to_raw(self) -> dict:
@@ -1140,6 +1156,8 @@ class Assist:
             "frequency": self.frequency,
             "profile": self.profile,
             "agent_freedom": self.agent_freedom,
+            "agent_mode": self.agent_mode,
+            "agent_mode_noticed": self.agent_mode_noticed,
         }
 
 
@@ -1949,20 +1967,23 @@ def save(settings: Settings, path: Path | None = None) -> None:
 
 
 # Флаги ассистента, чьё значение по умолчанию в файл не пишется.
-_UNSET_DEFAULTS = ("participant", "agent_freedom")
+_UNSET_DEFAULTS = ("participant", "agent_freedom", "agent_mode", "agent_mode_noticed")
 
 
 def _keep_default_participant_unset(merged: dict, before: dict) -> None:
-    """`assist.participant` и `assist.agent_freedom` по умолчанию в файл не
-    пишутся: сохранение любой настройки ассистента иначе закрепляло бы в
-    файле значение по умолчанию этой версии. Ключ, который в файле уже есть,
-    и значение не по умолчанию пишутся как обычно."""
+    """`assist.participant`, `assist.agent_freedom`, `assist.agent_mode` и
+    `assist.agent_mode_noticed` по умолчанию в файл не пишутся: сохранение
+    любой настройки ассистента иначе закрепляло бы в файле значение по
+    умолчанию этой версии. Ключ, который в файле уже есть, и значение не по
+    умолчанию пишутся как обычно."""
     assist = merged.get("assist")
     had = before.get("assist") if isinstance(before.get("assist"), dict) else {}
     if not isinstance(assist, dict):
         return
     for key in _UNSET_DEFAULTS:
-        if assist.get(key) is getattr(Assist, key) and key not in had:
+        default = getattr(Assist, key)
+        value = assist.get(key)
+        if type(value) is type(default) and value == default and key not in had:
             assist.pop(key, None)
 
 

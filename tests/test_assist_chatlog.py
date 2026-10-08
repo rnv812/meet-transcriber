@@ -1130,7 +1130,7 @@ def test_tool_records_hidden_from_md_and_compressed_in_seed(tmp_path):
     log.append("tool", event="result", re=bad, error="папка вне базы знаний")
     log.append("agent", text="В плане срок 15.11.", t=13.0)
     with pytest.raises(ValueError):
-        log.append("tool", event="call")
+        log.append("tool", event="answer")    # `call` — вызов инструмента агента (0.4)
     md = log.render_md()
     assert "План.md" not in md and "Срок 15.11. Срок" not in md and "биллинг" not in md
     assert "В плане срок 15.11." in md and "глянь план" in md
