@@ -30,3 +30,27 @@ test("ui/*.css и theme/tokens.css — без литералов цвета", ()
   }
   expect(bad).toEqual([]);
 });
+
+/**
+ * Текст акцентного цвета — только `--accent-line` (текстовый токен Aurora:
+ * сигнал в тёмной теме, средний тон в светлой, ≥ 4,5:1). `--accent` и
+ * `--accent-hover` — заливки и рамки: в светлой теме текстом они не читаются.
+ */
+const ACCENT_TEXT = /(^|[;{\s])color\s*:\s*var\(--accent(-hover)?\)/;
+
+test("разбор: цвет текста --accent / --accent-hover находит, заливку и рамку — нет", () => {
+  expect(ACCENT_TEXT.test(".a { color: var(--accent-hover); }")).toBe(true);
+  expect(ACCENT_TEXT.test(".a { margin: 0; color:var(--accent) }")).toBe(true);
+  expect(ACCENT_TEXT.test(".a { color: var(--accent-line); }")).toBe(false);
+  expect(ACCENT_TEXT.test(".a { background-color: var(--accent); border-color: var(--accent-hover); }")).toBe(false);
+  expect(ACCENT_TEXT.test(".a { background: var(--accent); text-decoration-color: var(--accent); }")).toBe(false);
+});
+
+test("ui/*.css — текст акцентного цвета только через --accent-line", () => {
+  const bad: string[] = [];
+  for (const f of css(join(SRC, "ui"))) {
+    const lines = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").split("\n");
+    lines.forEach((line, i) => { if (ACCENT_TEXT.test(line)) bad.push(`${relative(SRC, f)}:${i + 1}: ${line.trim()}`); });
+  }
+  expect(bad).toEqual([]);
+});

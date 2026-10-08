@@ -1,9 +1,9 @@
 /* Ключ задачи Jira в тексте — ссылка в цвет акцента; подсветка поиска внутри неё сохраняется. */
 .jira-link {
-  color: var(--accent-hover); text-decoration: underline; text-decoration-color: var(--accent-line);
+  color: var(--accent-line); text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: currentColor;
   text-underline-offset: 2px; cursor: pointer; border-radius: 2px;
 }
-.jira-link:hover { color: var(--accent-hover); text-decoration-color: currentColor; }
+.jira-link:hover { color: var(--accent-line); text-decoration-thickness: 2px; }
 
 /*
  * Задача, сказанная словами («орион двадцать один двадцать два»): значок с
@@ -17,7 +17,7 @@
 }
 .jira-ref::before {
   content: attr(data-key); display: inline-block; margin-right: 4px; padding: 0 5px; border-radius: 3px;
-  background: var(--selection); color: var(--accent-hover);
+  background: var(--selection); color: var(--accent-line);
   font: 600 11px/16px ui-monospace, Consolas, monospace; letter-spacing: 0.02em; vertical-align: 1px;
   text-decoration: none; user-select: none;
 }

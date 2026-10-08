@@ -31,8 +31,8 @@
 }
 .cat-menu__item:hover, .cat-menu__item:focus-visible { background: var(--surface-3); outline: none; }
 .cat-menu__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-menu__check { color: var(--accent-hover); }
-.cat-menu__item--action { color: var(--accent-hover); }
+.cat-menu__check { color: var(--accent-line); }
+.cat-menu__item--action { color: var(--accent-line); }
 .cat-menu__sep { height: 1px; margin: 3px 4px; background: var(--hairline-strong); }
 
 /* Фильтр списка по категориям. */
