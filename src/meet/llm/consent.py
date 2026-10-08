@@ -656,8 +656,9 @@ for _alias, _name in (("select", "select-object"), ("sort", "sort-object"), ("me
                       ("ft", "format-table"), ("fl", "format-list")):
     _PS_PROGRAMS[_alias] = _PS_PROGRAMS[_name]
 # Знаки, которых в команде чтения не бывает: подстановки, перенаправления,
-# блоки и подвыражения, история.
-_READ_UNSAFE = re.compile(r"[`<>(){}!\r\n]|\$\(|\$\{|@\(")
+# блоки и подвыражения, история; `#` — комментарий (bash и PowerShell режут
+# по нему по-разному, `<#…#>` — блок PowerShell): команда с ним — не чтение.
+_READ_UNSAFE = re.compile(r"[`<>(){}!#\r\n]|\$\(|\$\{|@\(")
 _PATTERN_PROGRAMS = frozenset(("sed", "grep", "rg", "findstr", "select-string", "sls"))
 
 
@@ -963,6 +964,9 @@ def shell_simple_word(tool: str, command: str) -> str | None:
 
 DELETE = "delete"
 SEND = "send"
+# Команду не разобрать до конца (кавычки без пары, блок-комментарий
+# PowerShell, имя программы из подстановки…) — карточка, как у рискованной.
+UNPARSED = "unparsed"
 # Удаление файлов (PowerShell: `rm`, `del`, `erase`, `rd`, `rmdir`, `ri` — псевдонимы Remove-Item).
 DELETE_PROGRAMS = frozenset(("rm", "rmdir", "del", "erase", "rd", "remove-item", "ri", "unlink", "shred"))
 MOVE_PROGRAMS = frozenset(("mv", "move", "move-item", "mi"))
@@ -999,10 +1003,14 @@ _RISK_DEPTH = 4
 
 
 def _tokens(text: str, tool: str) -> list[str] | None:
-    """Слова и разделители команды (кавычки соблюдены; перевод строки — `;`)."""
+    """Слова и разделители команды (кавычки соблюдены; перевод строки — `;`).
+    `#` — обычный знак: shlex по умолчанию режет по нему и посреди слова
+    (`a.txt#; rm …`), а оболочки — только в начале слова; комментарий,
+    прочитанный как код, лишь добавляет слов — в закрытую сторону (C1)."""
     text = re.sub(r"\r\n?|\n", " ; ", str(text or ""))
     try:
         lexer = shlex.shlex(text, posix=tool != "PowerShell", punctuation_chars="();<>|&{}")
+        lexer.commenters = ""
         lexer.whitespace_split = True
         out = list(lexer)
     except ValueError:
@@ -1024,7 +1032,9 @@ def _commands(tokens: list[str]) -> list[list[str]]:
             k += 1
             continue
         if _REDIRECTS.match(t) or set(t) <= set("<>"):
-            k += 2                      # перенаправление и его цель
+            # Перенаправление и его цель; разделитель целью не бывает (`# >↵rm …`).
+            nxt = tokens[k + 1] if k + 1 < len(tokens) else ""
+            k += 1 if not nxt or nxt in _SEPARATORS or set(nxt) <= set(";&|(){}") else 2
             continue
         if t.startswith("`"):
             out.append([])
@@ -1269,17 +1279,38 @@ def shell_risk(tool: str, command: str, *, inside=None, _depth: int = 0) -> str:
     отправка наружу (`git push`, `scp`, `sftp`, `ftp`, `ssh`, `rsync host:`,
     `curl`/`wget`/`Invoke-WebRequest`/`irm` с телом или методом изменения,
     `gh pr|issue create|comment…`, публикация пакетов); `""` — ни то, ни
-    другое (решает автомод CLI). `inside(путь) -> bool` — путь в рабочих
-    папках (для `mv`); None — любой перенос считается выходом наружу."""
+    другое (решает автомод CLI); `unparsed` — команду не разобрать до конца
+    (кавычки без пары, блок-комментарий PowerShell…): карточка, без «до
+    конца встречи». `inside(путь) -> bool` — путь в рабочих папках (для
+    `mv`); None — любой перенос считается выходом наружу."""
     if _depth > _RISK_DEPTH:
         return DELETE
+    command = str(command or "")
+    if tool == "PowerShell" and "<#" in command:
+        # Блок-комментарий PowerShell: что выполнится — без него (и он же
+        # разделяет слова или нет — смотрим оба), а сам блок — в закрытую сторону.
+        variants = [re.sub(r"<#.*?#>", sep, command, flags=re.S) for sep in (" ", "")]
+        risks = [shell_risk(tool, v, inside=inside, _depth=_depth + 1) for v in variants
+                 if "<#" not in v]
+        return _worst(risks) or UNPARSED
     tokens = _tokens(command, tool)
     if tokens is None:
-        return _fallback_risk(command)
+        return _fallback_risk(command) or UNPARSED
     commands = _commands(tokens)
     cd = any(_program(c[0]) in _CD for c in commands if c)
-    risks = [_command_risk(c, tool, inside, cd, _depth) for c in commands]
-    return DELETE if DELETE in risks else SEND if SEND in risks else ""
+    return _worst([_command_risk(c, tool, inside, cd, _depth) for c in commands])
+
+
+# Категории команд, которые «до конца встречи» не разрешаются: каждая — своей карточкой.
+_NO_GRANT = (DELETE, UNPARSED)
+
+
+def _worst(risks) -> str:
+    """Самая серьёзная категория: удаление, отправка, непонятное."""
+    for risk in (DELETE, SEND, UNPARSED):
+        if risk in risks:
+            return risk
+    return ""
 
 
 # --- адреса в аргументах MCP (fix round 3; ревью N2) -------------------------------------------
@@ -1732,7 +1763,7 @@ _WHY_LABELS = {
     "timeout": "нет ответа", "unseen": "мимо проверки Meet", "no-card": "некуда показать карточку",
     DELETE: "удаление", SEND: "отправка наружу", "outside": "запись вне рабочих папок",
     "sandbox": "без песочницы", "mcp-write": "изменение через MCP", "mcp-address": "адрес в MCP",
-    "recursive": "обход рядом с закрытым",
+    "recursive": "обход рядом с закрытым", UNPARSED: "непонятная команда",
 }
 
 
@@ -1936,7 +1967,7 @@ class ConsentGate:
             if data.get("dangerouslyDisableSandbox") or bash_warnings(tool, data):
                 return None
             command = str(data.get("command") or "")
-            if shell_risk(tool, command, inside=self._inside_work) == DELETE:
+            if shell_risk(tool, command, inside=self._inside_work) in _NO_GRANT:
                 return None
             return shell_grant(tool, command)
         if tool in FILE_WRITE:
@@ -2143,7 +2174,7 @@ class ConsentGate:
         return ""
 
     def _ask(self, tool: str, data: dict, what: str, kind: str, why: str = "") -> Decision:
-        grant = None if why in (DELETE, "sandbox", "recursive") else self._grant_offer(tool, data)
+        grant = None if why in (*_NO_GRANT, "sandbox", "recursive") else self._grant_offer(tool, data)
         return Decision(ASK, what=what, kind=kind, why=why, card=card_for(tool, data, grant))
 
     def _decide(self, tool: str, data: dict, kind: str, what: str, level: str) -> Decision:
@@ -2207,7 +2238,7 @@ class ConsentGate:
             return self._ask(tool, data, what, kind, "recursive")
         risk = self._risk(tool, data, kind, force_card)
         if risk:
-            if risk != DELETE and risk != "sandbox" and self._granted(tool, data):
+            if risk not in (*_NO_GRANT, "sandbox") and self._granted(tool, data):
                 return Decision(ALLOW, what=what, kind=kind, why="granted")
             return self._ask(tool, data, what, kind, risk)
         if self._mode == MODE_CONFIRM:
