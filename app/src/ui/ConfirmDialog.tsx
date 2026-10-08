@@ -50,7 +50,8 @@ type Props = ConfirmOptions & {
 const modalStack: symbol[] = [];
 const inertBy = new Map<Element, number>();
 
-function holdInert(own: Element | null): Element[] {
+/** Сделать `inert` всё в body, кроме своего слоя; общий счётчик со всеми модальными окнами. */
+export function holdInert(own: Element | null): Element[] {
   const held = [...document.body.children].filter(
     (el) => el !== own && (inertBy.has(el) || !el.hasAttribute("inert")));
   for (const el of held) {
@@ -60,7 +61,7 @@ function holdInert(own: Element | null): Element[] {
   return held;
 }
 
-function releaseInert(held: Element[]) {
+export function releaseInert(held: Element[]) {
   for (const el of held) {
     const left = (inertBy.get(el) ?? 1) - 1;
     if (left > 0) { inertBy.set(el, left); continue; }

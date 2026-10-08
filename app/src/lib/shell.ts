@@ -376,6 +376,21 @@ export async function openUrl(url: string): Promise<void> {
   await invoke<void>("open_url", { url }).catch((cause) => console.warn("open_url:", cause));
 }
 
+/**
+ * Закрыть своё окно (право `core:window:allow-close`). Резидент и трей
+ * продолжают работать: команды «Выйти из Meet» у оболочки для окна нет. Закрытие
+ * главного окна с несохранёнными настройками по-прежнему решает close_guard.rs.
+ * Вне оболочки — window.close().
+ */
+export async function closeWindow(): Promise<void> {
+  if (!inTauri()) {
+    window.close();
+    return;
+  }
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().close();
+}
+
 /** Отметка «мастер пройден» для оболочки: при старте она не откроет окно с мастером. */
 export async function markWizardDone(): Promise<void> {
   if (!inTauri()) return;

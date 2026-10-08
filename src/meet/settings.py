@@ -1660,6 +1660,11 @@ class Ui:
     # Живое сияние: медленный дрейф пятен. prefers-reduced-motion выключает
     # его в окне независимо от этого флага.
     motion: bool = True
+    # Версия принятого текста условий (окно, `app/src/lib/terms.ts`); "" — не
+    # принимали. Сменился текст — окно спросит снова. По умолчанию в файл не
+    # пишется (см. _keep_default_terms_unset): и новый, и обновившийся пользователь
+    # увидят условия один раз.
+    terms_accepted: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict, *, default_theme: str = UI_THEMES[0]) -> "Ui":
@@ -1672,6 +1677,7 @@ class Ui:
             aurora=as_choice(raw.get("aurora"), AURORA_PALETTES, AURORA_PALETTES[0]),
             aurora_style=as_choice(raw.get("aurora_style"), AURORA_STYLES, AURORA_STYLES[0]),
             motion=as_flag(raw.get("motion"), True),
+            terms_accepted=as_terms_version(raw.get("terms_accepted")),
         )
 
     def to_raw(self) -> dict:
@@ -1682,7 +1688,22 @@ class Ui:
             "aurora": self.aurora,
             "aurora_style": self.aurora_style,
             "motion": self.motion,
+            "terms_accepted": self.terms_accepted,
         }
+
+
+# Версия условий — короткая метка (дата текста); длиннее — мусор.
+TERMS_VERSION_MAX = 64
+
+
+def as_terms_version(value) -> str:
+    """`ui.terms_accepted`: строка-версия или "" (не принимали). Не строка,
+    пустая или слишком длинная — "": лучше спросить ещё раз, чем считать
+    принятым."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    return text if len(text) <= TERMS_VERSION_MAX else ""
 
 
 @dataclass(frozen=True)
@@ -1917,6 +1938,7 @@ def save(settings: Settings, path: Path | None = None) -> None:
         merged = {k: v for k, v in before.items() if k not in RETIRED_SECTIONS}
         merged.update(settings.to_raw())
         _keep_default_participant_unset(merged, before)
+        _keep_default_terms_unset(merged, before)
         # Integrations.to_raw токена не содержит: запасная копия токена
         # (диспетчер недоступен) приходит из файла выше и так и сохраняется.
         # post_record_hook больше не читается (его место — hooks.post_record), но
@@ -1942,6 +1964,17 @@ def _keep_default_participant_unset(merged: dict, before: dict) -> None:
     for key in _UNSET_DEFAULTS:
         if assist.get(key) is getattr(Assist, key) and key not in had:
             assist.pop(key, None)
+
+
+def _keep_default_terms_unset(merged: dict, before: dict) -> None:
+    """`ui.terms_accepted` не принятых условий ("") в файл не пишется, пока
+    его там нет: иначе любая правка окна закрепляла бы «не принимали» как
+    явное значение. Ключ, который в файле уже есть, пишется как обычно."""
+    ui = merged.get("ui")
+    had = before.get("ui") if isinstance(before.get("ui"), dict) else {}
+    if isinstance(ui, dict) and ui.get("terms_accepted") == Ui.terms_accepted \
+            and "terms_accepted" not in had:
+        ui.pop("terms_accepted", None)
 
 
 def drop_retired(path: Path | None = None) -> bool:

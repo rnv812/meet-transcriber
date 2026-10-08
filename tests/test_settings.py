@@ -388,7 +388,66 @@ def test_ui_defaults_notify_everything_and_wizard_not_done():
         "notifications": "all", "wizard_done": False,
         # Конфиг с version — обновившийся пользователь: окно остаётся тёмным.
         "theme": "dark", "aurora": "violet", "aurora_style": "glow", "motion": True,
+        "terms_accepted": "",
     }
+
+
+# --- условия использования (ui.terms_accepted) --------------------------------
+
+
+@pytest.mark.parametrize("raw", [
+    {},
+    {"version": settings.SCHEMA_VERSION, "ui": {"wizard_done": True, "theme": "light"}},
+    {"version": 2, "auto_record": {"enabled": True}},
+    {"post_record_hook": True},
+])
+def test_terms_not_accepted_for_new_and_upgraded_users(raw):
+    """Условия ещё никто не принимал: и новая установка, и обновившийся
+    пользователь увидят их один раз."""
+    assert settings.Settings.from_raw(raw).ui.terms_accepted == ""
+
+
+def test_terms_accepted_roundtrip_through_patch(tmp_path):
+    f = tmp_path / "config.json"
+    patched = settings.patch({"ui": {"terms_accepted": "2026-10-08"}}, f)
+    assert patched.ui.terms_accepted == "2026-10-08"
+    assert patched.to_raw()["ui"]["terms_accepted"] == "2026-10-08"
+    assert settings.load(f).ui.terms_accepted == "2026-10-08"
+    # Правка другой настройки окна не сбрасывает согласие.
+    assert settings.patch({"ui": {"theme": "light"}}, f).ui.terms_accepted == "2026-10-08"
+    raw = json.loads(f.read_text(encoding="utf-8"))
+    assert raw["ui"]["terms_accepted"] == "2026-10-08"
+
+
+def test_terms_not_written_to_file_while_default(tmp_path):
+    f = tmp_path / "config.json"
+    settings.patch({"ui": {"theme": "light"}}, f)
+    raw = json.loads(f.read_text(encoding="utf-8"))
+    assert "terms_accepted" not in raw["ui"]
+    settings.save(settings.Settings(), f)
+    assert "terms_accepted" not in json.loads(f.read_text(encoding="utf-8"))["ui"]
+    # Но GET /settings отдаёт ключ всегда: окну не гадать об отсутствии.
+    assert settings.load(f).to_raw()["ui"]["terms_accepted"] == ""
+
+
+def test_terms_already_in_file_stays_even_if_cleared(tmp_path):
+    """Ключ, который в файле уже есть, пишется как обычно — и пустым тоже."""
+    f = tmp_path / "config.json"
+    settings.patch({"ui": {"terms_accepted": "2026-10-08"}}, f)
+    settings.patch({"ui": {"terms_accepted": ""}}, f)
+    raw = json.loads(f.read_text(encoding="utf-8"))
+    assert raw["ui"]["terms_accepted"] == ""
+    assert settings.load(f).ui.terms_accepted == ""
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, ""), (True, ""), (20261008, ""), (["2026-10-08"], ""),
+    (" 2026-10-08 ", "2026-10-08"), ("x" * 200, ""),
+])
+def test_terms_accepted_garbage_reads_as_not_accepted(value, expected):
+    cfg = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION, "ui": {"terms_accepted": value}})
+    assert cfg.ui.terms_accepted == expected
 
 
 def test_new_install_follows_system_theme():
