@@ -58,9 +58,9 @@ export function applyAppearance(root: HTMLElement, a: Appearance, systemDark: bo
   else root.dataset.motion = "paused";
 }
 
-export function readCached(storage: Storage | undefined = globalThis.localStorage): Appearance {
+export function readCached(storage?: Storage): Appearance {
   try {
-    const text = storage?.getItem(CACHE_KEY);
+    const text = (storage ?? globalThis.localStorage)?.getItem(CACHE_KEY);
     if (!text) return DEFAULT_APPEARANCE;
     const v: unknown = JSON.parse(text);
     if (!isRecord(v) || !THEMES.includes(v.theme as ThemePref) || !PALETTES.includes(v.aurora as Palette)) {
@@ -72,9 +72,9 @@ export function readCached(storage: Storage | undefined = globalThis.localStorag
   }
 }
 
-export function writeCached(a: Appearance, storage: Storage | undefined = globalThis.localStorage): void {
+export function writeCached(a: Appearance, storage?: Storage): void {
   try {
-    storage?.setItem(CACHE_KEY, JSON.stringify(a));
+    (storage ?? globalThis.localStorage)?.setItem(CACHE_KEY, JSON.stringify(a));
   } catch {
     // Хранилище недоступно — следующий запуск начнётся с умолчаний, это не ошибка.
   }

@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CACHE_KEY, DEFAULT_APPEARANCE, appearanceFromSettings, appearanceToSettings, applyAppearance,
   readCached, resolveTheme, writeCached,
 } from "./appearance";
+
+afterEach(() => localStorage.clear());
 
 test("из настроек резидента: значения проверяются, мусор — умолчания", () => {
   expect(appearanceFromSettings({ ui: { theme: "light", aurora: "amber", aurora_style: "waves", motion: false } }))
@@ -51,4 +55,71 @@ test("недоступное хранилище не роняет окно", () 
   const broken = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("denied"); } } as unknown as Storage;
   expect(readCached(broken)).toEqual(DEFAULT_APPEARANCE);
   expect(() => writeCached(DEFAULT_APPEARANCE, broken)).not.toThrow();
+});
+
+test("localStorage, которого нет совсем (геттер бросает), не роняет вызов без аргумента", () => {
+  const desc = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get() { throw new Error("SecurityError"); },
+  });
+  try {
+    expect(() => readCached()).not.toThrow();
+    expect(readCached()).toEqual(DEFAULT_APPEARANCE);
+    expect(() => writeCached(DEFAULT_APPEARANCE)).not.toThrow();
+  } finally {
+    if (desc) Object.defineProperty(globalThis, "localStorage", desc);
+  }
+});
+
+// Ранний старт (public/appearance-boot.js) и модель (readCached) должны давать одно и то же
+// на любом содержимом кеша: иначе окно мигает чужой темой до ответа резидента.
+const BOOT_SRC = readFileSync(join(process.cwd(), "public", "appearance-boot.js"), "utf8");
+const ATTRS = ["data-theme", "data-aurora", "data-aurora-style", "data-motion"] as const;
+
+const CACHE_FIXTURES: ReadonlyArray<readonly [string, string | null]> = [
+  ["тёмный, полный", JSON.stringify({ theme: "dark", aurora: "violet", auroraStyle: "glow", motion: true })],
+  ["светлый, волны, без движения", JSON.stringify({ theme: "light", aurora: "amber", auroraStyle: "waves", motion: false })],
+  ["системный, зелёный", JSON.stringify({ theme: "system", aurora: "green", auroraStyle: "glow", motion: true })],
+  ["частично испорченный (палитра неизвестна)", JSON.stringify({ theme: "dark", aurora: "bad", auroraStyle: "waves", motion: false })],
+  ["тема неизвестна", JSON.stringify({ theme: "x", aurora: "violet", auroraStyle: "waves", motion: false })],
+  ["палитры нет", JSON.stringify({ theme: "dark", auroraStyle: "waves", motion: false })],
+  ["ключа нет", null],
+  ["не JSON", "{не json"],
+  ["JSON null", "null"],
+  ["JSON массив", "[]"],
+];
+
+const PARITY_CASES = CACHE_FIXTURES.flatMap(([label, raw]) =>
+  [true, false].map((systemDark) => [label, raw, systemDark] as const));
+
+function stubMatchMedia(dark: boolean): () => void {
+  const original = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    matches: dark, media: query, onchange: null,
+    addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; },
+  })) as unknown as typeof window.matchMedia;
+  return () => { window.matchMedia = original; };
+}
+
+const clearAttrs = (root: HTMLElement) => ATTRS.forEach((n) => root.removeAttribute(n));
+const snapshot = (root: HTMLElement) => ATTRS.map((n) => root.getAttribute(n));
+
+test.each(PARITY_CASES)("ранний старт совпадает с readCached: %s, система тёмная: %s", (_label, raw, systemDark) => {
+  const root = document.documentElement;
+  if (raw === null) localStorage.removeItem(CACHE_KEY);
+  else localStorage.setItem(CACHE_KEY, raw);
+  const restore = stubMatchMedia(systemDark);
+  try {
+    clearAttrs(root);
+    new Function(BOOT_SRC)();
+    const fromBoot = snapshot(root);
+    expect(fromBoot[0]).not.toBeNull();
+    clearAttrs(root);
+    applyAppearance(root, readCached(localStorage), systemDark);
+    expect(snapshot(root)).toEqual(fromBoot);
+  } finally {
+    restore();
+    clearAttrs(root);
+  }
 });
