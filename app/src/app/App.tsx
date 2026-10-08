@@ -27,7 +27,7 @@ import { GroupsLayer } from "../features/groups/GroupsLayer";
 import { GroupsPanel } from "../features/groups/GroupsNav";
 import { useGroupsUi } from "../features/groups/useGroupsUi";
 import { Nav, type Section } from "./Nav";
-import { RecordingBadge } from "./RecordingBadge";
+import { RecordingBadge, RecordingWarnings } from "./RecordingBadge";
 import { useAppearance } from "../theme/useAppearance";
 import { ShellResize } from "./ShellResize";
 
@@ -200,86 +200,86 @@ export function App() {
   ) : <OfflineState />;
 
   return (
-    <div className="app">
-      <Nav section={section} onSelect={select} groups={offline ? undefined : (
-        // Область меняется, только если уход к записям состоялся (несохранённые настройки — вопрос).
-        <GroupsPanel ui={groupsUi} active={section === "recordings"}
-          onOpen={(apply) => leaveSettings(() => { apply(); setSettingsPart(undefined); setSection("recordings"); })} />
-      )} />
-      <div className="content">
-        {/* Полоса под системным заголовком тоже перетаскивает окно; кнопки в ней — нет (атрибут только у самой полосы). */}
-        <header className="topbar" data-tauri-drag-region>
-          <RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
-            snapshotAt={resident.snapshotAt} online={resident.status === "online"}
-            onSnapshot={resident.applySnapshot} />
-        </header>
-        <div className="panes">
-          {section === "recordings" && (
-            <div className="pane-list" data-pane="list">
-              {offline ? offlineList : <RecordingsList
-                selected={selected}
-                onSelect={selectFromList}
-                onOpenHit={openHit}
-                onChanged={(id) => { if (id === selected) setCardTick((n) => n + 1); }}
-                onDeleting={(id) => { if (id === selected) setSelected(null); }}
-                library={library}
-                resident={resident}
-                q={q}
-                onQ={setQ}
-                chips={chips}
-                onChips={setChips}
-                groups={groupRefs}
-                categories={categories.list}
-                categoryFilter={activeFilter}
-                onCategoryFilter={setCatFilter}
-                onOpenSettings={openSettings}
-                groupsUi={groupsUi}
-                searchPlaceholder={groupsUi.scopeName ? `Поиск в «${groupsUi.scopeName}»` : undefined}
-              />}
-            </div>
+    // Шапки нет (0.4): кнопка записи и предупреждения — в рейке. `data-nav-rail` — группы встреч
+    // в рейке значками (features/groups/groups.css), пока они не переехали в список (этап 3, Task 2).
+    <div className="app" data-nav-rail="">
+      <Nav section={section} onSelect={select}
+        record={<RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
+          snapshotAt={resident.snapshotAt} online={resident.status === "online"}
+          onSnapshot={resident.applySnapshot} />}
+        alerts={<RecordingWarnings endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
+          online={resident.status === "online"} />}
+        groups={offline ? undefined : (
+          // Область меняется, только если уход к записям состоялся (несохранённые настройки — вопрос).
+          <GroupsPanel ui={groupsUi} active={section === "recordings"}
+            onOpen={(apply) => leaveSettings(() => { apply(); setSettingsPart(undefined); setSection("recordings"); })} />
+        )} />
+      <div className="panes">
+        {section === "recordings" && (
+          <div className="pane-list" data-pane="list">
+            {offline ? offlineList : <RecordingsList
+              selected={selected}
+              onSelect={selectFromList}
+              onOpenHit={openHit}
+              onChanged={(id) => { if (id === selected) setCardTick((n) => n + 1); }}
+              onDeleting={(id) => { if (id === selected) setSelected(null); }}
+              library={library}
+              resident={resident}
+              q={q}
+              onQ={setQ}
+              chips={chips}
+              onChips={setChips}
+              groups={groupRefs}
+              categories={categories.list}
+              categoryFilter={activeFilter}
+              onCategoryFilter={setCatFilter}
+              onOpenSettings={openSettings}
+              groupsUi={groupsUi}
+              searchPlaceholder={groupsUi.scopeName ? `Поиск в «${groupsUi.scopeName}»` : undefined}
+            />}
+          </div>
+        )}
+        <main className="pane-detail" data-pane="detail">
+          {offline ? (
+            offlineDetail
+          ) : section === "voices" && resident.endpoint ? (
+            <VoicesPane
+              endpoint={resident.endpoint}
+              people={people}
+              avatarVersion={avatarVersion}
+              onAvatar={(name) => { bumpAvatar(name); void refreshPeople(); }}
+              onChanged={() => void refreshPeople()}
+              onOpenRecording={openRecording}
+            />
+          ) : section === "settings" && resident.endpoint ? (
+            <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
+              initial={settingsPart?.part} initialTick={settingsPart?.n} guardRef={settingsGuard}
+              appearance={look.appearance} onAppearance={look.preview}
+              onDirtyChange={(dirty) => void setSettingsDirty(dirty)}
+              // Мастер заменяет окно целиком: несохранённое — через тот же вопрос.
+              onRunWizard={(step) => leaveSettings(() => gate.open(step ?? "hardware"))} />
+          ) : selected && resident.endpoint ? (
+            <RecordingCard
+              key={selected}
+              id={selected}
+              endpoint={resident.endpoint}
+              jobs={library.jobs}
+              chatEvent={chatEvent}
+              snapshot={resident.snapshot ?? null}
+              people={people}
+              avatarVersion={avatarVersion}
+              onPeopleChanged={() => void refreshPeople()}
+              onOpenSettings={openSettings}
+              find={find}
+              categories={categories.loaded ? categories.list : undefined}
+              refreshKey={cardTick}
+              onChanged={() => void library.refresh()}
+              onDeleted={() => { setSelected(null); void library.refresh(); }}
+            />
+          ) : (
+            <EmptyState title="Выберите запись" />
           )}
-          <main className="pane-detail" data-pane="detail">
-            {offline ? (
-              offlineDetail
-            ) : section === "voices" && resident.endpoint ? (
-              <VoicesPane
-                endpoint={resident.endpoint}
-                people={people}
-                avatarVersion={avatarVersion}
-                onAvatar={(name) => { bumpAvatar(name); void refreshPeople(); }}
-                onChanged={() => void refreshPeople()}
-                onOpenRecording={openRecording}
-              />
-            ) : section === "settings" && resident.endpoint ? (
-              <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
-                initial={settingsPart?.part} initialTick={settingsPart?.n} guardRef={settingsGuard}
-                appearance={look.appearance} onAppearance={look.preview}
-                onDirtyChange={(dirty) => void setSettingsDirty(dirty)}
-                // Мастер заменяет окно целиком: несохранённое — через тот же вопрос.
-                onRunWizard={(step) => leaveSettings(() => gate.open(step ?? "hardware"))} />
-            ) : selected && resident.endpoint ? (
-              <RecordingCard
-                key={selected}
-                id={selected}
-                endpoint={resident.endpoint}
-                jobs={library.jobs}
-                chatEvent={chatEvent}
-                snapshot={resident.snapshot ?? null}
-                people={people}
-                avatarVersion={avatarVersion}
-                onPeopleChanged={() => void refreshPeople()}
-                onOpenSettings={openSettings}
-                find={find}
-                categories={categories.loaded ? categories.list : undefined}
-                refreshKey={cardTick}
-                onChanged={() => void library.refresh()}
-                onDeleted={() => { setSelected(null); void library.refresh(); }}
-              />
-            ) : (
-              <EmptyState title="Выберите запись" />
-            )}
-          </main>
-        </div>
+        </main>
       </div>
       <ShellResize list={section === "recordings"} />
       {/* Итог переноса движка и моделей, остатки в общем кэше, прерванный перенос — где бы ни был человек. */}

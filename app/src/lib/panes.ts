@@ -1,69 +1,42 @@
 /**
- * Ширины боковых панелей окна: навигация, список записей, меню настроек,
- * панель человека в «Голосах», панель «Спикеры встречи».
+ * Ширины боковых панелей окна: список записей, меню настроек, панель человека
+ * в «Голосах», панель «Спикеры встречи». Рейка разделов (app/Nav) — постоянной
+ * ширины RAIL: режим «навигация шире/уже» ушёл в 0.4.
  *
  * Пользователь тянет разделитель — ширина запоминается в этом окне
  * (localStorage, ключ на панель). Запомненная ширина — пожелание: в узком окне
- * панели сжимаются (сначала пропорционально, потом навигация — в полосу
- * значков), карточке записи остаётся не меньше CARD_MIN. Окно снова шире —
- * панели возвращаются к запомненной ширине.
+ * список сжимается, карточке записи остаётся не меньше CARD_MIN. Окно снова
+ * шире — список возвращается к запомненной ширине.
  */
 
 /** Карточка записи не уже этого — боковые панели сжимаются раньше неё. */
 export const CARD_MIN = 520;
-/** Окно до этой ширины — навигация по умолчанию полосой значков (как и раньше, до 1000 px). */
-export const NARROW = 1000;
 /** Шаг клавиатуры у разделителя. */
 export const KEY_STEP = 16;
-
-export const NAV = { def: 200, min: 140, max: 320, rail: 56, snap: 100 } as const;
-export const LIST = { def: 320, min: 260, max: 560 } as const;
-
+/** Рейка разделов (app/Nav, app/rail.css): постоянная ширина. */
+export const RAIL = 60;
 /**
- * Навигация: «auto» — полоса значков в узком окне (до NARROW), иначе полная;
- * «rail» — пользователь свернул её в полосу; «open» — развернул в узком окне
- * (полная, пока помещается вместе со списком и карточкой).
+ * Прежняя навигация (до 0.4: ширина и сворачивание в полосу значков). Окно её
+ * больше не использует; оставлена для примера порога в ui/Splitter.test.
+ * @deprecated рейка — RAIL.
  */
-export type NavMode = "auto" | "rail" | "open";
-export type ShellPrefs = { nav: number; navMode: NavMode; list: number };
-export type ShellFit = { nav: number; rail: boolean; list: number };
+export const NAV = { def: 200, min: 140, max: 320, rail: 56, snap: 100 } as const;
+export const LIST = { def: 300, min: 260, max: 560 } as const;
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * Ширины навигации и списка для окна шириной `win`. Не хватает места для
- * карточки — панели сжимаются пропорционально (не уже своих минимумов), потом
- * навигация сворачивается в полосу значков; список уже LIST.min не становится.
+ * Ширина списка записей в окне шириной `win` при запомненной `want`: в своих
+ * пределах, но карточке — не меньше CARD_MIN; уже LIST.min список не становится
+ * (в самом узком окне сжимается карточка).
  */
-export function fitShell(win: number, p: ShellPrefs): ShellFit {
-  const avail = win - CARD_MIN;
-  const list = clamp(p.list, LIST.min, LIST.max);
-  const rail = p.navMode === "rail" || (p.navMode === "auto" && win <= NARROW);
-  if (!rail) {
-    const nav = clamp(p.nav, NAV.min, NAV.max);
-    if (nav + list <= avail) return { nav, rail: false, list };
-    const k = avail / (nav + list);
-    const navFit = Math.max(NAV.min, Math.round(nav * k));
-    const listFit = Math.max(LIST.min, avail - navFit);
-    if (navFit + listFit <= avail) return { nav: navFit, rail: false, list: listFit };
-  }
-  return { nav: NAV.rail, rail: true, list: Math.max(LIST.min, Math.min(list, avail - NAV.rail)) };
+export function fitList(win: number, want: number): number {
+  return Math.max(LIST.min, Math.min(clamp(want, LIST.min, LIST.max), win - RAIL - CARD_MIN));
 }
 
-/** Предел разделителя навигации: карточка не уже CARD_MIN при нынешнем списке. */
-export function navMax(win: number, fit: ShellFit): number {
-  return Math.max(NAV.min, Math.min(NAV.max, win - CARD_MIN - fit.list));
-}
-
-/** Предел разделителя списка: карточка не уже CARD_MIN при нынешней навигации. */
-export function listMax(win: number, fit: ShellFit): number {
-  return Math.max(LIST.min, Math.min(LIST.max, win - CARD_MIN - fit.nav));
-}
-
-/** Навигацию отпустили на ширине `w`: полоса значков или полная (и в узком окне — тоже). */
-export function navCommit(w: number, win: number, prev: ShellPrefs): ShellPrefs {
-  if (w <= NAV.rail) return { ...prev, navMode: "rail" };
-  return { ...prev, nav: w, navMode: win <= NARROW ? "open" : "auto" };
+/** Предел разделителя списка: карточка не уже CARD_MIN рядом с рейкой. */
+export function listMax(win: number): number {
+  return Math.max(LIST.min, Math.min(LIST.max, win - CARD_MIN - RAIL));
 }
 
 /** Панель внутри области: пределы и ширина при ширине области `room`. */
@@ -105,7 +78,7 @@ export function paneWidth(spec: PaneSpec, want: number, room: number): number {
 }
 
 /**
- * Ширина после перетаскивания до `raw` px. С `snap` (навигация): уже `snap.below` —
+ * Ширина после перетаскивания до `raw` px. С `snap` (сворачиваемая панель): уже `snap.below` —
  * сворачивается в `snap.to`, между ним и `min` — встаёт на `min`.
  */
 export function dragWidth(raw: number, min: number, max: number, snap?: { below: number; to: number }): number {
@@ -147,20 +120,21 @@ export function saveWidth(name: string, w: number | null): void {
   } catch { /* хранилище недоступно: ширина живёт до перезапуска */ }
 }
 
-export function loadShell(): ShellPrefs {
-  let navMode: NavMode = "auto";
+/** Ключи прежней навигации (до 0.4): ширина и режим «полоса значков». */
+const LEGACY_NAV = ["nav", "nav-mode"];
+
+/**
+ * Запомненная ширина списка записей; заодно забывает ширину и режим прежней
+ * навигации — рейка их не читает.
+ */
+export function loadList(): number {
   try {
-    const m = window.localStorage?.getItem(PREFIX + "nav-mode");
-    if (m === "rail" || m === "open") navMode = m;
+    for (const key of LEGACY_NAV) window.localStorage?.removeItem(PREFIX + key);
   } catch { /* хранилище недоступно */ }
-  return { nav: loadWidth("nav") ?? NAV.def, navMode, list: loadWidth("list") ?? LIST.def };
+  return loadWidth("list") ?? LIST.def;
 }
 
-export function saveShell(p: ShellPrefs): void {
-  saveWidth("nav", p.nav === NAV.def ? null : p.nav);
-  saveWidth("list", p.list === LIST.def ? null : p.list);
-  try {
-    if (p.navMode === "auto") window.localStorage?.removeItem(PREFIX + "nav-mode");
-    else window.localStorage?.setItem(PREFIX + "nav-mode", p.navMode);
-  } catch { /* хранилище недоступно */ }
+/** Ширина по умолчанию не хранится. */
+export function saveList(w: number): void {
+  saveWidth("list", w === LIST.def ? null : w);
 }

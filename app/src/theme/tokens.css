@@ -35,47 +35,13 @@ body { overflow: hidden; }
 }
 .num { font-variant-numeric: tabular-nums; }
 
-/* Каркас окна: навигация · список · карточка */
+/* Каркас окна: рейка разделов (app/rail.css, 60 px) · список · карточка. Шапки нет (0.4). */
 .app { position: relative; display: flex; height: 100%; min-width: 820px; }
-.nav {
-  width: var(--nav-w); flex: none; padding: 12px 8px;
-  background: var(--surface-1); border-right: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 2px;
-}
-/* Знак и имя приложения над разделами: диск-знак Meet (ui/MeetMark). */
-.nav__brand {
-  display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; margin-bottom: 6px;
-  color: var(--ink); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; user-select: none;
-}
-.nav__mark {
-  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none;
-}
-.nav__item {
-  display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px;
-  border: 0; border-radius: var(--r-md); background: transparent;
-  color: var(--ink-2); font: inherit; text-align: left; cursor: pointer;
-  transition: background var(--d), color var(--d);
-}
-.nav__item:hover { background: var(--surface-3); color: var(--ink); }
-.nav__item[aria-current="page"] { background: var(--surface-2); color: var(--ink); }
-.nav__icon { flex: none; }
-.nav__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Навигация полосой значков (data-nav-rail ставит app/ShellResize): в узком
-   окне (до 1000 px) по умолчанию или когда её свернули разделителем. Подписи
-   разделов остаются доступными именами кнопок и всплывают подсказкой (title).
-   Ширины --nav-w и --list-w тоже ставит ShellResize: карточке остаётся не
-   меньше 520 px, пока окно не уже 900 px (lib/panes.ts). */
-.app[data-nav-rail] .nav { padding: 12px 6px; align-items: stretch; }
-.app[data-nav-rail] .nav__brand { justify-content: center; padding: 0; gap: 0; }
-.app[data-nav-rail] .nav__item { justify-content: center; padding: 0; height: 36px; }
-.app[data-nav-rail] .nav .nav__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-/* Разделители навигации и списка — поверх границ колонок. У навигации захват
-   внутри неё самой; у списка — ниже полосы заголовка: та перетаскивает окно. */
-.app > .shell-split { position: absolute; top: 0; bottom: 0; left: var(--nav-w); }
-.app > .shell-split--list { top: var(--app-topbar-h); left: calc(var(--nav-w) + var(--list-w)); }
-.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.panes { flex: 1; min-height: 0; display: flex; }
+/* Разделитель списка — поверх его правой границы; ширину --list-w ставит app/ShellResize:
+   карточке остаётся не меньше 520 px (lib/panes.ts). 60px — ширина рейки (RAIL). */
+.app > .shell-split { position: absolute; top: 0; bottom: 0; }
+.app > .shell-split--list { left: calc(60px + var(--list-w)); }
+.panes { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .pane-list {
   width: var(--list-w); flex: none; overflow: auto; scrollbar-gutter: stable;
   border-right: 1px solid var(--hairline); background: var(--canvas);

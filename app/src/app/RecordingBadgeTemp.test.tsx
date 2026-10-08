@@ -80,18 +80,20 @@ test("«Удалить запись» — /recording/cancel, ответ прим
   expect(await screen.findByRole("button", { name: "Начать запись" })).toBeInTheDocument();
 });
 
-test("временная встреча: пометка, «Стоп» спрашивает, «Продолжить» по умолчанию", async () => {
+test("временная встреча: пометка в подсказке, «Закончить временную встречу» спрашивает, «Продолжить» по умолчанию", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const command = vi.spyOn(api, "recordingCommand").mockResolvedValue(reply(base(), "stopped"));
   render(<RecordingBadge endpoint={ep} snapshot={recording({ source: "live", temporary: true })} />);
-  expect(screen.getByText("Временная — не сохранится")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  const end = screen.getByRole("button", { name: "Закончить временную встречу" });
+  expect(end).toHaveAccessibleDescription(/Идёт запись · 01:00.*Временная — не сохранится/);
+  expect(screen.queryByRole("button", { name: "Остановить и сохранить" })).toBeNull();
+  await userEvent.click(end);
   const dialog = await screen.findByRole("alertdialog");
   expect(dialog).toHaveTextContent("Временная встреча закончится и будет удалена.");
   expect(screen.getByRole("button", { name: "Продолжить" })).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(command).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  await userEvent.click(screen.getByRole("button", { name: "Закончить временную встречу" }));
   await userEvent.click(await screen.findByRole("button", { name: "Закончить" }));
   expect(command).toHaveBeenCalledWith(ep, "stop");
 });
@@ -109,9 +111,9 @@ test("временная встреча: «Сохранить как обычн�
   expect(screen.queryByRole("menuitem", { name: /Остановить без сохранения/ })).toBeNull();
   await userEvent.click(await screen.findByRole("menuitem", { name: /Сохранить как обычную встречу/ }));
   expect(command).toHaveBeenCalledWith(ep, "keep");
-  await waitFor(() => expect(screen.queryByText("Временная — не сохранится")).toBeNull());
-  // Теперь это обычная запись: «Стоп» без вопроса.
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  await waitFor(() => expect(screen.getByRole("tooltip")).not.toHaveTextContent("Временная — не сохранится"));
+  // Теперь это обычная запись: «Остановить и сохранить» без вопроса.
+  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(command).toHaveBeenLastCalledWith(ep, "stop");
 });

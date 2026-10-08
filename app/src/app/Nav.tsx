@@ -1,44 +1,54 @@
 import { AudioLines, Settings, Users, type LucideIcon } from "lucide-react";
-import { Fragment, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { MeetMark } from "../ui/MeetMark";
+import { RailTip } from "./RailTip";
+import "./rail.css";
 
 export type Section = "recordings" | "voices" | "settings";
 
-const ITEMS: { id: Section; label: string; icon: LucideIcon }[] = [
-  { id: "recordings", label: "Записи", icon: AudioLines },
-  { id: "voices", label: "Голоса", icon: Users },
-  { id: "settings", label: "Настройки", icon: Settings },
-];
+const LABEL: Record<Section, string> = { recordings: "Записи", voices: "Голоса", settings: "Настройки" };
+const ICON: Record<Section, LucideIcon> = { recordings: AudioLines, voices: Users, settings: Settings };
 
 /**
- * Разделы окна. В узком окне (до 1000 px) — полоса значков: подпись остаётся
- * доступным именем кнопки и всплывает подсказкой. `groups` — группы встреч
- * под «Записи» (features/groups/GroupsNav).
+ * Рейка разделов (60 px, по макету MeetApp): знак Meet, под ним — кнопка записи
+ * (`record`, app/RecordingBadge), разделы «Записи» и «Голоса» кнопками-значками,
+ * внизу — предупреждения записи (`alerts`) и «Настройки». Подписи — доступные
+ * имена кнопок и подсказки справа. `groups` — группы встреч под «Записи»
+ * (features/groups/GroupsNav; уходят в список записей на этапе 3, Task 2).
+ * Пустое место рейки перетаскивает окно (атрибут — только у самой рейки).
  */
-export function Nav({ section, onSelect, groups }: {
+export function Nav({ section, onSelect, groups, record, alerts }: {
   section: Section;
   onSelect: (s: Section) => void;
   groups?: ReactNode;
+  record?: ReactNode;
+  alerts?: ReactNode;
 }) {
+  const item = (id: Section) => {
+    const current = id === section;
+    return (
+      <RailTip tip={LABEL[id]}>
+        <Button variant={current ? "deep" : "ghost"} size="lg" className="btn--icon rail__item"
+          aria-label={LABEL[id]} aria-current={current ? "page" : undefined} onClick={() => onSelect(id)}>
+          <Icon as={ICON[id]} />
+        </Button>
+      </RailTip>
+    );
+  };
   return (
-    <nav className="nav" role="navigation">
-      <div className="nav__brand" title="Meet"><span className="nav__mark" aria-hidden="true"><MeetMark size={18} /></span><span className="nav__label">Meet</span></div>
-      {ITEMS.map((it) => (
-        <Fragment key={it.id}>
-          <button
-            type="button"
-            className="nav__item"
-            title={it.label}
-            aria-current={it.id === section ? "page" : undefined}
-            onClick={() => onSelect(it.id)}
-          >
-            <Icon as={it.icon} className="nav__icon" />
-            <span className="nav__label">{it.label}</span>
-          </button>
-          {it.id === "recordings" && groups}
-        </Fragment>
-      ))}
+    <nav className="rail" aria-label="Разделы" data-tauri-drag-region>
+      <div className="rail__mark" title="Meet"><MeetMark size={22} /></div>
+      {record}
+      <div className="rail__sep" aria-hidden="true" />
+      {item("recordings")}
+      {groups}
+      {item("voices")}
+      <div className="rail__foot">
+        {alerts}
+        {item("settings")}
+      </div>
     </nav>
   );
 }

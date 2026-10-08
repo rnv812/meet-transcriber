@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { CARD_MIN, LIST, NAV } from "../lib/panes";
+import { CARD_MIN, LIST, RAIL } from "../lib/panes";
 import { ShellResize } from "./ShellResize";
 
 function Shell({ list = true }: { list?: boolean }) {
@@ -8,9 +8,7 @@ function Shell({ list = true }: { list?: boolean }) {
 }
 
 const app = () => screen.getByTestId("app");
-const navW = () => parseInt(app().style.getPropertyValue("--nav-w"), 10);
 const listW = () => parseInt(app().style.getPropertyValue("--list-w"), 10);
-const navSplit = () => screen.getByRole("separator", { name: "Ширина навигации" });
 const listSplit = () => screen.getByRole("separator", { name: "Ширина списка записей" });
 
 function drag(el: HTMLElement, from: number, to: number) {
@@ -33,21 +31,31 @@ beforeEach(() => {
 });
 afterEach(() => localStorage.clear());
 
-test("ширины ставятся до отрисовки; у списка разделитель только в «Записях»", () => {
+test("рейка постоянной ширины — разделителя у неё нет; у списка разделитель только в «Записях»", () => {
   const { rerender } = render(<Shell />);
-  expect(navW()).toBe(NAV.def);
+  expect(RAIL).toBe(60);
+  expect(LIST.def).toBe(300);
   expect(listW()).toBe(LIST.def);
+  expect(screen.queryByRole("separator", { name: "Ширина навигации" })).toBeNull();
   expect(app()).not.toHaveAttribute("data-nav-rail");
   expect(listSplit()).toBeInTheDocument();
   rerender(<Shell list={false} />);
   expect(screen.queryByRole("separator", { name: "Ширина списка записей" })).toBeNull();
 });
 
+test("прежние ширина и режим навигации (до 0.4) забываются", () => {
+  localStorage.setItem("meet.pane.nav", "240");
+  localStorage.setItem("meet.pane.nav-mode", "rail");
+  render(<Shell />);
+  expect(localStorage.getItem("meet.pane.nav")).toBeNull();
+  expect(localStorage.getItem("meet.pane.nav-mode")).toBeNull();
+});
+
 test("список тянут — ширина меняется в пределах и запоминается; после перезапуска — та же", () => {
   const { unmount } = render(<Shell />);
   drag(listSplit(), 500, 580);
-  expect(listW()).toBe(400);
-  expect(localStorage.getItem("meet.pane.list")).toBe("400");
+  expect(listW()).toBe(380);
+  expect(localStorage.getItem("meet.pane.list")).toBe("380");
   drag(listSplit(), 500, 2000);
   expect(listW()).toBe(LIST.max);
   unmount();
@@ -59,52 +67,25 @@ test("список тянут — ширина меняется в предел�
   expect(localStorage.getItem("meet.pane.list")).toBeNull();
 });
 
-test("навигацию сузили ниже порога — полоса значков; вытянули — снова с подписями", () => {
-  render(<Shell />);
-  drag(navSplit(), 200, 70);
-  expect(app()).toHaveAttribute("data-nav-rail");
-  expect(navW()).toBe(NAV.rail);
-  expect(localStorage.getItem("meet.pane.nav-mode")).toBe("rail");
-  drag(navSplit(), 56, 236);
-  expect(app()).not.toHaveAttribute("data-nav-rail");
-  expect(navW()).toBe(236);
-  expect(localStorage.getItem("meet.pane.nav-mode")).toBeNull();
-  expect(localStorage.getItem("meet.pane.nav")).toBe("236");
-});
-
-test("навигацию ← до минимума и дальше — полоса; → из полосы — минимум", () => {
-  render(<Shell />);
-  navSplit().focus();
-  fireEvent.keyDown(navSplit(), { key: "Home" });
-  expect(app()).toHaveAttribute("data-nav-rail");
-  fireEvent.keyDown(navSplit(), { key: "ArrowRight" });
-  expect(app()).not.toHaveAttribute("data-nav-rail");
-  expect(navW()).toBe(NAV.min);
-});
-
-test("окно сузили — панели ужимаются, карточке остаётся минимум; расширили — запомненные ширины вернулись", async () => {
-  localStorage.setItem("meet.pane.nav", "300");
+test("окно сузили — список ужимается, карточке остаётся минимум; расширили — запомненная ширина вернулась", async () => {
   localStorage.setItem("meet.pane.list", "520");
   render(<Shell />);
-  expect([navW(), listW()]).toEqual([300, 520]);
-  await resizeWindow(1200);
-  expect(1200 - navW() - listW()).toBeGreaterThanOrEqual(CARD_MIN);
-  expect(app()).not.toHaveAttribute("data-nav-rail");
+  expect(listW()).toBe(520);
   await resizeWindow(1000);
-  expect(app()).toHaveAttribute("data-nav-rail");
-  expect(1000 - navW() - listW()).toBeGreaterThanOrEqual(CARD_MIN);
+  expect(1000 - RAIL - listW()).toBeGreaterThanOrEqual(CARD_MIN);
   await resizeWindow(900);
-  expect(900 - navW() - listW()).toBeGreaterThanOrEqual(CARD_MIN);
+  expect(900 - RAIL - listW()).toBe(CARD_MIN);
+  // Самое узкое окно: список не уже своего минимума, карточке — что осталось.
+  await resizeWindow(820);
+  expect(listW()).toBe(LIST.min);
   await resizeWindow(1600);
-  expect([navW(), listW()]).toEqual([300, 520]);
+  expect(listW()).toBe(520);
 });
 
 test("разделитель не даёт сузить карточку меньше минимума", () => {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1100 });
   render(<Shell />);
-  expect(listSplit()).toHaveAttribute("aria-valuemax", String(1100 - CARD_MIN - NAV.def));
+  expect(listSplit()).toHaveAttribute("aria-valuemax", String(1100 - CARD_MIN - RAIL));
   drag(listSplit(), 500, 900);
-  expect(1100 - navW() - listW()).toBe(CARD_MIN);
-  drag(navSplit(), 200, 400);
-  expect(1100 - navW() - listW()).toBeGreaterThanOrEqual(CARD_MIN);
+  expect(1100 - RAIL - listW()).toBe(CARD_MIN);
 });

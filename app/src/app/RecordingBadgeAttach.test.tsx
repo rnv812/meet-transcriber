@@ -22,8 +22,11 @@ const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
   provider: "claude", setting: "auto", available: {}, knowledge_dir: null, checking: false, ...o,
 });
 const openMenu = () => userEvent.click(screen.getByRole("button", { name: "Ещё действия с записью" }));
+/** Подсказка кнопки остановки: «Идёт запись · мм:сс», ассистент, этап его запуска. */
+const status = () => screen.getByRole("tooltip");
+const stopButton = () => screen.getByRole("button", { name: "Остановить и сохранить" });
 
-test("во время записи «Стоп ▾»: «Включить ассистента» — ответ применяется сразу", async () => {
+test("во время записи «Ещё действия с записью»: «Включить ассистента» — ответ применяется сразу", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
     { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
@@ -33,7 +36,7 @@ test("во время записи «Стоп ▾»: «Включить асси
     return <RecordingBadge endpoint={ep} snapshot={s} onSnapshot={setS} />;
   }
   render(<Harness />);
-  expect(screen.getByText(/REC/)).toHaveTextContent("12:34");
+  expect(status()).toHaveTextContent("Идёт запись · 12:34");
   await openMenu();
   const item = await screen.findByRole("menuitem", { name: /Включить ассистента · Рабочая встреча/ });
   await waitFor(() => expect(item).toBeEnabled());
@@ -41,8 +44,8 @@ test("во время записи «Стоп ▾»: «Включить асси
   await userEvent.click(item);
   expect(attach).toHaveBeenCalledWith(ep, "work");
   expect(stop).not.toHaveBeenCalled(); // запись не останавливали
-  expect(await screen.findByText("Ассистент запускается…")).toBeInTheDocument();
-  expect(screen.getByText(/REC/)).toHaveTextContent("12:34"); // всё та же запись
+  await waitFor(() => expect(status()).toHaveTextContent("Ассистент запускается…"));
+  expect(status()).toHaveTextContent("Идёт запись · 12:34"); // всё та же запись
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
@@ -72,7 +75,7 @@ test("без подключённой модели «Включить ассис
   expect(attach).not.toHaveBeenCalled();
 });
 
-test("включён — «· ассистент» у REC и «Выключить ассистента» (запись продолжается)", async () => {
+test("включён — «· ассистент» в подсказке и «Выключить ассистента» (запись продолжается)", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const detach = vi.spyOn(api, "liveDetach").mockResolvedValue(
     { ok: true, action: "stopping", ...live({ active: true, stopping: true, attached: true }) });
@@ -81,14 +84,14 @@ test("включён — «· ассистент» у REC и «Выключит�
     return <RecordingBadge endpoint={ep} snapshot={s} onSnapshot={setS} />;
   }
   render(<Harness />);
-  expect(screen.getByText(/REC/)).toHaveTextContent("· ассистент");
+  expect(status()).toHaveTextContent("Идёт запись · 12:34 · ассистент");
   await openMenu();
   const item = await screen.findByRole("menuitem", { name: /Выключить ассистента/ });
   expect(item).toHaveTextContent("запись продолжится");
   await userEvent.click(item);
   expect(detach).toHaveBeenCalledWith(ep);
-  expect(await screen.findByText("Ассистент выключается…")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Стоп" })).toBeEnabled(); // запись можно остановить
+  await waitFor(() => expect(status()).toHaveTextContent("Ассистент выключается…"));
+  expect(stopButton()).toBeEnabled(); // запись можно остановить
 });
 
 test("отказ резидента виден рядом с кнопкой", async () => {
@@ -102,28 +105,28 @@ test("отказ резидента виден рядом с кнопкой", as
   expect(await screen.findByRole("alert")).toHaveTextContent("Ассистент ещё запускается");
 });
 
-test("Стоп во время записи с ассистентом — остановка самой записи", async () => {
+test("«Остановить и сохранить» во время записи с ассистентом — остановка самой записи", async () => {
   const stop = vi.spyOn(api, "recordingCommand").mockResolvedValue({} as never);
   const liveStop = vi.spyOn(api, "liveStop");
   render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true }))} />);
-  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  await userEvent.click(stopButton());
   expect(stop).toHaveBeenCalledWith(ep, "stop");
   expect(liveStop).not.toHaveBeenCalled();
 });
 
-test("подключается: этап старта виден у REC вместо общего «запускается»", () => {
+test("подключается: этап старта виден в подсказке вместо общего «запускается»", () => {
   const { rerender } = render(<RecordingBadge endpoint={ep}
     snapshot={recording(live({ starting: true, attached: true, stage: "подключаюсь к записи…" }))} />);
-  expect(screen.getByText("Ассистент запускается: подключаюсь к записи…")).toBeInTheDocument();
+  expect(status()).toHaveTextContent("Ассистент запускается: подключаюсь к записи…");
   // Отвод уже читается, модель ещё грузится: ассистент ещё не слушает.
   rerender(<RecordingBadge endpoint={ep} snapshot={recording(live({
     active: true, ready: false, attached: true, stage: "загружаю модель распознавания…" }))} />);
-  expect(screen.getByText("Ассистент запускается: загружаю модель распознавания…")).toBeInTheDocument();
-  expect(screen.getByText(/REC/)).not.toHaveTextContent("· ассистент");
+  expect(status()).toHaveTextContent("Ассистент запускается: загружаю модель распознавания…");
+  expect(status()).not.toHaveTextContent("· ассистент");
   rerender(<RecordingBadge endpoint={ep}
     snapshot={recording(live({ active: true, ready: true, attached: true }))} />);
-  expect(screen.getByText(/REC/)).toHaveTextContent("· ассистент");
-  expect(screen.queryByText(/Ассистент запускается/)).toBeNull();
+  expect(status()).toHaveTextContent("· ассистент");
+  expect(status()).not.toHaveTextContent(/Ассистент запускается/);
 });
 
 test("подключённый ассистент упал — ошибка видна, хотя запись идёт, и не гаснет сама", () => {

@@ -1,0 +1,75 @@
+/* Рейка разделов (app/Nav, макет MeetApp «RAIL»): 60 px, отступ 10, кнопки-значки
+   48 (--control-lg) с подсказками справа. Сверху знак Meet и кнопка записи
+   (app/RecordingBadge), внизу — предупреждения записи и «Настройки». */
+.rail {
+  flex: none; width: 60px; box-sizing: border-box; padding: 10px;
+  background: var(--surface-1); border-right: 1px solid var(--hairline);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.rail__mark { flex: none; height: 40px; display: grid; place-items: center; margin-bottom: 6px; user-select: none; }
+.rail__sep { flex: none; width: 28px; height: 1px; margin: 8px 0; background: var(--hairline); }
+/* «Настройки» и предупреждения — внизу рейки. */
+.rail__foot {
+  margin-top: auto; padding-top: 8px; border-top: 1px solid var(--hairline);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.rail .btn--lg.btn--icon { flex: none; width: var(--control-lg); }
+.rail .btn--lg svg { width: var(--icon-lg); height: var(--icon-lg); }
+/* Выбранный раздел — «глубокая» заливка и контур (контур — outline: box-shadow занят рамкой фокуса). */
+.rail__item[aria-current="page"] { outline: 1px solid var(--control-line); outline-offset: -1px; }
+/* Группы встреч под «Записи» — значками во всю ширину рейки (features/groups, режим полосы). */
+.rail .nav-groups { align-self: stretch; }
+.rail .nav__label {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* Подсказки рейки — справа от кнопки, по центру по высоте (Aurora ставит их сверху). */
+.rail__tip { flex: none; }
+.rail__tip .tooltip { left: calc(100% + 8px); top: 50%; bottom: auto; transform: translate(-4px, -50%); }
+.rail .rail__tip:hover .tooltip, .rail .rail__tip:focus-within .tooltip { transform: translate(0, -50%); }
+/* Мостик для указателя — слева от подсказки, а не под ней. */
+.rail__tip .tooltip::after { top: 0; bottom: 0; left: auto; right: 100%; width: 8px; height: auto; }
+.rail__tip-line { display: block; }
+
+/* Кнопка записи: главная (primary) в простое, «Остановить» (danger) во время записи,
+   под ней — узкая «ещё» с меню вариантов; меню раскрывается вправо от кнопки. */
+.rail-rec { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.rail-rec__dot { width: 12px; height: 12px; border-radius: 50%; background: var(--on-accent-strong); }
+.rail .rail-rec__more { width: var(--control-lg); height: 18px; border-radius: var(--r-sm); }
+.rail-rec__anchor { position: absolute; left: calc(100% + 8px); top: 0; width: 0; height: 0; }
+
+/* Меню вариантов записи (ui/floating держит его в пределах окна). */
+.rec-menu {
+  position: fixed; z-index: var(--z-popover); width: 280px; max-width: calc(100vw - 16px);
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border-radius: var(--r-lg); box-shadow: var(--elev-3); color: var(--ink);
+}
+.rec-menu__item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 10px; border: 0; border-radius: var(--r-control-sm); background: none;
+  color: var(--ink); font: inherit; font-size: var(--text-ui); text-align: left; cursor: pointer;
+}
+.rec-menu__item:hover:not(:disabled) { background: var(--surface-3); }
+.rec-menu__item:disabled { opacity: 0.5; cursor: default; }
+/* «Остановить без сохранения…» — внизу меню, за чертой и красным: удаляет запись. */
+.rec-menu__item--danger {
+  margin-top: 4px; color: var(--danger);
+  border-top: 1px solid var(--hairline); border-radius: 0 0 var(--r-control-sm) var(--r-control-sm);
+}
+.rec-menu__note { color: var(--ink-3); font-size: var(--text-xs); }
+.rec-menu__hint { padding: 0 10px 6px; color: var(--warning); font-size: var(--text-xs); }
+
+/* Предупреждения записи внизу рейки: значок цвета --warning, текст — имя и подсказка. */
+.rail-warn { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rail .rail__warn, .rail .rail__warn:hover { color: var(--warning); }
+
+/* Ошибка команды записи — справа от рейки, поверх списка; у предупреждений — вверх от низа. */
+.rail-error {
+  position: absolute; z-index: var(--z-popover); left: calc(100% + 8px); top: 0;
+  display: flex; align-items: flex-start; gap: 8px; width: max-content; max-width: 320px;
+  padding: 10px 8px 10px 12px; border-radius: var(--r-md); box-shadow: var(--elev-3);
+  color: var(--ink); font-size: var(--text-sm); line-height: 1.45;
+}
+.rail-error--up { top: auto; bottom: 0; }
+.rail-error__icon { flex: none; margin-top: 2px; color: var(--danger); }
+.rail-error__text { flex: 1; min-width: 0; margin: 0; }

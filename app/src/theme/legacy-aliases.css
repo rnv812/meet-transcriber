@@ -25,10 +25,8 @@
   --err: var(--danger);
   --amber: var(--warning);
   --t: 120ms;
-  --nav-w: 200px;
-  --list-w: 320px;
-  /* Высота прежней шапки окна; в Aurora --topbar-h — 56 (шапка уйдёт на этапе 3). */
-  --app-topbar-h: 40px;
+  /* Ширина списка записей до первого замера (app/ShellResize ставит свою на .app). */
+  --list-w: 300px;
   /* Ползунки прокрутки — нейтральный серый яркости --ink-3 своей темы, без color-mix():
      его нет в WebKit macOS 13.0 (Safari 16.1). */
   --sb-thumb: oklch(66% 0 0 / 0.28);

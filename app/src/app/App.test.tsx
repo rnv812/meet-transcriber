@@ -212,11 +212,15 @@ test("клик по уведомлению из настроек с правка
   expect(await screen.findByTestId("card")).toHaveTextContent("rec-1");
 });
 
+/** Имена кнопок рейки по порядку. */
+const railNames = () => within(screen.getByRole("navigation", { name: "Разделы" })).getAllByRole("button")
+  .map((b) => b.getAttribute("aria-label") ?? b.textContent);
+
 test("три раздела; у записей есть список, у голосов — нет", async () => {
   const { container } = render(<App />);
-  expect(screen.getByRole("navigation")).toHaveTextContent(/Записи.*Голоса.*Настройки/);
+  expect(railNames()).toEqual(["Записи", "Голоса", "Настройки"]);
   expect(container.querySelector('[data-pane="list"]')).not.toBeNull();
-  await userEvent.click(screen.getByText("Голоса"));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
   expect(container.querySelector('[data-pane="list"]')).toBeNull();
 });
 
@@ -271,7 +275,7 @@ test("группы — в левой панели под «Записи»; вы�
   expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] }, "");
   expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveAttribute("placeholder", "Поиск в «Проект Альфа»");
   // Из «Голосов» щелчок по группе возвращает к списку записей.
-  await userEvent.click(screen.getByText("Голоса"));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
   await userEvent.click(within(list).getByRole("button", { name: /^Все записи,/ }));
   expect(screen.getByRole("button", { name: "Записи" })).toHaveAttribute("aria-current", "page");
   expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {}, "");
@@ -323,7 +327,32 @@ test("старый резидент без /groups — групп в панел�
   await waitFor(() => expect(api.getGroups).toHaveBeenCalled());
   await act(async () => {});
   expect(screen.queryByRole("list", { name: "Группы встреч" })).toBeNull();
-  expect(screen.getByRole("navigation")).toHaveTextContent(/^MeetЗаписиГолосаНастройки$/);
+  expect(railNames()).toEqual(["Записи", "Голоса", "Настройки"]);
+});
+
+const idle = (extra: Record<string, unknown> = {}) => ({
+  status: "idle", source: null, folder: null, elapsed_s: 0, levels: {},
+  auto_record: { enabled: false, processes: [], grace_seconds: 0, state: null, mic: null, render: null },
+  recordings_dir: "", gpu_busy: false, disk_free_gb: 100, last_stop: null, ...extra,
+});
+
+test("шапки нет: кнопка записи — в рейке под знаком, «Мало места» — внизу над «Настройками»", () => {
+  residentState.current = { ...online(), snapshot: idle({ disk_free_gb: 3.2 }), snapshotAt: Date.now(),
+    applySnapshot: () => {} };
+  render(<App />);
+  expect(screen.queryByRole("banner")).toBeNull();
+  expect(railNames()).toEqual(["Начать запись", "Другие варианты записи", "Записи", "Голоса",
+    "Мало места: 3.2 ГБ", "Настройки"]);
+});
+
+test("во время записи в рейке — «Остановить и сохранить» с подсказкой «Идёт запись · мм:сс»", () => {
+  residentState.current = { ...online(), snapshot: idle({ status: "recording", source: "manual", elapsed_s: 767 }),
+    snapshotAt: Date.now(), applySnapshot: () => {} };
+  render(<App />);
+  const nav = screen.getByRole("navigation", { name: "Разделы" });
+  expect(within(nav).getByRole("button", { name: "Остановить и сохранить" }))
+    .toHaveAccessibleDescription("Идёт запись · 12:47");
+  expect(within(nav).queryByRole("button", { name: "Начать запись" })).toBeNull();
 });
 
 test("?recording=abc в адресе — выбрана запись abc", () => {
@@ -336,7 +365,7 @@ test("?recording=abc в адресе — выбрана запись abc", () =>
 test("событие open-recording переключает на «Записи» и выбирает запись", async () => {
   residentState.current = online();
   render(<App />);
-  await userEvent.click(screen.getByText("Голоса"));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
   expect(screen.getByTestId("voices")).toBeInTheDocument();
   await vi.waitFor(() => expect(openCb.current).not.toBeNull());
   act(() => openCb.current!("rec-42"));
@@ -375,7 +404,7 @@ test("вход в «Голоса» перечитывает базу людей"
   residentState.current = online();
   render(<App />);
   refreshPeople.mockClear();
-  await userEvent.click(screen.getByText("Голоса"));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
   expect(refreshPeople).toHaveBeenCalledTimes(1);
 });
 
@@ -386,8 +415,8 @@ test("карточка просит настройки «Ассистент» �
   await userEvent.click(screen.getByRole("button", { name: "в настройки" }));
   expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "assistant");
   // Обычный переход в настройки из меню — с начала, без запомненной секции.
-  await userEvent.click(screen.getByText("Записи"));
-  await userEvent.click(screen.getByText("Настройки"));
+  await userEvent.click(screen.getByRole("button", { name: "Записи" }));
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
   expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "");
 });
 
@@ -396,7 +425,7 @@ test("?section=assistant в адресе — открыты настройки �
   window.history.replaceState({}, "", "/?recording=abc&section=assistant");
   render(<App />);
   expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "assistant");
-  await userEvent.click(screen.getByText("Записи"));
+  await userEvent.click(screen.getByRole("button", { name: "Записи" }));
   expect(screen.getByTestId("card")).toHaveTextContent("abc");
 });
 
@@ -496,7 +525,7 @@ test("пропуск без резидента дописывается в ег�
 test("настройки: «Запустить мастер» открывает его с начала; закрыли — снова настройки", async () => {
   residentState.current = online();
   render(<App />);
-  await userEvent.click(screen.getByText("Настройки"));
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
   await userEvent.click(screen.getByRole("button", { name: "Запустить мастер" }));
   expect(screen.getByTestId("wizard")).toHaveAttribute("data-start", "hardware");
   await userEvent.click(screen.getByRole("button", { name: "закрыть мастер" }));
