@@ -390,7 +390,7 @@ button.chat-tool__line:hover { background: var(--surface-3); }
 .chat-sys__icon { flex: none; margin-top: 2px; color: var(--info); }
 
 /* --- Подсказка слэш-команд над полем ввода (`.menu` Aurora, раскрыта вверх) --- */
-.chat-compose > .menu.chat-slash {
+.chat-compose .menu.chat-slash {
   top: auto; bottom: calc(100% + 6px); max-height: min(320px, 50vh); overflow-y: auto;
   /* Плотное стекло на непрозрачной подложке: лента под списком не просвечивает (как панель, A1). */
   background: linear-gradient(var(--glass-2), var(--glass-2)), var(--surface-1);

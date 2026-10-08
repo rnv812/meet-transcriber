@@ -64,6 +64,11 @@ test("поле ввода чата без своего кольца фокуса
   expect(css).toMatch(/\.chat-compose__field:focus-visible[^{]*\{[^}]*box-shadow: none/);
 });
 
+test("подсказка «/» — непрозрачная (где бы ни лежала внутри строки ввода): лента под ней не просвечивает", () => {
+  const css = clean(join("live", "chat.css"));
+  expect(css).toMatch(/\.chat-compose \.menu\.chat-slash \{[^}]*background: linear-gradient\(var\(--glass-2\), var\(--glass-2\)\), var\(--surface-1\)/);
+});
+
 test("отклик на реакцию гаснет анимацией, но не при «уменьшить движение»", () => {
   const css = clean(join("live", "chat.css"));
   expect(css).toMatch(/\.chat-msg__ack \{[^}]*animation: chat-ack/);

@@ -53,6 +53,8 @@ test("«/» открывает список над полем, набранно�
   await userEvent.type(field(), "/");
   const list = screen.getByRole("listbox", { name: "Команды" });
   expect(list).toHaveClass("menu", "open");
+  // Внутри строки ввода: там её непрозрачный фон (chat.css), лента не просвечивает.
+  expect(list.closest(".chat-compose")).not.toBeNull();
   expect(within(list).getAllByRole("option")).toHaveLength(cli.length);
   expect(field()).toHaveAttribute("aria-expanded", "true");
   await userEvent.type(field(), "re");
