@@ -11,6 +11,8 @@
 .lib-empty__text { max-width: 46ch; font-size: var(--text-body); line-height: 1.5; }
 .lib-empty__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .lib-empty__dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--on-accent-strong); }
+/* Файл несут в окно — страница его примет (импорт ведёт она: списка нет). */
+.lib-empty--over { box-shadow: inset 0 0 0 2px var(--accent); }
 /* «Импортировать файл» — контурная на стекле, как в макете. */
 .btn.lib-empty__import { background: var(--glass-1); border-color: var(--glass-line); color: var(--ink); }
 .lib-empty .lib-empty__error {

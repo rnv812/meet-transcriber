@@ -1,10 +1,20 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { CommandResult, Snapshot } from "../../lib/types";
 import { LibraryEmpty } from "./LibraryEmpty";
+
+const drop = vi.hoisted(() => ({ handler: null as null | ((e: unknown) => void) }));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: async (fn: (e: unknown) => void) => {
+      drop.handler = fn;
+      return () => {};
+    },
+  }),
+}));
 
 /** Пустая библиотека: сияние, «Записей пока нет», «Начать запись», «Импортировать файл», автозапись. */
 
@@ -80,4 +90,26 @@ test("ошибка импорта видна", async () => {
   render(<LibraryEmpty endpoint={ep} snapshot={snap()} />);
   await userEvent.click(screen.getByRole("button", { name: "Импортировать файл" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("call.m4a: формат не поддерживается");
+});
+
+test("файл, брошенный в окно, импортирует страница (списка и зоны импорта нет); ошибки по файлам видны", async () => {
+  drop.handler = null;
+  vi.spyOn(shell, "inTauri").mockReturnValue(true);
+  const imp = vi.spyOn(api, "importFile").mockImplementation(async (_ep, path: string) => {
+    if (path.endsWith("b.mp3")) throw new Error("формат не поддерживается");
+    return { ok: true } as never;
+  });
+  const onImported = vi.fn();
+  const { container } = render(<LibraryEmpty endpoint={ep} snapshot={snap()} onImported={onImported} />);
+  await vi.waitFor(() => expect(drop.handler).not.toBeNull());
+  act(() => drop.handler!({ payload: { type: "over", paths: [], position: { x: 1, y: 1 } } }));
+  expect(container.querySelector(".lib-empty--over")).not.toBeNull();
+  act(() => drop.handler!({ payload: { type: "drop", paths: ["D:/calls/a.m4a", "D:/calls/b.mp3"] } }));
+  await waitFor(() => expect(onImported).toHaveBeenCalled());
+  expect(imp).toHaveBeenCalledWith(ep, "D:/calls/a.m4a");
+  expect(imp).toHaveBeenCalledWith(ep, "D:/calls/b.mp3");
+  expect(screen.getByRole("alert")).toHaveTextContent("b.mp3: формат не поддерживается");
+  expect(container.querySelector(".lib-empty--over")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть ошибки импорта" }));
+  expect(screen.queryByRole("alert")).toBeNull();
 });

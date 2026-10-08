@@ -9,7 +9,8 @@
  * тема блока вернула бы акцент и сияние палитры по умолчанию.
  *
  * «Записей пока нет», пояснение, «Начать запись» (та же команда, что у кнопки в
- * рейке), «Импортировать файл» (тот же выбор файла, что у зоны импорта) и
+ * рейке), «Импортировать файл» и файл, брошенный в окно (тот же импорт, что у зоны
+ * над списком, — `useImportFiles`: списка здесь нет, импорт ведёт страница) и
  * стеклянная плашка «Автозапись включена: Zoom, …» из `auto_record.processes`
  * (имена программ — из каталога «Программы звонков») или «Автозапись
  * выключена».
@@ -17,14 +18,13 @@
 
 import { useEffect, useState } from "react";
 
-import { type Endpoint, importFile, recordingCommand } from "../../lib/api";
+import { type Endpoint, recordingCommand } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { OS } from "../../lib/platform";
-import { inTauri, pickMedia } from "../../lib/shell";
 import type { AutoRecord, Snapshot } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { callPrograms } from "../settings/CallPrograms";
-import { BROWSER_HINT } from "./ImportZone";
+import { ImportErrors, useImportFiles } from "./ImportZone";
 import "./library-empty.css";
 
 const lower = (s: string) => s.toLowerCase();
@@ -78,25 +78,12 @@ export function LibraryEmpty({ endpoint, snapshot, onSnapshot, onImported }: {
       setError(errorText(e));
     }
   };
-  const importOne = async () => {
-    if (!endpoint) return;
-    setError(null);
-    if (!inTauri()) {
-      setError(BROWSER_HINT);
-      return;
-    }
-    const path = await pickMedia();
-    if (!path) return;
-    try {
-      await importFile(endpoint, path);
-    } catch (e) {
-      setError(`${path.split(/[\\/]/).pop() || path}: ${errorText(e)}`);
-    }
-    onImported?.();
-  };
+  // Список (и зона импорта над ним) не показан — файл, брошенный в окно, импортирует эта страница.
+  const files = useImportFiles(endpoint, onImported);
 
   return (
-    <div className="empty aurora aurora--live lib-empty" data-theme="dark" data-aurora={palette}>
+    <div className={`empty aurora aurora--live lib-empty${files.over ? " lib-empty--over" : ""}`} data-theme="dark"
+      data-aurora={palette} {...files.browserDrop}>
       <h2 className="lib-empty__title">Записей пока нет</h2>
       <p className="lib-empty__text">
         {auto?.enabled
@@ -107,11 +94,12 @@ export function LibraryEmpty({ endpoint, snapshot, onSnapshot, onImported }: {
         <Button variant="primary" size="lg" disabled={!endpoint || recording} onClick={start}>
           <i className="lib-empty__dot" aria-hidden="true" />Начать запись
         </Button>
-        <Button size="lg" className="lib-empty__import" disabled={!endpoint} onClick={importOne}>
+        <Button size="lg" className="lib-empty__import" disabled={!endpoint} onClick={files.choose}>
           Импортировать файл
         </Button>
       </div>
       {error && <p className="lib-empty__error" role="alert">{error}</p>}
+      <ImportErrors errors={files.errors} onClose={files.clearErrors} className="lib-empty__error" />
       {auto && (
         <span className="glass lib-empty__auto">
           <i className={`lib-empty__auto-dot${auto.enabled ? " lib-empty__auto-dot--on" : ""}`} aria-hidden="true" />

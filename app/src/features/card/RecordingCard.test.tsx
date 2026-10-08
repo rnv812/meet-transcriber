@@ -205,6 +205,31 @@ test("расшифровывается: бейдж и этапы, анализ �
   await waitFor(() => expect(stages[3]).toHaveTextContent("Claude Code, после расшифровки"));
 });
 
+test("расшифровывается: пока сведения о модели не пришли — без «подключите модель»", async () => {
+  load({ has_transcript: false }, null);
+  vi.mocked(api.getSettings).mockResolvedValue({ analysis: { auto: true } });
+  vi.mocked(api.getAssistant).mockReturnValue(new Promise(() => {}));
+  render(<RecordingCard id="r1" endpoint={ep} jobs={[job({ done: 0.5, total: 1 })]} />);
+  await screen.findByText("Расшифровывается");
+  const analysis = () => within(screen.getByRole("list", { name: "Этапы расшифровки" })).getAllByRole("listitem")[3]!;
+  // Настройки прочитаны (авто-анализ включён) — уже не «по кнопке».
+  await waitFor(() => expect(analysis()).not.toHaveTextContent("по кнопке"));
+  expect(analysis()).toHaveTextContent("после расшифровки");
+  expect(analysis()).not.toHaveTextContent("подключите модель");
+});
+
+test("«Идёт запись»: ответ команды уходит наверх снимком (onSnapshot)", async () => {
+  load({ has_transcript: false }, null);
+  const snapshot = { status: "recording", source: "manual", folder: "C:/rec/r1", elapsed_s: 5, levels: {} };
+  const stopped = { ...snapshot, status: "idle", ok: true, action: "stop" };
+  const command = vi.spyOn(api, "recordingCommand").mockResolvedValue(stopped as never);
+  const onSnapshot = vi.fn();
+  render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot as never} onSnapshot={onSnapshot} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Остановить и сохранить" }));
+  expect(command).toHaveBeenCalledWith(ep, "stop");
+  expect(onSnapshot).toHaveBeenCalledWith(stopped);
+});
+
 const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({
   active: true, starting: false, stopping: false, folder: "C:\\rec\\r1", error: null, started_at: 1, ...o,
 });
