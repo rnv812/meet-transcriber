@@ -49,7 +49,10 @@ V4 (0.3.6, v4-design §5.1, §12):
   `config.toml` пользователя не загружается (`--ignore-user-config`, вход
   остаётся); выключены приложения, браузер, управление компьютером (`--disable
   apps browser_use computer_use in_app_browser`) и веб-поиск (`-c
-  web_search="disabled"` — [ключ не проверен]);
+  tools.web_search=false` — ключ `[tools] web_search` из config.toml Codex,
+  сверено с полями config разобранного `codex.exe` 0.160.0; флаг `--search`,
+  который его включает, у `codex exec` отсутствует, так что по умолчанию он и
+  так выключен — ключ держит его выключенным и при своём config пользователя);
 * `none` — рабочая папка (`-C`) — папка встречи; читать файлы вне неё
   песочнице не запретить — только инструкция; `read` — постоянная папка
   сеансов.
@@ -177,7 +180,7 @@ def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
     for feature in _NONE_FEATURES:
         out += ["--disable", feature]
     if access != "user":
-        out += ["-c", 'web_search="disabled"']
+        out += ["-c", "tools.web_search=false"]
     return out
 
 

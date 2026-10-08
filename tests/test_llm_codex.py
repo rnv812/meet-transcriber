@@ -500,7 +500,7 @@ def test_every_free_turn_is_read_only_without_mcp_apps_or_web(monkeypatch, tmp_p
     assert "mcp_servers.team-jira.enabled=false" in overrides
     assert "mcp_servers.team-gitlab.enabled=false" in overrides
     assert not any("off" in o for o in overrides)
-    assert 'web_search="disabled"' in overrides
+    assert "tools.web_search=false" in overrides
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--disable"] == FEATURES
     assert "--ignore-user-config" not in cmd
     assert (cmd[cmd.index("-C") + 1] == str(meeting)) is (access == "none")
@@ -574,7 +574,7 @@ def test_a_user_turn_writes_working_folders_with_auto_review(monkeypatch, tmp_pa
     assert cmd[cmd.index("--sandbox") + 1] == "workspace-write" and "--approve-for-me" in cmd
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"] == [str(meeting), str(kb)]
     overrides = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-c"]
-    assert "mcp_servers.team-jira.enabled=false" in overrides and 'web_search="disabled"' not in overrides
+    assert "mcp_servers.team-jira.enabled=false" in overrides and "tools.web_search=false" not in overrides
     assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--disable"] == FEATURES
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
 
