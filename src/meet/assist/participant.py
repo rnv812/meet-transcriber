@@ -40,19 +40,22 @@
 `read` / `search` / `list` — только у модели без инструментов (иначе —
 пометка в журнал процесса).
 
-**Свобода по согласию** (0.3.7, A1, fix round 1; `freedom`, настройка
-`assist.agent_freedom`, по умолчанию вкл.) — `meet.llm.consent`. Перед
-каждым ходом Meet ставит уровень согласия (`consent_level`): ход по
-репликам, 👍/👎, «Не надо» — NONE (читать можно только папку встречи и
-вложения), сообщение пользователя, ❓, кнопка агента — READ (осторожное
-чтение без вопросов). Claude Code: каждый вызов инструмента решают ворота
-(`ConsentGate`, хук PreToolUse и `can_use_tool`); всё, что не осторожное
-чтение, в ходе READ — **карточка Meet** в чате (`card: "confirm"`, точный
-вызов, [Разрешить один раз] [Отклонить]; `confirm`); ответ CLI держится до
-решения (не дольше `consent.CONFIRM_TIMEOUT_S`). Отказы хода — строкой в
-чате. Повтор хода после сбоя согласия не повторяет (`_replayed`). Codex и
-OpenCode остановить вызов не дают — им со свободой только чтение файлов
-(`access`). Выключено — как в 0.3.6.
+**Свобода** (0.3.7, A1; 0.4 — «как CLI»; `freedom`, настройка
+`assist.agent_freedom`, по умолчанию вкл.; `agent_mode` — `assist.agent_mode`:
+`auto` / `confirm`) — `meet.llm.consent`. Перед каждым ходом Meet ставит
+уровень хода (`consent_level`): только реплики, 👍/👎, «Не надо», повтор
+после сбоя — NONE (только чтение рабочих папок и вложений, что бы ни
+прозвучало на встрече), ❓ — READ (чтение без карточек), сообщение
+пользователя, кнопка агента, слэш-команда — USER (автомод: действует сам,
+карточка Meet — только удаление, запись вне рабочих папок, отправка
+наружу, MCP-изменения; в режиме `confirm` — на каждое действие, как
+0.3.7). Claude Code: каждый вызов решают ворота (`ConsentGate`, хук
+PreToolUse и `can_use_tool`), карточка — в чате (`card: "confirm"`); ответ
+CLI держится до решения (не дольше `consent.CONFIRM_TIMEOUT_S`). Отказы
+хода — строкой в чате. Codex и OpenCode остановить вызов не дают: в ходе
+USER они правят рабочие папки и выполняют команды сами, а рискованное им
+запрещено (`access`, `work_dirs`). «Личный» отличается только промптом.
+Выключено — как в 0.3.6.
 
 **Страховка** — единственная: не больше одного нового сообщения агента за
 `merge_window_s` (15 с). Лишнее склеивается с последним сообщением агента
@@ -133,7 +136,6 @@ NOTE_STOPPED = "Пользователь остановил твой прошл�
 EXPLAIN_REQUEST = ("❓ к твоему сообщению: поясни его — на что ты опирался и что предлагаешь "
                    "(как реакция ❓ во время встречи).")
 TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
-PERSONAL_NO_KB = "в профиле «Личный» базы знаний и прошлых встреч нет — ответь по тому, что услышал"
 SHUTDOWN_ERROR = "ассистент остановлен"
 NOTHING_TO_ADD = "Ассистенту нечего добавить"
 # ❓ остался без пояснения: человек остановил ответ.
@@ -258,7 +260,7 @@ class _RunnerSession:
 
     def __init__(self, runner, provider: str, *, system, session_id: str | None,
                  resumable: bool, allowed_dirs=(), deny_paths=(), call_kwargs=None,
-                 freedom: bool = False) -> None:
+                 freedom: bool = False, mode: str = consent.MODE_AUTO, work_dirs=()) -> None:
         self._runner = runner
         self._provider = provider
         self._system = system          # () -> str: частота могла смениться
@@ -268,6 +270,8 @@ class _RunnerSession:
         self._deny = tuple(deny_paths)
         self._kwargs = dict(call_kwargs or {})
         self._freedom = freedom
+        self._mode = mode
+        self._work = tuple(work_dirs)
 
     @property
     def has_context(self) -> bool:
@@ -282,7 +286,10 @@ class _RunnerSession:
         if self._resumable:
             extra = {"resume": self.session_id} if self.session_id else {"keep_session": True}
         if self._freedom:
-            extra["access"] = level   # уровень согласия хода → флаги и права вызова
+            # Уровень хода → флаги и права вызова. Спросить каждое действие
+            # Codex и OpenCode не умеют: в режиме `confirm` просьба — только чтение.
+            extra["access"] = consent.READ if level == consent.USER and self._mode != consent.MODE_AUTO else level
+            extra["work_dirs"] = self._work
         reply = await self._runner(text, system_prompt=self._system(), images=list(images or ()),
                                    deny_paths=self._deny, allowed_dirs=self._allowed,
                                    timeout_s=timeout_s, max_turns=12, on_text=on_text,
@@ -377,11 +384,11 @@ class Participant:
     дорасшифровать хвост речи перед ответом пользователю; `clock` — часы
     (тесты — поддельные); `after_meeting` — разговор после встречи (задача
     «Продолжить разговор»): у записей нет секунд встречи `t`; `profile` —
-    профиль сессии (`work` / `personal`, 0.3.7): в «Личном» нет карты
-    базы знаний, базы и библиотеки в папках модели и запасных запросов к
-    базе; со свободой — ворота отказывают в базе и библиотеке на любом
-    уровне согласия (`_profile_blocked_roots`), MCP пользователя не
-    подключаются. `ephemeral` —
+    профиль сессии (`work` / `personal`, 0.3.7; 0.4 — только промпт): в
+    «Личном» свой промпт без карты базы, контекста задачи и глоссария, а
+    папки, MCP и ворота — те же, что в «Рабочей встрече». `agent_mode` — как
+    действует ассистент по просьбе (`auto` / `confirm`, `assist.agent_mode`).
+    `ephemeral` —
     временная встреча (`meet.temp_meeting`): сеанс провайдера не сохраняется
     нигде (Claude Code `--no-session-persistence`, Codex `--ephemeral`,
     OpenCode — сеанс удаляется после вызова), нового хода без живого
@@ -401,7 +408,7 @@ class Participant:
                  min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S,
                  after_meeting: bool = False, seed_until: str | None = None,
                  profile=pp.DEFAULT_PROFILE, ephemeral: bool = False,
-                 freedom: bool = False) -> None:
+                 freedom: bool = False, agent_mode: str = consent.MODE_AUTO) -> None:
         from meet import llm
 
         self._bus = bus
@@ -447,8 +454,12 @@ class Participant:
         self.tools = provider in TOOL_PROVIDERS
         # Свобода по согласию — только у модели со своими инструментами.
         self.freedom = bool(freedom) and self.tools
+        self.agent_mode = agent_mode if agent_mode in consent.MODES else consent.MODE_AUTO
         self._gate: consent.ConsentGate | None = None
         self._mcp: list[str] | None = None
+        # Режим, в котором CLI на самом деле запустился (`system/init` →
+        # `permissionMode`, `Conversation.permission_mode`); None — ещё не известен.
+        self._permission_mode: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._cards: dict[str, asyncio.Event] = {}     # карточки, которые ждут решения
         self._grant_ids: dict[str, str] = {}           # id записи журнала → ключ разрешения
@@ -594,26 +605,57 @@ class Participant:
                          "materials": self._materials, "images": self._images}}
 
     def _can(self) -> dict:
-        """Что агент может (шапка окна «может: …»): `consent` — Claude Code,
-        всё по согласию (`mcp` — имена MCP-серверов, если CLI их назвал;
-        None — неизвестно); `files` — Codex/OpenCode со свободой: только
-        чтение файлов по просьбе; `read` — без свободы: чтение встречи и базы;
-        `meet` — просит Meet (локальная модель)."""
+        """Что агент может (шапка окна «может: …»): `consent` — Claude Code
+        со свободой (`mcp` — имена MCP-серверов, если CLI их назвал; None —
+        неизвестно); `act` — Codex/OpenCode со свободой в автомоде: правит
+        рабочие папки и выполняет команды сам, без MCP и рискованного;
+        `files` — они же в режиме `confirm`: только чтение файлов по просьбе;
+        `read` — без свободы: чтение встречи и базы; `meet` — просит Meet
+        (локальная модель). Со свободой — ещё `agent_mode` (`auto` /
+        `confirm`) и у Claude Code `auto` — работает ли автомод на деле (None
+        — CLI ещё не сообщил режим; False — «Автомод недоступен — спрашиваю
+        каждое действие»)."""
         if self.freedom and self.provider == "claude-code":
-            return {"mode": "consent", "mcp": list(self._mcp) if self._mcp is not None else None}
+            auto = None
+            if self.agent_mode == consent.MODE_AUTO and self._permission_mode is not None:
+                auto = self._permission_mode == "auto"
+            return {"mode": "consent", "mcp": list(self._mcp) if self._mcp is not None else None,
+                    "agent_mode": self.agent_mode, "auto": auto}
         if self.freedom:
-            return {"mode": "files", "mcp": None}
+            mode = "act" if self.agent_mode == consent.MODE_AUTO else "files"
+            return {"mode": mode, "mcp": None, "agent_mode": self.agent_mode}
         return {"mode": "read" if self.tools else "meet", "mcp": None}
 
     def _update_mcp(self, session) -> None:
-        servers = getattr(session, "mcp_servers", None)
-        if not self.freedom or not isinstance(servers, list):
+        """После хода: MCP-серверы и режим, в котором CLI на деле работает."""
+        if not self.freedom:
             return
-        names = [str(x.get("name")) for x in servers
-                 if isinstance(x, dict) and x.get("name") and x.get("status") not in ("failed", "disabled")]
-        if names != self._mcp:
-            self._mcp = names
+        changed = False
+        conv = getattr(session, "conv", None)
+        mode = getattr(conv, "permission_mode", None) if conv is not None else None
+        if isinstance(mode, str) and mode != self._permission_mode:
+            self._permission_mode = mode
+            changed = True
+        servers = getattr(session, "mcp_servers", None)
+        if isinstance(servers, list):
+            names = [str(x.get("name")) for x in servers
+                     if isinstance(x, dict) and x.get("name") and x.get("status") not in ("failed", "disabled")]
+            if names != self._mcp:
+                self._mcp = names
+                changed = True
+        if changed:
             self._changed()
+
+    def on_tool_event(self, event: dict) -> None:
+        """Точка подключения хода работы в чате (0.4, спец. §3 «Ход работы —
+        как в Claude CLI»): события вызова инструмента от `claude_stream`
+        (`send(on_event=…)`: `tool_use`, `tool_result`, `gate`, `hook`; общий
+        ключ — `id` вызова) станут записями журнала `kind: "tool"` (патчи по
+        `id`: `name`, `server`, `summary`, `input_preview`, `status`,
+        `output_preview`, `duration_ms`, `gate` — `consent.Decision.row()`).
+        Запись в журнал и окно — следующая задача; пока события не хранятся.
+        В журнал процесса — только вид и исход вызова, без текста (CLAUDE.md)."""
+        return None
 
     async def snapshot(self, limit: int | None = 200) -> dict:
         """Лента (`ChatLog.snapshot(feed=True)`), состояние агента и текст,
@@ -743,75 +785,51 @@ class Participant:
 
     # --- сессия ---
 
+    def _kb_root(self):
+        return self._kb.root if self._kb is not None and getattr(self._kb, "configured", False) else None
+
     def _folders(self) -> dict[str, str]:
-        if self.profile == pp.PERSONAL:
-            # «Личный»: ни базы знаний, ни библиотеки — только своя папка
-            # (вложения пользователя разбираются в неё).
-            return {"Папка этой записи": str(self._folder)}
+        """Папки для промпта (с инструментами): у обоих профилей одни и те же
+        (0.4: «Личный» — только промпт), подписи — по профилю."""
+        personal = self.profile == pp.PERSONAL
         out = {}
-        if self._kb is not None and getattr(self._kb, "configured", False):
-            out["База знаний"] = str(self._kb.root)
+        if self._kb_root() is not None:
+            out["База знаний"] = str(self._kb_root())
         if self._library_root is not None:
-            out["Библиотека встреч"] = str(self._library_root)
-        out["Эта встреча"] = str(self._folder)
+            out["Прошлые записи" if personal else "Библиотека встреч"] = str(self._library_root)
+        out["Эта запись" if personal else "Эта встреча"] = str(self._folder)
         return out
 
     def _add_dirs(self) -> list[str]:
-        """Папки на чтение модели (`add_dirs` Claude Code, `allowed_dirs`
-        остальных): папка встречи, в «Рабочей встрече» — ещё база знаний и
-        библиотека встреч."""
-        if self.profile == pp.PERSONAL:
-            return [str(self._folder)]
-        return [str(d) for d in (self._folder,
-                                 self._kb.root if self._kb is not None and self._kb.configured else None,
-                                 self._library_root) if d]
+        """Папки модели (`add_dirs` Claude Code, `allowed_dirs` остальных):
+        папка записи, база знаний и библиотека встреч — у обоих профилей."""
+        return [str(d) for d in (self._folder, self._kb_root(), self._library_root) if d]
 
-    def _profile_blocked_roots(self) -> list[str]:
-        """Что профиль закрывает целиком: в «Личном» — база знаний и
-        библиотека встреч (кроме папки этой записи, она внутри библиотеки).
-
-        Точка подключения для ворот A1 (`v037/agent-freedom`, `llm/consent.py`):
-        при слиянии ворота должны отказывать в чтении этих путей на любом
-        уровне согласия — как `kb_exclude`. Здесь, без ворот, барьер — папки
-        модели (`_add_dirs`) и правила запрета Claude Code (`_deny`) для
-        базы знаний, если папка записи не внутри неё."""
-        if self.profile != pp.PERSONAL:
-            return []
-        out = []
-        if self._kb is not None and getattr(self._kb, "configured", False):
-            out.append(str(self._kb.root))
-        if self._library_root is not None:
-            out.append(str(self._library_root))
-        return out
+    def _work_dirs(self) -> list[str]:
+        """Рабочие папки кроме папки записи (ворота, Codex `--add-dir`,
+        OpenCode `external_directory`): база знаний. Библиотека — нет: запись
+        в неё вне своей папки идёт карточкой (у Codex и OpenCode — запрещена)."""
+        return [str(self._kb_root())] if self._kb_root() is not None else []
 
     def _deny(self) -> list[str]:
-        """Запреты сеанса: `kb_exclude`, в «Личном» — и корни профиля,
-        которые не содержат папку записи (запрет библиотеки закрыл бы и её)."""
-        deny = list(self._deny_paths)
-        folder = self._folder.resolve() if self._folder.exists() else self._folder
-        for root in self._profile_blocked_roots():
-            path = Path(root)
-            try:
-                inside = folder.is_relative_to(path.resolve() if path.exists() else path)
-            except (OSError, ValueError):
-                inside = True
-            if not inside and root not in deny:
-                deny.append(root)
-        return deny
+        """Запреты сеанса: `kb_exclude`."""
+        return list(self._deny_paths)
 
     def system_prompt(self) -> str:
+        actions = self.provider == "claude-code"
         if self.profile == pp.PERSONAL:
+            # Карта, контекст задачи и глоссарий — содержание промпта «Рабочей встречи».
             return pp.build_system(
                 frequency=self.frequency, tools_available=self.tools, owner_name=self._owner_name,
                 folders=self._folders() if self.tools else None, profile=pp.PERSONAL,
-                freedom=self.freedom, actions=self.provider == "claude-code")
+                freedom=self.freedom, actions=actions, mode=self.agent_mode)
         return pp.build_system(
             frequency=self.frequency, tools_available=self.tools, kb_map=self._kb_map,
             owner_name=self._owner_name,
             kb_exclude=tuple(getattr(self._kb, "exclude", ()) or ()) if self._kb is not None else (),
             folders=self._folders() if self.tools else None,
             glossary=self._glossary, task_context=self._task_context, freedom=self.freedom,
-            actions=self.provider == "claude-code")
+            actions=actions, mode=self.agent_mode)
 
     def _gather(self) -> dict:
         """Карта, запреты, материалы — один раз на сессию (в потоке)."""
@@ -869,34 +887,27 @@ class Participant:
             return self._session
         await self._load_info()
         dirs = self._add_dirs()
-        # `kb_exclude` и — в «Личном» — корень базы знаний, если запись не
-        # внутри неё (правило CLI у Claude Code, права у OpenCode, просьба у Codex).
+        # `kb_exclude` (правило CLI у Claude Code, права у OpenCode, просьба у Codex).
         deny = self._deny()
         if self.provider == "claude-code":
             extra = {}
             if self.freedom:
-                # Свобода по согласию: без вопросов CLI — только папка встречи;
-                # остальное (база, библиотека, «Загрузки», MCP…) решают ворота,
-                # действия — карточкой Meet по каждому вызову.
+                # Свобода (0.4): каждый вызов решают ворота — сами, автомодом
+                # CLI (`auto`) или карточкой Meet (рискованное; в `confirm` —
+                # всё). Папки, MCP и ворота у обоих профилей одни.
                 self._loop = asyncio.get_running_loop()
                 cwd = await asyncio.to_thread(_agent_cwd)
                 sensitive = await asyncio.to_thread(consent.sensitive_paths, library_root=self._library_root)
-                # «Личный»: база знаний и библиотека (кроме своей папки)
-                # закрыты на любом уровне согласия, разрешения их не открывают.
-                self._gate = consent.ConsentGate(own_dirs=[self._folder], deny_paths=self._deny_paths,
-                                                 sensitive=sensitive, cwd=cwd, log=self._log,
-                                                 confirmer=self._confirm_sync,
-                                                 blocked_roots=self._profile_blocked_roots())
+                self._gate = consent.ConsentGate(
+                    own_dirs=[self._folder], work_dirs=self._work_dirs(), deny_paths=self._deny_paths,
+                    sensitive=sensitive, cwd=cwd, log=self._log, confirmer=self._confirm_sync,
+                    mode=self.agent_mode,
+                    ask_text=pp.ASK_FIRST_PERSONAL if self.profile == pp.PERSONAL else consent.ASK_FIRST)
                 self._gate.allow_paths(await self._io(self._attached_paths))
                 for gid, key, label in await self._io(self._load_grants):
                     self._grant_ids[gid], self._grant_labels[gid] = key, label
                     self._gate.add_grant(key, label)
-                dirs = [str(self._folder)]
-                extra.update(gate=self._gate, cwd=cwd)
-                if self.profile == pp.PERSONAL:
-                    # MCP пользователя (корпоративная база, Jira…) — та же база
-                    # знаний другим путём: в «Личном» их нет.
-                    extra["mcp"] = False
+                extra.update(gate=self._gate, cwd=cwd, mode=self.agent_mode)
                 # Закрытые данные — ещё и правилами CLI (Grep по папке выше их не прочтёт).
                 deny += [str(p) for p in sensitive if p.exists()]
             conv = self._conversation(
@@ -916,7 +927,8 @@ class Participant:
                 self._runner, self.provider, system=self.system_prompt,
                 session_id=self._stored_sid, resumable=self.resumable,
                 allowed_dirs=dirs, deny_paths=deny, call_kwargs=self._call_kwargs,
-                freedom=self.freedom)
+                freedom=self.freedom, mode=self.agent_mode,
+                work_dirs=[str(self._folder), *self._work_dirs()])
         self._session_profile = self.profile
         self._changed()
         return self._session
@@ -934,18 +946,23 @@ class Participant:
         return out
 
     def consent_level(self, inputs) -> str:
-        """Согласие хода (`meet.llm.consent`): сообщение пользователя, ❓,
-        кнопка агента — READ (кроме «Не надо»: `click_level`); реплики
-        встречи, 👍/👎 — NONE. Повтор после сбоя (`_replayed`) согласия не
-        даёт: его даёт только свежий ввод пользователя."""
+        """Уровень хода (`meet.llm.consent`, 0.4): сообщение пользователя,
+        кнопка агента (кроме отказа — `click_level`), слэш-команда — USER;
+        ❓ (реакция во время встречи, `via: "reaction"` после неё) — READ;
+        реплики встречи, 👍/👎 — NONE. Повтор после сбоя (`_replayed`)
+        уровня не даёт: его даёт только свежий ввод пользователя. Кто
+        просил, решает Meet: просьбу из речи встречи классификатор CLI не
+        отличит."""
         level = consent.NONE
         for m in inputs.user:
             if m.get("_replayed"):
                 continue
             if m.get("via") == "button":
                 level = consent.higher(level, consent.click_level(m.get("text") or ""))
-            else:
+            elif m.get("via") == "reaction":
                 level = consent.higher(level, consent.READ)
+            else:
+                level = consent.higher(level, consent.USER)
         for r in inputs.reactions:
             if r.get("emoji") == "❓" and r.get("on") is not False and not r.get("_replayed"):
                 level = consent.higher(level, consent.READ)
@@ -1762,10 +1779,6 @@ class Participant:
     def _tool_call(self, action) -> tuple[str, str | None]:
         from meet.assist.kb_prep import KnowledgeBase
 
-        if self.profile == pp.PERSONAL:
-            # Запасной путь — только база знаний и прошлые встречи: в
-            # «Личном» их нет (вложения уходят агенту в ходе сами).
-            return "", PERSONAL_NO_KB
         kb = self._kb or KnowledgeBase(None, library_root=self._library_root)
         if action.kind == "read":
             return _read_text(kb.kb_read(list(action.paths)))
@@ -2225,7 +2238,9 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
         frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
         proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log,
         profile=session_profile(chatlog, cfg.assist.profile, profile),
-        freedom=getattr(cfg.assist, "agent_freedom", False), **kwargs)
+        freedom=getattr(cfg.assist, "agent_freedom", False),
+        # `assist.agent_mode` (0.4) заводит задача настроек; до неё — автомод.
+        agent_mode=getattr(cfg.assist, "agent_mode", consent.MODE_AUTO), **kwargs)
 
 
 # --- помощники ---

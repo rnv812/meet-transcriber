@@ -5,8 +5,8 @@
   карты, правил базы знаний и рабочей рамки, со своей ролью и примерами;
 - смена профиля по ходу — пометка в ходе, сеанс модели пересоздаётся с
   продолжением; профиль — в журнале встречи (`sessions.json`);
-- в «Личном» база знаний и библиотека не в папках модели, запасные
-  запросы к базе выключены;
+- 0.4: «Личный» — только промпт: папки модели, MCP, ворота и запасные
+  запросы к базе — те же, что в «Рабочей встрече»;
 - настройка `assist.profile`, маршруты ребёнка и резидента.
 
 Модель не зовётся: поддельные диалог и runner, журнал и шина — настоящие, во
@@ -24,7 +24,7 @@ from meet.assist import participant_prompts as pp
 from meet.assist.bus import TranscriptBus
 from meet.assist.chatlog import ChatLog
 from meet.assist.kb_prep import KnowledgeBase
-from meet.assist.participant import PERSONAL_NO_KB, Participant, from_settings, session_profile
+from meet.assist.participant import Participant, from_settings, session_profile
 from meet.settings import Settings
 
 from test_assist_participant import SILENT, FakeRunner, _make, publish, run, say
@@ -72,9 +72,12 @@ def test_personal_prompt_has_no_work_or_kb_wording(tools, frequency):
     text = pp.build_system(profile="personal", frequency=frequency, tools_available=tools,
                            kb_map="Проекты/\n  План запуска.md\nВстречи/\n  Ретро.md",
                            owner_name="Ирина", kb_exclude=("Личное/",),
-                           folders={"Папка этой записи": "C:/rec/s1"},
+                           folders={"Эта запись": "C:/rec/s1"},
                            glossary="SLA — соглашение", task_context="Запуск Альфы")
-    assert _work_hits(text) == []
+    # 0.4: база знаний названа только правилом «по просьбе» (доступ тот же, что у работы).
+    sources = pp._PERSONAL_SOURCES_TOOLS if tools else pp._PERSONAL_SOURCES
+    assert sources in text
+    assert _work_hits(text.replace(sources, "")) == []
     for leaked in ("План запуска", "Ретро", "Личное", "SLA", "Альф", "ДАННЫЕ\nПроекты"):
         assert leaked not in text
     assert "# База знаний" not in text and "# Карта базы знаний" not in text
@@ -97,7 +100,7 @@ def test_personal_prompt_has_no_work_or_kb_wording(tools, frequency):
     # Протокол и реакции — те же.
     assert '{"silent": true}' in text and "👎 «Не по теме»" in text and '"explains"' in text
     if tools:
-        assert "C:/rec/s1" in text
+        assert "C:/rec/s1" in text and "только по его просьбе" in text
     else:
         assert "C:/rec/s1" not in text
 
@@ -193,7 +196,8 @@ def test_work_session_keeps_kb_and_library_in_add_dirs(tmp_path):
     assert str(tmp_path / "kb") not in kw["deny_paths"]
 
 
-def test_personal_session_has_no_map_no_kb_dirs_and_denies_the_kb(tmp_path):
+def test_personal_session_has_no_map_but_the_same_folders(tmp_path):
+    """0.4: «Личный» — только промпт: папки модели и запреты те же, карты нет."""
     p, h, chat, clock, made = _participant(tmp_path, profile="personal", script=[SILENT])
 
     async def main():
@@ -205,10 +209,11 @@ def test_personal_session_has_no_map_no_kb_dirs_and_denies_the_kb(tmp_path):
 
     run(main())
     kw = made[0].kwargs
-    assert kw["add_dirs"] == [str(p._folder)]                    # ни базы, ни библиотеки
-    assert str(tmp_path / "kb") in kw["deny_paths"]              # база — ещё и запрет CLI
-    assert str(tmp_path / "lib") not in kw["deny_paths"]         # библиотека держит папку записи
-    assert "План запуска" not in kw["system_prompt"] and _work_hits(kw["system_prompt"]) == []
+    assert kw["add_dirs"] == [str(p._folder), str(tmp_path / "kb"), str(tmp_path / "lib")]
+    assert str(tmp_path / "kb") not in kw["deny_paths"] and "mcp" not in kw
+    assert "План запуска" not in kw["system_prompt"]
+    # База знаний названа только правилом «по просьбе» и подписью папки.
+    assert [w for w in _work_hits(kw["system_prompt"]) if w != r"баз\w* знаний"] == []
     sent = made[0].sent[0][0]
     assert sent.startswith(pp.SEED_NEW_PERSONAL) and "План запуска" not in sent
     assert pp.H_TRANSCRIPT_PERSONAL in sent
@@ -216,10 +221,10 @@ def test_personal_session_has_no_map_no_kb_dirs_and_denies_the_kb(tmp_path):
     assert view["profile"] == "personal" and view["sees"]["kb"] is False
     assert view["sees"]["kb_docs"] is False
     assert chat.profile() == "personal"                           # журнал встречи помнит профиль
-    assert p._profile_blocked_roots() == [str(tmp_path / "kb"), str(tmp_path / "lib")]
+    assert not hasattr(p, "_profile_blocked_roots")
 
 
-def test_personal_runner_gets_only_the_meeting_folder(tmp_path):
+def test_personal_runner_gets_the_same_folders(tmp_path):
     runner = FakeRunner([SILENT])
     p, h, _chat, clock, _made = _participant(tmp_path, provider="codex", profile="personal",
                                                runner=runner)
@@ -233,15 +238,15 @@ def test_personal_runner_gets_only_the_meeting_folder(tmp_path):
 
     run(main())
     (_prompt, kw), = runner.calls
-    assert list(kw["allowed_dirs"]) == [str(p._folder)]
+    assert list(kw["allowed_dirs"]) == [str(p._folder), str(tmp_path / "kb"), str(tmp_path / "lib")]
     assert "План запуска" not in kw["system_prompt"]
 
 
-def test_personal_disables_the_kb_fallback_for_a_local_model(tmp_path, monkeypatch):
+def test_personal_keeps_the_kb_fallback_for_a_local_model(tmp_path, monkeypatch):
+    """0.4: запасные запросы к базе в «Личном» не выключены (доступ тот же);
+    промпт «Личного» их не рекламирует."""
     calls = []
-    monkeypatch.setattr(KnowledgeBase, "kb_read", lambda self, *a, **k: calls.append("read"))
-    monkeypatch.setattr(KnowledgeBase, "kb_search", lambda self, *a, **k: calls.append("search"))
-    monkeypatch.setattr(KnowledgeBase, "kb_list", lambda self, *a, **k: calls.append("list"))
+    monkeypatch.setattr(KnowledgeBase, "kb_read", lambda self, *a, **k: calls.append("read") or [])
     from meet.llm.base import AgentReply
 
     runner = FakeRunner([AgentReply(text='{"read": ["Проекты/План запуска.md"]}'),
@@ -251,18 +256,14 @@ def test_personal_disables_the_kb_fallback_for_a_local_model(tmp_path, monkeypat
 
     async def main():
         await p.start()
-        await p.post_user_message("что там с запуском?")
+        await p.post_user_message("загляни в план запуска в базе")
         await p.tick()
         await p.tick()
         await p.shutdown()
 
     run(main())
-    assert calls == []                                    # база не тронута
-    results = [m for m in chat.messages() if m.get("kind") == "tool" and m.get("event") == "result"]
-    assert results and results[0]["error"] == PERSONAL_NO_KB
-    first, second = runner.calls[0][0], runner.calls[1][0]
-    assert '{"read"' not in runner.calls[0][1]["system_prompt"]   # протокола запросов нет
-    assert PERSONAL_NO_KB in second and "Запуск 14.11" not in first + second
+    assert calls == ["read"]
+    assert '{"read"' not in runner.calls[0][1]["system_prompt"]
 
 
 def test_switching_profile_mid_session_sends_the_note_and_restarts_with_resume(tmp_path):
@@ -290,7 +291,7 @@ def test_switching_profile_mid_session_sends_the_note_and_restarts_with_resume(t
     first, second = made
     # Новый процесс — тот же сеанс провайдера, другие папки и промпт.
     assert second.kwargs["resume"] == first.session_id
-    assert second.kwargs["add_dirs"] == [str(p._folder)]
+    assert second.kwargs["add_dirs"] == first.kwargs["add_dirs"]   # папки те же — другой промпт
     assert "План запуска" not in second.kwargs["system_prompt"]
     note = pp.profile_note("personal")
     turn2, turn3 = second.sent[0][0], second.sent[1][0]
@@ -423,9 +424,10 @@ def test_runner_switch_to_personal_starts_a_fresh_seeded_session(tmp_path, provi
     assert "План запуска" in k1["system_prompt"]
     # После смены: прежний сеанс не продолжается — новый, с промптом «Личного» и затравкой.
     assert k2.get("keep_session") is True and "resume" not in k2
-    for text in ("План запуска", "База знаний", "базы знаний", "прошлые встречи"):
+    # 0.4: «Личный» — другой промпт (без карты и правил базы), те же папки.
+    for text in ("План запуска", "# База знаний", "прошлые встречи"):
         assert text not in k2["system_prompt"]
-    assert list(k2["allowed_dirs"]) == [str(p._folder)]
+    assert list(k2["allowed_dirs"]) == list(k1["allowed_dirs"])
     assert p2.startswith((pp.SEED_NEW_PERSONAL, pp.SEED_RESUMED)) and "Профиль: «Личный»" in p2
     assert pp.profile_note("personal") in p2 and "План запуска" not in p2
     # Дальше — продолжение уже нового сеанса.
@@ -490,17 +492,21 @@ def test_task_context_note_still_goes_in_work(tmp_path):
     assert "Запуск Альфы" in made[0].sent[1][0]
 
 
-def test_deny_skips_the_kb_when_the_recording_is_inside_it(tmp_path):
+def test_folders_and_denials_are_the_same_in_both_profiles(tmp_path):
     kb_root = tmp_path / "kb"
     folder = kb_root / "Встречи" / "2026-10-07_10-00"
     folder.mkdir(parents=True)
     from meet.assist.bus import TranscriptBus as Bus
 
-    p = Participant(Bus(), ChatLog(folder, log=lambda _m: None), provider="claude-code",
-                    folder=folder, kb=KnowledgeBase(kb_root, exclude=(), library_root=folder.parent),
-                    library_root=folder.parent, log=lambda _m: None, profile="personal")
-    assert str(kb_root) not in p._deny()          # запрет базы закрыл бы и саму запись
-    assert p._add_dirs() == [str(folder)]
+    def make(profile):
+        return Participant(Bus(), ChatLog(folder, log=lambda _m: None), provider="claude-code",
+                           folder=folder, kb=KnowledgeBase(kb_root, exclude=(), library_root=folder.parent),
+                           library_root=folder.parent, log=lambda _m: None, profile=profile)
+
+    work, personal = make("work"), make("personal")
+    assert personal._deny() == work._deny() == []
+    assert personal._add_dirs() == work._add_dirs() == [str(folder), str(kb_root), str(folder.parent)]
+    assert list(personal._folders().values()) == list(work._folders().values())
 
 
 # --- журнал и сборка по настройкам ------------------------------------------------------
@@ -758,12 +764,12 @@ def test_stored_profile_reads_without_creating_files(tmp_path):
     assert stored_profile(folder) is None
 
 
-def test_profile_note_has_no_work_wording_except_the_kb_ban():
+def test_profile_note_has_no_work_wording_except_the_kb_rule():
     note = pp.profile_note("personal")
-    # База знаний и прошлые записи названы только запретом — явное исключение.
-    allowed = {r"баз\w* знаний", r"документ"}
+    # База знаний и прошлые записи названы только правилом «по просьбе».
+    allowed = {r"баз\w* знаний"}
     assert [w for w in _work_hits(note) if w not in allowed] == []
-    assert "не упоминай их" in note
+    assert "только по его просьбе" in note
 
 
 # --- сводка, итоги и разговор после встречи вне агента (ревью I3) -------------------------
@@ -916,7 +922,7 @@ def test_tray_assistant_reports_the_default_profile(monkeypatch, tmp_path):
     assert state.assistant(probe_local=False)["profile"] == "personal"
 
 
-# --- ворота свободы в «Личном» (ревью I2) ---------------------------------------------
+# --- 0.4: ворота у «Личного» те же (спец. §5: «Личный» — только промпт) -------------------
 
 
 def _gate_dirs(tmp_path):
@@ -933,81 +939,61 @@ def _gate_dirs(tmp_path):
     return lib, rec, other, kb, cwd
 
 
-def _profile_gate(tmp_path, blocked=True):
+def _profile_gate(tmp_path, ask_text=None):
     from meet.llm import consent
 
     lib, rec, other, kb, cwd = _gate_dirs(tmp_path)
-    gate = consent.ConsentGate(own_dirs=[rec], sensitive=[], cwd=cwd,
-                               blocked_roots=[kb, lib] if blocked else ())
+    gate = consent.ConsentGate(own_dirs=[rec], work_dirs=[kb], sensitive=[], cwd=cwd,
+                               ask_text=ask_text or consent.ASK_FIRST)
     return gate, lib, rec, other, kb
 
 
-def test_gate_denies_the_library_and_the_kb_on_every_level(tmp_path):
+def test_personal_gate_opens_the_library_and_the_kb_like_work(tmp_path):
+    """Прежде (0.3.7) — отказ `profile` на любом уровне; теперь доступ как у работы."""
     from meet.llm import consent
 
-    gate, lib, rec, other, kb = _profile_gate(tmp_path)
-    for level in (consent.NONE, consent.READ):
-        gate.begin(level)
-        for data in ({"file_path": str(other / "x.md")},
-                     {"file_path": str(rec / ".." / other.name / "x.md")},     # «..» от своей папки
-                     {"file_path": str(kb / "a.md")}):
-            d = gate.decide("Read", data)
-            assert d.outcome == consent.DENY and d.why == "profile", (level, data)
-            assert d.reason.startswith("Meet заблокировал:") and "«Личный»" in d.reason
-            assert _work_hits(d.reason) == [r"баз\w* знаний"]          # база названа только запретом
-        assert gate.decide("Read", {"file_path": str(rec / "transcript.md")}).allow
-    gate.begin(consent.READ)
-    glob = gate.decide("Glob", {"pattern": "**/*.md", "path": str(lib)})
-    assert glob.outcome == consent.DENY and glob.why == "profile"
-    grep = gate.decide("Grep", {"pattern": "смета", "path": str(lib)})
-    assert grep.why == "profile"
-
-
-def test_gate_profile_denial_beats_grants_and_covers_commands(tmp_path):
-    from meet.llm import consent
-
-    gate, lib, rec, other, kb = _profile_gate(tmp_path)
-    gate.begin(consent.READ)
-    for command in (f'type "{kb}\\a.md"', f'cat "{kb}/a.md"', f"ls -R {lib}", f"rg смета {other}"):
-        data = {"command": command}
-        grant = gate.grant_for("Bash", data)
-        if grant:
-            gate.add_grant(*grant)                 # «разрешать такое до конца» не открывает
-        d = gate.decide("Bash", data)
-        assert d.outcome == consent.DENY and d.why == "profile", command
-    # Своя папка — путь внутри библиотеки — не отказ профиля.
-    own = gate.decide("Bash", {"command": f'cat "{rec}/transcript.md"'})
-    assert own.why != "profile"
-    # Обход папки над закрытым корнем — не сам собой: карточкой.
-    above = gate.decide("Bash", {"command": f"ls -R {tmp_path}"})
-    assert above.outcome == consent.ASK
-    # Команды в «Личном» — каждая своей карточкой, без «разрешать до конца».
-    assert not (above.card or {}).get("grant")
-
-
-def test_gate_without_the_profile_is_unchanged(tmp_path):
-    from meet.llm import consent
-
-    gate, lib, rec, other, kb = _profile_gate(tmp_path, blocked=False)
-    gate.begin(consent.READ)
-    assert gate.decide("Read", {"file_path": str(other / "x.md")}).allow
-    assert gate.decide("Read", {"file_path": str(kb / "a.md")}).allow
+    gate, lib, rec, other, kb = _profile_gate(tmp_path, pp.ASK_FIRST_PERSONAL)
     gate.begin(consent.NONE)
-    ask = gate.decide("Read", {"file_path": str(kb / "a.md")})
+    assert gate.decide("Read", {"file_path": str(kb / "a.md")}).allow           # рабочая папка
+    assert gate.decide("Read", {"file_path": str(other / "x.md")}).why == "ask"  # другая запись — по просьбе
+    for level in (consent.READ, consent.USER):
+        gate.begin(level)
+        assert gate.decide("Read", {"file_path": str(other / "x.md")}).allow
+        assert gate.decide("Grep", {"pattern": "смета", "path": str(lib)}).allow
+
+
+def test_personal_gate_commands_follow_the_same_rules(tmp_path):
+    from meet.llm import consent
+
+    gate, lib, rec, other, kb = _profile_gate(tmp_path, pp.ASK_FIRST_PERSONAL)
+    gate.begin(consent.USER)
+    kb_text = str(kb).replace("\\", "/")
+    assert gate.decide("Bash", {"command": f'cat "{kb_text}/a.md" | head -n 5'}).outcome == consent.ALLOW
+    assert gate.decide("Bash", {"command": "npm test"}).outcome == consent.AUTO
+    assert gate.decide("Bash", {"command": f'rm "{kb_text}/a.md"'}).outcome == consent.ASK
+    # Запись в чужую запись библиотеки — карточкой, как у работы.
+    assert gate.decide("Write", {"file_path": str(other / "y.md"), "content": "x"}).outcome == consent.ASK
+
+
+def test_gate_ask_text_in_work_names_the_meeting(tmp_path):
+    from meet.llm import consent
+
+    gate, lib, rec, other, kb = _profile_gate(tmp_path)
+    gate.begin(consent.NONE)
+    ask = gate.decide("Read", {"file_path": str(other / "x.md")})
     assert ask.why == "ask" and "реплик" in ask.reason and "встречи" in ask.reason
 
 
 def test_gate_ask_text_in_personal_has_no_meeting_wording(tmp_path):
     from meet.llm import consent
 
-    gate, lib, rec, other, kb = _profile_gate(tmp_path)
+    gate, lib, rec, other, kb = _profile_gate(tmp_path, pp.ASK_FIRST_PERSONAL)
     gate.begin(consent.NONE)
     elsewhere = tmp_path / "Downloads"
     elsewhere.mkdir()
     d = gate.decide("Read", {"file_path": str(elsewhere / "spec.pdf")})
     assert d.why == "ask" and "встреч" not in d.reason and "по репликам" in d.reason
-    assert consent.denial_line([d]) and "встреч" not in consent.denial_line(
-        [gate.decide("Read", {"file_path": str(kb / "a.md")})])
+    assert "встреч" not in consent.denial_line([d])
 
 
 def test_claude_command_has_user_mcp_in_every_profile(tmp_path):
@@ -1020,7 +1006,7 @@ def test_claude_command_has_user_mcp_in_every_profile(tmp_path):
     assert "--strict-mcp-config" not in work and "--setting-sources" not in work
 
 
-def test_personal_free_claude_session_gets_the_profile_gate_and_no_mcp(tmp_path):
+def test_personal_free_claude_session_has_the_same_gate_folders_and_mcp(tmp_path):
     from meet.llm import consent
 
     p, h, _chat, clock, made = _participant(tmp_path, profile="personal", script=[SILENT, SILENT],
@@ -1039,49 +1025,55 @@ def test_personal_free_claude_session_gets_the_profile_gate_and_no_mcp(tmp_path)
 
     run(main())
     first, second = made
+    assert "mcp" not in first.kwargs and "mcp" not in second.kwargs
+    assert first.kwargs["add_dirs"] == second.kwargs["add_dirs"]
+    assert first.kwargs["mode"] == second.kwargs["mode"] == "auto"
+    assert str(tmp_path / "kb") not in first.kwargs["deny_paths"]
     gate = first.kwargs["gate"]
-    assert first.kwargs["mcp"] is False and first.kwargs["add_dirs"] == [str(p._folder)]
-    assert str(tmp_path / "kb") in first.kwargs["deny_paths"]
-    gate.begin(consent.READ)
-    assert gate.decide("Read", {"file_path": str(tmp_path / "kb" / "Проекты" / "План запуска.md")}).why == "profile"
-    assert gate.decide("Read", {"file_path": str(tmp_path / "lib" / "другая" / "transcript.md")}).why == "profile"
+    assert gate.mode == "auto"
+    gate.begin(consent.USER)
+    assert gate.decide("Read", {"file_path": str(tmp_path / "kb" / "Проекты" / "План запуска.md")}).allow
+    gate.begin(consent.NONE)
+    assert "встреч" not in gate.decide("Bash", {"command": "npm test"}).reason        # свой текст отказа
     prompt = first.kwargs["system_prompt"]
     assert "# Возможности и согласие пользователя" in prompt and "Только чтение" not in prompt
-    assert _work_hits(prompt) == []
-    # Обратно в «Рабочую встречу» — новые ворота без профиля и MCP пользователя.
-    assert "mcp" not in second.kwargs and second.kwargs["gate"] is not gate
-    second.kwargs["gate"].begin(consent.READ)
-    assert second.kwargs["gate"].decide(
-        "Read", {"file_path": str(tmp_path / "kb" / "Проекты" / "План запуска.md")}).allow
+    # Обратно в «Рабочую встречу» — новые ворота, тот же доступ, свой текст отказа.
+    assert second.kwargs["gate"] is not gate
+    second.kwargs["gate"].begin(consent.NONE)
+    assert "встречи" in second.kwargs["gate"].decide("Bash", {"command": "npm test"}).reason
 
 
 @pytest.mark.parametrize("actions", [True, False])
-def test_personal_freedom_prompt_variants(actions):
-    text = pp.build_system(profile="personal", freedom=True, actions=actions,
-                           folders={"Папка этой записи": "C:/rec/s1"})
-    assert _work_hits(text) == [] and "MCP" not in text and "Jira" not in text
-    assert "# Возможности и согласие пользователя" in text and "Только чтение" not in text
-    assert ("карточкой" in text) is actions
-    plain = pp.build_system(profile="personal", folders={"Папка этой записи": "C:/rec/s1"})
+@pytest.mark.parametrize("mode", ["auto", "confirm"])
+def test_personal_freedom_section_is_the_same_as_work(actions, mode):
+    """0.4: раздел возможностей общий (`_freedom_section`), отличается только роль."""
+    section = pp._freedom_section(actions=actions, mode=mode)
+    personal = pp.build_system(profile="personal", freedom=True, actions=actions, mode=mode,
+                               folders={"Эта запись": "C:/rec/s1"})
+    work = pp.build_system(freedom=True, actions=actions, mode=mode, folders={"Эта встреча": "C:/rec/s1"})
+    assert section in personal and section in work
+    assert "Только чтение" not in personal and pp._PERSONAL_SOURCES_FREE in personal
+    plain = pp.build_system(profile="personal", folders={"Эта запись": "C:/rec/s1"})
     assert "Только чтение: ничего не изменяй" in plain and "Возможности и согласие" not in plain
 
 
-def test_personal_runner_with_freedom_denies_the_kb(tmp_path):
+def test_personal_runner_with_freedom_has_the_same_access(tmp_path):
     runner = FakeRunner([SILENT])
     p, h, _chat, clock, _made = _participant(tmp_path, provider="codex", profile="personal", runner=runner,
                                              freedom=True)
 
     async def main():
         await p.start()
-        _line(h, 5, "привет")
-        clock.t = 40
+        await p.post_user_message("поправь заметку в базе")
         await p.tick()
         await p.shutdown()
 
     run(main())
     (_prompt, kw), = runner.calls
-    assert str(tmp_path / "kb") in kw["deny_paths"] and list(kw["allowed_dirs"]) == [str(p._folder)]
-    assert "access" in kw and "План запуска" not in kw["system_prompt"]
+    assert str(tmp_path / "kb") not in kw["deny_paths"]
+    assert list(kw["allowed_dirs"]) == [str(p._folder), str(tmp_path / "kb"), str(tmp_path / "lib")]
+    assert kw["access"] == "user" and list(kw["work_dirs"]) == [str(p._folder), str(tmp_path / "kb")]
+    assert "План запуска" not in kw["system_prompt"]
 
 
 def test_temporary_personal_meeting_switch_seeds_a_fresh_session(tmp_path):
@@ -1139,6 +1131,7 @@ def test_personal_prompt_knows_labels_are_provisional():
 
     text = pp.build_system(profile="personal")
     assert "Подписи «Собеседник», «Собеседник N» и «Спикер N» предварительные" in text
-    assert "Meet уточнил говорящих" in text and _work_hits(text) == []
+    assert "Meet уточнил говорящих" in text
+    assert _work_hits(text.replace(pp._PERSONAL_SOURCES_TOOLS, "")) == []
     assert "после встречи" in job_worker.CHAT_LABELS_NOTE
     assert "встреч" not in job_worker.CHAT_LABELS_NOTE_PERSONAL

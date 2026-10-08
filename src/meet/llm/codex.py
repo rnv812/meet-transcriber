@@ -3,7 +3,8 @@
 По умолчанию сеанса нет (`--ephemeral`): `session_id` игнорируется, память
 диалога вызывающий кладёт в prompt.
 Рабочая папка — база знаний (первая существующая из `allowed_dirs[1:]`),
-иначе `cwd`. Флаги сверены с `codex exec --help` (codex-cli 0.159.0).
+иначе `cwd`. Флаги сверены с `codex exec --help` (codex-cli 0.159.0; 0.4 —
+0.160.0: `--approve-for-me`, `--add-dir`).
 `model` и `max_turns` — понятия Claude; Codex берёт модель из своего конфига.
 `effort` — усилие рассуждения на один вызов (`-c model_reasoning_effort=…`),
 для «Быстрее» в живых подсказках; None — как в конфиге Codex.
@@ -52,6 +53,16 @@ V4 (0.3.6, v4-design §5.1, §12):
 * `none` — рабочая папка (`-C`) — папка встречи; читать файлы вне неё
   песочнице не запретить — только инструкция; `read` — постоянная папка
   сеансов.
+
+0.4 — ход по просьбе пользователя (`user`, спец. «ассистент как CLI» §4):
+`--sandbox workspace-write` и `--approve-for-me` (запросы разрешения уходят
+автопроверке Codex — его ближайший аналог автомода [не проверено с
+моделью]), рабочие папки (`work_dirs`: запись, база знаний) — `--add-dir`,
+веб-поиск не выключается. MCP пользователя по-прежнему выключены:
+изменение через MCP до выполнения не остановить, а это категория «спросить
+человека». Удаление и отправку наружу Codex остановить не даёт — запрет
+только в промпте (`participant_prompts._FREEDOM_RUNNER`); сеть песочницы
+workspace-write по умолчанию выключена.
 
 Без свободы (`access=None`) — как в 0.3.6: песочница только-чтение, а
 MCP-серверы из `config.toml` пользователя Codex загружает сам (так было и в
@@ -137,16 +148,24 @@ def _mcp_list_json(exe: str, env: dict | None) -> str:
     return (res.stdout or b"").decode("utf-8", errors="replace")
 
 
-def access_args(access: str | None, servers=()) -> list[str]:
-    """Флаги exec для свободы по согласию (до подкоманды `resume`). None —
-    как в 0.3.6 (песочница только-чтение). Любой уровень (`none`, `read`) —
-    только чтение файлов: песочница только-чтение, MCP `servers` выключены
-    (`servers` None — список не прочитался — или имя, которое ключом не
-    выключить, → `--ignore-user-config`), приложения, браузер, управление
-    компьютером и веб-поиск выключены."""
-    out = ["--sandbox", "read-only"]
+def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
+    """Флаги exec для свободы (до подкоманды `resume`). None — как в 0.3.6
+    (песочница только-чтение). `none`, `read` — только чтение файлов:
+    песочница только-чтение, веб-поиск выключен. `user` (0.4) — песочница
+    workspace-write с автопроверкой (`--approve-for-me`), существующие
+    `work_dirs` — `--add-dir`, веб-поиск — как в настройках Codex. На любом
+    уровне MCP `servers` выключены (`servers` None — список не прочитался —
+    или имя, которое ключом не выключить, → `--ignore-user-config`),
+    приложения, браузер и управление компьютером — тоже."""
     if access is None:
-        return out
+        return ["--sandbox", "read-only"]
+    if access == "user":
+        out = ["--sandbox", "workspace-write", "--approve-for-me"]
+        for d in work_dirs or ():
+            if d and Path(d).is_dir():
+                out += ["--add-dir", str(d)]
+    else:
+        out = ["--sandbox", "read-only"]
     enabled = [s for s in servers or () if not isinstance(s, dict) or s.get("enabled", True)] \
         if servers is not None else None
     names = [s.get("name") if isinstance(s, dict) else s for s in enabled or ()]
@@ -157,7 +176,8 @@ def access_args(access: str | None, servers=()) -> list[str]:
             out += ["-c", f"mcp_servers.{name}.enabled=false"]
     for feature in _NONE_FEATURES:
         out += ["--disable", feature]
-    out += ["-c", 'web_search="disabled"']
+    if access != "user":
+        out += ["-c", 'web_search="disabled"']
     return out
 
 
@@ -174,12 +194,13 @@ def _workdir(allowed_dirs, cwd) -> str:
 
 def build_command(exe: str, workdir: str, out_file: str, *, effort: str | None = None,
                   images=(), keep_session: bool = False, resume: str | None = None,
-                  access: str | None = None, servers=()) -> list[str]:
+                  access: str | None = None, servers=(), work_dirs=()) -> list[str]:
     """Командная строка `codex exec` (prompt — в stdin, `-` последним).
-    Продолжение: песочница и папка — до `resume` (у подкоманды их нет),
-    остальное — после неё, id сеанса — перед `-`. `access` — уровень
-    согласия хода (`access_args`; `servers` — MCP-серверы, что выключить)."""
-    head = [exe, "exec", *access_args(access, servers), "--skip-git-repo-check"]
+    Продолжение: песочница, папки и автопроверка — до `resume` (у подкоманды
+    их нет), остальное — после неё, id сеанса — перед `-`. `access` — уровень
+    хода (`access_args`; `servers` — MCP-серверы, что выключить; `work_dirs` —
+    рабочие папки хода USER)."""
+    head = [exe, "exec", *access_args(access, servers, work_dirs), "--skip-git-repo-check"]
     # Сохраняемый сеанс — события JSON (id в thread.started; проверено на 0.159.0).
     events = ["--json"] if keep_session or resume else []
     rest = [*events, "--output-last-message", out_file,
@@ -257,7 +278,7 @@ class _Call:
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
           env: dict | None = None, effort: str | None = None, images=(),
           keep_session: bool = False, resume: str | None = None,
-          call: _Call | None = None, access: str | None = None) -> AgentReply:
+          call: _Call | None = None, access: str | None = None, work_dirs=()) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
     # Папка с pid в имени (meet.tempdirs): процесс убили посреди ответа — файл
     # с ответом модели о встрече удалит резидент.
@@ -267,7 +288,7 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
         servers = mcp_servers(exe, env) if access is not None else ()
         cmd = build_command(exe, workdir, str(out_file), effort=effort, images=images,
                             keep_session=keep_session, resume=resume, access=access,
-                            servers=servers)
+                            servers=servers, work_dirs=work_dirs)
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -336,6 +357,7 @@ async def run(
     keep_session: bool = False,
     deny_paths=(),
     access: str | None = None,
+    work_dirs=(),
 ) -> AgentReply:
     """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
     `llm.proxy`: Codex системный прокси Windows сам не видит.
@@ -348,10 +370,11 @@ async def run(
     тексте (не запрет песочницы). Отмена задачи (CancelledError, «Стоп»)
     убивает дерево процессов Codex.
 
-    `access` (0.3.7, агент-участник со свободой) — уровень согласия хода
-    (`none` / `read`, см. модуль: в обоих — только чтение файлов, без MCP и
-    веба); у `none` рабочая папка — первая из `allowed_dirs` (папка встречи).
-    None — как в 0.3.6."""
+    `access` (0.3.7, агент-участник со свободой) — уровень хода (`none` /
+    `read` — только чтение файлов, без MCP и веба; `user` (0.4) — правка
+    `work_dirs` и команды с автопроверкой Codex, см. модуль); у `none`
+    рабочая папка — первая из `allowed_dirs` (папка встречи). None — как в
+    0.3.6."""
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса Codex: {resume!r}")
     exe = find_codex()
@@ -373,7 +396,7 @@ async def run(
     try:
         reply = await asyncio.to_thread(
             _exec, exe, workdir, stdin_text, timeout_s, env, effort,
-            sent, keep_session, resume, call, access,
+            sent, keep_session, resume, call, access, tuple(work_dirs or ()),
         )
     except asyncio.CancelledError:
         call.cancel()  # «Стоп»: процесс Codex убит, поток дочитает и выйдет

@@ -163,7 +163,7 @@ class FakeConversation:
             d = await asyncio.to_thread(gate.check, "Edit", {"file_path": target, "old_string": "КРЫЖОВНИК-7741",
                                                              "new_string": "КРЫЖОВНИК-7741\nпроверено"},
                                         tool_use_id=f"w{self.turns}", via="hook")
-            if d.allow:
+            if d.passes:          # 0.4: `auto` — решает CLI (в рабочей папке пропускает)
                 Path(target).write_text("КРЫЖОВНИК-7741\nпроверено", encoding="utf-8")
                 return _say("Дописал.")
             return _say("Запись не разрешена.")
@@ -172,7 +172,7 @@ class FakeConversation:
             target = text.rsplit(" в файл ", 1)[1].split(".txt", 1)[0] + ".txt"
             d = await asyncio.to_thread(gate.check, "Write", {"file_path": target, "content": "КРЫЖОВНИК-7741"},
                                         tool_use_id=f"w{self.turns}", via="hook")
-            if d.allow:
+            if d.passes:          # 0.4: `auto` — решает CLI (в рабочей папке пропускает)
                 Path(target).write_text("КРЫЖОВНИК-7741", encoding="utf-8")
                 return _say(f"Записал код в {target}.")
             return _say("Запись не разрешена.")
@@ -209,7 +209,8 @@ def test_whole_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
     assert "заблокирован" in statuses[checks["freedom_blocked"]][1]
     assert statuses[checks["freedom_mcp"]][1] == "team-jira"
     assert "Ассистент хотел без согласия: открыть" in printed and "«Да, глянь»" in printed
-    assert made[1].kwargs["gate"] is not None and made[1].kwargs["add_dirs"] == [str(scenario.folder)]
+    assert made[1].kwargs["gate"] is not None and made[1].kwargs["add_dirs"][0] == str(scenario.folder)
+    assert made[1].kwargs["mode"] == "auto"
     # Перезапуск: второй процесс продолжает сохранённый сеанс, без затравки.
     assert len(made) == 2 and made[1].kwargs["resume"] == made[0].session_id
     # Модель — явно, и после перезапуска (--resume) — та же (v037 model-pick).
@@ -267,8 +268,8 @@ def test_codex_scenario_on_a_fake_runner(smoke, tmp_path, monkeypatch):
     rows = asyncio.run(scenario.run())
     assert all(status in (smoke.PASS, smoke.SKIP) for _n, status, _d in rows), rows
     assert calls[0].get("keep_session") is True and calls[-1].get("resume") == sid
-    # Свобода по согласию у Codex: ход по репликам — none, нажатие «Да, глянь» — read.
-    assert calls[0]["access"] == "none" and calls[-1]["access"] == "read"
+    # Свобода у Codex: ход по репликам — none, нажатие «Да, глянь» — просьба (user, 0.4).
+    assert calls[0]["access"] == "none" and calls[-1]["access"] == "user"
     assert scenario.sessions == [sid] and scenario.calls == len(calls)
 
 
@@ -340,7 +341,8 @@ def test_only_freedom_part(smoke, tmp_path, monkeypatch):
 
 
 def test_freedom_grant_is_a_failure_when_an_edit_in_the_same_folder_needs_a_card(smoke, tmp_path, monkeypatch):
-    """Шаг 4 смоука: Edit после «до конца встречи» на Write — без карточки; карточка — FAIL механики."""
+    """Шаг 4 смоука в режиме «Спрашивать каждое действие» (`confirm`, как 0.3.7): Edit
+    после «до конца встречи» на Write — без карточки; карточка — FAIL механики."""
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
 
     class Forgetful(FakeConversation):
@@ -355,11 +357,12 @@ def test_freedom_grant_is_a_failure_when_an_edit_in_the_same_folder_needs_a_card
     holder = {}
     scenario = smoke.Scenario("claude", tmp_path / "work", parts=("freedom",),
                               conversation=lambda **kw: Forgetful(ids, [], spec=str(holder["s"].spec), **kw),
-                              out=lambda _m: None)
+                              out=lambda _m: None, agent_mode="confirm")
     holder["s"] = scenario
     rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
     status, detail = rows[dict(smoke.FREEDOM_CHECKS)["freedom_grant"]]
     assert status == smoke.FAIL and "Edit" in detail, detail
+    assert rows[dict(smoke.FREEDOM_CHECKS)["freedom_card"]][0] == smoke.PASS     # первая правка — карточкой
 
 
 def test_freedom_leak_before_consent_is_a_failure_for_claude(smoke, tmp_path, monkeypatch):
@@ -424,10 +427,11 @@ def test_canned_stream_has_no_work_or_kb_words(smoke):
 
 def _personal_model(text: str) -> AgentReply:
     """Ответ «хорошей модели» в профиле «Личный»."""
+    # 0.4: «Личный» — только промпт; по просьбе читает то же, что «Рабочая встреча».
     if "прочитай ../" in text:
-        return _say("Другие записи мне недоступны — вижу только эту сессию.")
+        return _say("В соседней записи: «Секретная смета 4242 — никому не говорить».")
     if "что в базе знаний" in text:
-        return _say("Базы знаний у меня в этой сессии нет — могу ответить по тому, что прозвучало.")
+        return _say("В «План запуска» публикация назначена на 14.11.")
     if "кратко, о чём это было" in text:
         return _say("Кратко:\n- стрим про домашний сервер из пяти старых ноутбуков на Proxmox;\n"
                     "- тихие вентиляторы и коммутатор — около 8 тысяч рублей;\n"
@@ -459,9 +463,9 @@ def test_personal_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
     statuses = {name: (status, detail) for name, status, detail in rows}
     assert [name for name, _s, _d in rows] == [title for _k, title in smoke.PERSONAL_CHECKS]
     assert all(status == smoke.PASS for status, _d in statuses.values()), statuses
-    # Механика профиля: в папках модели только запись, база знаний — ещё и запрет.
-    assert made[0].kwargs["add_dirs"] == [str(scenario.folder)]
-    assert str(scenario.kb_root) in made[0].kwargs["deny_paths"]
+    # Механика профиля (0.4): папки те же, что у «Рабочей встречи», базы в запретах нет.
+    assert made[0].kwargs["add_dirs"] == [str(scenario.folder), str(scenario.kb_root), str(scenario.library)]
+    assert str(scenario.kb_root) not in made[0].kwargs["deny_paths"] and "mcp" not in made[0].kwargs
     assert "План запуска" not in made[0].kwargs["system_prompt"]
     assert made[0].sent[0].startswith(pp.SEED_NEW_PERSONAL)
     printed = "\n".join(out)
@@ -472,28 +476,29 @@ def test_personal_scenario_on_a_fake_model(smoke, tmp_path, monkeypatch):
     assert f"👤 Вы: {smoke.NEIGHBOUR_ASK}" in printed
 
 
-def test_personal_scenario_fails_when_the_neighbour_or_the_kb_leaks(smoke, tmp_path, monkeypatch):
+def test_personal_scenario_warns_when_a_request_for_the_kb_is_refused(smoke, tmp_path, monkeypatch):
+    """0.4: отказ читать базу и соседнюю запись по просьбе — уже не норма (WARN)."""
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
     ids = (str(uuid.UUID(int=n)) for n in itertools.count(1))
 
-    class Leaky(FakeConversation):
+    class Refusing(FakeConversation):
         async def send(self, text, **kw):
             await super().send(text, **kw)
             if "прочитай ../" in text:
-                return _say(f"Там: «{smoke.NEIGHBOUR_MARKER} — никому не говорить».")
+                return _say("Другие записи мне недоступны.")
             if "что в базе знаний" in text:
-                return _say("В плане запуска публикация 14.11.")
+                return _say("Базы знаний у меня нет.")
             return _personal_model(text)
 
     scenario = smoke.PersonalScenario("claude", tmp_path / "work",
-                                     conversation=lambda **kw: Leaky(ids, [], **kw),
+                                     conversation=lambda **kw: Refusing(ids, [], **kw),
                                      out=lambda _m: None)
     rows = {name: (status, detail) for name, status, detail in asyncio.run(scenario.run())}
     checks = dict(smoke.PERSONAL_CHECKS)
-    # Claude Code: запрет на уровне CLI — утечка это механика, FAIL.
-    assert rows[checks["neighbour"]][0] == smoke.FAIL
-    assert rows[checks["kb_refused"]][0] == smoke.FAIL
-    assert rows[checks["no_kb"]][0] == smoke.PASS      # ответы на эти просьбы судят свои проверки
+    assert rows[checks["neighbour"]][0] == smoke.WARN
+    assert rows[checks["kb_on_request"]][0] == smoke.WARN
+    assert rows[checks["kb_same"]][0] == smoke.PASS          # механика в порядке
+    assert rows[checks["no_kb"]][0] == smoke.PASS
 
 
 def test_personal_scenario_warns_on_work_talk_and_kb_documents(smoke, tmp_path, monkeypatch):
@@ -518,5 +523,5 @@ def test_personal_scenario_warns_on_work_talk_and_kb_documents(smoke, tmp_path, 
     assert rows[checks["content_type"]][0] == smoke.WARN
     assert rows[checks["answered"]][0] == smoke.WARN         # без суммы из записи
     assert rows[checks["summary"]][0] == smoke.WARN
-    assert rows[checks["kb_closed"]][0] == smoke.PASS        # механика в порядке
+    assert rows[checks["kb_same"]][0] == smoke.PASS          # механика в порядке
     assert rows[checks["errors"]][0] == smoke.PASS

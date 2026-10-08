@@ -61,6 +61,19 @@ opencode.ai/docs/permissions]. Остановить вызов до решени
 * `read` — чтение где угодно, кроме `kb_exclude`, чувствительных путей
   (`consent.sensitive_paths`) и `.env`; команды, правка, веб, MCP и
   подагенты — `deny` (`"*": "deny"`).
+
+0.4 — ход по просьбе пользователя (`user`, спец. «ассистент как CLI» §4;
+сверено с `opencode run --help` 1.18 и разбором его сборки: правка
+спрашивает `edit` с путём относительно рабочей папки, а любой путь вне неё
+— `external_directory` с шаблоном «папка/*»). `--auto` не используем (он
+одобряет всё, что явно не запрещено). Права: `read` — как у `read`;
+`edit` — `allow`, а запись вне рабочих папок закрывает `external_directory`
+(`"*": "deny"`, рабочие папки — `allow`, закрытое — `deny` последним; читать
+вне рабочих папок в этом ходе тоже нельзя — у OpenCode одна проверка на
+оба действия); `bash` — `allow`, кроме удаления и отправки наружу (те же
+списки, что у ворот Claude Code, `consent`) и оболочек с кодом в строке —
+`deny` (спросить человека OpenCode не может); `webfetch`, `websearch` —
+`allow`; MCP и подагенты — `deny`.
 """
 
 import asyncio
@@ -168,12 +181,71 @@ def readonly_permission(dirs, exclude=()) -> dict:
     }
 
 
-def permission_for(access: str | None, dirs, exclude=(), sensitive=()) -> dict:
-    """Права агента для уровня согласия хода (`meet.llm.consent`): None и
-    `none` — `readonly_permission(dirs)` (у `none` `dirs` — только папка
-    встречи); `read` — чтение файлов где угодно, кроме закрытых папок
-    (`exclude`), чувствительных путей (`sensitive`) и `.env`; больше ничего.
-    Запреты — последними (побеждает последнее подходящее правило)."""
+def bash_denials() -> dict:
+    """Шаблоны `bash` в ходе USER, которые OpenCode запрещает: удаление,
+    отправка наружу, публикация, оболочки с кодом в строке (их содержимое
+    шаблоны не видят). Шаблон OpenCode — `*` и `?` по всей строке команды;
+    регистр PowerShell — оба варианта."""
+    from meet.llm import consent
+
+    rules: list[str] = []
+    for prog in [*sorted(consent.DELETE_PROGRAMS | consent.SEND_PROGRAMS), "Remove-Item", "Send-MailMessage"]:
+        rules += [prog, f"{prog} *"]
+    rules += ["git clean*", "git rm *", "git reset --hard*", "git reset * --hard*", "git checkout -- *",
+              "git checkout .*", "git restore *", "git stash drop*", "git stash clear*", "git push*",
+              "git * push*", "git * clean*", "git send-email*", "find *-delete*", "find *-exec*",
+              "find *-ok*", "xargs *", "rsync *:*"]
+    for flag in ("-d", "--data", "-F", "--form", "-T", "--upload", "--json", "-X", "--request"):
+        rules.append(f"curl *{flag}*")
+    rules += ["wget *--post*", "wget *--method*", "wget *--body*"]
+    for cmdlet in ("Invoke-WebRequest", "iwr", "Invoke-RestMethod", "irm"):
+        rules += [f"{cmdlet} *{flag}*" for flag in ("-M", "-B", "-I", "-F")]
+    for forge in ("gh", "glab"):
+        rules += [f"{forge} * {verb}*" for verb in ("create", "comment", "note", "review", "merge", "close",
+                                                  "reopen", "edit", "delete", "upload")]
+        rules += [f"{forge} api *{flag}*" for flag in ("-f", "-F", "-X", "--field", "--raw-field", "--input",
+                                                       "--method")]
+    rules += [f"{prog} publish*" for prog in ("npm", "pnpm", "yarn", "cargo", "poetry", "uv")]
+    rules += ["twine upload*", "docker push*", "podman push*", "gem push*", "dotnet nuget push*"]
+    rules += [f"{shell} -c*" for shell in ("bash", "sh", "zsh", "dash")]
+    rules += ["cmd *", "powershell *", "pwsh *", "eval *", "iex *", "Invoke-Expression *",
+              "Invoke-Command *", "sudo *", "doas *", "runas *"]
+    out: dict[str, str] = {}
+    for rule in rules:
+        for variant in dict.fromkeys((rule, rule.lower())):
+            out[variant] = "deny"
+    return out
+
+
+def _user_permission(work_dirs, exclude=(), sensitive=()) -> dict:
+    """Права хода USER (0.4): см. `permission_for`."""
+    closed = [v for e in (*(exclude or ()), *(sensitive or ())) if e for v in path_variants(e)]
+    read = {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow"}
+    external = {"*": "deny"}
+    for d in work_dirs or ():
+        if d:
+            for v in path_variants(d):
+                external[str(Path(v) / "*")] = "allow"
+    for v in closed:
+        for pattern in (v, str(Path(v) / "*")):
+            read[pattern] = "deny"
+            external[pattern] = "deny"
+    return {"*": "deny", "read": read, "grep": "deny" if closed else "allow", "glob": "allow",
+            "list": "allow", "edit": "allow", "external_directory": external,
+            "bash": {"*": "allow", **bash_denials()}, "webfetch": "allow", "websearch": "allow",
+            "todowrite": "allow"}
+
+
+def permission_for(access: str | None, dirs, exclude=(), sensitive=(), work_dirs=()) -> dict:
+    """Права агента для уровня хода (`meet.llm.consent`): None и `none` —
+    `readonly_permission(dirs)` (у `none` `dirs` — только папка встречи);
+    `read` — чтение файлов где угодно, кроме закрытых папок (`exclude`),
+    чувствительных путей (`sensitive`) и `.env`; больше ничего; `user` (0.4)
+    — правка и команды в рабочих папках (`work_dirs`), веб; удаление,
+    отправка наружу и MCP — нет (см. модуль). Запреты — последними
+    (побеждает последнее подходящее правило)."""
+    if access == "user":
+        return _user_permission(work_dirs, exclude, sensitive)
     if access != "read":
         return readonly_permission(dirs, exclude)
     closed = [v for e in (*(exclude or ()), *(sensitive or ())) if e for v in path_variants(e)]
@@ -188,7 +260,7 @@ def permission_for(access: str | None, dirs, exclude=(), sensitive=()) -> dict:
 
 
 def config_content(prompt: str, dirs, max_turns: int, exclude=(), access: str | None = None,
-                   sensitive=()) -> dict:
+                   sensitive=(), work_dirs=()) -> dict:
     """Конфиг поверх конфига человека (`OPENCODE_CONFIG_CONTENT`): агент только
     для чтения, без публикации сеанса, снимков файлов и обновления."""
     return {
@@ -202,7 +274,7 @@ def config_content(prompt: str, dirs, max_turns: int, exclude=(), access: str | 
                 "description": "meet: фоновые вызовы, только чтение",
                 "prompt": prompt,
                 "steps": max(1, int(max_turns)),
-                "permission": permission_for(access, dirs, exclude, sensitive),
+                "permission": permission_for(access, dirs, exclude, sensitive, work_dirs),
             },
         },
     }
@@ -214,17 +286,18 @@ def _dumps(value) -> str:
 
 
 def prompt_placement(system_prompt: str, prompt: str, dirs, max_turns: int, exclude=(),
-                     resume: bool = False, access: str | None = None, sensitive=()) -> tuple[dict, str]:
+                     resume: bool = False, access: str | None = None, sensitive=(),
+                     work_dirs=()) -> tuple[dict, str]:
     """(конфиг, stdin): системный промпт — в конфиг агента, если переменная
     среды с ним укладывается в ENV_LIMIT; иначе — в начало stdin. У
     продолжения сеанса длинный промпт в stdin не повторяется (он ушёл первым
     сообщением и уже в истории; иначе каждый ход добавлял бы его заново):
     конфиг — с коротким промптом, stdin — только сообщение."""
-    config = config_content(system_prompt, dirs, max_turns, exclude, access, sensitive)
+    config = config_content(system_prompt, dirs, max_turns, exclude, access, sensitive, work_dirs)
     if len(_dumps(config)) <= ENV_LIMIT:
         return config, prompt
     short = config_content(SHORT_SYSTEM if access is None else SHORT_SYSTEM_FREE, dirs, max_turns,
-                           exclude, access, sensitive)
+                           exclude, access, sensitive, work_dirs)
     if resume:
         return short, prompt
     return short, f"{system_prompt}\n\n{prompt}"
@@ -564,6 +637,7 @@ async def run(
     keep_session: bool = False,
     deny_paths=(),
     access: str | None = None,
+    work_dirs=(),
 ) -> AgentReply:
     """Один вызов `opencode run`; ошибки — в AgentReply.error. `model` —
     `llm.opencode_model` («провайдер/модель»), `proxy` — `llm.proxy`. Папки
@@ -575,7 +649,7 @@ async def run(
     `dropped_images` и NO_VISION_NOTE. `deny_paths` — закрытые папки
     (запрет в правах агента). `access` (0.3.7) — уровень согласия хода
     (`permission_for`); у `none` читать можно только первую из `allowed_dirs`
-    (папку встречи)."""
+    (папку встречи); у `user` (0.4) правка и команды — в `work_dirs`."""
     if resume and not _SESSION_ID.fullmatch(resume):
         return resume_failure(f"неверный id сеанса OpenCode: {resume!r}")
     exe = find_opencode()
@@ -583,13 +657,13 @@ async def run(
         return AgentReply(text="", error=OPENCODE_NOT_FOUND)
     dirs = tuple(allowed_dirs)[:1] if access == "none" else allowed_dirs
     sensitive = ()
-    if access == "read":
+    if access in ("read", "user"):
         from meet.llm.consent import sensitive_paths
 
         sensitive = [p for p in sensitive_paths() if p.exists()]
     config, stdin_text = prompt_placement(system_prompt, prompt, dirs, max_turns,
                                           deny_paths, resume=bool(resume), access=access,
-                                          sensitive=sensitive)
+                                          sensitive=sensitive, work_dirs=tuple(work_dirs or ()))
     env = child_env(proxy, config)
     call = _Call()
     keep = bool(keep_session or resume)

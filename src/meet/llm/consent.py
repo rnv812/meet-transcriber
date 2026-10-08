@@ -1,39 +1,44 @@
-"""Согласие пользователя на действия агента-участника (0.3.7, A1; fix round 1).
+"""Согласие пользователя на действия агента-участника (0.3.7, A1; 0.4 — «как CLI»).
 
-Агенту можно всё, что умеет CLI провайдера, но **действует он только с
-согласия**, и согласие на действие даёт не текст агента, а карточка Meet:
+Кто просил, решает Meet (классификатор автомода реплики встречи отличить от
+просьбы не может). Уровни хода (`Participant.consent_level`):
 
-* ``NONE`` — ход без просьбы пользователя (агент сам отвечает на реплики
-  встречи, 👍/👎, «Не надо»). Можно только читать папку этой встречи и то,
-  что пользователь приложил к чату. Всё остальное — отказ с причиной
-  «спроси пользователя с кнопками».
-* ``READ`` — ход отвечает на просьбу: сообщение пользователя, ❓, нажатая
-  кнопка агента. Без карточки — только осторожное чтение: Read/Glob/Grep
-  (кроме закрытых и чувствительных путей), веб-поиск, MCP-инструменты,
-  чьё имя начинается с глагола чтения и не содержит глагола изменения.
-* Всё остальное в ходе READ — **карточка Meet** с точным вызовом
-  («Ассистент хочет выполнить: команду — `…`» [Разрешить один раз]
-  [Отклонить]): любая команда оболочки, запись и правка, прочие MCP,
-  WebFetch (с адресом), навыки (Skill), правка блокнота. Ответ хука CLI
-  держится, пока человек не решит (не дольше CONFIRM_TIMEOUT_S); разрешение —
-  на этот один вызов. Кнопки агента («Да, создай») значат только «человек
-  этого хочет», сам вызов всё равно идёт через карточку.
+* ``NONE`` — ход без просьбы пользователя: только реплики встречи, 👍/👎,
+  «Не надо», повтор после сбоя. Можно только читать рабочие папки и то, что
+  пользователь приложил к чату. Всё остальное — отказ «спроси пользователя
+  с кнопками» (`ask_text`), что бы ни прозвучало на встрече.
+* ``READ`` — ❓ «Поясни»: чтение где угодно, веб-поиск, MCP-чтение, простые
+  команды чтения (`shell_plan`) — без карточек; остальное — отказ «предложи
+  кнопками» (`ASK_FIRST_READ`).
+* ``USER`` — сообщение пользователя, кнопка агента (кроме отказа,
+  `click_level`), слэш-команда. Режим `auto` (0.4): Meet отдаёт решение CLI
+  (исход ``auto`` — хук отвечает `{}`, дальше правила пользователя и
+  классификатор автомода), а **карточкой Meet** (исход ``ask``) спрашивает
+  только рискованное: удаление (`rm`, `Remove-Item`, `git clean`, `git reset
+  --hard`…), запись вне рабочих папок, отправку наружу (`git push`, `scp`,
+  `curl -d`…), команды без песочницы, MCP-изменения и MCP с адресом в
+  аргументах. Режим `confirm` — как 0.3.7: карточка на каждое действие.
+
+Рабочие папки (`own_dirs` — папка записи, `work_dirs` — база знаний,
+служебная `cwd` и папки, где пользователь разрешил запись «до конца
+встречи»). Библиотека встреч читается, а запись в неё вне своей папки идёт
+карточкой.
 
 **Всегда запрещено:** закрытые папки (`kb_exclude`), чувствительные пути
 (`sensitive_paths`: ключи SSH и облаков, настройки Claude Code и Codex,
 профили браузеров, хранилища паролей ОС, служебная папка Meet с его токеном,
 `.env` вне встречи), фоновое выполнение (подагенты Task/Agent, Bash с
 `run_in_background`, расписания), обращения к локальным адресам (API Meet),
-свой вопрос CLI (`AskUserQuestion`). В профиле сессии «Личный» —
-ещё `blocked_roots` (база знаний и библиотека встреч, кроме своей папки):
-отказ `profile` на любом уровне, и разрешения его не снимают.
+скрытые символы, огромные вызовы, свой вопрос CLI (`AskUserQuestion`).
 
-`ConsentGate.decide(tool, input)` — решение без ожидания (`allow` / `deny` /
-`ask`); `ConsentGate.check(...)` — то же с карточкой: им отвечает
+`ConsentGate.decide(tool, input)` — решение без ожидания (`allow` / `auto` /
+`deny` / `ask`); `ConsentGate.check(...)` — то же с карточкой: им отвечает
 `claude_stream.Conversation` на хук PreToolUse (он приходит на **каждый**
-вызов — проверено на claude 2.1.292 без модели) и на `can_use_tool`. Codex и
-OpenCode обратного вызова не имеют — им при включённой свободе дают только
-чтение файлов (`codex.access_args`, `opencode.permission_for`).
+вызов — проверено на claude 2.1.292 без модели) и на `can_use_tool` (вопрос
+самого CLI — в ходе USER всегда карточка). Исходы `check`: `allow` (хук —
+`permissionDecision: "allow"`: Meet или человек решили), `auto` (хук — `{}`),
+`deny`. Codex и OpenCode обратного вызова не имеют: строки `ask` у них —
+отказ (`codex.access_args`, `opencode.permission_for`).
 
 Модуль — только stdlib.
 """
@@ -50,10 +55,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-NONE, READ = "none", "read"
-LEVELS = (NONE, READ)
-_RANK = {NONE: 0, READ: 1}
-ALLOW, DENY, ASK = "allow", "deny", "ask"
+NONE, READ, USER = "none", "read", "user"
+LEVELS = (NONE, READ, USER)
+_RANK = {NONE: 0, READ: 1, USER: 2}
+# `auto` — отдать решение CLI (его правила и классификатор автомода).
+ALLOW, AUTO, DENY, ASK = "allow", "auto", "deny", "ask"
+# Как действует ассистент в ходе USER (`assist.agent_mode`).
+MODE_AUTO, MODE_CONFIRM = "auto", "confirm"
+MODES = (MODE_AUTO, MODE_CONFIRM)
 ALLOW_MEETING = "allow_meeting"      # «Разрешать такое до конца встречи»
 # Ключ разрешения на правки файлов в папке (Write, Edit, MultiEdit, NotebookEdit).
 FILES_GRANT = "write:files:"
@@ -70,22 +79,21 @@ CARD_FULL_CHARS = 1_200
 # Пробелов подряд — не больше; длиннее — видимой пометкой «⟨N пробелов⟩».
 SPACES_SHOWN = 8
 
-ASK_FIRST = ("Meet заблокировал: {what} — без согласия пользователя. Сейчас ход по репликам встречи: "
-             "без его просьбы можно читать только папку этой встречи и то, что он добавил в чат. "
+# Отказ в ходе без просьбы (NONE); свой текст — параметр `ask_text` ворот
+# (у профиля «Личный» — без «встречи», `participant_prompts.ASK_FIRST_PERSONAL`).
+ASK_FIRST = ("Meet заблокировал: {what} — без просьбы пользователя. Сейчас ход по репликам встречи: "
+             "без его просьбы можно только читать рабочие папки (эту встречу, базу знаний) и то, что он "
+             "добавил в чат, — ничего не менять и не выполнять. "
              "Спроси пользователя с кнопками, прежде чем это делать (например: "
              "{{\"say\": \"Я гляну …?\", \"buttons\": [\"Да, глянь\", \"Не надо\"]}}), "
              "и сделай после его согласия. Не пытайся обойти запрет другим инструментом.")
-# Профиль сессии «Личный» (0.3.7): тот же отказ без «встречи».
-ASK_FIRST_PERSONAL = ("Meet заблокировал: {what} — без согласия пользователя. Сейчас ход по репликам: "
-                     "без его просьбы можно читать только файлы этой сессии и то, что он добавил в чат. "
-                     "Спроси пользователя с кнопками, прежде чем это делать (например: "
-                     "{{\"say\": \"Я гляну …?\", \"buttons\": [\"Да, глянь\", \"Не надо\"]}}), "
-                     "и сделай после его согласия. Не пытайся обойти запрет другим инструментом.")
-# Профиль «Личный»: база знаний и другие записи закрыты на любом уровне
-# согласия — ни просьба, ни кнопка, ни разрешение «до конца» их не открывают.
-PROFILE = ("Meet заблокировал: {what} — в профиле «Личный» база знаний и другие записи "
-           "закрыты. Не открывай и не ищи там, в том числе командами.")
-EXCLUDED = ("Meet заблокировал: {what} — эта папка закрыта настройками пользователя "
+# Отказ в ходе по ❓ «Поясни» (READ): карточек нет — только чтение.
+ASK_FIRST_READ = ("Meet заблокировал: {what} — сейчас ход по «Поясни»: можно только читать (файлы, "
+                  "веб-поиск, MCP на чтение, простые команды чтения). Если для ответа нужно это действие, "
+                  "предложи его пользователю с кнопками (например: "
+                  "{{\"say\": \"Сделать …?\", \"buttons\": [\"Да, сделай\", \"Не надо\"]}}) "
+                  "и сделай после его согласия. Не пытайся обойти запрет другим инструментом.")
+EXCLUDED =("Meet заблокировал: {what} — эта папка закрыта настройками пользователя "
             "(«Не показывать ассистенту»). Не открывай и не ищи там, в том числе командами.")
 SENSITIVE = ("Meet заблокировал: {what} — это закрытые данные (ключи, пароли, настройки программ, "
              "служебные файлы Meet). Их ассистенту не открыть никак.")
@@ -157,10 +165,11 @@ _NEGATIVE = re.compile(r"^\s*(не\b|нет\b|отмен|стоп\b|пропус
 
 def click_level(label: str) -> str:
     """Согласие от нажатой кнопки агента: «Не надо», «Нет», «Позже» — NONE;
-    остальное — READ (чтение по просьбе). Действия кнопка агента не
-    разрешает никогда: на них — карточка Meet по каждому вызову."""
+    остальное — USER (нажал человек: его просьба, как сообщение).
+    Рискованное (удаление, запись вне рабочих папок, отправка наружу) всё
+    равно идёт карточкой Meet по каждому вызову."""
     text = " ".join(str(label or "").split())
-    return NONE if not text or _NEGATIVE.match(text) else READ
+    return NONE if not text or _NEGATIVE.match(text) else USER
 
 
 def _ipv4_legacy(text: str) -> int | None:
@@ -361,35 +370,65 @@ _WRAPPERS = {"env", "command", "exec", "xargs", "nohup", "sudo", "nice", "time",
 
 
 def _abs_path(arg: str) -> bool:
-    return bool(re.match(r"^([A-Za-z]:/|/)", arg))
+    return bool(re.match(r"^([A-Za-z]:[\\/]|/)", arg))
 
 
 def shell_plan(command: str):
-    """Команда из безопасного набора — (пути, рекурсивно ли) или None
-    (карточка). Одна команда, без метасимволов, без обёрток и переменных
-    окружения; программа и КАЖДЫЙ её флаг — из белого списка; пути — только
-    абсолютные (относительные — карточкой: рабочая папка оболочки неизвестна)."""
-    cmd = str(command or "")
-    if not cmd.strip() or any(ch in _SHELL_UNSAFE for ch in cmd):
-        return None
-    try:
-        words = shlex.split(cmd, posix=True)
-    except ValueError:
-        return None
-    if not words or "=" in words[0] or words[0] in _WRAPPERS:
-        return None
-    prog, args = words[0], words[1:]
-    handler = _SAFE_PROGRAMS.get(prog)
-    return handler(args) if handler else None
+    """Команда Bash из безопасного набора чтения — (пути, рекурсивно ли) или
+    None (`read_plan`)."""
+    return read_plan("Bash", command)
+
+
+def _path_ok(arg: str) -> bool:
+    """Путь в команде чтения: только абсолютный и буквальный (без `$`,
+    шаблонов, `~` и обратных кавычек) — иначе не знаем, что прочтётся."""
+    return _abs_path(arg) and not any(ch in arg for ch in "$*?[]~`")
 
 
 def _paths_only(args, *, need=0, recursive=False):
-    if len(args) < need or not all(_abs_path(a) for a in args):
+    if len(args) < need or not all(_path_ok(a) for a in args):
         return None
     return list(args), recursive
 
 
-def _plan_ls(args):
+def _scan(args, flags: dict[str, bool], attached: str | None = None, *, fold: bool = False):
+    """Флаги команды чтения: только из `flags` (флаг → берёт ли значение
+    отдельным словом) или слитные по `attached`; остальное — позиционные.
+    → (позиционные, значения флагов) или None (чужой флаг)."""
+    positional, values, k = [], {}, 0
+    while k < len(args):
+        a = args[k]
+        key = a.lower() if fold else a
+        if a.startswith("-") and a != "-":
+            if key in flags:
+                if flags[key]:
+                    if k + 1 >= len(args):
+                        return None
+                    values.setdefault(key, []).append(args[k + 1])
+                    k += 1
+            elif not (attached and re.fullmatch(attached, a)):
+                return None
+        else:
+            positional.append(a)
+        k += 1
+    return positional, values
+
+
+def _files(flags: dict[str, bool], attached: str | None = None, *, max_paths: int | None = None):
+    """cat/head/tail/wc/cut/sort/uniq/nl: позиционные — файлы. Первая в цепочке
+    без файла — нет (читала бы ввод), за `|` — можно."""
+    def plan(args, piped):
+        scanned = _scan(args, flags, attached)
+        if scanned is None:
+            return None
+        paths = scanned[0]
+        if max_paths is not None and len(paths) > max_paths:
+            return None           # `uniq a b` пишет в b
+        return _paths_only(paths, need=0 if piped else 1)
+    return plan
+
+
+def _plan_ls(args, piped=False):
     flags = [a for a in args if a.startswith("-")]
     paths = [a for a in args if not a.startswith("-")]
     if any(not re.fullmatch(r"-[lahAR1tSrF]+|--all|--human-readable", f) for f in flags):
@@ -397,45 +436,23 @@ def _plan_ls(args):
     return _paths_only(paths, recursive=any("R" in f for f in flags))
 
 
-def _plan_files(allowed: dict[str, bool]):
-    """cat/head/tail/wc: флаги из `allowed` (флаг → берёт ли число), пути — абсолютные, хотя бы один."""
-    def plan(args):
-        paths, k = [], 0
-        while k < len(args):
-            a = args[k]
-            if a.startswith("-"):
-                if a not in allowed:
-                    return None
-                if allowed[a]:
-                    if k + 1 >= len(args) or not args[k + 1].isdigit():
-                        return None
-                    k += 1
-            else:
-                paths.append(a)
-            k += 1
-        return _paths_only(paths, need=1)
-    return plan
-
-
 def _plan_grep(rg: bool):
-    def plan(args):
+    def plan(args, piped=False):
         pattern_given, positional, k = False, [], 0
         while k < len(args):
             a = args[k]
-            if a in ("-e",):
+            if a in ("-e", "-A", "-B", "-C", "-m", "--max-count") or (rg and a in ("-g", "--glob")):
                 if k + 1 >= len(args):
                     return None
-                pattern_given, k = True, k + 2
-                continue
-            if a.startswith("--glob="):
-                k += 1
-                continue
-            if a == "--glob":
+                pattern_given = pattern_given or a == "-e"
                 k += 2
                 continue
+            if a.startswith(("--glob=", "--color=", "--max-count=")) or re.fullmatch(r"-[ABCm]\d+", a):
+                k += 1
+                continue
             if a.startswith("-"):
-                if not re.fullmatch(r"-[inlcwF]+", a):
-                    return None          # --pre, -O, --pre-glob, -r, -z… — карточкой
+                if not re.fullmatch(r"-[inlcwFvoEHhxs]+", a):
+                    return None          # --pre, -O, --pre-glob, -r, -z… — не чтение
                 k += 1
                 continue
             positional.append(a)
@@ -444,8 +461,101 @@ def _plan_grep(rg: bool):
             if not positional:
                 return None
             positional = positional[1:]
-        return _paths_only(positional, need=0 if rg else 1, recursive=rg)
+        return _paths_only(positional, need=0 if rg or piped else 1, recursive=rg)
     return plan
+
+
+# sed — только печать строк: адреса (номер, `$`, /рег/) и команды p, d, q, =,
+# замена s/…/…/ с флагами g, i, p, числом. Ни `w` (запись), ни `e`
+# (выполнение), ни `r` (чтение файла), ни `-i`.
+_SED_ADDR = r"(?:\d+|\$|/(?:[^/\\]|\\.)*/)"
+_SED_CMD = (r"\s*(?:" + _SED_ADDR + r"(?:\s*,\s*" + _SED_ADDR + r")?)?\s*!?\s*"
+            r"(?:[pdq=]|s/(?:[^/\\\n]|\\.)*/(?:[^/\\\n]|\\.)*/[gip0-9]*)\s*")
+_SED_SAFE = re.compile(r"(?:" + _SED_CMD + r";)*" + _SED_CMD)
+
+
+def _plan_sed(args, piped=False):
+    scanned = _scan(args, {"-n": False, "-E": False, "-r": False, "-z": False, "--quiet": False,
+                           "--silent": False, "-e": True, "--expression": True})
+    if scanned is None:
+        return None
+    positional, values = scanned
+    scripts = values.get("-e", []) + values.get("--expression", [])
+    if not scripts:
+        if not positional:
+            return None
+        scripts, positional = [positional[0]], positional[1:]
+    if not all(_SED_SAFE.fullmatch(s) for s in scripts):
+        return None
+    return _paths_only(positional, need=0 if piped else 1)
+
+
+def _plan_findstr(args, piped=False):
+    """findstr: `/i /n /v /r /l /b /e /x /m /c:строка` (без /s, /f, /g — обхода и списков из файлов)."""
+    positional, literal = [], False
+    for a in args:
+        low = a.lower()
+        if low.startswith("/c:"):
+            literal = True
+        elif low.startswith("/"):
+            if not re.fullmatch(r"(/[invrlbexm])+", low):
+                return None
+        else:
+            positional.append(a)
+    if not literal:
+        if not positional:
+            return None
+        positional = positional[1:]
+    return _paths_only(positional, need=0 if piped else 1)
+
+
+def _no_paths(flags: dict[str, bool], attached: str | None = None, *, positional_ok: bool = False,
+              fold: bool = False):
+    """Фильтр потока без файлов (tr, Select-Object, Sort-Object…)."""
+    def plan(args, piped=False):
+        scanned = _scan(args, flags, attached, fold=fold)
+        if scanned is None or (scanned[0] and not positional_ok):
+            return None
+        return [], False
+    return plan
+
+
+def _plan_get_content(args, piped=False):
+    scanned = _scan(args, {"-path": True, "-literalpath": True, "-totalcount": True, "-head": True, "-first": True,
+                           "-tail": True, "-last": True, "-encoding": True, "-raw": False, "-readcount": True},
+                    fold=True)
+    if scanned is None:
+        return None
+    positional, values = scanned
+    paths = positional + values.get("-path", []) + values.get("-literalpath", [])
+    return _paths_only(paths, need=1)
+
+
+def _plan_gci(args, piped=False):
+    scanned = _scan(args, {"-path": True, "-literalpath": True, "-filter": True, "-name": False, "-file": False,
+                           "-directory": False, "-force": False, "-recurse": False, "-depth": True,
+                           "-include": True, "-exclude": True}, fold=True)
+    if scanned is None:
+        return None
+    positional, values = scanned
+    paths = positional + values.get("-path", []) + values.get("-literalpath", [])
+    recursive = any(a.lower() in ("-recurse", "-depth") for a in args)
+    return _paths_only(paths, recursive=recursive)
+
+
+def _plan_select_string(args, piped=False):
+    scanned = _scan(args, {"-pattern": True, "-path": True, "-literalpath": True, "-simplematch": False,
+                           "-casesensitive": False, "-context": True, "-list": False, "-notmatch": False,
+                           "-allmatches": False, "-raw": False, "-quiet": False, "-encoding": True}, fold=True)
+    if scanned is None:
+        return None
+    positional, values = scanned
+    if "-pattern" not in values:
+        if not positional:
+            return None
+        positional = positional[1:]
+    paths = positional + values.get("-path", []) + values.get("-literalpath", [])
+    return _paths_only(paths, need=0 if piped else 1)
 
 
 _GIT_SUBS = {
@@ -497,17 +607,103 @@ def _plan_find(args):
     return _paths_only(paths, need=1, recursive=True)
 
 
+def _plan_git_read(args, piped=False):
+    return _plan_git(args)
+
+
+_STREAM = r"-n\d+|-\d+|-c\d+|--lines=\d+|--bytes=\d+"
 _SAFE_PROGRAMS = {
     "ls": _plan_ls, "dir": _plan_ls,
-    "cat": _plan_files({"-n": False}), "type": _plan_files({}),
-    "head": _plan_files({"-n": True}), "tail": _plan_files({"-n": True}),
-    "wc": _plan_files({"-l": False, "-w": False, "-c": False}),
-    "pwd": lambda args: ([], False) if not args else None,
-    "echo": lambda args: ([], False),
+    "cat": _files({"-n": False, "-b": False, "-s": False, "-A": False, "-E": False, "-T": False}),
+    "type": _files({}),
+    "head": _files({"-n": True, "-q": False}, _STREAM), "tail": _files({"-n": True, "-q": False}, _STREAM),
+    "wc": _files({"-l": False, "-w": False, "-c": False, "-m": False}, r"-[lwcm]+"),
+    "nl": _files({"-b": True, "-w": True, "-n": True}, r"-b[atn]|-w\d+|-n(?:ln|rn|rz)"),
+    "cut": _files({"-c": True, "-f": True, "-d": True, "-b": True, "-s": False, "--complement": False},
+                  r"-[cfb][\d,-]+|-d.|--(?:characters|fields|delimiter|bytes)=.+"),
+    "sort": _files({"-n": False, "-r": False, "-u": False, "-f": False, "-h": False, "-V": False, "-b": False,
+                    "-g": False, "-M": False, "-s": False, "-k": True, "-t": True},
+                   r"-[nrufhVbgMs]+|-k[\d.,a-zA-Z]+|-t."),
+    "uniq": _files({"-c": False, "-d": False, "-u": False, "-i": False, "-f": True, "-s": True},
+                   r"-[cdui]+", max_paths=1),
+    "tr": _no_paths({"-d": False, "-s": False, "-c": False}, r"-[dsc]+", positional_ok=True),
+    "pwd": lambda args, piped=False: ([], False) if not args else None,
+    "echo": lambda args, piped=False: ([], False),
     "rg": _plan_grep(True), "grep": _plan_grep(False),
-    "git": _plan_git,
-    "find": _plan_find,
+    "sed": _plan_sed, "findstr": _plan_findstr,
+    "git": _plan_git_read,
+    "find": lambda args, piped=False: _plan_find(args),
 }
+# PowerShell: свои командлеты и псевдонимы (`cat`, `ls`, `type` там — Get-Content / Get-ChildItem).
+_PS_PROGRAMS = {
+    "get-content": _plan_get_content, "gc": _plan_get_content, "cat": _plan_get_content,
+    "type": _plan_get_content,
+    "get-childitem": _plan_gci, "gci": _plan_gci, "ls": _plan_gci, "dir": _plan_gci,
+    "select-string": _plan_select_string, "sls": _plan_select_string,
+    "select-object": _no_paths({"-first": True, "-last": True, "-skip": True, "-unique": False, "-index": True,
+                                "-expandproperty": True, "-property": True}, fold=True),
+    "sort-object": _no_paths({"-unique": False, "-descending": False, "-property": True}, fold=True,
+                             positional_ok=True),
+    "measure-object": _no_paths({"-line": False, "-word": False, "-character": False}, fold=True),
+    "format-table": _no_paths({"-autosize": False, "-wrap": False}, fold=True, positional_ok=True),
+    "format-list": _no_paths({}, fold=True, positional_ok=True),
+    "out-string": _no_paths({"-width": True, "-stream": False}, fold=True),
+    "get-location": _no_paths({}, fold=True), "pwd": _no_paths({}, fold=True),
+    "write-output": lambda args, piped=False: ([], False), "echo": lambda args, piped=False: ([], False),
+    "git": _plan_git_read, "rg": _plan_grep(True), "findstr": _plan_findstr,
+}
+for _alias, _name in (("select", "select-object"), ("sort", "sort-object"), ("measure", "measure-object"),
+                      ("ft", "format-table"), ("fl", "format-list")):
+    _PS_PROGRAMS[_alias] = _PS_PROGRAMS[_name]
+# Знаки, которых в команде чтения не бывает: подстановки, перенаправления,
+# блоки и подвыражения, история.
+_READ_UNSAFE = re.compile(r"[`<>(){}!\r\n]|\$\(|\$\{|@\(")
+_PATTERN_PROGRAMS = frozenset(("sed", "grep", "rg", "findstr", "select-string", "sls"))
+
+
+def read_plan(tool: str, command: str):
+    """Команда только чтения (0.4: и цепочки через `|`, `;`, `&&`) — (пути,
+    рекурсивно ли) или None. Каждая команда цепочки — из белого списка
+    (cat, head, tail, `sed -n` с печатью строк, grep, rg, cut, sort, uniq,
+    wc, nl, tr, ls, findstr, git status/log/diff/show; в PowerShell —
+    Get-Content, Get-ChildItem, Select-String, Select-Object, Sort-Object…)
+    с КАЖДЫМ флагом из списка; без перенаправлений в файлы, подстановок
+    (`$(…)`, обратные кавычки), обёрток, переменных окружения и in-place
+    флагов (`sed -i`, `sort -o`); пути — только абсолютные и буквальные."""
+    cmd = str(command or "")
+    if tool not in SHELL or not cmd.strip() or _READ_UNSAFE.search(cmd):
+        return None
+    tokens = _tokens(cmd, tool)
+    if not tokens:
+        return None
+    programs = _PS_PROGRAMS if tool == "PowerShell" else _SAFE_PROGRAMS
+    segments: list[tuple[list[str], bool]] = [([], False)]
+    for t in tokens:
+        if t in ("|", ";", "&&"):
+            if not segments[-1][0]:
+                return None
+            segments.append(([], t == "|"))
+        elif t in _SEPARATORS or set(t) <= set(";&|"):
+            return None                       # `&` (фон), `||` и прочее — не чтение
+        else:
+            segments[-1][0].append(t)
+    paths, recursive = [], False
+    for words, piped in segments:
+        if not words:
+            return None
+        head = words[0]
+        if "=" in head or head.lower() in _WRAPPERS or "$" in head:
+            return None
+        # `$` — только в шаблоне поиска или сценарии sed (якорь конца строки, адрес `$`).
+        if head.lower() not in _PATTERN_PROGRAMS and any("$" in w for w in words[1:]):
+            return None
+        handler = programs.get(head.lower() if tool == "PowerShell" else head)
+        plan = handler(words[1:], piped) if handler else None
+        if plan is None:
+            return None
+        paths += plan[0]
+        recursive = recursive or plan[1]
+    return paths, recursive
 
 
 # --- «до конца встречи» для команд (ревью round 3, G1) -----------------------------------------
@@ -755,6 +951,335 @@ def shell_simple_word(tool: str, command: str) -> str | None:
     if not words or "=" in words[0] or words[0].lower() in _WRAPPERS:
         return None
     return words[0]
+
+
+# --- рискованные команды: удаление и отправка наружу (0.4, спец. §2) ---------------------------
+#
+# Команда разбирается на простые команды (`;`, `&&`, `||`, `|`, `&`, скобки,
+# `$(…)`, обратные кавычки, блоки PowerShell `{…}`), у каждой снимаются
+# обёртки (`sudo`, `env`, `xargs`…) и разворачиваются оболочки с кодом в
+# строке (`bash -c "…"`, `cmd /c`, `powershell -Command`, `eval`, `iex`).
+# Не разобралась — запасной путь в закрытую сторону: любое слово из списков.
+
+DELETE = "delete"
+SEND = "send"
+# Удаление файлов (PowerShell: `rm`, `del`, `erase`, `rd`, `rmdir`, `ri` — псевдонимы Remove-Item).
+DELETE_PROGRAMS = frozenset(("rm", "rmdir", "del", "erase", "rd", "remove-item", "ri", "unlink", "shred"))
+MOVE_PROGRAMS = frozenset(("mv", "move", "move-item", "mi"))
+# Отправка наружу — всегда (любые аргументы).
+SEND_PROGRAMS = frozenset(("scp", "sftp", "ftp", "tftp", "ssh", "nc", "ncat", "netcat", "telnet",
+                           "send-mailmessage"))
+_PS_WEB = frozenset(("invoke-webrequest", "iwr", "invoke-restmethod", "irm"))
+_SEND_METHODS = frozenset(("post", "put", "patch", "delete", "merge"))
+# Публикация пакетов и образов: (программа, подкоманда).
+_PUBLISH = {"npm": {"publish"}, "pnpm": {"publish"}, "yarn": {"publish", "npm"}, "cargo": {"publish"},
+            "twine": {"upload"}, "docker": {"push"}, "podman": {"push"}, "gem": {"push"},
+            "poetry": {"publish"}, "uv": {"publish"}, "flit": {"publish"}, "hatch": {"publish"}}
+# gh / glab: действия, которые пишут на сервер (задача, PR, комментарий…).
+_FORGE_ACTIONS = frozenset(("create", "comment", "note", "review", "merge", "close", "reopen", "edit", "delete",
+                            "upload", "ready", "lock", "unlock", "transfer", "approve", "revoke", "update",
+                            "rename", "archive", "fork", "sync", "set", "add", "remove", "cancel", "rerun",
+                            "run", "enable", "disable"))
+# Обёртки, у которых дальше идёт обычная команда (флаги и их значения пропускаются).
+_PASS_WRAPPERS = frozenset(("sudo", "doas", "env", "command", "exec", "nohup", "nice", "time", "timeout", "watch",
+                            "strace", "busybox", "runas", "start", "start-process", "xargs", "stdbuf", "ionice",
+                            "chrt", "setsid", "unbuffer", "caffeinate", "&", "."))
+_VALUE_FLAGS = {"xargs": {"-I", "-n", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs"},
+                "timeout": {"-s", "-k", "--signal", "--kill-after"}, "sudo": {"-u", "-g", "-C", "-D", "-h", "-p"},
+                "nice": {"-n"}, "env": {"-u", "-C", "-S"}, "start-process": {"-ArgumentList", "-FilePath"}}
+# Оболочки с кодом в строке: (программа → флаги, после которых код).
+_SHELLS = {"bash": {"-c"}, "sh": {"-c"}, "zsh": {"-c"}, "dash": {"-c"}, "ksh": {"-c"}, "fish": {"-c", "--command"},
+           "cmd": {"/c", "/k", "/r"}, "powershell": {"-c", "-command", "-com", "-comm", "-comma", "-comman"},
+           "pwsh": {"-c", "-command", "-com", "-comm", "-comma", "-comman"}}
+_EVALS = frozenset(("eval", "iex", "invoke-expression", "invoke-command", "icm"))
+_CD = frozenset(("cd", "pushd", "chdir", "set-location", "sl", "push-location"))
+_SEPARATORS = frozenset((";", ";;", "&&", "||", "|", "&", "|&", "(", ")", "{", "}", "$(", "${"))
+_REDIRECTS = re.compile(r"^\d*(?:>>?|<<?|>&|<&|&>>?)$")
+_RISK_DEPTH = 4
+
+
+def _tokens(text: str, tool: str) -> list[str] | None:
+    """Слова и разделители команды (кавычки соблюдены; перевод строки — `;`)."""
+    text = re.sub(r"\r\n?|\n", " ; ", str(text or ""))
+    try:
+        lexer = shlex.shlex(text, posix=tool != "PowerShell", punctuation_chars="();<>|&{}")
+        lexer.whitespace_split = True
+        out = list(lexer)
+    except ValueError:
+        return None
+    if tool == "PowerShell":
+        out = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"" else t for t in out]
+    return out
+
+
+def _commands(tokens: list[str]) -> list[list[str]]:
+    """Простые команды из слов: делятся разделителями; перенаправление —
+    вместе с его целью — не слово команды; обратная кавычка — граница."""
+    out: list[list[str]] = [[]]
+    k = 0
+    while k < len(tokens):
+        t = tokens[k]
+        if t in _SEPARATORS or t == "$" or set(t) <= set(";&|(){}"):
+            out.append([])
+            k += 1
+            continue
+        if _REDIRECTS.match(t) or set(t) <= set("<>"):
+            k += 2                      # перенаправление и его цель
+            continue
+        if t.startswith("`"):
+            out.append([])
+            t = t[1:]
+        tail = t.endswith("`")
+        t = t.rstrip("`")
+        if t:
+            out[-1].append(t)
+        if tail:
+            out.append([])
+        k += 1
+    return [c for c in out if c]
+
+
+def _inner_code(word: str) -> list[str]:
+    """Код внутри слова: `$(…)` и обратные кавычки (в том числе в кавычках)."""
+    found = re.findall(r"\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)", word)
+    found += re.findall(r"`([^`]*)`", word)
+    if not found and ("$(" in word or word.count("`") == 1):
+        found.append(word.replace("$(", " ").replace("`", " "))
+    return found
+
+
+def _strip_wrappers(words: list[str]) -> list[str]:
+    """Снять присваивания переменных и обёртки (`sudo -u x`, `xargs -n 1`, `timeout 5`)."""
+    k = 0
+    while k < len(words):
+        w = words[k]
+        if re.match(r"^[A-Za-z_][\w]*=", w) or w.startswith("$env:"):
+            k += 1
+            continue
+        prog = _program(w)
+        if prog not in _PASS_WRAPPERS:
+            break
+        k += 1
+        values = {v.lower() for v in _VALUE_FLAGS.get(prog, ())}
+        while k < len(words) and (words[k].startswith("-") or (prog == "timeout" and re.fullmatch(r"[\d.]+\w?",
+                                                                                                    words[k]))):
+            flag = words[k].lower()
+            k += 2 if flag in values else 1
+    return words[k:]
+
+
+def _git_risk(words: list[str]) -> str:
+    """`git [глобальные флаги] <подкоманда> …`: push — наружу; clean, rm,
+    reset --hard, checkout -- <путь> / checkout ., restore (кроме только
+    --staged) — удаление."""
+    k = 1
+    while k < len(words) and words[k].startswith("-"):
+        k += 2 if words[k] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") else 1
+    if k >= len(words):
+        return ""
+    sub, rest = words[k].lower(), words[k + 1:]
+    if sub in ("push", "send-email", "request-pull") or (sub == "svn" and "dcommit" in rest):
+        return SEND
+    if sub in ("clean", "rm"):
+        return DELETE
+    if sub == "reset" and any(w in ("--hard", "--merge", "--keep") for w in rest):
+        return DELETE
+    if sub == "checkout" and ("--" in rest or "." in rest or any(w in ("-f", "--force") for w in rest)):
+        return DELETE
+    if sub == "restore":
+        staged_only = any(w in ("--staged", "-S") for w in rest) and not any(w in ("--worktree", "-W")
+                                                                            for w in rest)
+        return "" if staged_only else DELETE
+    if sub == "stash" and rest[:1] and rest[0] in ("drop", "clear"):
+        return DELETE
+    return ""
+
+
+def _curl_sends(words: list[str]) -> bool:
+    """curl: тело (`-d`, `--data*`, `-F`, `--form*`, `-T`, `--upload-file`,
+    `--json`) или метод изменения (`-X POST`, `-XPUT`, `--request=PATCH`)."""
+    k = 1
+    while k < len(words):
+        w = words[k]
+        low = w.lower()
+        if w.startswith("--"):
+            name, _eq, value = low.partition("=")
+            if name.startswith(("--data", "--form", "--upload", "--json", "--post")):
+                return True
+            if name in ("--request", "--method"):
+                method = value or (words[k + 1].lower() if k + 1 < len(words) else "")
+                if method in _SEND_METHODS:
+                    return True
+        elif w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            for i, ch in enumerate(letters):
+                if ch in "dFT":
+                    return True
+                if ch == "X":
+                    method = (letters[i + 1:] or (words[k + 1] if k + 1 < len(words) else "")).lower()
+                    if method in _SEND_METHODS:
+                        return True
+                    break
+                if ch in "HoOuAebcKxwmrEyYzCUQDtP":    # дальше — значение флага
+                    break
+        k += 1
+    return False
+
+
+def _ps_web_sends(words: list[str]) -> bool:
+    """Invoke-WebRequest / Invoke-RestMethod (и curl/wget — их псевдонимы в
+    PowerShell 5): `-Method Post…`, `-Body`, `-InFile`, `-Form`
+    (сокращения параметров PowerShell — тоже)."""
+    k = 1
+    while k < len(words):
+        w = words[k]
+        if w.startswith("-") and len(w) > 2:
+            name, _colon, value = w[1:].lower().partition(":")
+            if len(name) >= 2 and ("method".startswith(name) or "custommethod".startswith(name)):
+                method = value or (words[k + 1].lower() if k + 1 < len(words) else "")
+                if method.strip("'\"") in _SEND_METHODS or "custommethod".startswith(name) and len(name) > 2:
+                    return True
+            if len(name) >= 2 and any(full.startswith(name) for full in ("body", "infile", "form")):
+                return True
+        k += 1
+    return False
+
+
+def _http_sends(prog: str, words: list[str]) -> bool:
+    if prog == "curl" and _curl_sends(words):
+        return True
+    if prog == "wget" and any(w.lower().startswith(("--post", "--body", "--method")) for w in words[1:]):
+        return True
+    if prog in ("http", "https", "xh", "httpie"):
+        rest = words[1:]
+        if any(w.upper() in ("POST", "PUT", "PATCH", "DELETE") for w in rest[:1]) or \
+                any(re.search(r"(?<!:)(?::=|=|@)", w) and not w.startswith("-") for w in rest[1:]):
+            return True
+    return False
+
+
+def _forge_sends(prog: str, words: list[str]) -> bool:
+    """gh / glab: задачи, PR и комментарии (`gh pr create`, `gh issue comment`…),
+    `api` с телом или методом изменения."""
+    rest = [w.lower() for w in words[1:] if not w.startswith("-")]
+    if not rest:
+        return False
+    if rest[0] == "api":
+        for i, w in enumerate(words[2:], 2):
+            if re.match(r"^(?:-[fF]|--field|--raw-field|--input|--form)", w):
+                return True               # тело запроса
+            name, _eq, value = w.lower().partition("=")
+            if name in ("-x", "--method", "--request"):
+                method = value or (words[i + 1].lower() if i + 1 < len(words) else "")
+                if method in _SEND_METHODS:
+                    return True
+            elif re.fullmatch(r"-x(post|put|patch|delete)", w.lower()):
+                return True
+        return False
+    return (len(rest) >= 2 and rest[1] in _FORGE_ACTIONS) or rest[0] in ("release", "gist", "secret", "variable")
+
+
+def _paths_of(words: list[str]) -> list[str]:
+    return [w for w in words[1:] if not w.startswith("-")]
+
+
+def _command_risk(words: list[str], tool: str, inside, cd: bool, depth: int) -> str:
+    words = _strip_wrappers(words)
+    if not words:
+        return ""
+    prog = _program(words[0])
+    for w in words[1:]:
+        for code in _inner_code(w):
+            risk = shell_risk(tool, code, inside=inside, _depth=depth + 1)
+            if risk:
+                return risk
+    if prog in _SHELLS:
+        flags = _SHELLS[prog]
+        if prog in ("powershell", "pwsh") and any(
+                len(w) > 2 and "-encodedcommand".startswith(w.lower()) for w in words[1:]):
+            return DELETE                       # код не прочесть — в закрытую сторону
+        for i, w in enumerate(words[1:], 1):
+            if w.lower() in flags:
+                code = " ".join(words[i + 1:])
+                return shell_risk("PowerShell" if prog in ("powershell", "pwsh") else "Bash", code,
+                                  inside=inside, _depth=depth + 1)
+        # Сценарий файлом (`bash x.sh`) — что внутри, Meet не видит: решает автомод CLI.
+        return ""
+    if prog in _EVALS:
+        code = " ".join(w for w in words[1:] if not w.startswith("-"))
+        return shell_risk(tool, code, inside=inside, _depth=depth + 1)
+    if prog in DELETE_PROGRAMS:
+        return DELETE
+    if prog in MOVE_PROGRAMS or (prog == "git" and len(words) > 1 and words[1].lower() == "mv"):
+        targets = _paths_of(words[1:] if prog == "git" else words)
+        if not targets or cd or inside is None or not all(inside(t) for t in targets):
+            return DELETE
+        return ""
+    if prog == "find":
+        low = [w.lower() for w in words[1:]]
+        if "-delete" in low:
+            return DELETE
+        for flag in ("-exec", "-execdir", "-ok", "-okdir"):
+            if flag in low:
+                start = low.index(flag) + 1
+                end = next((i for i in range(start, len(low)) if low[i] in (";", "\\;", "+")), len(low))
+                risk = _command_risk(words[1 + start:1 + end], tool, inside, cd, depth + 1)
+                if risk:
+                    return risk
+        return ""
+    if prog == "git":
+        return _git_risk(words)
+    if prog in SEND_PROGRAMS:
+        return SEND
+    if prog == "rsync" and any(re.match(r"^(?:rsync://|[^/\\\s]+::|[^/\\\s:]{2,}:)", w)
+                               for w in words[1:] if not w.startswith("-")):
+        return SEND
+    if prog in _PS_WEB or (tool == "PowerShell" and prog in ("curl", "wget")):
+        if _ps_web_sends(words):
+            return SEND
+    if prog in ("curl", "wget", "http", "https", "xh", "httpie") and _http_sends(prog, words):
+        return SEND
+    if prog in ("gh", "glab") and _forge_sends(prog, words):
+        return SEND
+    if prog in _PUBLISH:
+        subs = [w.lower() for w in words[1:] if not w.startswith("-")]
+        if subs and subs[0] in _PUBLISH[prog]:
+            return SEND
+    if prog == "dotnet" and [w.lower() for w in words[1:3]] == ["nuget", "push"]:
+        return SEND
+    return ""
+
+
+def _fallback_risk(text: str) -> str:
+    """Команду не разобрать — любое слово из списков (в закрытую сторону)."""
+    words = {_program(w) for w in re.findall(r"[\w./\\:-]+", str(text or ""))}
+    if words & (DELETE_PROGRAMS | MOVE_PROGRAMS) or {"clean", "-delete"} & words:
+        return DELETE
+    if words & SEND_PROGRAMS or "push" in words or (words & {"curl", "wget", "rsync", "gh", "glab"} | words &
+                                                     _PS_WEB):
+        return SEND
+    return ""
+
+
+def shell_risk(tool: str, command: str, *, inside=None, _depth: int = 0) -> str:
+    """Категория Meet для команды (0.4, спец. §2): `delete` — удаление
+    (`rm`, `rmdir`, `del`, `erase`, `rd`, `Remove-Item`/`ri`, `git clean`,
+    `git rm`, `git reset --hard`, `git checkout -- …`, `git restore …`,
+    `find -delete`, `mv`/`move` за пределы рабочих папок); `send` —
+    отправка наружу (`git push`, `scp`, `sftp`, `ftp`, `ssh`, `rsync host:`,
+    `curl`/`wget`/`Invoke-WebRequest`/`irm` с телом или методом изменения,
+    `gh pr|issue create|comment…`, публикация пакетов); `""` — ни то, ни
+    другое (решает автомод CLI). `inside(путь) -> bool` — путь в рабочих
+    папках (для `mv`); None — любой перенос считается выходом наружу."""
+    if _depth > _RISK_DEPTH:
+        return DELETE
+    tokens = _tokens(command, tool)
+    if tokens is None:
+        return _fallback_risk(command)
+    commands = _commands(tokens)
+    cd = any(_program(c[0]) in _CD for c in commands if c)
+    risks = [_command_risk(c, tool, inside, cd, _depth) for c in commands]
+    return DELETE if DELETE in risks else SEND if SEND in risks else ""
 
 
 # --- адреса в аргументах MCP (fix round 3; ревью N2) -------------------------------------------
@@ -1199,12 +1724,28 @@ def card_for(tool: str, data: dict, grant: tuple[str, str] | None = None) -> dic
             "grant": {"key": grant[0], "label": grant[1]} if grant else None}
 
 
+# Подписи решения для строки вызова в чате (0.4, «Ход работы — как в Claude CLI»).
+_WHY_LABELS = {
+    "excluded": "закрытая папка", "sensitive": "закрытые данные", "background": "фоновое выполнение",
+    "local": "локальный адрес", "question": "вопрос не через чат", "hidden": "скрытые символы",
+    "too-long": "слишком длинный вызов", "ask": "нужна ваша просьба", "declined": "вы отклонили",
+    "timeout": "нет ответа", "unseen": "мимо проверки Meet", "no-card": "некуда показать карточку",
+    DELETE: "удаление", SEND: "отправка наружу", "outside": "запись вне рабочих папок",
+    "sandbox": "без песочницы", "mcp-write": "изменение через MCP", "mcp-address": "адрес в MCP",
+    "recursive": "обход рядом с закрытым",
+}
+
+
 @dataclass
 class Decision:
-    """`outcome`: allow / deny / ask (нужна карточка); `reason` — для модели;
-    `what` — «что агент хотел»; `why` — почему отказ (ask, excluded,
-    sensitive, background, local, question, declined, timeout, unseen,
-    no-card); `card` — карточка для `ask`."""
+    """`outcome`: allow (Meet пропускает сам) / auto (решает CLI: правила
+    пользователя и автомод) / deny / ask (нужна карточка); `reason` — для
+    модели; `what` — «что агент хотел»; `kind` — вид вызова (`describe`);
+    `why` — причина: у отказа (ask, excluded, sensitive, background, local,
+    question, hidden, too-long, declined, timeout, unseen, no-card), у
+    карточки — категория (delete, send, outside, sandbox, mcp-write,
+    mcp-address, recursive; в режиме confirm — пусто), у разрешения —
+    granted, granted-now, confirmed; `card` — карточка для `ask`."""
     outcome: str
     reason: str = ""
     what: str = ""
@@ -1215,6 +1756,31 @@ class Decision:
     @property
     def allow(self) -> bool:
         return self.outcome == ALLOW
+
+    @property
+    def passes(self) -> bool:
+        """Вызов идёт дальше (Meet разрешил или отдал решение CLI)."""
+        return self.outcome in (ALLOW, AUTO)
+
+    @property
+    def label(self) -> str:
+        """Коротко для строки вызова в чате: «разрешено автоматически»,
+        «решает автомод», «разрешили вы», «спрашиваю вас: удаление»,
+        «запрещено: закрытые данные»."""
+        why = _WHY_LABELS.get(self.why, "")
+        if self.outcome == AUTO:
+            return "решает автомод"
+        if self.outcome == ALLOW:
+            return {"confirmed": "разрешили вы", "granted-now": "разрешили вы до конца встречи",
+                    "granted": "разрешено до конца встречи"}.get(self.why, "разрешено автоматически")
+        if self.outcome == ASK:
+            return "спрашиваю вас" + (f": {why}" if why else "")
+        return "запрещено" + (f": {why}" if why else "")
+
+    def row(self) -> dict:
+        """Решение ворот для записи вызова в журнале (`kind: "tool"`, поле `gate`):
+        исход, причина и подпись — без текста вызова."""
+        return {"outcome": self.outcome, "why": self.why, "label": self.label}
 
 
 def _shown_dir(folder: str, written=None, cwd=None, *, parent: bool = False) -> str:
@@ -1249,23 +1815,29 @@ class ConsentGate:
     """Ворота согласия одного сеанса агента (потокобезопасно: решения
     спрашивают потоки ответов на запросы CLI).
 
-    `own_dirs` — читать можно всегда (папка встречи); `cwd` — рабочая папка
-    CLI (служебная, пустая; от неё — относительные пути; читать её тоже
-    можно); `deny_paths` — закрыто всегда (`kb_exclude`); `sensitive` —
-    закрыто всегда (по умолчанию `sensitive_paths()`); `allow_paths` —
-    файлы, которые приложил пользователь. `confirmer(card) -> "allow" |
-    "deny" | "timeout" | "cancelled"` — показать карточку и дождаться решения
-    (блокирующее; ставит вызывающий). `blocked_roots` — профиль сессии
-    «Личный» (база знаний, библиотека встреч): закрыто на любом уровне,
-    кроме своих путей внутри (папка записи лежит в библиотеке); хранится
-    отдельно от `deny_paths` — запрет библиотеки там закрыл бы и свою папку."""
+    `own_dirs` — папка записи: читать и править можно всегда, `.env` и
+    служебные файлы внутри неё — не закрыты (временная встреча лежит в папке
+    данных Meet); `work_dirs` — другие рабочие папки (база знаний): читать
+    без просьбы, править в ходе USER — но закрытое внутри них закрыто; `cwd`
+    — рабочая папка CLI (служебная; от неё — относительные пути; тоже
+    рабочая); папки, где пользователь разрешил правку «до конца встречи»
+    (`FILES_GRANT`), — тоже рабочие. `deny_paths` — закрыто всегда
+    (`kb_exclude`); `sensitive` — закрыто всегда (по умолчанию
+    `sensitive_paths()`); `allow_paths` — файлы, которые приложил
+    пользователь (только чтение). `confirmer(card) -> "allow" |
+    "allow_meeting" | "deny" | "timeout" | "cancelled"` — показать карточку и
+    дождаться решения (блокирующее; ставит вызывающий). `mode` — как
+    действует ассистент в ходе USER: `auto` (решает CLI, карточка — только
+    рискованное) или `confirm` (карточка на каждое действие, как 0.3.7).
+    `ask_text` — отказ в ходе без просьбы (`{what}` — что агент хотел)."""
 
-    def __init__(self, *, own_dirs=(), deny_paths=(), sensitive=None, cwd=None, log=None,
-                 confirmer=None, blocked_roots=()) -> None:
+    def __init__(self, *, own_dirs=(), work_dirs=(), deny_paths=(), sensitive=None, cwd=None, log=None,
+                 confirmer=None, mode: str = MODE_AUTO, ask_text: str = ASK_FIRST) -> None:
         self._cwd = str(cwd) if cwd else None
         self._own = [r for r in (resolve(d, self._cwd) for d in own_dirs or () if d) if r]
+        self._work = [r for r in (resolve(d, self._cwd) for d in work_dirs or () if d) if r]
         # Папка для подписи разрешения — настоящая (после ссылок), с регистром и «\».
-        self._dir_shown = {r: _shown_dir(r, d, self._cwd) for d in own_dirs or () if d
+        self._dir_shown = {r: _shown_dir(r, d, self._cwd) for d in (*(own_dirs or ()), *(work_dirs or ())) if d
                            for r in [resolve(d, self._cwd)] if r}
         if self._cwd:
             own_cwd = resolve(self._cwd)
@@ -1273,10 +1845,10 @@ class ConsentGate:
                 self._own.append(own_cwd)
                 self._dir_shown.setdefault(own_cwd, _shown_dir(own_cwd, self._cwd))
         self._deny = [r for r in (resolve(d, self._cwd) for d in deny_paths or () if d) if r]
-        self._blocked = [r for r in (resolve(d, self._cwd) for d in blocked_roots or () if d) if r]
-        self._ask_first = ASK_FIRST_PERSONAL if self._blocked else ASK_FIRST
         sens = sensitive_paths() if sensitive is None else sensitive
         self._sensitive = [r for r in (resolve(d, self._cwd) for d in sens or () if d) if r]
+        self._mode = mode if mode in MODES else MODE_AUTO
+        self._ask_text = ask_text or ASK_FIRST
         self._attached: set[str] = set()
         self._lock = threading.RLock()   # решение берёт замок и внутри (разрешения)
         self._level = NONE
@@ -1284,7 +1856,7 @@ class ConsentGate:
         self._approved: dict[str, int] = {}
         self._seen: set[str] = set()
         # «Разрешать такое до конца встречи»: ключ → подпись; папки, куда
-        # человек уже разрешал запись.
+        # человек уже разрешал запись (карточкой).
         self._grants: dict[str, str] = {}
         self._approved_dirs: set[str] = set()
         self._log = log or (lambda _m: None)
@@ -1296,8 +1868,14 @@ class ConsentGate:
         with self._lock:
             return self._level
 
+    @property
+    def mode(self) -> str:
+        """`auto` / `confirm` — как действует ассистент в ходе USER
+        (`claude_stream` берёт отсюда `--permission-mode`)."""
+        return self._mode
+
     def begin(self, level: str) -> None:
-        """Ход начинается: согласие на этот ход (NONE / READ)."""
+        """Ход начинается: согласие на этот ход (NONE / READ / USER)."""
         with self._lock:
             self._level = level if level in _RANK else NONE
             self._seen = set()
@@ -1324,12 +1902,23 @@ class ConsentGate:
         with self._lock:
             return dict(self._grants)
 
+    def _granted_dirs(self) -> list[str]:
+        with self._lock:
+            keys = list(self._grants)
+        return [k[len(FILES_GRANT):] for k in keys if k.startswith(FILES_GRANT)]
+
+    def _work_roots(self) -> list[str]:
+        """Рабочие папки: запись, база знаний, служебная папка CLI и папки с
+        разрешением на правку «до конца встречи»."""
+        return [*self._own, *self._work, *self._granted_dirs()]
+
     def grant_for(self, tool: str, data: dict) -> tuple[str, str] | None:
         """Что разрешит «до конца встречи» для такого вызова (None — не
         предлагается): тот же MCP-инструмент; тот же домен WebFetch; то же
-        первое слово простой команды; изменение файлов любым инструментом
-        правки (Write, Edit, MultiEdit, NotebookEdit) в папке встречи или в
-        папке, где запись уже разрешали, — кроме «Личного» и закрытого внутри."""
+        первое слово простой команды (удаление и команды без песочницы —
+        никогда); изменение файлов любым инструментом правки (Write, Edit,
+        MultiEdit, NotebookEdit) в рабочей папке или в папке, где запись уже
+        разрешали, — кроме закрытого внутри."""
         data = data if isinstance(data, dict) else {}
         if tool.startswith("mcp__"):
             server, name = mcp_parts(tool)
@@ -1340,15 +1929,16 @@ class ConsentGate:
         if tool in SHELL:
             if data.get("dangerouslyDisableSandbox") or bash_warnings(tool, data):
                 return None
-            return shell_grant(tool, str(data.get("command") or ""))
+            command = str(data.get("command") or "")
+            if shell_risk(tool, command, inside=self._inside_work) == DELETE:
+                return None
+            return shell_grant(tool, command)
         if tool in FILE_WRITE:
-            # Один класс на все правки файлов (Write, Edit, MultiEdit,
-            # NotebookEdit): «изменение файлов в папке X». В «Личном» — никогда.
             target = self._write_target(data)
-            if not target or self._blocked:
+            if not target:
                 return None
             with self._lock:
-                folders = [*self._own, *self._approved_dirs]
+                folders = [*self._own, *self._work, *self._approved_dirs]
                 shown = dict(self._dir_shown)
             for folder in folders:
                 if _inside(target, folder) and self._files_grantable(target, folder):
@@ -1362,12 +1952,20 @@ class ConsentGate:
     def _files_grantable(self, target: str, folder: str) -> bool:
         """Разрешение на правки в `folder` покрывает `target`, только если
         цель не закрыта ничем, что уже внутри этой папки: `kb_exclude`,
-        чувствительный путь или корень профиля во вложенной папке, `.env`.
-        (Сама папка встречи может лежать в служебной папке Meet — временная
-        встреча; её «свою» запись это не меняет.)"""
+        чувствительный путь во вложенной папке, `.env`. (Сама папка встречи
+        может лежать в служебной папке Meet — временная встреча; её «свою»
+        запись это не меняет.)"""
         if any(_inside(target, d) for d in self._deny) or _env_file(target):
             return False
-        return not any(_inside(target, d) and not _inside(folder, d) for d in (*self._sensitive, *self._blocked))
+        return not any(_inside(target, d) and not _inside(folder, d) for d in self._sensitive)
+
+    def _writable(self, target: str | None) -> bool:
+        """Цель записи — в рабочей папке и не закрыта внутри неё."""
+        return bool(target) and any(_inside(target, d) and self._files_grantable(target, d)
+                                    for d in self._work_roots())
+
+    def _inside_work(self, path: str) -> bool:
+        return self._writable(resolve(path, self._cwd))
 
     def _granted(self, tool: str, data: dict) -> bool:
         with self._lock:
@@ -1376,7 +1974,7 @@ class ConsentGate:
             return False
         if tool in FILE_WRITE:
             target = self._write_target(data)
-            if not target or self._blocked:
+            if not target:
                 return False
             # Прежние ключи `write:<инструмент>:` (журналы до grant-polish) — только для своего инструмента.
             for k in grants:
@@ -1404,6 +2002,10 @@ class ConsentGate:
     def _own_path(self, path: str | None) -> bool:
         return bool(path) and (any(_inside(path, d) for d in self._own) or path in self._attached)
 
+    def _free_read(self, path: str | None) -> bool:
+        """Читать можно и без просьбы: рабочие папки и вложения."""
+        return bool(path) and (self._own_path(path) or any(_inside(path, d) for d in self._work_roots()))
+
     def _protected(self, path: str | None) -> str:
         if path is None:
             return "unresolved"
@@ -1411,10 +2013,6 @@ class ConsentGate:
             return "excluded"
         if self._own_path(path):
             return ""
-        # После своих путей: библиотека закрыта целиком, кроме папки записи;
-        # `resolve` уже снял `..` и ссылки (`<rec>/../other` — сюда).
-        if any(_inside(path, d) for d in self._blocked):
-            return "profile"
         if any(_inside(path, d) for d in self._sensitive) or _env_file(path):
             return "sensitive"
         return ""
@@ -1447,9 +2045,10 @@ class ConsentGate:
                 out.append(resolve(cwd or os.getcwd()))
         return out
 
-    def _mentions(self, text: str) -> str:
-        """Команда упоминает закрытую папку (или папку над ней — корень базы),
-        чувствительный путь, токен Meet, `.env` или локальный адрес."""
+    def _mentions(self, text: str, *, parents: bool = True) -> str:
+        """Команда упоминает закрытую папку (или папку над ней — корень базы;
+        `parents=False` — у команды чтения с буквальными путями, их проверяет
+        `_protected`), чувствительный путь, токен Meet, `.env` или локальный адрес."""
         low = _norm_text(str(text or ""))
         home = _norm_text(str(_home()))
 
@@ -1466,24 +2065,9 @@ class ConsentGate:
 
         for d in self._deny:
             parent = d.rsplit("/", 1)[0]
-            for f in (*forms(d), *(forms(parent) if "/" in parent.strip("/") else ())):
+            for f in (*forms(d), *(forms(parent) if parents and "/" in parent.strip("/") else ())):
                 if f and f in low:
                     return "excluded"
-        if self._blocked:
-            # Корни профиля — без родителя (родитель библиотеки — обычно папка
-            # данных или «Документы»); свою папку внутри них упоминать можно:
-            # её путь начинается с пути библиотеки — сначала вырезаем его.
-            rest = low
-            with self._lock:
-                own = [*self._own, *self._attached]
-            for o in sorted(own, key=len, reverse=True):
-                for f in forms(o):
-                    if f:
-                        rest = rest.replace(f, " ")
-            for d in self._blocked:
-                for f in forms(d):
-                    if f and f in rest:
-                        return "profile"
         for d in self._sensitive:
             for f in forms(d):
                 if f and f in low:
@@ -1505,15 +2089,56 @@ class ConsentGate:
             if decision.outcome == DENY and decision.why != "question":
                 self._denials.append(decision)
         if decision.outcome == DENY:
-            self._log(f"согласие: отказ ({level}, {decision.why}) — {what}")
+            # В журнал процесса — только вид и исход, без текста вызова (CLAUDE.md).
+            self._log(f"согласие: отказ ({level}, {decision.why}, {kind})")
         return decision
 
-    def _deny_why(self, why: str, what: str, kind: str) -> Decision:
-        text = {"excluded": EXCLUDED, "sensitive": SENSITIVE, "unresolved": SENSITIVE,
-                "background": BACKGROUND, "local": LOCAL, "ask": self._ask_first,
-                "profile": PROFILE}[why]
+    def _deny_why(self, why: str, what: str, kind: str, level: str = NONE) -> Decision:
+        if why == "ask":
+            text = ASK_FIRST_READ if level == READ else self._ask_text
+        else:
+            text = {"excluded": EXCLUDED, "sensitive": SENSITIVE, "unresolved": SENSITIVE,
+                    "background": BACKGROUND, "local": LOCAL}[why]
         return Decision(DENY, text.format(what=what), what, kind,
                         "sensitive" if why == "unresolved" else why)
+
+    def _read_plan(self, tool: str, data: dict) -> Decision | str | None:
+        """Команда только чтения: отказ (закрытый путь), «recursive» (обход
+        над закрытым), "" (чтение) или None (не команда чтения)."""
+        if tool not in SHELL or bash_warnings(tool, data):
+            return None
+        plan = read_plan(tool, str(data.get("command") or ""))
+        if plan is None:
+            return None
+        paths_, recursive = plan
+        resolved = [resolve(x, self._cwd) for x in paths_]
+        for r in resolved:
+            why = self._protected(r)
+            if why:
+                return why
+        roots = resolved or [resolve(self._cwd or os.getcwd())]
+        if recursive and any(_inside(d, r) for r in roots for d in (*self._deny, *self._sensitive) if r):
+            return "recursive"
+        return ""
+
+    def _risk(self, tool: str, data: dict, kind: str, force_card: bool) -> str:
+        """Категория карточки в ходе USER (спец. §2): delete, send, outside,
+        sandbox, mcp-write, mcp-address; "" — решает режим."""
+        if tool in FILE_WRITE:
+            return "" if self._writable(self._write_target(data)) else "outside"
+        if tool in SHELL:
+            if data.get("dangerouslyDisableSandbox") or bash_warnings(tool, data):
+                return "sandbox"
+            return shell_risk(tool, str(data.get("command") or ""), inside=self._inside_work)
+        if kind == "mcp":
+            return "mcp-write"
+        if kind in ("mcp-read", "mcp-resource") and force_card:
+            return "mcp-address"
+        return ""
+
+    def _ask(self, tool: str, data: dict, what: str, kind: str, why: str = "") -> Decision:
+        grant = None if why in (DELETE, "sandbox", "recursive") else self._grant_offer(tool, data)
+        return Decision(ASK, what=what, kind=kind, why=why, card=card_for(tool, data, grant))
 
     def _decide(self, tool: str, data: dict, kind: str, what: str, level: str) -> Decision:
         if kind == "question":
@@ -1532,7 +2157,9 @@ class ConsentGate:
             if why:
                 return self._deny_why(why, what, kind)
         if kind in ("shell", "other", "skill"):
-            why = self._mentions(" ".join(str(v) for v in data.values() if isinstance(v, (str, int, float))))
+            literal = tool in SHELL and read_plan(tool, str(data.get("command") or "")) is not None
+            why = self._mentions(" ".join(str(v) for v in data.values() if isinstance(v, (str, int, float))),
+                                 parents=not literal)
             if why:
                 return self._deny_why(why, what, kind)
         if kind == "web-fetch":
@@ -1547,43 +2174,46 @@ class ConsentGate:
                 return self._deny_why(why, what, kind)
         if kind == "internal":
             return Decision(ALLOW, what=what, kind=kind)
-        if kind == "read" and paths and all(self._own_path(p) for p in paths):
+        if kind == "read" and paths and all(self._free_read(p) for p in paths):
             return Decision(ALLOW, what=what, kind=kind)
-        if level == NONE:
+        # Ход только по репликам встречи: ничего, кроме чтения рабочих папок, —
+        # что бы ни прозвучало (инъекция из речи), в любом режиме.
+        if level not in (READ, USER):
             return self._deny_why("ask", what, kind)
         raw = raw_args(tool, data)
         if len(raw) > ARGS_LIMIT:
             return Decision(DENY, TOO_LONG.format(what=what[:200], size=len(raw), limit=ARGS_LIMIT), what[:200],
                             kind, "too-long")
-        if kind in ("read", "web-search"):
+        plan = self._read_plan(tool, data)
+        if plan not in (None, "", "recursive"):
+            return self._deny_why(plan, what, kind)
+        reading = (kind in ("read", "web-search") or plan == ""
+                   or (kind in ("mcp-read", "mcp-resource") and not force_card))
+        if level == READ:
+            # ❓ «Поясни»: только чтение, карточек нет.
+            if reading:
+                return Decision(ALLOW, what=what, kind="shell-read" if plan == "" else kind)
+            return self._deny_why("ask", what, kind, READ)
+        # USER — просьба пользователя.
+        if plan == "":
+            return Decision(ALLOW, what=what, kind="shell-read")
+        if plan == "recursive":
+            return self._ask(tool, data, what, kind, "recursive")
+        risk = self._risk(tool, data, kind, force_card)
+        if risk:
+            if risk != DELETE and risk != "sandbox" and self._granted(tool, data):
+                return Decision(ALLOW, what=what, kind=kind, why="granted")
+            return self._ask(tool, data, what, kind, risk)
+        if self._mode == MODE_CONFIRM:
+            # Как 0.3.7: чтение — само, остальное — карточкой (или по разрешению «до конца»).
+            if kind in ("read", "web-search", "mcp-read", "mcp-resource"):
+                return Decision(ALLOW, what=what, kind=kind)
+            if self._granted(tool, data):
+                return Decision(ALLOW, what=what, kind=kind, why="granted")
+            return self._ask(tool, data, what, kind)
+        if kind == "read":
             return Decision(ALLOW, what=what, kind=kind)
-        if kind in ("mcp-read", "mcp-resource") and not force_card:
-            return Decision(ALLOW, what=what, kind=kind)
-        if tool == "Bash" and not bash_warnings(tool, data):
-            plan = shell_plan(str(data.get("command") or ""))
-            if plan is not None:
-                paths_, recursive = plan
-                resolved = [resolve(x, self._cwd) for x in paths_]
-                for r in resolved:
-                    why = self._protected(r)
-                    if why:
-                        return self._deny_why(why, what, kind)
-                # Рекурсивный обход над закрытым — карточкой. Корни профиля —
-                # тоже: обход своей папки (`dir /s <rec>`) их не заденет, обход
-                # самой библиотеки отказан выше (`_protected` → `profile`).
-                inner = recursive and any(_inside(d, r) for r in resolved or [resolve(self._cwd or os.getcwd())]
-                                          for d in (*self._deny, *self._sensitive, *self._blocked) if r)
-                if not inner:
-                    return Decision(ALLOW, what=what, kind="shell-read")
-        if self._blocked and tool in SHELL:
-            # Профиль закрывает папки целиком, а команду до конца не разобрать
-            # (обход папки над библиотекой, пути со «\»): кроме безопасного
-            # чтения выше — каждая команда своей карточкой, разрешение «до
-            # конца» её не пропускает и не предлагается.
-            return Decision(ASK, what=what, kind=kind, card=card_for(tool, data, None))
-        if self._granted(tool, data):
-            return Decision(ALLOW, what=what, kind=kind, why="granted")
-        return Decision(ASK, what=what, kind=kind, card=card_for(tool, data, self._grant_offer(tool, data)))
+        return Decision(AUTO, what=what, kind=kind)
 
     def _grant_offer(self, tool: str, data: dict):
         try:
@@ -1631,44 +2261,67 @@ class ConsentGate:
     # --- решение с карточкой (ответ CLI)
 
     def check(self, tool: str, data=None, *, tool_use_id: str | None = None, via: str = "hook") -> Decision:
-        """Ответ на хук PreToolUse (`via="hook"`) или `can_use_tool`. `ask` —
-        карточка: ждём решения человека (блокирующее, в потоке ответа CLI);
-        разрешение — на этот один вызов. `can_use_tool` для вызова, которому
-        нужна карточка, но хук его не видел, — дыра в проверке: отказ."""
+        """Ответ на хук PreToolUse (`via="hook"`) или `can_use_tool`.
+
+        Хук: `allow` / `auto` / `deny`; `ask` — карточка: ждём решения
+        человека (блокирующее, в потоке ответа CLI), «Разрешить» → `allow`
+        (человек решил — классификатор не спрашивается), разрешение — на
+        этот один вызов. `can_use_tool` (вопрос самого CLI: классификатор
+        отказал, правило `ask`, защищённый путь, Manual без автомода) — в
+        ходе USER всегда карточка, если хук этот вызов видел; не видел — отказ
+        `unseen` (дыра в проверке), кроме того, что Meet пропускает сам. В
+        ходах NONE и READ карточек нет: `allow` или отказ."""
         data = data if isinstance(data, dict) else {}
         tool = str(tool or "")
-        key = tool_use_id or _canonical(tool, data)
+        canonical = _canonical(tool, data)
+        key = tool_use_id or canonical
         with self._lock:
             if via == "hook":
-                if tool_use_id:
-                    self._seen.add(tool_use_id)
+                self._seen.update(k for k in (tool_use_id, canonical) if k)
             else:
-                keys = {key, _canonical(tool, data)}
+                keys = {key, canonical}
                 if any(self._approved.get(k) for k in keys):
                     for k in keys:     # одно разрешение — один вызов, по любому из ключей
                         if self._approved.get(k):
                             self._approved[k] -= 1
-                    return Decision(ALLOW, what=describe(tool, data)[1], kind="approved")
+                    return Decision(ALLOW, what=describe(tool, data)[1], kind="approved", why="confirmed")
+                seen = (tool_use_id in self._seen) if tool_use_id else canonical in self._seen
+                level = self._level
         decision = self.decide(tool, data)
-        if decision.outcome != ASK:
+        if decision.outcome == DENY:
             return decision
         if via != "hook":
-            self._log(f"согласие: вызов {tool} не прошёл через хук — отказ")
-            return self._record(Decision(DENY, UNSEEN.format(what=decision.what), decision.what,
-                                         decision.kind, "unseen"))
+            if level != USER:
+                if decision.outcome == ALLOW:
+                    return decision
+                return self._record(self._deny_why("ask", decision.what, decision.kind, level))
+            if not seen:
+                if decision.outcome == ALLOW:
+                    return decision
+                self._log(f"согласие: вызов {decision.kind} не прошёл через хук — отказ")
+                return self._record(Decision(DENY, UNSEEN.format(what=decision.what), decision.what,
+                                             decision.kind, "unseen"))
+            if decision.outcome != ASK:
+                decision = Decision(ASK, what=decision.what, kind=decision.kind, why=decision.why,
+                                    card=card_for(tool, data, self._grant_offer(tool, data)))
+        elif decision.outcome != ASK:
+            return decision
         confirmer = self.confirmer
         if confirmer is None:
             return self._record(Decision(DENY, NO_CARD.format(what=decision.what), decision.what,
                                          decision.kind, "no-card"))
+        card_shown = dict(decision.card or card_for(tool, data))
+        if tool_use_id:
+            card_shown["tool_use_id"] = str(tool_use_id)   # кнопки — в строке этого вызова в чате
         try:
-            answer = confirmer(dict(decision.card or card_for(tool, data)))
+            answer = confirmer(card_shown)
         except Exception as e:  # карточка не показалась — отказ
-            self._log(f"согласие: карточка не показана ({type(e).__name__}: {e})")
+            self._log(f"согласие: карточка не показана ({type(e).__name__})")
             answer = "cancelled"
         if answer in (ALLOW, ALLOW_MEETING):
             card = decision.card or {}
             with self._lock:
-                for k in {key, _canonical(tool, data)}:
+                for k in {key, canonical}:
                     self._approved[k] = self._approved.get(k, 0) + 1
                 if tool in FILE_WRITE:
                     target = resolve(data.get("file_path") or data.get("notebook_path") or "", self._cwd)
@@ -1706,7 +2359,6 @@ def denial_line(denials) -> str:
     shown = "; ".join(seen[:3]) + (f" и ещё {len(seen) - 3}" if len(seen) > 3 else "")
     whys = {d.why for d in denials}
     why = ("в закрытой папке" if whys == {"excluded"}
-           else "в базе знаний или другой записи" if whys == {"profile"}
            else "закрытые данные" if whys <= {"sensitive"}
            else "в фоне" if whys == {"background"} else "без согласия")
     return f"Ассистент хотел {why}: {shown} — запрос заблокирован"

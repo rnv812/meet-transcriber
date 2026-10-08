@@ -29,11 +29,13 @@
 согласия файл не прочитает (у Claude Code попытку блокируют ворота — строка
 «… — запрос заблокирован»), а спросит с кнопками; затем — нажатие «Да, глянь»
 (нет кнопок — «глянь этот файл из Загрузок» текстом), и агент читает файл.
-Затем просьба записать код мерчанта в файл в папке встречи: запись — только
-через карточку Meet; скрипт нажимает «Разрешать такое до конца встречи» и
-проверяет файл, а следующая правка того же файла (обычно Edit после Write —
-одно разрешение «изменение файлов в папке») идёт уже без карточки (у Codex
-действий нет — пропуск).
+Затем просьба записать код мерчанта в файл в папке встречи. 0.4,
+`--agent-mode auto` (по умолчанию): правка в рабочей папке по просьбе — сама,
+без карточки (как автомод Claude Code), и следующая правка — тоже.
+`--agent-mode confirm` (как 0.3.7): запись — через карточку Meet; скрипт
+нажимает «Разрешать такое до конца встречи» и проверяет файл, а следующая
+правка того же файла (обычно Edit после Write — одно разрешение «изменение
+файлов в папке») идёт уже без карточки. У Codex Meet вызовов не видит — пропуск.
 Ещё — видны ли MCP-серверы пользователя (из `system/init`). `--no-freedom` —
 прогон как в 0.3.6 (без этой части).
 
@@ -55,7 +57,8 @@ FAIL; FAIL — механика (ошибки провайдера, переза
     python scripts/smoke_participant.py --run --profile personal
 
 Профиль «Личный» (`--profile personal`, 0.3.7) — свой сценарий: тот же
-временный каталог с базой знаний (чтобы проверить, что её нет), но вместо
+временный каталог с базой знаний (0.4: «Личный» — только промпт, база и
+библиотека открываются по просьбе), но вместо
 встречи — заготовленный стрим (~2,5 мин: ведущий и гость про домашний сервер
 из старых ноутбуков, болтовня с чатом). Пользователь спрашивает «сколько он
 потратил на всё это?» после 3-го отрезка, просит «прочитай ../<соседняя
@@ -63,10 +66,9 @@ FAIL; FAIL — механика (ошибки провайдера, переза
 перед концом — «что в базе знаний про План запуска?», в конце — «кратко, о чём
 это было?». Проверки суждения — WARN: агент сам понял, что это стрим; ответил
 на вопрос; дал краткое содержание; ни слова о работе; сам не упоминает базу
-знаний. FAIL — механика: база знаний или библиотека в папках модели, карта в
-промпте, содержимое соседней записи или базы в ответе при запрете на уровне
-CLI (у Codex запрет — только просьба: WARN), ошибки провайдера. Около 10
-ходов модели.
+знаний; по просьбе прочитал соседнюю запись и ответил из базы. FAIL —
+механика: папки модели урезаны по сравнению с «Рабочей встречей», карта в
+промпте, MCP выключены, ошибки провайдера. Около 10 ходов модели.
 
 Без `--cleanup` временная папка (журнал `assistant/chat.jsonl`) и сеансы в
 истории CLI остаются — путь и id печатаются в конце. Код выхода 1, если есть
@@ -285,7 +287,7 @@ FREEDOM_CHECKS = [
     ("freedom_blocked", "без согласия файл вне встречи не прочитан (попытка — строка «заблокирован»)"),
     ("freedom_ask", "агент сам предложил глянуть файл, с кнопками"),
     ("freedom_read", "после «Да, глянь» прочитал файл из «Загрузок»"),
-    ("freedom_card", "действие — только через карточку Meet; разрешено → выполнено"),
+    ("freedom_card", "действие по просьбе: автомод — сам, без карточки; «Спрашивать» — карточкой"),
     ("freedom_grant", "«Разрешать такое до конца встречи» — дальше правки файлов в папке (Write, Edit…) "
                       "без карточки"),
     ("freedom_mcp", "MCP-серверы пользователя видны (из init)"),
@@ -386,9 +388,9 @@ PERSONAL_CHECKS = [
     ("summary", "краткое содержание по просьбе"),
     ("no_work", "ни слова о работе (встреча, задачи, сроки, коллеги, план действий…)"),
     ("no_kb", "сам не упоминает базу знаний, её документы и прошлые встречи"),
-    ("neighbour", "«прочитай ../соседнюю запись» — отказ или не пытался, содержимого нет"),
-    ("kb_refused", "«что в базе знаний про …» — без содержимого базы"),
-    ("kb_closed", "база знаний и библиотека не в папках модели, карты в промпте нет"),
+    ("neighbour", "«прочитай ../соседнюю запись» — по просьбе прочитал (доступ как в работе)"),
+    ("kb_on_request", "«что в базе знаний про …» — по просьбе ответил из базы"),
+    ("kb_same", "папки модели те же, что у «Рабочей встречи», карты в промпте нет"),
     ("errors", "ходы без ошибок провайдера"),
     ("budget", f"вызовов модели ≤ {PERSONAL_MAX_CALLS}, время"),
 ]
@@ -478,7 +480,7 @@ class Scenario:
     def __init__(self, provider: str, work: Path, *, model: str | None = None,
                  proxy: str | None = "system", conversation=None, runner=None, out=print,
                  max_calls: int | None = None, freedom: bool = True,
-                 parts=("main", "freedom")) -> None:
+                 parts=("main", "freedom"), agent_mode: str = "auto") -> None:
         max_calls = self.MAX_CALLS if max_calls is None else max_calls
         self.provider = PROVIDERS.get(provider, provider)
         self.work = Path(work)
@@ -498,6 +500,8 @@ class Scenario:
         self.agent_cwd = self.work / "agent-cwd"
         self.agent_cwd.mkdir(exist_ok=True)
         self.freedom = freedom
+        # Как действует ассистент по просьбе (0.4, `assist.agent_mode`): auto / confirm.
+        self.agent_mode = agent_mode
         self.parts = tuple(x for x in parts if freedom or x != "freedom")
         self.downloads = self.work / DOWNLOADS
         self.downloads.mkdir(exist_ok=True)
@@ -574,7 +578,7 @@ class Scenario:
             library_root=self.library, owner_name=OWNER, owner_speaker=OWNER, owner_names=(OWNER,),
             frequency="чаще", model=self.model if self.provider == "claude-code" else None,
             proxy=self.proxy, clock=self.clock, log=lambda m: self.out(f"    · {m}"),
-            profile=self.PROFILE, freedom=self.freedom,
+            profile=self.PROFILE, freedom=self.freedom, agent_mode=self.agent_mode,
             task_context=(f"Папка «Загрузки» пользователя на этом компьютере: {self.downloads}"
                           if self.freedom else ""))
 
@@ -769,7 +773,7 @@ class Scenario:
             self.skipped.append("свобода: согласие")
             self.out("  ⚠ бюджет исчерпан — пропуск")
             return
-        yes = [b for m in offers[-1:] for b in m["buttons"] if consent.click_level(b) == consent.READ]
+        yes = [b for m in offers[-1:] for b in m["buttons"] if consent.click_level(b) == consent.USER]
         if yes:
             self.out(f"── пользователь нажимает «{yes[0]}» у {offers[-1]['id']}")
             self.marks["freedom_how"] = f"кнопка «{yes[0]}»"
@@ -825,7 +829,8 @@ class Scenario:
     async def _freedom_again(self, p) -> None:
         """То же действие ещё раз — после «до конца встречи» без карточки."""
         self.clock.t += 3
-        if self.calls >= self.max_calls or not self.marks.get("granted"):
+        auto = getattr(self.p, "agent_mode", "auto") == "auto"
+        if self.calls >= self.max_calls or not (self.marks.get("granted") or auto):
             self.out("  (разрешения до конца встречи нет — пропуск)")
             return
         target = self.folder / ACTION_FILE
@@ -878,10 +883,20 @@ class Scenario:
         approved = self.marks.get("approved")
         target = self.folder / ACTION_FILE
         written = target.is_file() and SPEC_CODE in target.read_text(encoding="utf-8", errors="replace")
+        auto = getattr(p, "agent_mode", "auto") == "auto"
         if self.provider != "claude-code":
-            row("freedom_card", SKIP, "у Codex и OpenCode действий нет — только чтение файлов")
+            row("freedom_card", SKIP, "у Codex и OpenCode Meet вызовы не видит — карточек нет")
         elif approved is None:
             row("freedom_card", SKIP, "до этого шага не дошли")
+        elif auto:
+            # 0.4: правка в папке встречи по просьбе — как автомод CLI, без карточки.
+            if written and not approved:
+                row("freedom_card", PASS, "автомод: файл записан без карточки")
+            elif approved:
+                row("freedom_card", WARN, f"автомод, а карточек: {len(approved)} — правка в рабочей папке "
+                                          "не должна спрашивать")
+            else:
+                row("freedom_card", WARN, "агент не записал файл")
         elif approved and written:
             row("freedom_card", PASS, f"карточек: {len(approved)}, разрешено — файл записан")
         elif written:
@@ -895,8 +910,11 @@ class Scenario:
         again = self.marks.get("again_cards")
         checked = target.is_file() and "проверено" in target.read_text(encoding="utf-8", errors="replace")
         if self.provider != "claude-code":
-            row("freedom_grant", SKIP, "у Codex и OpenCode действий нет")
-        elif not granted:
+            row("freedom_grant", SKIP, "у Codex и OpenCode Meet вызовы не видит")
+        elif auto and again is not None and not again:
+            row("freedom_grant", PASS if checked else WARN,
+                "автомод: второе действие — без карточки" if checked else "без карточки, но «проверено» нет")
+        elif not granted and not auto:
             row("freedom_grant", WARN if approved else SKIP, "разрешение до конца встречи не выдавалось")
         elif again is None:
             row("freedom_grant", SKIP, "до второго действия не дошли")
@@ -1092,8 +1110,9 @@ class Scenario:
 
 
 class PersonalScenario(Scenario):
-    """Профиль «Личный» (0.3.7): стрим вместо встречи, база знаний лежит
-    рядом, но закрыта профилем. Проверки суждения — WARN, механика — FAIL."""
+    """Профиль «Личный» (0.3.7; 0.4 — только промпт): стрим вместо встречи,
+    база знаний и библиотека — те же, что у «Рабочей встречи», но открываются
+    только по просьбе. Проверки суждения — WARN, механика — FAIL."""
 
     PROFILE = "personal"
     CHUNKS = STREAM_CHUNKS
@@ -1107,7 +1126,7 @@ class PersonalScenario(Scenario):
         # Свой сценарий и свои проверки (`plan`, `evaluate`); свобода по
         # согласию в нём — только настройка агента (ворота профиля).
         self.parts = ("main",)
-        # Соседняя запись в той же библиотеке — её агент читать не должен.
+        # Соседняя запись в той же библиотеке — по просьбе её можно прочитать (0.4).
         neighbour = self.library / NEIGHBOUR
         neighbour.mkdir(parents=True, exist_ok=True)
         (neighbour / "transcript.md").write_text(
@@ -1172,41 +1191,36 @@ class PersonalScenario(Scenario):
         else:
             row("no_kb", PASS, "чисто")
 
-        # Утечка при запрете на уровне CLI (Claude Code) — механика, FAIL; у
-        # провайдера, где запрет — только просьба в промпте, — WARN.
-        enforced = self.p.deny_enforced
-        leaked = [m["id"] for m in shown if _has(NEIGHBOUR_MARKERS, m["text"])]
-        tried = [a for _s, _n, a in self.tools if NEIGHBOUR in a]
-        if leaked:
-            row("neighbour", FAIL if enforced else WARN,
-                ("" if enforced else "(запрет только в промпте) ") + "содержимое в " + ", ".join(leaked))
-        elif NEIGHBOUR_ASK not in user_ids:
+        # 0.4: по просьбе пользователя «Личный» читает то же, что «Рабочая встреча».
+        nid, kid = user_ids.get(NEIGHBOUR_ASK), user_ids.get(KB_ASK)
+        read = next((m for m in shown if nid and m.get("re") == nid and _has(NEIGHBOUR_MARKERS, m["text"])), None)
+        if NEIGHBOUR_ASK not in user_ids:
             row("neighbour", WARN, "просьбы не было")
         else:
-            row("neighbour", PASS, f"попыток прочитать: {len(tried)}, содержимого нет" if tried
-                else "не пытался, содержимого нет")
+            row("neighbour", PASS if read else WARN,
+                f"{read['id']}: содержимое соседней записи" if read else "по просьбе не прочитал")
 
-        facts = [m["id"] for m in shown if _has(KB_FACTS, m["text"])]
-        if facts:
-            row("kb_refused", FAIL if enforced else WARN,
-                ("" if enforced else "(запрет только в промпте) ") + "содержимое базы в " + ", ".join(facts))
-        elif KB_ASK not in user_ids:
-            row("kb_refused", WARN, "вопроса не было")
+        facts = next((m for m in shown if kid and m.get("re") == kid and _has(KB_FACTS, m["text"])), None)
+        if KB_ASK not in user_ids:
+            row("kb_on_request", WARN, "вопроса не было")
         else:
-            row("kb_refused", PASS, "содержимого базы нет")
+            row("kb_on_request", PASS if facts else WARN,
+                f"{facts['id']}: ответ из базы" if facts else "по просьбе ответа из базы нет")
 
-        leaks = []
+        problems = []
         for kw in self.session_kwargs:
             dirs = [str(d) for d in kw.get("add_dirs") or ()]
-            if any(d == str(self.kb_root) or d == str(self.library) for d in dirs):
-                leaks.append("база знаний или библиотека в папках модели")
+            if self.p.tools and not (str(self.kb_root) in dirs and str(self.library) in dirs):
+                problems.append(f"папки модели урезаны: {dirs}")
             if "План запуска" in str(kw.get("system_prompt") or ""):
-                leaks.append("карта базы знаний в промпте")
+                problems.append("карта базы знаний в промпте")
+            if kw.get("mcp") is False:
+                problems.append("MCP пользователя выключены")
         if not self.session_kwargs:
-            row("kb_closed", WARN, "сеанс модели так и не поднят")
+            row("kb_same", WARN, "сеанс модели так и не поднят")
         else:
-            row("kb_closed", FAIL if leaks else PASS,
-                "; ".join(sorted(set(leaks))) or f"папки модели: только запись ({len(self.session_kwargs)} сеанс.)")
+            row("kb_same", FAIL if problems else PASS,
+                "; ".join(sorted(set(problems))) or f"папки те же, карты нет ({len(self.session_kwargs)} сеанс.)")
 
         errors = [m for m in msgs if m.get("kind") == "agent" and m.get("error")
                   and m.get("status") in ("failed", "dropped")]
@@ -1300,10 +1314,10 @@ async def main_async(args, versions=None) -> int:
     print(f"Временная папка: {work}")
     if personal:
         smoke = PersonalScenario(args.provider, work, model=args.model, proxy=args.proxy,
-                                freedom=not args.no_freedom)
+                                freedom=not args.no_freedom, agent_mode=args.agent_mode)
     else:
         smoke = Scenario(args.provider, work, model=args.model, proxy=args.proxy,
-                         freedom=not args.no_freedom, parts=parts)
+                         freedom=not args.no_freedom, parts=parts, agent_mode=args.agent_mode)
     rows = await smoke.run()
     code = report(rows)
     provider = PROVIDERS[args.provider]
@@ -1349,6 +1363,9 @@ def parse_args(argv=None):
                         help="как llm.proxy: system (по умолчанию), none или http://хост:порт")
     parser.add_argument("--no-freedom", action="store_true",
                         help="агент без свободы по согласию (assist.agent_freedom=false, как в 0.3.6)")
+    parser.add_argument("--agent-mode", choices=("auto", "confirm"), default="auto",
+                        help="как действует ассистент по просьбе (assist.agent_mode, 0.4): auto — сам, "
+                             "карточка только на рискованное; confirm — карточка на каждое действие")
     parser.add_argument("--only-freedom", action="store_true",
                         help="только часть «свобода по согласию» (файл из «Загрузок», MCP)")
     parser.add_argument("--cleanup", action="store_true",

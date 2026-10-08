@@ -704,3 +704,57 @@ def test_without_access_permissions_are_as_in_0_3_6(tmp_path):
         "agent": {opencode.AGENT: {"mode": "primary", "hidden": True,
                                    "description": "meet: фоновые вызовы, только чтение", "prompt": "p",
                                    "steps": 3, "permission": opencode.readonly_permission((tmp_path,))}}}
+
+
+# --- 0.4: ход по просьбе (`user`) — правка рабочих папок и команды, без рискованного -------------
+
+
+def _user_permission(fake, tmp_path, monkeypatch):
+    from meet.llm import consent
+
+    meeting, kb, ssh = tmp_path / "meeting", tmp_path / "kb", tmp_path / "home" / ".ssh"
+    ssh.mkdir(parents=True)
+    monkeypatch.setattr(consent, "sensitive_paths", lambda **kw: [ssh])
+    _run(allowed_dirs=(meeting, kb, tmp_path / "lib"), access="user", deny_paths=[kb / "Личное"],
+         work_dirs=(meeting, kb))
+    return _agent_permission(FakePopen.calls[0].kw["env"]), meeting, kb, ssh
+
+
+def test_a_user_turn_edits_working_folders_and_runs_commands(fake, tmp_path, monkeypatch):
+    perm, meeting, kb, ssh = _user_permission(fake, tmp_path, monkeypatch)
+    assert perm["*"] == "deny"                                  # MCP, подагенты и прочее — нет
+    assert perm["edit"] == "allow" and perm["webfetch"] == "allow" and perm["websearch"] == "allow"
+    assert perm["read"]["*"] == "allow" and perm["read"]["*.env"] == "deny"
+    assert perm["read"][str(kb / "Личное" / "*")] == "deny" and perm["read"][str(ssh / "*")] == "deny"
+    # Запись и обход — только в рабочих папках (запрет «*» — первым, закрытое — последним).
+    external = perm["external_directory"]
+    keys = list(external)
+    assert keys[0] == "*" and external["*"] == "deny"
+    assert external[str(meeting / "*")] == "allow" and external[str(kb / "*")] == "allow"
+    assert str(tmp_path / "lib" / "*") not in external         # библиотека — не рабочая папка
+    assert external[str(kb / "Личное" / "*")] == "deny"
+    assert keys.index(str(kb / "Личное" / "*")) > keys.index(str(kb / "*"))
+    assert "task" not in perm and not any("*_" in k for k in perm)
+
+
+@pytest.mark.parametrize("command", [
+    "rm *", "rmdir *", "del *", "erase *", "rd *", "Remove-Item *", "ri *", "git clean*", "git rm *",
+    "git reset --hard*", "git checkout -- *", "git restore *", "git push*", "scp *", "sftp *", "ftp *", "ssh *",
+    "curl *-d*", "curl *--data*", "curl *-F*", "curl *-T*", "curl *-X*", "wget *--post*",
+    "Invoke-WebRequest *-M*", "Invoke-RestMethod *-B*", "gh * create*", "gh * comment*", "npm publish*",
+    "find *-delete*", "bash -c*", "powershell *",
+])
+def test_delete_and_send_commands_are_denied_for_opencode(fake, tmp_path, monkeypatch, command):
+    """Строки `ask` спец. §2: остановить вызов до решения человека OpenCode не даёт —
+    у него это отказ (последнее подходящее правило побеждает: запреты после «*»)."""
+    perm, *_ = _user_permission(fake, tmp_path, monkeypatch)
+    bash = perm["bash"]
+    assert list(bash)[0] == "*" and bash["*"] == "allow"
+    assert bash[command] == "deny", command
+
+
+def test_none_and_read_are_as_in_0_3_7(tmp_path):
+    dirs = (tmp_path,)
+    assert opencode.permission_for("none", dirs, work_dirs=dirs) == opencode.readonly_permission(dirs)
+    read = opencode.permission_for("read", dirs, work_dirs=dirs)
+    assert "edit" not in read and "bash" not in read and read["external_directory"]["*"] == "allow"

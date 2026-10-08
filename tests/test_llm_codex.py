@@ -556,3 +556,43 @@ def test_mcp_list_is_parsed_cached_and_failure_is_none(monkeypatch):
 
     monkeypatch.setattr(codex, "_mcp_list_json", boom)
     assert codex.mcp_servers("C:/third.exe") is None
+
+
+# --- 0.4: ход по просьбе (`user`) — автопроверка Codex, правка рабочих папок -------------------
+
+
+def test_a_user_turn_writes_working_folders_with_auto_review(monkeypatch, tmp_path):
+    """USER (0.4): `--sandbox workspace-write`, `--approve-for-me` (автопроверка Codex),
+    рабочие папки — `--add-dir`, веб-поиск не выключается; MCP пользователя — выключены
+    (изменение через MCP не остановить), приложения и браузер — тоже."""
+    _access_setup(monkeypatch, tmp_path, SERVERS)
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    meeting = tmp_path / "meeting"
+    meeting.mkdir()
+    cmd, _m = _access_cmd(tmp_path, "user", work_dirs=(meeting, kb))
+    assert cmd[cmd.index("--sandbox") + 1] == "workspace-write" and "--approve-for-me" in cmd
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"] == [str(meeting), str(kb)]
+    overrides = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-c"]
+    assert "mcp_servers.team-jira.enabled=false" in overrides and 'web_search="disabled"' not in overrides
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "--disable"] == FEATURES
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+
+
+def test_user_flags_go_before_resume_and_missing_folders_are_skipped(monkeypatch, tmp_path):
+    _access_setup(monkeypatch, tmp_path, SERVERS)
+    cmd, meeting = _access_cmd(tmp_path, "user", resume=ACCESS_SID, work_dirs=(tmp_path / "meeting",
+                                                                                tmp_path / "нет"))
+    i = cmd.index("resume")
+    for flag in ("--sandbox", "--approve-for-me", "--add-dir", "-C"):
+        assert cmd.index(flag) < i, flag
+    assert [cmd[k + 1] for k, a in enumerate(cmd) if a == "--add-dir"] == [str(meeting)]
+
+
+@pytest.mark.parametrize("access", ["none", "read"])
+def test_none_and_read_stay_read_only_even_with_working_folders(monkeypatch, tmp_path, access):
+    _access_setup(monkeypatch, tmp_path, SERVERS)
+    cmd, _m = _access_cmd(tmp_path, access, work_dirs=(tmp_path / "meeting",))
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    assert "--approve-for-me" not in cmd and "--add-dir" not in cmd
+    assert codex.access_args(access, SERVERS, work_dirs=("C:/x",)) == codex.access_args(access, SERVERS)
