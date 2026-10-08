@@ -46,7 +46,7 @@ const sent = () => (vi.mocked(api.patchSettings).mock.calls.at(-1)![1] as { cate
 
 test("раздел в меню; список с цветом, названием и описанием", async () => {
   const list = await open();
-  expect(screen.getByRole("button", { name: "Категории встреч" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Категории" })).toHaveAttribute("aria-current", "page");
   expect(names()).toEqual(["Дейлик", "Ретроспектива"]);
   expect(within(list).getByRole("textbox", { name: "Описание категории «Дейлик» для ИИ" }))
     .toHaveValue("Короткая встреча команды");

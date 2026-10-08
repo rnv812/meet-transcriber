@@ -1,17 +1,16 @@
 /**
- * Настройки «Расшифровка: подсветка и разметка» (`transcript_view`): что из
- * анализа встречи показывать в карточке — значки типов реплик и фильтры,
- * полосу у важных реплик, заголовки глав, «Наблюдения», кривую важности над
- * плеером, подписи глав на полосе плеера; ссылки на задачи Jira (адрес,
- * проекты, проект по умолчанию, шаблон ключа — `integrations.jira_*`,
- * JiraSettings).
+ * Что из анализа встречи показывать в карточке (`transcript_view`): значки
+ * типов реплик и фильтры, полосу у важных реплик, заголовки глав,
+ * «Наблюдения»; плеер — кривая важности и подписи глав. С 0.4 — подгруппы
+ * раздела «Анализ встречи» (прежний раздел «Подсветка расшифровки»); ссылки на
+ * задачи Jira — свой раздел «Jira» (JiraSection).
  *
- * Это только отображение: что размечать, решает раздел «Анализ встречи».
+ * Это только отображение: что размечать, решают переключатели «Что размечать».
  */
 
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { PlayerKeysTip } from "../card/PlayerKeysTip";
-import { dropHiddenJiraChanges, JiraSettings, jiraChangesInvalid } from "./JiraSettings";
+import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { Radio, Switch, type Raw, type SetFn } from "./Section";
 
 /** Правки, которые нельзя сохранить: негодный адрес Jira, проекты или шаблон ключа. */
@@ -28,8 +27,8 @@ export function MarkupTip() {
   return (
     <HelpTip label="Что такое подсветка и разметка" title="Подсветка и разметка">
       <TipLine>
-        Разметку делает анализ встречи (раздел «Анализ встречи»): типы реплик, важность, главы и наблюдения.
-        Здесь выбирается, что из этого показывать в карточке записи.
+        Разметку делает анализ встречи: типы реплик, важность, главы и наблюдения. Переключатели «Что
+        показывать в карточке» выбирают, что из этого видно в карточке записи.
       </TipLine>
       <TipLine>Пока анализа нет, расшифровка и плеер выглядят как обычно.</TipLine>
     </HelpTip>
@@ -48,16 +47,11 @@ export function CurveTip() {
   );
 }
 
-export function MarkupSection({ draft, set }: { draft: Raw; set: SetFn }) {
-  const v = (k: string) => draft.transcript_view?.[k];
-  const on = (k: string) => v(k) !== false;
-  const curve = (v("curve") as "always" | "hover" | "off" | undefined) ?? "hover";
+/** «Что показывать в карточке»: строки `transcript_view` про расшифровку. */
+export function ShowRows({ draft, set }: { draft: Raw; set: SetFn }) {
+  const on = (k: string) => draft.transcript_view?.[k] !== false;
   return (
     <>
-      <p className="muted sdesc">
-        Что из анализа встречи показывать в карточке записи. Что размечать, выбирается в разделе «Анализ встречи».
-      </p>
-      <h3 className="shead">Расшифровка</h3>
       <Switch label="Значки типов реплик" help={<MarkupTip />}
         hint="Вопрос, решение, задача, риск, идея — значок в начале реплики и фильтры над лентой"
         value={on("types")} onChange={(x) => set("transcript_view", "types", x)} />
@@ -68,7 +62,16 @@ export function MarkupSection({ draft, set }: { draft: Raw; set: SetFn }) {
       <Switch label="Блок «Наблюдения»"
         hint="Противоречия, на что обратить внимание, что сделать после встречи — над лентой реплик"
         value={on("insights")} onChange={(x) => set("transcript_view", "insights", x)} />
-      <h3 className="shead">Плеер</h3>
+    </>
+  );
+}
+
+/** «Плеер»: кривая важности и подписи глав на полосе. */
+export function PlayerRows({ draft, set }: { draft: Raw; set: SetFn }) {
+  const v = (k: string) => draft.transcript_view?.[k];
+  const curve = (v("curve") as "always" | "hover" | "off" | undefined) ?? "hover";
+  return (
+    <>
       <Radio label="Кривая важности над плеером" help={<CurveTip />} value={curve}
         options={[
           { value: "always", label: "Всегда" },
@@ -78,8 +81,7 @@ export function MarkupSection({ draft, set }: { draft: Raw; set: SetFn }) {
         onChange={(x) => set("transcript_view", "curve", x)} />
       <Switch label="Подписи глав на полосе плеера" help={<PlayerKeysTip />}
         hint="Номер и короткое название главы под полосой; в узком плеере — только номера"
-        value={on("bar_labels")} onChange={(x) => set("transcript_view", "bar_labels", x)} />
-      <JiraSettings draft={draft} set={set} />
+        value={v("bar_labels") !== false} onChange={(x) => set("transcript_view", "bar_labels", x)} />
     </>
   );
 }

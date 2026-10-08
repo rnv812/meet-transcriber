@@ -9,7 +9,7 @@
  * «Проверить» пишет ~2 с подпроцессом резидента (`POST /devices/test`) и
  * показывает пиковый уровень; проверяется выбор из черновика, ещё не сохранённый.
  *
- * «Мой голос» — образец голоса владельца (OwnerVoice.tsx), с микрофона из черновика.
+ * «Мой голос» (образец голоса владельца) — в «Спикерах» (0.4); микрофон для него — отсюда.
  */
 
 import { useState, type ReactNode } from "react";
@@ -18,13 +18,13 @@ import { errorText } from "../../lib/format";
 import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { OwnerVoiceRow } from "./OwnerVoice";
-import { Row, type Raw, type SetFn } from "./Section";
+import { Row, SeeAlso, SettingsCard, type Raw, type SetFn } from "./Section";
 
 /** Ниже этого пика считаем, что звука не было (шум тишины, а не речь). */
 const SILENCE = 0.02;
 
-function pickedName(value: unknown): string | null {
+/** Имя выбранного устройства (`{name}` или строка прежнего формата); null — «Как в системе». */
+export function pickedName(value: unknown): string | null {
   if (value && typeof value === "object" && typeof (value as { name?: unknown }).name === "string") {
     return (value as { name: string }).name || null;
   }
@@ -95,13 +95,15 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
   );
 }
 
-export function SoundSection({ draft, set, devices, endpoint }: {
+export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: {
   draft: Raw; set: SetFn; devices: Devices | null; endpoint: Endpoint;
+  /** Перейти в «Спикеры» (образец голоса); без него ссылки нет. */
+  onOpenSpeakers?: () => void;
 }) {
   const v = (k: string) => pickedName(draft.recording?.[k]);
   const choose = (key: string) => (name: string | null) => set("recording", key, name ? { name } : null);
   return (
-    <>
+    <SettingsCard title="Устройства">
       <p className="muted sdesc">
         Запись идёт двумя дорожками: ваш микрофон и звук собеседников. Изменения применятся со следующей записи.
       </p>
@@ -140,7 +142,12 @@ export function SoundSection({ draft, set, devices, endpoint }: {
           </HelpTip>
         )}
         items={devices?.outputs ?? []} value={v("output_device")} onChange={choose("output_device")} />
-      <OwnerVoiceRow endpoint={endpoint} device={v("mic_device")} />
-    </>
+      {onOpenSpeakers && (
+        <SeeAlso>
+          Образец вашего голоса — в разделе{" "}
+          <Button variant="link" onClick={onOpenSpeakers}>«Спикеры»</Button>.
+        </SeeAlso>
+      )}
+    </SettingsCard>
   );
 }

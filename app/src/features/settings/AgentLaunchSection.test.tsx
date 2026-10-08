@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.mocked(api.getAssistant).mockResolvedValue(structuredClone(info));
 });
 
-const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
+const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="advanced" />);
 const group = (name: string) => screen.getByRole("group", { name });
 const save = () => screen.getByRole("button", { name: "Сохранить" });
 

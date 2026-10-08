@@ -1,17 +1,20 @@
 /**
  * Настройки «Анализ встречи»: ставить ли анализ сам (`analysis.auto`), что
  * размечать (типы реплик, важность, главы, наблюдения, категория, название,
- * ссылки на задачи Jira) и
- * «Придумывать название встречи» (`assistant.auto_title`), а также «Улучшать
- * расшифровку автоматически после распознавания» (`analysis.improve_auto`).
+ * ссылки на задачи Jira), что из этого показывать в карточке и плеере
+ * (`transcript_view`, с 0.4 — здесь, прежде раздел «Подсветка расшифровки»),
+ * «Улучшать расшифровку автоматически после распознавания»
+ * (`analysis.improve_auto`) и «Придумывать название встречи»
+ * (`assistant.auto_title`).
  *
  * Выключенная часть не запрашивается у модели (промпт короче) и не
  * показывается в карточке. Анализ делает тот же агент, что итоги, — провайдер
- * выбирается в разделе «Ассистент».
+ * выбирается в разделе «Модели ИИ».
  */
 
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { Switch, type Raw, type SetFn } from "./Section";
+import { PlayerRows, ShowRows } from "./MarkupSection";
+import { SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 
 /** Части разметки: ключ в `analysis`, подпись и пояснение. */
 export const ANALYSIS_PARTS: { key: string; label: string; hint: string }[] = [
@@ -21,7 +24,7 @@ export const ANALYSIS_PARTS: { key: string; label: string; hint: string }[] = [
   { key: "insights", label: "Наблюдения", hint: "Противоречия, на что обратить внимание, что сделать после встречи" },
   {
     key: "category", label: "Определять категорию автоматически",
-    hint: "ИИ выбирает категорию из списка «Категории встреч». Выбранную вами категорию он не меняет",
+    hint: "ИИ выбирает категорию из списка в разделе «Категории». Выбранную вами категорию он не меняет",
   },
   {
     key: "title", label: "Название встречи",
@@ -31,7 +34,7 @@ export const ANALYSIS_PARTS: { key: string; label: string; hint: string }[] = [
   {
     key: "issues", label: "Ссылки на задачи",
     hint: "Задачи Jira, названные неполно или неразборчиво («тот баг про экспорт, сорок четыре пятьдесят два»). "
-      + "Работает, если в «Подсветке расшифровки» заданы проекты Jira",
+      + "Работает, если в разделе «Jira» заданы проекты",
   },
 ];
 
@@ -43,7 +46,7 @@ export function AnalysisTip() {
         делит встречу на главы и отмечает то, на что стоит обратить внимание.
       </TipLine>
       <TipLine>
-        Анализ делает тот же агент, что составляет итоги (раздел «Ассистент»). Встречи короче минимальной
+        Анализ делает модель по умолчанию — та же, что составляет итоги (раздел «Модели ИИ»). Встречи короче минимальной
         длительности звонка (раздел «Автозапись») и записи, которые ещё идут, автоматически не анализируются.
       </TipLine>
       <TipLine>Повторить анализ можно в карточке записи: «Ещё действия» → «Переанализировать».</TipLine>
@@ -83,29 +86,40 @@ export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
   const on = (k: string) => v(k) !== false;
   return (
     <>
-      <p className="muted sdesc">
-        Агент размечает расшифровку: важное, главы, наблюдения. Анализ делает тот же агент, что составляет итоги.
-      </p>
-      <Switch label="Анализировать встречу после расшифровки" help={<AnalysisTip />}
-        hint={v("consent") === "pending"
-          ? "После обновления выключено, пока вы не решите. Текст встречи отправляется выбранной модели"
-          : "Анализ ставится сам, когда расшифровка готова. Текст встречи отправляется выбранной модели. "
-            + "Повторить анализ можно в карточке записи"}
-        value={on("auto")} onChange={(x) => set("analysis", "auto", x)} />
-      <h3 className="shead">Что размечать</h3>
-      <p className="muted sdesc">Выключенное не запрашивается у модели и не показывается в карточке.</p>
-      {ANALYSIS_PARTS.map((part) => (
-        <Switch key={part.key} label={part.label} hint={part.hint} value={on(part.key)}
-          onChange={(x) => set("analysis", part.key, x)} />
-      ))}
-      <h3 className="shead">Улучшение расшифровки</h3>
-      <Switch label="Улучшать расшифровку автоматически после распознавания" help={<ImproveTip />}
-        hint="ИИ сам готовит список исправлений терминов; текст меняется, только когда вы примените выбранное"
-        value={draft.analysis?.improve_auto === true} onChange={(x) => set("analysis", "improve_auto", x)} />
-      <h3 className="shead">Название</h3>
-      <Switch label="Придумывать название встречи" help={<AutoTitleTip />}
-        hint="Название из анализа или итогов ставится само; заданные вами названия не меняются"
-        value={Boolean(draft.assistant?.auto_title)} onChange={(x) => set("assistant", "auto_title", x)} />
+      <SettingsCard title="Анализ после расшифровки">
+        <p className="muted sdesc">
+          Агент размечает расшифровку: важное, главы, наблюдения. Анализ делает тот же агент, что составляет итоги.
+        </p>
+        <Switch label="Анализировать встречу после расшифровки" help={<AnalysisTip />}
+          hint={v("consent") === "pending"
+            ? "После обновления выключено, пока вы не решите. Текст встречи отправляется выбранной модели"
+            : "Анализ ставится сам, когда расшифровка готова. Текст встречи отправляется выбранной модели. "
+              + "Повторить анализ можно в карточке записи"}
+          value={on("auto")} onChange={(x) => set("analysis", "auto", x)} />
+      </SettingsCard>
+      <SettingsCard title="Что размечать">
+        <p className="muted sdesc">Выключенное не запрашивается у модели и не показывается в карточке.</p>
+        {ANALYSIS_PARTS.map((part) => (
+          <Switch key={part.key} label={part.label} hint={part.hint} value={on(part.key)}
+            onChange={(x) => set("analysis", part.key, x)} />
+        ))}
+      </SettingsCard>
+      <SettingsCard title="Что показывать в карточке">
+        <ShowRows draft={draft} set={set} />
+      </SettingsCard>
+      <SettingsCard title="Плеер">
+        <PlayerRows draft={draft} set={set} />
+      </SettingsCard>
+      <SettingsCard title="Улучшение расшифровки">
+        <Switch label="Улучшать расшифровку автоматически после распознавания" help={<ImproveTip />}
+          hint="ИИ сам готовит список исправлений терминов; текст меняется, только когда вы примените выбранное"
+          value={draft.analysis?.improve_auto === true} onChange={(x) => set("analysis", "improve_auto", x)} />
+      </SettingsCard>
+      <SettingsCard title="Название">
+        <Switch label="Придумывать название встречи" help={<AutoTitleTip />}
+          hint="Название из анализа или итогов ставится само; заданные вами названия не меняются"
+          value={Boolean(draft.assistant?.auto_title)} onChange={(x) => set("assistant", "auto_title", x)} />
+      </SettingsCard>
     </>
   );
 }

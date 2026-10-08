@@ -13,7 +13,6 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Icon } from "../../ui/Icon";
 import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
-import { HfTokenRow } from "./HfTokenRow";
 import { PathText, Row } from "./Section";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "разделение на спикеров", align: "время слов" };
@@ -156,16 +155,13 @@ export function ModelsPane({ endpoint, usage = {} }: {
     finally { setRetrying(false); await load(); }
   };
 
-  // Токен — до каталога: он нужен и тогда, когда каталог не загрузился.
-  const token = <HfTokenRow endpoint={endpoint} onChanged={() => void load()} />;
   if (!models) {
-    return <>{token}{error && <p className="error">{error}</p>}
+    return <>{error && <p className="error">{error}</p>}
       {tried ? <p className="muted">Нет данных.</p> : <Loading label="Загружаю каталог моделей…" />}</>;
   }
   const done = Object.values(jobs).filter((j) => j.state === "done").map((j) => j.result);
   return (
     <>
-      {token}
       {error && <p className="error">{error}</p>}
       {models.gigaam_install_error && (
         <p className="notice" role="status">

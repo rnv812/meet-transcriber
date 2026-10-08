@@ -108,6 +108,25 @@ export function FolderRow({ label, hint, help, value, onChange }: {
   );
 }
 
+/**
+ * Подгруппа раздела настроек (0.4): карточка Atlas Aurora с заголовком и
+ * строками `Row`/`Switch`/`Radio`. Без `title` — карточка без заголовка (раздел
+ * из одной подгруппы).
+ */
+export function SettingsCard({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <section className="card scard">
+      {title && <h3 className="type-card-title scard__title">{title}</h3>}
+      {children}
+    </section>
+  );
+}
+
+/** Строка-ссылка на другой раздел: «… — в разделе «Спикеры»». */
+export function SeeAlso({ children }: { children: ReactNode }) {
+  return <p className="muted sdesc see-also">{children}</p>;
+}
+
 /** Тип сырых настроек: структуру определяет резидент, окно правит по секциям. */
 export type Raw = Record<string, Record<string, any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
 export type SetFn = (group: string, key: string, value: unknown) => void;

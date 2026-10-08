@@ -128,11 +128,10 @@ test("строка итога проверки есть и до проверки
   expect(container.querySelectorAll(".sound__result").length).toBeGreaterThan(0);
 });
 
-test("«Мой голос»: что записано и «Перезаписать»", async () => {
-  render(<Harness initial={{ recording }} />);
-  const group = screen.getByRole("group", { name: "Мой голос" });
-  expect(await within(group).findByText("записан 05.10 · USB-микрофон")).toBeInTheDocument();
-  expect(within(group).getByRole("button", { name: "Перезаписать" })).toBeInTheDocument();
-  expect(within(group).getByRole("button", { name: "Удалить образец: записан 05.10 · USB-микрофон" }))
-    .toBeInTheDocument();
+test("«Мой голос» — не здесь: ссылка ведёт в «Спикеры»", async () => {
+  const go = vi.fn();
+  render(<SoundSection draft={{ recording }} set={() => {}} devices={devices} endpoint={ep} onOpenSpeakers={go} />);
+  expect(screen.queryByRole("group", { name: "Мой голос" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "«Спикеры»" }));
+  expect(go).toHaveBeenCalled();
 });

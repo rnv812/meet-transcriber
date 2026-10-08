@@ -59,7 +59,7 @@ const save = () => userEvent.click(screen.getByRole("button", { name: "Сохр�
 
 test("раздел «Экспорт встреч» есть в меню и открывается по initial", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Экспорт встреч" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Экспорт" })).toHaveAttribute("aria-current", "page");
   expect(await screen.findByRole("group", { name: "Папка для встреч" })).toBeInTheDocument();
 });
 

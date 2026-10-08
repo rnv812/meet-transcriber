@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
   AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, enabledOf, loopback, opencodeModelError, privacyLine, proxyError,
-} from "./AssistantSection";
+} from "./ModelsSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo, ProviderCheck } from "../../lib/types";
@@ -66,12 +66,15 @@ beforeEach(() => {
   vi.mocked(shell.pickFolder).mockResolvedValue(null);
 });
 
-const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
+/** «Модели ИИ» (0.4): провайдеры, модели Claude Code и OpenCode, локальная модель, прокси. */
+const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
+/** «Ассистент» (0.4): участник встречи, база знаний, живая расшифровка. */
+const openAssistant = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
 const option = (name: string) => screen.getByRole("group", { name });
 
-test("раздел «Ассистент» есть в меню и открывается по initial", async () => {
+test("раздел «Модели ИИ» есть в меню и открывается по initial", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Ассистент" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Модели ИИ" })).toHaveAttribute("aria-current", "page");
   expect(await screen.findByRole("radio", { name: "Авто" })).toBeChecked();
 });
 
@@ -188,7 +191,7 @@ test("пустое имя локальной модели уходит как nu
 
 test("база знаний: «Выбрать папку…» берёт путь из диалога, «Очистить» — null", async () => {
   vi.mocked(shell.pickFolder).mockResolvedValue("E:\\materials");
-  open();
+  openAssistant();
   const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
   expect(within(kb).getByText("D:\\kb")).toBeInTheDocument();
   await userEvent.click(within(kb).getByRole("button", { name: "Очистить" }));
@@ -201,15 +204,15 @@ test("база знаний: «Выбрать папку…» берёт пут�
   }));
 });
 
-test("папки заметок в «Ассистенте» больше нет — встречи выгружаются в «Экспорте встреч»", async () => {
-  open();
+test("папки заметок в «Ассистенте» больше нет — встречи выгружаются в «Экспорте»", async () => {
+  openAssistant();
   await screen.findByRole("group", { name: "База знаний для ассистента" });
   expect(screen.queryByRole("group", { name: "Папка заметок" })).toBeNull();
   expect(screen.queryByLabelText("Подпапка для встреч")).toBeNull();
 });
 
 test("отказ в диалоге выбора папки ничего не меняет", async () => {
-  open();
+  openAssistant();
   const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
   await userEvent.click(within(kb).getByRole("button", { name: "Выбрать папку…" }));
   await waitFor(() => expect(shell.pickFolder).toHaveBeenCalledWith("D:\\kb"));
@@ -218,7 +221,7 @@ test("отказ в диалоге выбора папки ничего не м�
 });
 
 test("окно живой расшифровки уходит в assist.window_seconds; вне 5..120 — не сохранить", async () => {
-  open();
+  openAssistant();
   const win = await screen.findByLabelText("Окно живой расшифровки, с");
   expect(win).toHaveAttribute("min", "5");
   expect(win).toHaveAttribute("max", "120");
@@ -234,7 +237,7 @@ test("окно живой расшифровки уходит в assist.window_s
 
 test("окно вне 5..120 из файла настроек не мешает сохранять другое", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { window_seconds: 3 } }));
-  open();
+  openAssistant();
   const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
   await userEvent.click(within(kb).getByRole("button", { name: "Очистить" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -246,8 +249,8 @@ test("окно вне 5..120 из файла настроек не мешает 
 test("повторный запрос раздела возвращает на «Ассистент»", async () => {
   const { rerender } = render(
     <SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" initialTick={1} />);
-  await screen.findByText("сейчас: Claude Code");
-  await userEvent.click(screen.getByRole("button", { name: "Запись" }));
+  await screen.findByRole("switch", { name: "Ассистент — участник встречи" });
+  await userEvent.click(screen.getByRole("button", { name: "Звук" }));
   expect(screen.getByRole("button", { name: "Ассистент" })).not.toHaveAttribute("aria-current");
   rerender(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" initialTick={2} />);
   expect(screen.getByRole("button", { name: "Ассистент" })).toHaveAttribute("aria-current", "page");
@@ -361,7 +364,7 @@ test.each([
 
 test("живые подсказки (агент-участник выключен): по умолчанию «Сдержанно» и «Как у агента»; выбор уходит в assist", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { participant: false } }));
-  open();
+  openAssistant();
   const activity = await screen.findByRole("radiogroup", { name: "Активность подсказок" });
   expect(within(activity).getByRole("radio", { name: "Сдержанно" })).toBeChecked();
   const tier = screen.getByRole("radiogroup", { name: "Модель для живых подсказок" });
@@ -380,7 +383,7 @@ test("живые подсказки (агент-участник выключе�
 
 test("«Только сводка» — число подсказок не выбирается; у каждой настройки есть «?»", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0, participant: false } }));
-  open();
+  openAssistant();
   expect(await screen.findByLabelText("Сколько подсказок держать")).toBeDisabled();
   expect(screen.getByRole("option", { name: "По активности (5 или 8)" })).toBeInTheDocument();
   for (const label of ["Что такое активность подсказок", "Какая модель ведёт подсказки", "Что значит «Не отвлекать»"]) {

@@ -210,10 +210,10 @@ export function CategoriesSection({ value, onChange, endpoint }: {
                       disabled={i === list.length - 1} onClick={() => move(i, 1)} />
                   </span>
                   <ColorPicker value={c.color} name={clean(c.name)} onChange={(color) => update(i, { color })} />
-                  <input type="text" className="catedit__name" aria-label="Название категории" maxLength={NAME_MAX}
+                  <input type="text" className="field field--sm catedit__name" aria-label="Название категории" maxLength={NAME_MAX}
                     placeholder="Название" value={c.name} onChange={(e) => update(i, { name: e.target.value })}
                     onBlur={() => setTouched(true)} />
-                  <input type="text" className="catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
+                  <input type="text" className="field field--sm catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
                     maxLength={DESCRIPTION_MAX} placeholder="Описание для ИИ: какие встречи сюда относятся"
                     title={c.description || undefined}
                     value={c.description} onChange={(e) => update(i, { description: e.target.value })} />

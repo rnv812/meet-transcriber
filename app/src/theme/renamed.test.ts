@@ -103,10 +103,22 @@ test("CSS окна не оставляет элементов прежних б�
   expect(bad).toEqual([]);
 });
 
+/**
+ * Файлы, где имя — уже класс Atlas Aurora (прежний блок окна переименован, CSS
+ * окна его не объявляет — проверка выше): файл → имена.
+ */
+const AURORA_IN_MARKUP = new Map<string, string[]>([
+  // Подгруппа настроек — `.card` Aurora (feedback.css), этап 4.
+  [join("features", "settings", "Section.tsx"), ["card"]],
+]);
+
 test("разметка не использует прежние классы tabs/card/search/help/empty", () => {
   const bad: string[] = [];
   for (const f of files(SRC, [".tsx", ".ts"])) {
-    for (const name of oldClassesIn(readFileSync(f, "utf8"))) bad.push(`${relative(SRC, f)}: ${name}`);
+    const allowed = AURORA_IN_MARKUP.get(relative(SRC, f)) ?? [];
+    for (const name of oldClassesIn(readFileSync(f, "utf8"))) {
+      if (!allowed.includes(name)) bad.push(`${relative(SRC, f)}: ${name}`);
+    }
   }
   expect(bad).toEqual([]);
 });

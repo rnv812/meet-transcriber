@@ -50,7 +50,7 @@ beforeEach(() => {
   vi.mocked(api.listLocalModels).mockResolvedValue(found("qwen3:8b", "gemma3:4b"));
 });
 
-const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
+const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
 const picker = () => screen.findByRole("combobox", { name: "Модели на сервере" });
 
 test("модели сервера ищутся сразу и выбираются из списка в поле имени", async () => {

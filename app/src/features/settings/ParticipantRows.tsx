@@ -1,5 +1,6 @@
 /**
- * Настройки агента-участника (раздел «Ассистент» → «Живой ассистент», 0.3.6):
+ * Настройки агента-участника (раздел «Ассистент» → «Участник встречи» и «База
+ * знаний», 0.3.6):
  *
  * - «Ассистент — участник встречи» (`assist.participant`) — во время встречи ассистент
  *   пишет в чат как участник; выключен — прежние подсказки и «Спросить»
@@ -207,7 +208,6 @@ export function ParticipantRows({ draft, set, provider }: {
   const on = assist.participant !== false;
   const frequency = (FREQUENCIES.some((f) => f.value === assist.frequency) ? assist.frequency : "more") as Frequency;
   const profile = profileOf(assist.profile);
-  const kbRoot = (draft.assistant?.knowledge_dir as string | null | undefined) || null;
   const sees = provider ? provider in VISION : null;
   const freedom = assist.agent_freedom !== false;
   const filesOnly = provider ? FILES_ONLY[provider] : undefined;
@@ -234,17 +234,35 @@ export function ParticipantRows({ draft, set, provider }: {
             hint={freedom
               ? (filesOnly && provider ? `${FREEDOM_FILES_NOTE}. ${FREEDOM_CLOSED_NOTE[provider]}` : FREEDOM_ON_HINT)
               : FREEDOM_OFF_HINT} />
-          <Switch label={KB_MAP_LABEL} value={assist.kb_map !== false}
-            onChange={(v) => set("assist", "kb_map", v)}
-            hint="Папки и названия документов базы и список прошлых встреч группы, без содержимого. Читает он только по вашей просьбе или с согласия" />
-          <KbExcludeEditor value={assist.kb_exclude} kbRoot={kbRoot} provider={provider}
-            onChange={(v) => set("assist", "kb_exclude", v)} />
           <p className="muted sdesc participant__vision">
             {VISION_NOTE}
             {sees === false && provider ? `. ${LABELS[provider] ?? provider} картинки не видит` : ""}
           </p>
         </>
       )}
+    </>
+  );
+}
+
+/**
+ * База знаний агента-участника (карточка «База знаний» в «Ассистенте», под
+ * папкой базы): карта и исключённые папки. Только при включённом участнике.
+ */
+export function KnowledgeRows({ draft, set, provider }: {
+  draft: Raw; set: SetFn;
+  /** Модель по умолчанию, которая ответит сейчас (null — неизвестно). */
+  provider: string | null;
+}) {
+  const assist = draft.assist ?? {};
+  if (assist.participant === false) return null;
+  const kbRoot = (draft.assistant?.knowledge_dir as string | null | undefined) || null;
+  return (
+    <>
+      <Switch label={KB_MAP_LABEL} value={assist.kb_map !== false}
+        onChange={(v) => set("assist", "kb_map", v)}
+        hint="Папки и названия документов базы и список прошлых встреч группы, без содержимого. Читает он только по вашей просьбе или с согласия" />
+      <KbExcludeEditor value={assist.kb_exclude} kbRoot={kbRoot} provider={provider}
+        onChange={(v) => set("assist", "kb_exclude", v)} />
     </>
   );
 }

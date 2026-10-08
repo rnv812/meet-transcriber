@@ -37,8 +37,8 @@ function StatusLine({ status }: { status: HfStatus }) {
 
 export function HfTokenRow({ endpoint, onChanged }: {
   endpoint: Endpoint;
-  /** Токен сменился или удалён: каталог моделей помечает закрытые модели заново. */
-  onChanged: () => void;
+  /** Токен сменился или удалён (каталог моделей перечитывается при открытии «Движка и моделей»). */
+  onChanged?: () => void;
 }) {
   const [status, setStatus] = useState<HfStatus | null>(null);
   const [editing, setEditing] = useState(false);
@@ -72,7 +72,7 @@ export function HfTokenRow({ endpoint, onChanged }: {
   const remove = () => act(async () => {
     setStatus(await deleteHfToken(endpoint));
     setEditing(false);
-    onChanged();
+    onChanged?.();
   });
   const recheck = () => act(async () => {
     await recheckHf(endpoint);
@@ -110,7 +110,7 @@ export function HfTokenRow({ endpoint, onChanged }: {
       {error && <p className="error">{error}</p>}
       {editing && (
         <HfTokenForm endpoint={endpoint} label="Новый токен" submitLabel="Проверить и сохранить"
-          onSaved={() => { setEditing(false); void load(); onChanged(); }} />
+          onSaved={() => { setEditing(false); void load(); onChanged?.(); }} />
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 /**
- * «Запуск агента (вкладка «Агент»)» в разделе «Ассистент»: свои параметры
+ * «Запуск агента (вкладка «Агент»)» в разделе «Дополнительно» (0.4): свои параметры
  * запуска Claude Code, Codex и OpenCode — дополнительные аргументы и переменные
  * окружения (`agent.launch.<агент>`). Только для вкладки «Агент»: фоновые
  * задачи их не получают.
@@ -18,7 +18,7 @@ import {
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Row, type Raw, type SetFn } from "./Section";
-import { MODEL_LABEL, OPENCODE_MODEL_LABEL } from "./AssistantSection";
+import { MODEL_LABEL, OPENCODE_MODEL_LABEL } from "./ModelsSection";
 
 const EMPTY: LaunchDraft = { args: "", env: [] };
 
@@ -198,7 +198,6 @@ export function AgentLaunchSection({ draft, set }: { draft: Raw; set: SetFn }) {
   };
   return (
     <>
-      <h3 className="shead">Запуск агента (вкладка «Агент»)</h3>
       <p className="muted sdesc">
         Свои параметры для Claude Code, Codex и OpenCode во вкладке «Агент». Фоновые задачи (итоги, анализ, живой ассистент)
         их не получают.
