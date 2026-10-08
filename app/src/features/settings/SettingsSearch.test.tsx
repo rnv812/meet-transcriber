@@ -71,7 +71,7 @@ const options = () => within(screen.getByRole("listbox", { name: "Найденн
 test("поле «Поиск по настройкам» над меню — Aurora field--sm; ввод заменяет меню выдачей «Раздел › Параметр»", async () => {
   const field = await open();
   expect(field).toHaveClass("field", "field--sm");
-  expect(field).toHaveAttribute("placeholder", "Поиск по настройкам");
+  expect(field).toHaveAttribute("placeholder", "Поиск");
   expect(screen.getByRole("navigation", { name: "Разделы настроек" })).toContainElement(field);
   await userEvent.type(field, "прокси");
   expect(screen.queryByRole("button", { name: "Звук" })).toBeNull();

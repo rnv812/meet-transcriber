@@ -56,7 +56,7 @@ export function SettingsSearch({ query, onQuery, onPick, inputRef }: {
       <div className="search">
         <Icon as={Search} />
         <input ref={inputRef} type="search" className="field field--sm ssearch__input"
-          role="combobox" aria-label="Поиск по настройкам" placeholder="Поиск по настройкам"
+          role="combobox" aria-label="Поиск по настройкам" placeholder="Поиск"
           aria-autocomplete="list" aria-expanded={typed && results.length > 0} aria-controls={listId}
           aria-activedescendant={typed && results.length > 0 ? optionId(at) : undefined}
           autoComplete="off" spellCheck={false} value={query}
