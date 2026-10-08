@@ -25,7 +25,7 @@ function Host() {
   chat = useChat(ep);
   return <ChatComposer chat={chat} />;
 }
-const field = () => screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+const field = () => screen.getByRole("combobox", { name: "Сообщение ассистенту" });
 const cli: AgentCommand[] = [
   ...MEET_COMMANDS,
   { name: "context", hint: "", description: "Заполнение контекста", source: "cli" },
@@ -50,8 +50,13 @@ test("разбор и фильтр", () => {
 test("«/» открывает список над полем, набранное сужает его, описание и аргументы видны", async () => {
   render(<Host />);
   load(cli);
+  // Поле — combobox (ARIA 1.2): своё имя, всплывает listbox, закрыт — aria-expanded="false".
+  expect(field()).toHaveAttribute("aria-haspopup", "listbox");
+  expect(field()).toHaveAttribute("aria-expanded", "false");
+  expect(field()).not.toHaveAttribute("aria-controls");
   await userEvent.type(field(), "/");
   const list = screen.getByRole("listbox", { name: "Команды" });
+  expect(field()).toHaveAttribute("aria-controls", list.id);
   expect(list).toHaveClass("menu", "open");
   // Внутри строки ввода: там её непрозрачный фон (chat.css), лента не просвечивает.
   expect(list.closest(".chat-compose")).not.toBeNull();

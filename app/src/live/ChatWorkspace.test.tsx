@@ -70,7 +70,7 @@ test("условия не приняты — на месте строки вво
   width(600);
   render(<TermsHost live={makeLive({ agent: agentInfo() })} />);
   load();
-  expect(screen.queryByRole("textbox", { name: "Сообщение ассистенту" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Сообщение ассистенту" })).toBeNull();
   const notice = screen.getByText(TERMS_NEEDED).closest<HTMLElement>(".terms-notice")!;
   expect(notice).toHaveAttribute("role", "status");
   expect(notice.closest(".chat-dock")).not.toBeNull();
@@ -132,7 +132,7 @@ test("узкая панель (уже 560): по умолчанию только
 test("строка ввода — в доке под чатом и расшифровкой, вне колонок", () => {
   width(600);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
-  const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+  const field = screen.getByRole("combobox", { name: "Сообщение ассистенту" });
   const dock = field.closest(".chat-dock")!;
   expect(dock).not.toBeNull();
   expect(dock.parentElement).toHaveClass("chat-ws");
@@ -169,7 +169,7 @@ test("«Профиль» уходит setAgentProfile, чип и выбор ме
 test("нет связи — писать нельзя, причина видна", () => {
   width(600);
   render(<Host live={makeLive({ agent: agentInfo(), error: "Нет связи с ассистентом — переподключаюсь…" })} />);
-  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toBeDisabled();
   expect(screen.getByText("Нет связи с ассистентом — переподключаюсь…")).toBeInTheDocument();
 });
 
@@ -180,17 +180,17 @@ test("смена ширины (средняя → широкая → узкая)
   const live = makeLive({ agent: agentInfo() });
   const { rerender } = render(<Host live={live} />);
   load();
-  const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+  const field = screen.getByRole("combobox", { name: "Сообщение ассистенту" });
   await userEvent.type(field, "черновик");
   const png = new File([new Uint8Array([1])], "shot.png", { type: "image/png" });
   await act(async () => { fireEvent.paste(field, { clipboardData: { files: [png], getData: () => "" } }); });
   rerender(<Host live={live} wide />);
   expect(screen.getByRole("separator", { name: "Ширина расшифровки" })).toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBe(field); // тот же элемент — не пересоздан
+  expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toBe(field); // тот же элемент — не пересоздан
   px = 360;
   rerender(<Host live={{ ...live }} />);
   await act(async () => { window.dispatchEvent(new Event("resize")); });
-  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toHaveValue("черновик");
+  expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toHaveValue("черновик");
   expect(screen.getByRole("list", { name: "Вложения" })).toHaveTextContent("shot.png");
 });
 
@@ -202,7 +202,7 @@ test("быстрые вопросы над пустой строкой: щелч
   expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["Что я пропустил?", "Что ответить?", "Кратко итоги"]);
   await userEvent.click(within(group).getByRole("button", { name: "Что я пропустил?" }));
   expect(postChat).toHaveBeenCalledWith(ep, { text: "Что я пропустил?", client_id: "c1", attachments: [] });
-  await userEvent.type(screen.getByRole("textbox", { name: "Сообщение ассистенту" }), "с");
+  await userEvent.type(screen.getByRole("combobox", { name: "Сообщение ассистенту" }), "с");
   expect(screen.queryByRole("group", { name: "Быстрые вопросы" })).toBeNull();
 });
 
@@ -211,7 +211,7 @@ test("до первого состояния — уже чат с «Подклю
   expect(screen.getByText("Подключаюсь к ассистенту…")).toBeInTheDocument();
   expect(screen.queryByRole("tablist")).toBeNull();
   expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toBeDisabled();
 });
 
 
@@ -321,7 +321,7 @@ describe("одна раскладка", () => {
     const { rerender } = render(<Host live={live} wide />);
     load();
     const chatLog = screen.getByRole("log", { name: "Чат с ассистентом" });
-    const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+    const field = screen.getByRole("combobox", { name: "Сообщение ассистенту" });
     const first = shape();
     expect(first.children).toEqual(["chat-ws__transcript", "splitter", "chat-ws__main"]);
     for (const px of [300, 360, 420, 559, 560, 719, 720, 900, 1280, 1600]) {
@@ -329,7 +329,7 @@ describe("одна раскладка", () => {
       rerender(<Host live={{ ...live }} wide={px >= 720} />);
       expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBe(chatLog);
       expect(chatLog).toBeVisible();
-      expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBe(field);
+      expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toBe(field);
       if (px >= TRANSCRIPT_PX) {
         expect(shape()).toEqual(first);
         expect(screen.getByRole("region", { name: "Расшифровка" })).toBeVisible();

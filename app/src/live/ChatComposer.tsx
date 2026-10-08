@@ -327,9 +327,11 @@ export function ChatComposer({
           <IconButton icon={Paperclip} label="Приложить файл" disabled={disabled}
             tooltip="Приложить файл (или перетащите его сюда, или вставьте скриншот Ctrl+V)" onClick={() => void pick()} />
         )}
+        {/* Поле с подсказкой команд — combobox (ARIA 1.2): список «/» — его listbox, активный пункт —
+            aria-activedescendant; имя прежнее — «Сообщение ассистенту». */}
         <textarea ref={field} className="chat-compose__field" rows={1} value={text} disabled={disabled}
-          aria-label="Сообщение ассистенту"
-          aria-controls={menuOpen ? menuId : undefined} aria-expanded={menuOpen || undefined}
+          role="combobox" aria-label="Сообщение ассистенту" aria-haspopup="listbox"
+          aria-controls={menuOpen ? menuId : undefined} aria-expanded={menuOpen}
           aria-activedescendant={menuOpen ? `${menuId}-${active}` : undefined} aria-autocomplete="list"
           placeholder={disabled ? "Писать ассистенту сейчас нельзя" : placeholder}
           aria-description="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот, «/» — команды"

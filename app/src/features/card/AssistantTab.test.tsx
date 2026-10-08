@@ -55,7 +55,7 @@ function Tab({ jobs = [], ev = null, onOpenSettings }: { jobs?: Job[]; ev?: Chat
 }
 const log = () => screen.getByRole("log", { name: "Чат с ассистентом" });
 const ready = () => screen.findByRole("log", { name: "Чат с ассистентом" });
-const field = () => screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+const field = () => screen.getByRole("combobox", { name: "Сообщение ассистенту" });
 
 beforeEach(() => {
   vi.clearAllMocks();

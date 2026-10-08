@@ -41,7 +41,7 @@ function Host({ reason = null, vision = true }: { reason?: string | null; vision
     </>
   );
 }
-const field = () => screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+const field = () => screen.getByRole("combobox", { name: "Сообщение ассистенту" });
 const load = (messages: ChatMessage[] = [], seq = 1) =>
   act(() => chat.sink.onChatSnapshot({ messages, seq, agent: agentInfo() } as ChatSnapshot));
 const log = () => screen.getByRole("log");

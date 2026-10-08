@@ -99,7 +99,7 @@ async function expandedPanel(messages: unknown[]) {
     liveStream().emit("state", liveState);
     liveStream().emit("chat_snapshot", { messages, seq: 2, agent: agentInfo() });
   });
-  return screen.findByRole("textbox", { name: "Сообщение ассистенту" });
+  return screen.findByRole("combobox", { name: "Сообщение ассистенту" });
 }
 
 test("свернули и развернули: текст строки ввода и вложение остались", async () => {
@@ -108,16 +108,16 @@ test("свернули и развернули: текст строки ввод
   const png = new File([new Uint8Array([1])], "shot.png", { type: "image/png" });
   await act(async () => { fireEvent.paste(field, { clipboardData: { files: [png], getData: () => "" } }); });
   await userEvent.click(screen.getByRole("button", { name: "Свернуть" }));
-  expect(screen.queryByRole("textbox", { name: "Сообщение ассистенту" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Сообщение ассистенту" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
-  expect(await screen.findByRole("textbox", { name: "Сообщение ассистенту" })).toHaveValue("не потеряй");
+  expect(await screen.findByRole("combobox", { name: "Сообщение ассистенту" })).toHaveValue("не потеряй");
   expect(screen.getByRole("list", { name: "Вложения" })).toHaveTextContent("shot.png");
 });
 
 test("закреплённый вопрос, убранный «×», не возвращается ни в свёрнутой строке, ни после разворота", async () => {
   await expandedPanel([agentMsg("m1", { text: "Раньше" }), agentMsg("m2", { text: "Сказать про срок?", pin: true })]);
   await userEvent.click(screen.getByRole("button", { name: "Убрать из закреплённых" }));
-  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toHaveFocus();
+  expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toHaveFocus();
   await userEvent.click(screen.getByRole("button", { name: "Свернуть" }));
   expect(screen.queryByRole("button", { name: /Вопрос вам/ })).toBeNull();
   expect(screen.getByRole("button", { name: /Ассистент: Сказать про срок\?/ })).toBeInTheDocument();
