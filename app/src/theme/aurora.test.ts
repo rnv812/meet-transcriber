@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -48,4 +49,26 @@ test("шрифт Onest из npm больше не подключается", () 
   const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
   expect(pkg.dependencies?.["@fontsource-variable/onest"]).toBeUndefined();
   expect(readdirSync(join(theme, "aurora", "fonts")).filter((f) => f.endsWith(".woff2"))).toHaveLength(13);
+});
+
+test("псевдонимы окна ссылаются только на объявленные переменные", () => {
+  const own = read("tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const known = new Set([
+    ...declared(read("aurora", "tokens.css")),
+    ...declared(read("aurora", "palettes.css")),
+    ...declared(own),
+  ]);
+  const blocks = [...own.matchAll(/(?:^|\n)(:root|\[data-theme="light"\])\s*\{([^}]*)\}/g)];
+  expect(blocks.length).toBeGreaterThanOrEqual(2);
+  const missing = blocks.flatMap((b) => [...b[2]!.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]!)).filter((n) => !known.has(n));
+  expect(missing).toEqual([]);
+});
+
+test("сборка не встраивает шрифты в CSS: CSP окна не пускает data:-URI", async () => {
+  const { default: config } = await import("../../vite.config");
+  const limit = config.build?.assetsInlineLimit;
+  expect(typeof limit).toBe("function");
+  const inline = limit as (file: string, content: Buffer) => boolean | undefined;
+  expect(inline("/x/aurora/fonts/unbounded-cyrillic-ext.woff2", Buffer.alloc(1840))).toBe(false);
+  expect(inline("/x/icon.svg", Buffer.alloc(100))).toBeUndefined(); // остальное — по умолчанию Vite
 });

@@ -32,6 +32,9 @@ export default defineConfig({
   plugins: [react()],
   build: {
     target: "chrome110", // WebView2 на Win10/11; лишние полифилы не нужны
+    // Шрифты не встраиваем в CSS как data:-URI: CSP окна (tauri.conf.json) без
+    // font-src берёт default-src 'self' и data: отвергает. Остальное — по умолчанию.
+    assetsInlineLimit: (file: string) => (file.endsWith(".woff2") ? false : undefined),
     // Три страницы: окно приложения, плавающая панель ассистента (окно
     // `live` оболочки грузит live.html и в dev, и в сборке) и панель записи
     // под значком в строке меню macOS (окно `tray-panel`, tray.html).

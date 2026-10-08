@@ -6,7 +6,7 @@
 :root {
   --bg: var(--canvas);
   --surface: var(--surface-1);
-  --surface-hover: var(--surface-2);
+  --surface-hover: var(--surface-3);
   --line: var(--hairline);
   --line-2: var(--hairline-strong);
   --text: var(--ink);
