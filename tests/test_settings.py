@@ -399,6 +399,18 @@ def test_new_install_follows_system_theme():
     assert cfg.ui.motion is True
 
 
+@pytest.mark.parametrize("raw", [
+    {"hooks": {"post_record": False}},
+    {"llm": {"provider": "claude"}},
+    {"assist": {}},
+    {"auto_record": {"enabled": False}},
+    {"post_record_hook": False},
+])
+def test_legacy_unversioned_config_with_old_section_stays_dark(raw):
+    # Конфиг без version, но с секцией прежней версии — обновившийся, не новая установка.
+    assert settings.Settings.from_raw(raw).ui.theme == "dark"
+
+
 def test_upgraded_user_stays_dark_until_he_changes_it(tmp_path):
     f = tmp_path / "config.json"
     f.write_text(json.dumps({"version": settings.SCHEMA_VERSION,
