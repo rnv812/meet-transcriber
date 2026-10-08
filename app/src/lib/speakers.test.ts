@@ -1,4 +1,12 @@
-import { mergeTurns, initials, speakersOf, isUnnamed } from "./speakers";
+import { mergeTurns, initials, initialsFontSize, speakersOf, isUnnamed } from "./speakers";
+
+test("кегль инициалов: одна буква ≈ 42 % диаметра, две — ≈ 34 %, не меньше 9 px (0.5)", () => {
+  expect(initialsFontSize(24, "А")).toBe(10);
+  expect(initialsFontSize(24, "АС")).toBe(9);
+  expect(initialsFontSize(48, "А")).toBe(20);
+  expect(initialsFontSize(48, "АС")).toBe(16);
+  expect(initialsFontSize(16, "АС")).toBe(9);
+});
 
 test("склейка подряд идущих реплик одного спикера", () => {
   const t = mergeTurns([

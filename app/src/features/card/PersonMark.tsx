@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { Endpoint } from "../../lib/api";
-import { initials, isUnnamed } from "../../lib/speakers";
+import { initials, initialsFontSize, isUnnamed } from "../../lib/speakers";
 import { Avatar } from "../../ui/Avatar";
 
 /**
@@ -18,7 +18,7 @@ export function PersonMark({ name, tone, hasAvatar = false, version, endpoint, s
 }) {
   const photo = hasAvatar && !isUnnamed(name) && !!endpoint;
   const style = {
-    "--person": tone, width: size, height: size, fontSize: Math.max(10, Math.round(size * 0.4)),
+    "--person": tone, width: size, height: size, fontSize: initialsFontSize(size, initials(name)),
   } as CSSProperties;
   return (
     <span className="person-mark" style={style} aria-hidden="true">

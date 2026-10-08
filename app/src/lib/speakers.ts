@@ -66,6 +66,14 @@ export function isUnnamed(name: string): boolean {
   return /^Спикер \d+$/.test(name) || /^SPEAKER_\d+$/.test(name);
 }
 
+/**
+ * Кегль инициалов в круге диаметром `size` (0.5): одна буква — ≈ 42 % диаметра,
+ * две — ≈ 34 %, чтобы буквы не подходили к кольцу; не меньше 9 px.
+ */
+export function initialsFontSize(size: number, text: string): number {
+  return Math.max(9, Math.round(size * ([...text].length > 1 ? 0.34 : 0.42)));
+}
+
 export function initials(name: string): string {
   const num = /^Спикер (\d+)$/.exec(name) ?? /^SPEAKER_0*(\d+)$/.exec(name);
   if (num?.[1]) return num[1];
