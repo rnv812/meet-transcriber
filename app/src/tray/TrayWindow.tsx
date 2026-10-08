@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { useTermsAccepted } from "../features/legal/useTermsAccepted";
 import { trayPanelFit, trayPanelHide, trayPanelOpen } from "../lib/shell";
 import { useAppearance } from "../theme/useAppearance";
 import { type OpenTarget, TrayPanel } from "./TrayPanel";
@@ -18,6 +19,8 @@ const STALE_CHECK_MS = 30_000;
 export function TrayWindow() {
   const data = useTrayPanel();
   useAppearance(data.endpoint);
+  // Условия — при каждом показе панели (их принимают в окне Meet); спрятанная не спрашивает.
+  const termsOk = useTermsAccepted(data.visible ? data.endpoint : null, data.shownTick);
   const box = useRef<HTMLDivElement>(null);
   const [glass] = useState(() =>
     new URLSearchParams(window.location.search).get("glass") === "native" ? "native" : "css");
@@ -73,6 +76,7 @@ export function TrayWindow() {
           justStopped={isJustStopped(recent, data.snapshot, data.stopped, now)}
           assistant={data.assistant}
           visible={data.visible}
+          termsOk={termsOk}
           onSnapshot={data.applySnapshot}
           onOpen={open}
         />

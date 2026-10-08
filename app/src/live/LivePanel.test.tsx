@@ -9,15 +9,20 @@ vi.mock("../lib/api", async (orig) => ({
   liveAsk: vi.fn(),
   liveHint: vi.fn(),
   getOwnerVoice: vi.fn(),
+  getSettings: vi.fn(),
 }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
   inTauri: () => true,
   invoke: vi.fn(async () => undefined),
   onLiveWindow: vi.fn(async () => () => {}),
+  trayPanelOpen: vi.fn(async () => {}),
 }));
-import { NoResidentError, getOwnerVoice, getState, liveAsk, liveHint, liveStop, resolveEndpoint } from "../lib/api";
-import { invoke, onLiveWindow } from "../lib/shell";
+import {
+  NoResidentError, getOwnerVoice, getSettings, getState, liveAsk, liveHint, liveStop, resolveEndpoint,
+} from "../lib/api";
+import { invoke, onLiveWindow, trayPanelOpen } from "../lib/shell";
+import { TERMS_NEEDED, TERMS_VERSION } from "../lib/terms";
 import type { LiveStatus, Snapshot } from "../lib/types";
 import { FakeEventSource } from "../test/setup";
 import { LivePanel, LiveWindow } from "./LivePanel";
@@ -51,9 +56,23 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getState).mockResolvedValue(snap(status()));
   vi.mocked(onLiveWindow).mockImplementation(async () => () => {});
+  vi.mocked(getSettings).mockResolvedValue({ ui: { terms_accepted: TERMS_VERSION } });
   shellWith();
 });
 afterEach(() => vi.useRealTimers());
+
+test("условия не приняты (сеанс начат из трея) — пометка вместо строки ввода, «Открыть Meet» — окно", async () => {
+  vi.mocked(getSettings).mockResolvedValue({ ui: { terms_accepted: "" } });
+  shellWith({ expanded: true });
+  render(<LivePanel endpoint={ep} />);
+  act(() => liveStream().emit("state", { digest: "", hints: [], status: null }));
+  await userEvent.click(await screen.findByRole("tab", { name: "Спросить" }));
+  const text = await screen.findByText(TERMS_NEEDED);
+  expect(screen.queryByRole("textbox", { name: "Вопрос ассистенту" })).toBeNull();
+  const notice = text.closest<HTMLElement>(".terms-notice")!;
+  await userEvent.click(within(notice).getByRole("button", { name: "Открыть Meet" }));
+  expect(trayPanelOpen).toHaveBeenCalledWith({});
+});
 
 test("свёрнутая: таймер от начала, «Слушает», последняя реплика", () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
@@ -492,7 +511,7 @@ test("без образца голоса — строка над лентой; �
   expect(await within(dialog).findByText(/Утро выдалось тихим/)).toBeInTheDocument();
   // Встреча ещё пишется: образец — после неё, окно об этом говорит и ждёт.
   expect(within(dialog).getByText(/запишите образец после неё/)).toBeInTheDocument();
-  expect(calls("tray_panel_open")).toEqual([]); // не переход в настройки — окно здесь же
+  expect(trayPanelOpen).not.toHaveBeenCalled(); // не переход в настройки — окно здесь же
   await userEvent.click(within(dialog).getAllByRole("button", { name: "Закрыть" })[0]!);
   expect(screen.queryByRole("dialog", { name: "Мой голос" })).toBeNull();
 });

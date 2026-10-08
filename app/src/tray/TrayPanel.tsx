@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { fallbackText, liveOf } from "../app/RecordingBadge";
 import { noProvider } from "../features/card/assistant";
+import { TermsNotice } from "../features/legal/TermsNotice";
 import { ApiError, type Endpoint, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, dayLabel, duration, errorText } from "../lib/format";
 import {
@@ -44,11 +45,16 @@ export type OpenTarget = { recording?: string; section?: string };
  * «Продолжить», Esc — тоже она (и панель при этом не прячется). Спрятанная
  * панель запись не трогает: удаляет только кнопка «Удалить запись».
  *
+ * Условия не приняты (`termsOk === false`; Meet часто стартует в трей, и
+ * главного окна с заслонкой человек мог не видеть): кнопки начала записи
+ * закрыты, под ними — пометка «Примите условия…» с «Открыть Meet». Идущую
+ * запись остановить можно всегда.
+ *
  * Вид — Atlas Aurora: главная кнопка — `primary`, остановка — `danger`,
  * остальное — контур и «призрак»; тема и палитра — от окна (useAppearance).
  */
 export function TrayPanel({
-  endpoint, snapshot, snapshotAt, online, recent, justStopped, assistant, visible = true,
+  endpoint, snapshot, snapshotAt, online, recent, justStopped, assistant, visible = true, termsOk = null,
   onSnapshot, onOpen,
 }: {
   endpoint: Endpoint | null;
@@ -65,6 +71,8 @@ export function TrayPanel({
   assistant: AssistantInfo | null;
   /** Панель на экране: таймер тикает только тогда. */
   visible?: boolean;
+  /** Приняты ли условия; null — не знаем (ничего не закрываем, как заслонка окна). */
+  termsOk?: boolean | null;
   onSnapshot: (s: Snapshot) => void;
   onOpen: (target: OpenTarget) => void;
 }) {
@@ -117,6 +125,13 @@ export function TrayPanel({
     onSnapshot({ ...snapshot!, live: liveOf(result) });
   });
   const blocked = noProvider(assistant) || needsProvider;
+  const needsTerms = termsOk === false;
+  const terms = needsTerms
+    ? <TermsNotice id="tp-terms" className="tp__terms" onOpen={() => onOpen({})} />
+    : null;
+  // Почему кнопка начала записи закрыта: условия важнее провайдера.
+  const startWhy = needsTerms ? "tp-terms" : undefined;
+  const liveWhy = needsTerms ? "tp-terms" : blocked ? "tp-provider" : undefined;
 
   let hero: ReactNode;
   let showRecent = false;
@@ -237,11 +252,13 @@ export function TrayPanel({
             onClick={() => onOpen({ recording: recent.id })}>
             Открыть запись
           </Button>
-          <Button variant="secondary" className="tp__wide" disabled={pending} onClick={() => record("start")}>
+          <Button variant="secondary" className="tp__wide" disabled={pending || needsTerms}
+            aria-describedby={startWhy} onClick={() => record("start")}>
             <Icon as={Circle} className="tp__glyph-rec" />
             Начать новую запись
           </Button>
         </div>
+        {terms}
       </>
     );
   } else {
@@ -252,23 +269,25 @@ export function TrayPanel({
           {snapshot.auto_record?.enabled ? "Автозапись включена" : "Запись не идёт"}
         </Status>
         <div className="tp__actions">
-          <Button variant="primary" size="md" className="tp__wide" disabled={pending} onClick={() => record("start")}>
+          <Button variant="primary" size="md" className="tp__wide" disabled={pending || needsTerms}
+            aria-describedby={startWhy} onClick={() => record("start")}>
             <Icon as={Circle} className="tp__glyph-fill" />
             Начать запись
           </Button>
-          <Button variant="secondary" className="tp__wide" disabled={pending || blocked}
-            aria-describedby={blocked ? "tp-provider" : undefined} onClick={() => startLive()}>
+          <Button variant="secondary" className="tp__wide" disabled={pending || blocked || needsTerms}
+            aria-describedby={liveWhy} onClick={() => startLive()}>
             <AgentMark size={16} />
             С ассистентом
           </Button>
           <Tip content={`Временная встреча ${TEMP_NOTE}`}>
-            <Button variant="ghost" className="tp__wide" icon={Clock3} disabled={pending || blocked}
-              aria-describedby={blocked ? "tp-provider" : undefined} onClick={() => startLive(true)}>
+            <Button variant="ghost" className="tp__wide" icon={Clock3} disabled={pending || blocked || needsTerms}
+              aria-describedby={liveWhy} onClick={() => startLive(true)}>
               {TEMP_LABEL}
             </Button>
           </Tip>
         </div>
-        {blocked && (
+        {terms}
+        {blocked && !needsTerms && (
           <p id="tp-provider" className="tp__note">
             {NO_PROVIDER}.{" "}
             <Button variant="link" onClick={() => onOpen({ section: MODELS_SECTION })}>Открыть настройки</Button>

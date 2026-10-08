@@ -298,6 +298,8 @@ export function LiveWorkspace(props: {
   place?: LivePlace;
   /** Чат агента-участника (`useChat`): есть агент — показывается он. */
   chat?: Chat | null;
+  /** Пометка на месте строки ввода (условия не приняты, `TermsNotice`): писать нельзя. */
+  notice?: ReactNode;
 }) {
   const { chat, ...rest } = props;
   const on = participantOn(props.live, chat);
@@ -305,12 +307,13 @@ export function LiveWorkspace(props: {
   // Флаг — только из пришедшего состояния: до него ничего не знаем.
   useEffect(() => { if (chat && loaded) rememberParticipant(on); }, [chat, loaded, on]);
   if (chat && (on || (!loaded && cachedParticipant()))) {
-    return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place} />;
+    return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place}
+      notice={props.notice} />;
   }
   return <ClassicWorkspace {...rest} />;
 }
 
-function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, place = "panel" }: {
+function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, place = "panel", notice }: {
   live: Live;
   view: LiveView;
   onAsk: (question: string, quick?: LiveQuick) => void | Promise<void>;
@@ -320,6 +323,8 @@ function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, plac
   disabled?: boolean;
   /** Чьи размеры областей помнить: плавающей панели или карточки. */
   place?: LivePlace;
+  /** Пометка вместо «Спросить» (условия не приняты). */
+  notice?: ReactNode;
 }) {
   const { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide } = view;
   const uid = useId();
@@ -356,7 +361,7 @@ function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, plac
       onAskUrgent={onAskHint ?? ((h) => { void onAsk(urgentQuestion(h)); openAsk(); })}
       askTitle={onAskHint ? "Спросить агента об этой подсказке: откроется вкладка «Агент»" : undefined} />
   );
-  const ask = (
+  const ask = notice ?? (
     <LiveAsk qa={live.qa} asking={live.asking} error={live.askError} onAsk={onAsk} disabled={disabled}
       draft={draft} onDraft={setDraft} onTime={jump} />
   );

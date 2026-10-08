@@ -9,7 +9,9 @@ vi.mock("../lib/api", async (orig) => ({
   postChat: vi.fn(async () => ({ id: "m9", queued: false, attachments: [] })),
   newChatClientId: vi.fn(() => "c1"),
 }));
+import { TermsNotice } from "../features/legal/TermsNotice";
 import { postChat, setAgentFrequency, setAgentProfile } from "../lib/api";
+import { TERMS_NEEDED } from "../lib/terms";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
 import { readFileSync } from "node:fs";
@@ -55,6 +57,33 @@ function width(px: number) {
     .mockReturnValue({ width: px, height: 600, top: 0, left: 0, right: px, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
 }
 afterEach(() => vi.restoreAllMocks());
+
+function TermsHost({ live }: { live: Live }) {
+  chat = useChat(ep);
+  const view = useLiveView(live, { open: true, wide: false, quiet: false });
+  return <LiveWorkspace live={live} view={view} onAsk={() => {}} chat={chat}
+    notice={<TermsNotice id="live-terms" onOpen={openMeet} />} />;
+}
+const openMeet = vi.fn();
+
+test("условия не приняты — на месте строки ввода пометка с «Открыть Meet», писать нельзя", async () => {
+  width(600);
+  render(<TermsHost live={makeLive({ agent: agentInfo() })} />);
+  load();
+  expect(screen.queryByRole("textbox", { name: "Сообщение ассистенту" })).toBeNull();
+  const notice = screen.getByText(TERMS_NEEDED).closest<HTMLElement>(".terms-notice")!;
+  expect(notice).toHaveAttribute("role", "status");
+  expect(notice.closest(".chat-dock")).not.toBeNull();
+  await userEvent.click(within(notice).getByRole("button", { name: "Открыть Meet" }));
+  expect(openMeet).toHaveBeenCalledTimes(1);
+});
+
+test("условия не приняты, прежний режим — пометка вместо «Спросить»", async () => {
+  render(<TermsHost live={makeLive()} />);
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
+  expect(screen.queryByRole("textbox", { name: "Вопрос ассистенту" })).toBeNull();
+  expect(screen.getByText(TERMS_NEEDED)).toBeInTheDocument();
+});
 
 test("участник выключен — прежняя раскладка без изменений (вкладки, подсказки)", () => {
   render(<Host live={makeLive()} />);

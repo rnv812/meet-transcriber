@@ -45,6 +45,8 @@
 
 import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
+import { TermsNotice } from "../features/legal/TermsNotice";
+import { useTermsAccepted } from "../features/legal/useTermsAccepted";
 import { plainMarkdown } from "../lib/agentRef";
 import {
   type Endpoint, NoResidentError, liveAttach, liveDetach, liveStart, liveStop, recordingCommand, resolveEndpoint,
@@ -206,6 +208,12 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const chat = useChat(endpoint);
   const live = useLive(endpoint, (status ? status.active : true) && !stopping, chat.sink);
   const participant = participantOn(live, chat);
+  // Сеанс мог начаться без окна Meet (трей, консоль): условия не приняты —
+  // на месте строки ввода пометка с «Открыть Meet», писать ассистенту нельзя.
+  const termsOk = useTermsAccepted(endpoint);
+  const termsNotice = termsOk === false
+    ? <TermsNotice id="live-terms" className="live-terms" onOpen={() => void trayPanelOpen({})} />
+    : null;
   const elapsed = useElapsed(status?.started_at);
   const { view, setExpanded, setMaximized, setPinned, startDrag } = useLiveWindow();
   const [stopError, setStopError] = useState<string | null>(null);
@@ -514,7 +522,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           {wantsOwnerSample(live.mic) && (
             <OwnerVoiceNudge endpoint={endpoint} lead={LIVE_NUDGE_LEAD} className="live-nudge" />
           )}
-          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} />
+          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} notice={termsNotice} />
         </div>
       ) : failure ? failure
       : participant && chat.cards[0] ? (

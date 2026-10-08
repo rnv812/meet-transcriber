@@ -13,6 +13,8 @@ export const TERMS_VERSION = "2026-10-08";
 export const TERMS_TITLE = "Прежде чем продолжить";
 export const TERMS_INTRO = "Коротко о том, куда уходят данные и за что отвечаете вы.";
 export const TERMS_CHECKBOX = "Я прочитал(а) и принимаю эти условия";
+/** Компактная пометка панелей трея и ассистента: условия не приняты, кнопки записи закрыты. */
+export const TERMS_NEEDED = "Примите условия, чтобы продолжить";
 
 export type TermsSection = { title: string; paragraphs: readonly string[] };
 

@@ -1,7 +1,8 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import * as api from "../lib/api";
+import { TERMS_NEEDED } from "../lib/terms";
 import type { AssistantInfo, LiveStatus, Recording, Snapshot } from "../lib/types";
 import { NO_PROVIDER, TrayPanel } from "./TrayPanel";
 
@@ -229,4 +230,50 @@ test("предупреждение — выноска callout--warn со зна�
   const error = await screen.findByRole("alert");
   expect(error).toHaveClass("callout", "callout--err", "tp__callout");
   expect(error).toHaveTextContent("микрофон занят");
+});
+
+// --- Условия (0.4): панель трея без заслонки окна ---
+
+test("условия не приняты — начать запись нельзя; пометка с «Открыть Meet» открывает окно", async () => {
+  const spy = vi.spyOn(api, "recordingCommand");
+  const { onOpen } = panel({ termsOk: false });
+  const notice = screen.getByText(TERMS_NEEDED).closest<HTMLElement>(".terms-notice")!;
+  expect(notice).toHaveClass("callout", "callout--warn");
+  for (const name of ["Начать запись", "С ассистентом", "Временная встреча с ассистентом"]) {
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription(expect.stringContaining(TERMS_NEEDED));
+  }
+  await userEvent.click(within(notice).getByRole("button", { name: "Открыть Meet" }));
+  expect(onOpen).toHaveBeenCalledWith({});
+  expect(spy).not.toHaveBeenCalled();
+});
+
+test("условия не приняты и нет провайдера — одна причина: условия", () => {
+  panel({ termsOk: false, assistant: provider(null) });
+  expect(screen.queryByText(NO_PROVIDER, { exact: false })).toBeNull();
+  expect(screen.getByRole("button", { name: "С ассистентом" }))
+    .toHaveAccessibleDescription(expect.stringContaining(TERMS_NEEDED));
+});
+
+test("условия не приняты — «Начать новую запись» после остановки тоже закрыта", () => {
+  panel({ termsOk: false, recent: rec(), justStopped: true });
+  expect(screen.getByRole("button", { name: "Начать новую запись" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Открыть запись" })).toBeEnabled();
+  expect(screen.getByText(TERMS_NEEDED)).toBeInTheDocument();
+});
+
+test("идущую запись остановить можно и без принятых условий", () => {
+  panel({ termsOk: false, snapshot: snap({ status: "recording" }) });
+  expect(screen.getByRole("button", { name: "Остановить" })).toBeEnabled();
+  expect(screen.queryByText(TERMS_NEEDED)).toBeNull();
+});
+
+test("условия приняты или не знаем — кнопки открыты, пометки нет", () => {
+  for (const termsOk of [true, null]) {
+    const { unmount } = panel({ termsOk });
+    expect(screen.getByRole("button", { name: "Начать запись" })).toBeEnabled();
+    expect(screen.queryByText(TERMS_NEEDED)).toBeNull();
+    unmount();
+  }
 });

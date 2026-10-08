@@ -23,3 +23,14 @@
 .terms-text__section { display: flex; flex-direction: column; gap: var(--s-1); }
 .terms-text .terms-text__title { margin: 0; color: var(--ink); font: 600 var(--text-ui)/1.4 var(--font-body); }
 .terms-text .terms-text__p { margin: 0; color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
+
+/* Пометка панелей трея и ассистента (TermsNotice): выноска Aurora в компактном виде —
+   значок 14, отступы 8 × 10, кегль --text-sm; кнопка «Открыть Meet» — рядом или под текстом. */
+.callout.terms-notice {
+  grid-template-columns: var(--icon-sm) minmax(0, 1fr); gap: var(--s-2); width: 100%; margin: 0;
+  padding: var(--s-2) 10px; border-radius: var(--r-sm); color: var(--ink);
+  font-size: var(--text-sm); line-height: 1.45;
+}
+.callout.terms-notice .ic { width: var(--icon-sm); height: var(--icon-sm); margin-top: 3px; }
+.terms-notice__body { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-width: 0; }
+.terms-notice__text { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }

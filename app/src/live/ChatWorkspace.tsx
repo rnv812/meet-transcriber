@@ -35,8 +35,9 @@
  */
 
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import { TERMS_NEEDED } from "../lib/terms";
 import { IconButton } from "../ui/IconButton";
 import { PaneResizer } from "../ui/PaneResizer";
 import { ChatComposer } from "./ChatComposer";
@@ -113,12 +114,14 @@ export function composerBlock(live: Live, chat: Chat, disabled: boolean): string
   return null;
 }
 
-export function ChatWorkspace({ live, chat, view, disabled = false, place = "panel", compact: forced }: {
+export function ChatWorkspace({ live, chat, view, disabled = false, place = "panel", compact: forced, notice }: {
   live: Live;
   chat: Chat;
   view: LiveView;
   disabled?: boolean;
   place?: LivePlace;
+  /** Пометка на месте строки ввода (условия не приняты): писать, реагировать и менять сессию нельзя. */
+  notice?: ReactNode;
   /** Задать плотность снаружи (тесты); иначе — по ширине. На раскладку не влияет. */
   compact?: boolean;
 }) {
@@ -150,7 +153,7 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
     if (seq !== undefined && hidden) setHidden(false);
   }, [seq, hidden]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const block = composerBlock(live, chat, disabled);
+  const block = notice ? TERMS_NEEDED : composerBlock(live, chat, disabled);
   const paneId = `${name}-pane`;
 
   return (
@@ -185,8 +188,10 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
       </div>
       {/* Док строки ввода: во всю ширину под колонками, сплошной, с линией сверху. */}
       <div className="chat-dock">
-        <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
-          quick={profileOf(agent?.profile) === "personal" ? PERSONAL_LIVE_QUESTIONS : undefined} />
+        {notice ?? (
+          <ChatComposer chat={chat} disabledReason={block} vision={agent?.vision !== false}
+            quick={profileOf(agent?.profile) === "personal" ? PERSONAL_LIVE_QUESTIONS : undefined} />
+        )}
       </div>
     </div>
   );
