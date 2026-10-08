@@ -86,7 +86,7 @@ beforeEach(() => {
   vi.mocked(api.getProcesses).mockResolvedValue({ available: true, running: ["Telegram.exe", "zoom.exe"] });
   vi.mocked(api.getSettings).mockResolvedValue({ auto_record: { enabled: false, processes: ["zoom.exe"] } });
   vi.mocked(api.getOwnerVoice).mockResolvedValue(voiceStatus());
-  vi.mocked(api.patchSettings).mockResolvedValue({ settings: {}, restart_required: [] });
+  vi.mocked(api.patchSettings).mockImplementation(async (_ep, updates) => ({ settings: updates, restart_required: [] }));
   vi.mocked(api.setAutoRecord).mockResolvedValue({} as never);
 });
 

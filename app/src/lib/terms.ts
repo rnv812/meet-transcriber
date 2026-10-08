@@ -59,9 +59,19 @@ export function termsAccepted(settings: Record<string, unknown> | null | undefin
 /** Событие окна: условия приняты (из окна-заслонки или шага мастера). */
 export const TERMS_ACCEPTED_EVENT = "meet:terms-accepted";
 
+/** Резидент ответил на PATCH, но отметки в ответе нет: его движок не знает `ui.terms_accepted`. */
+export const TERMS_NOT_SAVED = "Отметка о принятии не сохранилась: работает движок Meet старой версии. "
+  + "Закройте Meet из значка в трее и откройте снова — движок обновится";
+
 /** Принять условия: `PATCH /settings {"ui": {"terms_accepted": TERMS_VERSION}}`.
- *  Ошибку резидента пробрасывает — показать её решает вызывающий. */
+ *  Ошибку резидента пробрасывает — показать её решает вызывающий. Ответ без
+ *  отметки (0.5: движок старой версии молча отбрасывал ключ, и окно спрашивало
+ *  при каждом запуске) — тоже ошибка. */
 export async function acceptTerms(endpoint: Endpoint): Promise<void> {
-  await patchSettings(endpoint, { ui: { terms_accepted: TERMS_VERSION } });
+  const reply = await patchSettings(endpoint, { ui: { terms_accepted: TERMS_VERSION } });
+  if (reply && typeof reply === "object" && "settings" in reply && !termsAccepted(reply.settings)) {
+    console.warn("ui.terms_accepted: резидент не сохранил отметку — движок старой версии?");
+    throw new Error(TERMS_NOT_SAVED);
+  }
   window.dispatchEvent(new Event(TERMS_ACCEPTED_EVENT));
 }

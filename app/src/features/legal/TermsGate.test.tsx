@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
-import { acceptTerms, TERMS_SECTIONS, TERMS_VERSION, termsAccepted } from "../../lib/terms";
+import { acceptTerms, TERMS_NOT_SAVED, TERMS_SECTIONS, TERMS_VERSION, termsAccepted } from "../../lib/terms";
 import type { Snapshot } from "../../lib/types";
 import { TermsGate, TERMS_RECORDING } from "./TermsGate";
 import { TermsText } from "./TermsText";
@@ -123,6 +123,18 @@ test("PATCH не прошёл — ошибка в окне, окно остаё�
   await userEvent.click(go);
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(patchSettings).toHaveBeenCalledTimes(2);
+});
+
+test("0.5: резидент принял PATCH, но отметку не сохранил (движок старой версии) — ошибка в окне, а не тихий повтор при каждом запуске", async () => {
+  notAccepted();
+  patchSettings.mockResolvedValueOnce({ settings: { ui: { wizard_done: true } }, restart_required: [] });
+  render(<TermsGate endpoint={ep}>{app}</TermsGate>);
+  const box = await dialog();
+  await userEvent.click(within(box).getByRole("checkbox"));
+  await userEvent.click(within(box).getByRole("button", { name: "Продолжить" }));
+  const alert = await within(box).findByRole("alert");
+  expect(alert).toHaveTextContent(TERMS_NOT_SAVED);
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
 
 test("Esc и щелчок по затемнению окно не закрывают; Esc не уходит дальше", async () => {
