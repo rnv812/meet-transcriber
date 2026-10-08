@@ -59,3 +59,76 @@ def test_the_live_assistant_shows_the_notice_once(tmp_path, monkeypatch):
     confirm = Settings.from_raw({"assist": {"agent_mode": "confirm"}})
     assert len(notices(confirm, mode_notice=True)) == 1          # спрашивать каждое действие — строки нет
     assert marked == [True]
+
+
+def test_the_child_marks_the_notice_outside_config_json(tmp_path, monkeypatch):
+    """Ребёнок `meet assist` не пишет `config.json` (его пишет резидент, замок
+    у них разный — правка из окна терялась бы): «показано» — отдельная отметка
+    в папке данных, создаётся атомарно и не трогает настроек."""
+    import threading
+
+    from meet import paths
+    from meet.assist import participant as part
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    config = paths.config_path()
+    settings_mod.patch({"assist": {"frequency": "less"}}, config)
+    before = config.read_bytes()
+    assert part.mode_noticed(Settings()) is False
+
+    part._mark_mode_noticed()
+    part._mark_mode_noticed()                                    # второй раз — не ошибка
+    assert config.read_bytes() == before
+    assert (tmp_path / part.MODE_NOTICED_MARK).is_file()
+    assert part.mode_noticed(Settings()) is True
+    # прежний флаг в config.json (сборки до этой правки) тоже считается
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "other"))
+    assert part.mode_noticed(Settings.from_raw({"assist": {"agent_mode_noticed": True}})) is True
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    # одновременно: правки резидента и отметка ребёнка — правки не теряются
+    errors = []
+
+    def resident(i):
+        try:
+            settings_mod.patch({"recording": {"speaker_name": f"Имя {i}"}}, config)
+        except Exception as e:  # pragma: no cover - отчёт о сбое
+            errors.append(e)
+
+    threads = [threading.Thread(target=resident, args=(i,)) for i in range(20)]
+    threads += [threading.Thread(target=part._mark_mode_noticed) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    raw = json.loads(config.read_text(encoding="utf-8"))
+    assert "agent_mode_noticed" not in raw["assist"] and raw["assist"]["frequency"] == "less"
+    assert raw["recording"]["speaker_name"].startswith("Имя ")
+
+
+def test_from_settings_skips_the_notice_after_the_mark(tmp_path, monkeypatch):
+    import asyncio
+
+    from meet.assist import participant as part
+    from meet.assist.bus import TranscriptBus
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    folder = tmp_path / "lib" / "rec"
+    folder.mkdir(parents=True)
+
+    def notices():
+        p = part.from_settings(Settings(), TranscriptBus(), folder, "claude-code", None,
+                               log=lambda _m: None, mode_notice=True)
+
+        async def main():
+            await p.start()
+            await p.shutdown()
+
+        asyncio.run(main())
+        return [m for m in p._chatlog.messages() if m.get("notice") == "agent_mode"]
+
+    assert len(notices()) == 1
+    assert (tmp_path / "data" / part.MODE_NOTICED_MARK).is_file()
+    assert not (tmp_path / "data" / "config.json").exists()      # настроек ребёнок не создаёт
+    assert len(notices()) == 1                                   # новой строки нет

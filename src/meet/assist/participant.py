@@ -2674,7 +2674,7 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
     chatlog = chatlog if chatlog is not None else ChatLog(folder, log=log)
     voices = cfg.recording.voices
     kwargs.setdefault("roles", lambda names: people.roles(voices, names))
-    if mode_notice and not getattr(cfg.assist, "agent_mode_noticed", True):
+    if mode_notice and not mode_noticed(cfg):
         kwargs.setdefault("mode_notice", True)
         kwargs.setdefault("on_mode_notice", _mark_mode_noticed)
     return Participant(
@@ -2689,11 +2689,36 @@ def from_settings(cfg, bus, folder, provider: str, runner, *, knowledge_dir=None
         agent_mode=getattr(cfg.assist, "agent_mode", consent.MODE_AUTO), **kwargs)
 
 
-def _mark_mode_noticed() -> None:
-    """Строку об автомоде показали — больше не показывать (`config.json`)."""
-    from meet import settings
+# Отметка «строку об автомоде показали» — файл в папке данных, не config.json:
+# её ставит ребёнок `meet assist`, а config.json пишет резидент (замок
+# `settings._FILE_LOCK` — внутри одного процесса), и запись ребёнка могла бы
+# потерять одновременную правку настроек из окна.
+MODE_NOTICED_MARK = "agent-mode-noticed.flag"
 
-    settings.patch({"assist": {"agent_mode_noticed": True}})
+
+def _mode_noticed_path() -> Path:
+    from meet import paths
+
+    return paths.data_dir() / MODE_NOTICED_MARK
+
+
+def mode_noticed(cfg) -> bool:
+    """Строку об автомоде уже показывали: отметка в папке данных или прежний
+    флаг `assist.agent_mode_noticed` (его ставили сборки до отметки)."""
+    if getattr(cfg.assist, "agent_mode_noticed", False):
+        return True
+    try:
+        return _mode_noticed_path().is_file()
+    except OSError:
+        return False
+
+
+def _mark_mode_noticed() -> None:
+    """Строку об автомоде показали — больше не показывать. Создание пустого
+    файла атомарно и не зависит от того, кто ещё пишет настройки."""
+    mark = _mode_noticed_path()
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.touch(exist_ok=True)
 
 
 # --- помощники ---
