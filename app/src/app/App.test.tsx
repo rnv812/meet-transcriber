@@ -4,6 +4,7 @@ import { App } from "./App";
 import { SHELL_POLL_MS, SHELL_STARTING_POLLS } from "../features/wizard/useWizardGate";
 import * as api from "../lib/api";
 import * as shell from "../lib/shell";
+import { NO_CATEGORY } from "../lib/categories";
 
 const ep = { base: "/api", token: null };
 const residentState = vi.hoisted(() => ({ current: { status: "offline" } as Record<string, unknown> }));
@@ -226,6 +227,12 @@ test("три раздела; у записей есть список, у гол�
 
 test("строка поиска из списка уходит в useLibrary", async () => {
   residentState.current = online();
+  // Совсем пустая библиотека — сияние без списка; здесь — одна запись.
+  useLibrarySpy.mockReturnValue({
+    items: [{ id: "a", path: "C:/rec/a", started_at: "2026-09-30T10:00:00", duration_s: 60, tracks: {},
+      has_transcript: true, has_voices: false, title: "Планёрка", source: "record" }],
+    jobs: [], loading: false, error: null, refresh: async () => {},
+  });
   render(<App />);
   await userEvent.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "план");
   expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0, {}, "план");
@@ -390,11 +397,63 @@ test.each(["Голоса", "Настройки"])("офлайн: в раздел
   expect(container.querySelector('[data-pane="detail"]')).toHaveTextContent(OFFLINE);
 });
 
-test("пустой список при живом резиденте — подсказка про запись и перетаскивание", () => {
+/** Резидент без групп (как в mock по умолчанию): прежние тесты групп меняют ответ /groups. */
+const noGroups = () => vi.mocked(api.getGroups).mockRejectedValue(new api.ApiError(404, "нет"));
+
+test("пустая библиотека — на всё окно (без списка): «Записей пока нет», подсказка про запись и перетаскивание", async () => {
+  noGroups();
   residentState.current = online();
-  render(<App />);
-  expect(screen.getByText("Записей пока нет")).toBeInTheDocument();
-  expect(screen.getByText("Нажмите «Начать запись» или перетащите файл")).toBeInTheDocument();
+  const { container } = render(<App />);
+  // Пока группы не прочитаны — список (вдруг они есть); резидент без групп — сияние.
+  const detail = container.querySelector<HTMLElement>('[data-pane="detail"]')!;
+  expect(await within(detail).findByRole("heading", { name: "Записей пока нет" })).toBeInTheDocument();
+  expect(container.querySelector('[data-pane="list"]')).toBeNull();
+  expect(within(detail).getByText("Нажмите «Начать запись» или перетащите файл")).toBeInTheDocument();
+  expect(screen.queryByText("Выберите запись")).toBeNull();
+});
+
+test("пустая библиотека: «Начать запись» — ответ команды сразу становится снимком, плашка автозаписи", async () => {
+  noGroups();
+  const applySnapshot = vi.fn();
+  const snapshot = {
+    status: "idle", live: null, disk_free_gb: 100, levels: {}, elapsed_s: 0,
+    auto_record: { enabled: true, processes: ["Zoom.exe"], grace_seconds: 0, state: null, mic: null, render: null },
+  };
+  residentState.current = { ...online(), snapshot, applySnapshot };
+  const started = { ...snapshot, status: "recording", ok: true, action: "start" };
+  const command = vi.spyOn(api, "recordingCommand").mockResolvedValue(started as never);
+  const { container } = render(<App />);
+  const detail = container.querySelector<HTMLElement>('[data-pane="detail"]')!;
+  expect(await within(detail).findByText("Автозапись включена: Zoom")).toBeInTheDocument();
+  await userEvent.click(within(detail).getByRole("button", { name: "Начать запись" }));
+  expect(command).toHaveBeenCalledWith(ep, "start");
+  expect(applySnapshot).toHaveBeenCalledWith(started);
+});
+
+test("пусто из-за фильтра категорий, пока грузится или есть группы — список на месте, сияния нет", async () => {
+  noGroups();
+  residentState.current = online();
+  window.localStorage.setItem("meet.categoryFilter", JSON.stringify([NO_CATEGORY]));
+  const { container, unmount } = render(<App />);
+  expect(container.querySelector('[data-pane="list"]')).not.toBeNull();
+  expect(screen.getByText("Нет записей в выбранных категориях")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Записей пока нет" })).toBeNull();
+  unmount();
+  window.localStorage.removeItem("meet.categoryFilter");
+  useLibrarySpy.mockReturnValue({ items: [], jobs: [], loading: true, error: null, refresh: async () => {} });
+  const again = render(<App />);
+  expect(again.container.querySelector('[data-pane="list"]')).not.toBeNull();
+  expect(screen.queryByRole("heading", { name: "Записей пока нет" })).toBeNull();
+  again.unmount();
+  useLibrarySpy.mockReturnValue({ items: [], jobs: [], loading: false, error: null, refresh: async () => {} });
+  vi.mocked(api.getGroups).mockResolvedValue({
+    groups: [{ id: "g-a", name: "Проект Альфа", color: "#4c8bf5", count: 0 }], unknown: [], none: 0,
+  });
+  const third = render(<App />);
+  expect(await groupPicker()).toBeInTheDocument();
+  expect(third.container.querySelector('[data-pane="list"]')).not.toBeNull();
+  expect(screen.queryByRole("heading", { name: "Записей пока нет" })).toBeNull();
+  noGroups();
 });
 
 test("вход в «Голоса» перечитывает базу людей", async () => {

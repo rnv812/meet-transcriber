@@ -4,6 +4,7 @@ import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
 import { RecordingsList, useToday } from "../features/recordings/RecordingsList";
+import { LibraryEmpty } from "../features/recordings/LibraryEmpty";
 import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
@@ -24,6 +25,7 @@ import { useWizardGate } from "../features/wizard/useWizardGate";
 import { STORAGE_MISSING_TITLE, StorageMissing } from "../features/settings/StorageMissing";
 import { StorageNotices } from "../features/settings/StorageNotices";
 import { GroupsLayer } from "../features/groups/GroupsLayer";
+import { groupEmptyState } from "../features/groups/GroupHeader";
 import { useGroupsUi } from "../features/groups/useGroupsUi";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge, RecordingWarnings } from "./RecordingBadge";
@@ -90,6 +92,12 @@ export function App() {
   const offline = resident.status === "offline";
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
+  // Совсем пустая библиотека (макет EMPTY): ни записей, ни групп, ни поиска, ни условий (категории —
+  // тоже метки `query.chips`), ни пустой группы — сияние на всё окно вместо списка и «Выберите запись».
+  // Группы есть, ещё не прочитаны или не прочитались («Группы недоступны» с повтором) — список остаётся.
+  const bareLibrary = section === "recordings" && !offline && !!resident.endpoint && !selected
+    && !library.loading && library.items.length === 0 && !q && query.chips.length === 0
+    && groupsUi.supported !== null && !groupRefs?.length && groupEmptyState(groupsUi, q) === null;
 
   /** Несохранённое в настройках: SettingsPane кладёт сюда список разделов и save. */
   const settingsGuard = useRef<SettingsGuard | null>(null);
@@ -209,7 +217,7 @@ export function App() {
         alerts={<RecordingWarnings endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
           online={resident.status === "online"} />} />
       <div className="panes">
-        {section === "recordings" && (
+        {section === "recordings" && !bareLibrary && (
           <div className="pane-list" data-pane="list">
             {offline ? offlineList : <RecordingsList
               selected={selected}
@@ -252,6 +260,9 @@ export function App() {
               onDirtyChange={(dirty) => void setSettingsDirty(dirty)}
               // Мастер заменяет окно целиком: несохранённое — через тот же вопрос.
               onRunWizard={(step) => leaveSettings(() => gate.open(step ?? "hardware"))} />
+          ) : bareLibrary ? (
+            <LibraryEmpty endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
+              onSnapshot={resident.applySnapshot} onImported={() => void library.refresh()} />
           ) : selected && resident.endpoint ? (
             <RecordingCard
               key={selected}
@@ -267,6 +278,7 @@ export function App() {
               find={find}
               categories={categories.loaded ? categories.list : undefined}
               refreshKey={cardTick}
+              onSnapshot={resident.applySnapshot}
               onChanged={() => void library.refresh()}
               onDeleted={() => { setSelected(null); void library.refresh(); }}
             />
@@ -275,7 +287,7 @@ export function App() {
           )}
         </main>
       </div>
-      <ShellResize list={section === "recordings"} />
+      <ShellResize list={section === "recordings" && !bareLibrary} />
       {/* Итог переноса движка и моделей, остатки в общем кэше, прерванный перенос — где бы ни был человек. */}
       {resident.endpoint && resident.status === "online" && (
         <StorageNotices endpoint={resident.endpoint} onOpenEngine={() => openSettings("engine")} />

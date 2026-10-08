@@ -55,6 +55,13 @@ test("«Начать запись» — команда start, снимок ух�
   expect(onSnapshot).toHaveBeenCalledWith(started);
 });
 
+test("«Начать запись» без слушателя снимка — команда всё равно уходит", async () => {
+  const command = vi.spyOn(api, "recordingCommand").mockResolvedValue({ ...snap(), ok: true, action: "start" } as CommandResult);
+  render(<LibraryEmpty endpoint={ep} snapshot={snap()} />);
+  await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
+  expect(command).toHaveBeenCalledWith(ep, "start");
+});
+
 test("«Импортировать файл» — выбор файла и импорт", async () => {
   vi.spyOn(shell, "inTauri").mockReturnValue(true);
   vi.spyOn(shell, "pickMedia").mockResolvedValue("D:/calls/call.m4a");

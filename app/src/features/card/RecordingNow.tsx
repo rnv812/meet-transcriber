@@ -22,7 +22,7 @@
 
 import { useEffect, useId, useState } from "react";
 
-import { ATTACH_FAILED, fallbackText, LOW_DISK_GB, startingText } from "../../app/RecordingBadge";
+import { ATTACH_FAILED, fallbackText, liveOf, LOW_DISK_GB, startingText } from "../../app/RecordingBadge";
 import { type Endpoint, liveAttach, recordingCommand } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
 import {
@@ -94,9 +94,14 @@ function LevelRow({ name, note, warn, track, value, history }: {
   );
 }
 
-export function RecordingNow({ endpoint, snapshot, startedAt, autoTranscribe = true, noModel = null }: {
+export function RecordingNow({ endpoint, snapshot, startedAt, autoTranscribe = true, noModel = null, onSnapshot }: {
   endpoint: Endpoint;
   snapshot: Snapshot;
+  /**
+   * Ответ команды — новый снимок (как у кнопки в рейке): страница не ждёт опроса, и
+   * «Включить ассистента» не нажать второй раз, пока снимок старый.
+   */
+  onSnapshot?: (s: Snapshot) => void;
   /** Начало записи из meta.json (`started_at`); нет — по прошедшему времени. */
   startedAt?: string | null;
   /** `recording.auto_transcribe`: после остановки запись сразу встанет в расшифровку. */
@@ -125,6 +130,8 @@ export function RecordingNow({ endpoint, snapshot, startedAt, autoTranscribe = t
   const levels = useLevelHistory(snapshot.levels);
 
   const live = snapshot.live;
+  // Временная встреча идёт вне библиотеки, и карточки у неё нет: ветки для неё — на всякий случай,
+  // чтобы страница не обещала сохранить то, что удалится (те же подписи, что у кнопки в рейке).
   const temporary = !!snapshot.temporary;
   // Ассистент, которого позвали в эту запись: запускается, слушает или выключается.
   const attached = !!live?.attached && (!!live.active || !!live.starting || !!live.stopping);
@@ -144,7 +151,11 @@ export function RecordingNow({ endpoint, snapshot, startedAt, autoTranscribe = t
     setError(null);
     try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   };
-  const run = (cmd: "stop" | "cancel" | "keep") => act(() => recordingCommand(endpoint, cmd));
+  const run = (cmd: "stop" | "cancel" | "keep") => act(async () => {
+    // Сначала команда: `onSnapshot?.(await …)` без слушателя не вызвал бы её вовсе.
+    const result = await recordingCommand(endpoint, cmd);
+    onSnapshot?.(result);
+  });
   const discard = async () => {
     if (await confirm(discardConfirm(snapshot.forget_gaps))) await run("cancel");
   };
@@ -154,6 +165,7 @@ export function RecordingNow({ endpoint, snapshot, startedAt, autoTranscribe = t
   const attach = () => act(async () => {
     const result = await liveAttach(endpoint);
     if (!result.ok) setError(result.error || ATTACH_FAILED);
+    onSnapshot?.({ ...snapshot, live: liveOf(result) });
   });
   const openSettings = () => act(() => openScreenRecordingSettings());
 

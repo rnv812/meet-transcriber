@@ -387,17 +387,6 @@ test("первая загрузка библиотеки — заготовки 
   expect(screen.queryByText("Записей пока нет")).toBeNull();
 });
 
-test("пустая библиотека — сияние «Записей пока нет» с «Начать запись» и плашкой автозаписи", () => {
-  const snapshot = {
-    status: "idle", live: null,
-    auto_record: { enabled: true, processes: ["Zoom.exe"], grace_seconds: 0, state: null, mic: null, render: null },
-  } as never;
-  setup({ library: { ...library, items: [] }, resident: { ...resident, snapshot } });
-  expect(screen.getByRole("heading", { name: "Записей пока нет" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Начать запись" })).toBeEnabled();
-  expect(screen.getByText("Автозапись включена: Zoom")).toBeInTheDocument();
-});
-
 test("ничего не найдено — подсказка и «Сбросить поиск»", async () => {
   const { onQ } = setup({ library: { ...library, items: [] }, q: "бюджет" });
   expect(screen.getByText("Ничего не найдено")).toBeInTheDocument();

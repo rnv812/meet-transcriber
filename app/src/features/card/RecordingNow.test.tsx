@@ -78,6 +78,20 @@ test("«Остановить без сохранения…»: тот же во�
   expect(command).toHaveBeenCalledWith(ep, "cancel");
 });
 
+test("ответы команд — сразу новый снимок: stop и attach (как у кнопки в рейке)", async () => {
+  const stopped = reply(snap({ status: "idle" }), "stop");
+  vi.spyOn(api, "recordingCommand").mockResolvedValue(stopped);
+  const attached = { ok: true, ...live({ starting: true, attached: true }) };
+  vi.spyOn(api, "liveAttach").mockResolvedValue(attached);
+  const onSnapshot = vi.fn();
+  const s = snap();
+  render(<RecordingNow endpoint={ep} snapshot={s} onSnapshot={onSnapshot} />);
+  await userEvent.click(screen.getByRole("button", { name: "Включить ассистента" }));
+  expect(onSnapshot).toHaveBeenLastCalledWith({ ...s, live: live({ starting: true, attached: true }) });
+  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
+  expect(onSnapshot).toHaveBeenLastCalledWith(stopped);
+});
+
 test("ошибка команды видна на странице", async () => {
   vi.spyOn(api, "recordingCommand").mockRejectedValue(new Error("резидент занят"));
   render(<RecordingNow endpoint={ep} snapshot={snap()} />);

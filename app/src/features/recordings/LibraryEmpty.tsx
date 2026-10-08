@@ -72,7 +72,8 @@ export function LibraryEmpty({ endpoint, snapshot, onSnapshot, onImported }: {
     if (!endpoint) return;
     setError(null);
     try {
-      onSnapshot?.(await recordingCommand(endpoint, "start"));
+      const result = await recordingCommand(endpoint, "start");
+      onSnapshot?.(result);
     } catch (e) {
       setError(errorText(e));
     }

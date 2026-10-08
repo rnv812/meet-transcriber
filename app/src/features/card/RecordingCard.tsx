@@ -84,7 +84,7 @@ const SPEAKERS_PANE = { def: 420, min: 320, max: 760, reserve: (room: number) =>
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
   chatEvent = null,
-  onOpenSettings, find, refreshKey = 0, categories,
+  onOpenSettings, find, refreshKey = 0, categories, onSnapshot,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -105,6 +105,8 @@ export function RecordingCard({
   refreshKey?: number;
   /** Категории встреч из настроек: метка под названием и меню выбора. */
   categories?: Category[];
+  /** Ответ команды записи со страницы «Идёт запись» — новый снимок резидента. */
+  onSnapshot?: (s: Snapshot) => void;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -435,8 +437,10 @@ export function RecordingCard({
   const retranscribeFailed = status.kind === "ready" ? failedRetranscribe(rec, jobs) : null;
   // Колонка «Анализ» страницы «Расшифровывается»: кто и когда сделает анализ встречи.
   const provider = assistantInfo?.provider ? PROVIDER_LABELS[assistantInfo.provider] ?? assistantInfo.provider : null;
+  // Пока сведения о модели не пришли (или резидент её ищет) — без «подключите модель».
   const analysisWhen = !after.analysis ? "по кнопке, после расшифровки"
-    : provider ? `${provider}, после расшифровки` : "после расшифровки, когда подключите модель";
+    : provider ? `${provider}, после расшифровки`
+      : noModel ? "после расшифровки, когда подключите модель" : "после расшифровки";
   /** Строка хода над текстом до спикеров: спокойно, без полосы — текст уже можно читать. */
   const textNote = (st: Extract<typeof status, { kind: "text" }>) => (
     <div className="card__textfirst" role="status" aria-label="Ход расшифровки">
@@ -546,7 +550,8 @@ export function RecordingCard({
         ? <LiveCard endpoint={endpoint} live={snapshot.live} snapshot={snapshot} onAskAgent={askHint} />
         : snapshot ? (
           <RecordingNow endpoint={endpoint} snapshot={snapshot} startedAt={rec.started_at}
-            autoTranscribe={after.transcribe} noModel={noModel ? noModelText(assistantInfo) : null} />
+            autoTranscribe={after.transcribe} noModel={noModel ? noModelText(assistantInfo) : null}
+            onSnapshot={onSnapshot} />
         ) : <EmptyState title="Идёт запись…" />;
       break;
   }

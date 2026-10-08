@@ -78,6 +78,7 @@ export function LiveCard({ endpoint, live, snapshot, onAskAgent }: {
         <span className="live-dot" aria-hidden="true" />
         <span className="live-card__title">{stopping ? "Останавливаю…" : "Идёт запись с ассистентом"}</span>
         {elapsed !== null && <span className="muted num" role="timer" aria-label="Время записи">{clock(elapsed)}</span>}
+        {/* Временная встреча вне библиотеки и в карточку не попадает — пометка на всякий случай. */}
         {snapshot?.temporary && <span className="badge badge--stale">{TEMP_BADGE}</span>}
         {state.status && !stopping && <span className="muted" role="status">{state.status}</span>}
         {state.error && <span className="muted">{state.error}</span>}

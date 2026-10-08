@@ -24,7 +24,6 @@ import { DateSections } from "./DateSections";
 import { FiltersButton } from "./FilterPanel";
 import { QueryChips } from "./QueryChips";
 import { ImportZone } from "./ImportZone";
-import { LibraryEmpty } from "./LibraryEmpty";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchSuggest } from "./SearchSuggest";
 import { IconButton } from "../../ui/IconButton";
@@ -37,8 +36,7 @@ type Props = {
   selected: string | null;
   onSelect: (id: string) => void;
   library: Library;
-  /** `applySnapshot` — ответ «Начать запись» в пустой библиотеке сразу становится снимком. */
-  resident: Pick<Resident, "endpoint" | "snapshot"> & Partial<Pick<Resident, "applySnapshot">>;
+  resident: Pick<Resident, "endpoint" | "snapshot">;
   /**
    * Текст строки поиска (с ещё не ставшими метками префиксами — lib/libraryQuery). Живёт в App;
    * то, что из него следует (`effectiveQuery`), уходит в useLibrary (задержка — там).
@@ -552,8 +550,8 @@ export function RecordingsList({
       {library.items.length === 0 && !library.loading && resident.endpoint && query.chips.length === 0 && (
         (groupsUi ? groupEmptyState(groupsUi, q) : null) ?? (q ? <EmptyState title="Ничего не найдено" hint="Проверьте написание или ищите по слову из расшифровки"
           action={<Button variant="link" onClick={() => onQ("")}>Сбросить поиск</Button>} />
-          : <LibraryEmpty endpoint={endpoint} snapshot={snapshot} onSnapshot={resident.applySnapshot}
-            onImported={() => void library.refresh?.()} />)
+          // Совсем пустую библиотеку App показывает без списка — на сиянии (LibraryEmpty).
+          : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />)
       )}
     </div>
   );

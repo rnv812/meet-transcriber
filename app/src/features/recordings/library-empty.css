@@ -1,13 +1,14 @@
 /* Пустая библиотека (LibraryEmpty.tsx, макет MeetApp EMPTY): полное сияние `.empty.aurora`
-   в тёмной теме блока, текст снизу, кнопки и стеклянная плашка автозаписи. Занимает
-   остаток колонки списка. */
+   в тёмной теме блока на всю область окна вместо списка и карточки (App), отступ 24 от края;
+   текст снизу, кнопки и стеклянная плашка автозаписи. */
 .lib-empty {
-  flex: 1 1 auto; min-height: 320px; box-sizing: border-box;
-  display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; gap: 14px;
-  padding: 32px 24px;
+  box-sizing: border-box; min-height: calc(100% - 2 * var(--s-5)); margin: var(--s-5);
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; gap: var(--s-4);
+  padding: calc(var(--s-7) + var(--s-2));
 }
-.lib-empty__title { margin: 0; font: 500 var(--text-h2)/1.15 var(--font-display); letter-spacing: var(--track-display); }
-.lib-empty__text { font-size: var(--text-ui); line-height: 1.5; }
+/* 36 px, как в макете: в шкале кегля Aurora его нет (h1 — 32, hero — 44). */
+.lib-empty__title { margin: 0; font: 500 36px/1.1 var(--font-display); letter-spacing: var(--track-display); }
+.lib-empty__text { max-width: 46ch; font-size: var(--text-body); line-height: 1.5; }
 .lib-empty__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .lib-empty__dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--on-accent-strong); }
 /* «Импортировать файл» — контурная на стекле, как в макете. */
@@ -22,3 +23,9 @@
 }
 .lib-empty__auto-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--ink-3); }
 .lib-empty__auto-dot--on { background: var(--accent); }
+
+/* Невысокое или узкое окно: отступы меньше, заголовок — h1. */
+@media (max-width: 760px), (max-height: 520px) {
+  .lib-empty { padding: var(--s-6); }
+  .lib-empty__title { font-size: var(--text-h1); }
+}
