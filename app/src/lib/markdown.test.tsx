@@ -18,6 +18,19 @@ test("0.5: пути в ответе — ссылки «открыть» и «п�
   expect(screen.getByText("npm test").tagName).toBe("CODE");
 });
 
+test("0.5: ссылка meet://settings/раздел — кнопка «открыть настройку»; неизвестный раздел — просто ссылка", async () => {
+  const open = vi.fn();
+  const settings = { open, title: (id: string) => (id === "assistant" ? "Ассистент" : null) };
+  render(<Markdown settings={settings}
+    source={"Частота — в [Открыть настройку](meet://settings/assistant). А тут [нечто](meet://settings/nope)."} />);
+  const button = screen.getByRole("button", { name: "Открыть настройку: Ассистент" });
+  expect(button).toHaveTextContent("Открыть настройку");
+  await userEvent.click(button);
+  expect(open).toHaveBeenCalledWith("assistant");
+  expect(screen.queryByRole("button", { name: /нечто/ })).toBeNull();
+  expect(screen.getByText("нечто")).toHaveClass("md-link");
+});
+
 test("0.5: без paths пути — обычный текст и код", () => {
   render(<Markdown source={"`C:\\a\\b.pdf` и C:\\x\\y.txt"} />);
   expect(screen.queryByRole("button")).toBeNull();

@@ -16,7 +16,9 @@
  * (ближайший заголовок выше).
  */
 
+import { Settings } from "lucide-react";
 import { Fragment, useMemo, type ReactNode } from "react";
+import { Button } from "../ui/Button";
 import { LinkedText } from "../ui/LinkedText";
 import { looksLikePath, type PathActions, PathLink, splitPaths } from "../ui/PathLink";
 import { Tip } from "../ui/Tip";
@@ -201,7 +203,13 @@ type Ctx = {
   tables?: TableClasses;
   /** Пути к файлам — ссылками «открыть» / «показать в папке» (ответы ассистента, 0.5). */
   paths?: PathActions | null;
+  /** Ссылки `meet://settings/раздел` — кнопками «открыть настройку» (0.5). */
+  settings?: SettingsLinks | null;
 };
+
+/** Разделы настроек для ссылок `meet://settings/…`: открыть и название (null — нет такого). */
+export type SettingsLinks = { open: (section: string) => void; title: (section: string) => string | null };
+const SETTINGS_LINK = /^meet:\/\/settings\/([a-z-]+)$/;
 /** Свои классы таблиц (итоги: карточка и таблица Aurora `.tbl`). */
 export type TableClasses = { wrap?: string; table?: string };
 const WORD = /[\p{L}\p{N}_]/u;
@@ -251,7 +259,20 @@ function inline(text: string, ctx: Ctx = {}): ReactNode[] {
         </Tip>,
       );
     } else if (c === "[" && (m = LINK.exec(rest))) {
-      push(<Tip key={out.length} content={m[2]}><span className="md-link">{inline(m[1]!, ctx)}</span></Tip>);
+      const target = SETTINGS_LINK.exec(m[2] ?? "");
+      const title = target && ctx.settings ? ctx.settings.title(target[1]!) : null;
+      if (target && title && ctx.settings) {
+        const { open } = ctx.settings;
+        const section = target[1]!;
+        push(
+          <Button key={out.length} variant="secondary" size="sm" icon={Settings} className="md-settings"
+            aria-label={`${plainMarkdown(m[1]!)}: ${title}`} onClick={() => open(section)}>
+            {inline(m[1]!, ctx)}
+          </Button>,
+        );
+      } else {
+        push(<Tip key={out.length} content={m[2]}><span className="md-link">{inline(m[1]!, ctx)}</span></Tip>);
+      }
     } else if (c === "*" && (m = STRONG_STAR.exec(rest) ?? EM_STAR.exec(rest))) {
       const Tag = m[0].startsWith("**") ? "strong" : "em";
       push(<Tag key={out.length}>{inline(m[1]!, ctx)}</Tag>);
@@ -344,7 +365,7 @@ function render(blocks: Block[], outer: Ctx = {}): ReactNode[] {
   });
 }
 
-export function Markdown({ source, className, onTime, itemAction, jira = null, tables, paths = null }: {
+export function Markdown({ source, className, onTime, itemAction, jira = null, tables, paths = null, settings = null }: {
   source: string;
   className?: string;
   /** Таймкоды «[мм:сс]» — кнопки; щелчок передаёт секунды. */
@@ -357,10 +378,12 @@ export function Markdown({ source, className, onTime, itemAction, jira = null, t
   tables?: TableClasses;
   /** Пути к файлам — ссылками «открыть» / «показать в папке» (ответы ассистента, 0.5). */
   paths?: PathActions | null;
+  /** Ссылки `meet://settings/раздел` — кнопками «открыть настройку» (0.5). */
+  settings?: SettingsLinks | null;
 }) {
   const nodes = useMemo(
-    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira, tables, paths }),
-    [source, onTime, itemAction, jira, tables, paths],
+    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira, tables, paths, settings }),
+    [source, onTime, itemAction, jira, tables, paths, settings],
   );
   return <div className={className ? `md ${className}` : "md"}>{nodes}</div>;
 }

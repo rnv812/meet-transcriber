@@ -50,7 +50,9 @@ import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef,
 import { plainMarkdown } from "../lib/agentRef";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
-import { inTauri, openFolder, openMaterial, openUserPath } from "../lib/shell";
+import { inTauri, openFolder, openMaterial, openUserPath, trayPanelOpen } from "../lib/shell";
+import type { SettingsLinks } from "../lib/markdown";
+import { MENU, sectionTitle, type SectionId } from "../features/settings/settingsIndex";
 import type { PathActions } from "../ui/PathLink";
 import type { ChatMessage, ChatReaction } from "../lib/types";
 import { AgentMark } from "../ui/AgentMark";
@@ -82,6 +84,11 @@ const FLASH_MS = 1600;
 const PATH_ACTIONS: PathActions = {
   open: (path) => openUserPath(path, false),
   reveal: (path) => openUserPath(path, true),
+};
+/** Ссылки `meet://settings/раздел` в ответах (0.5): кнопка открывает раздел настроек главного окна. */
+const SETTINGS_LINKS: SettingsLinks = {
+  open: (section) => { void trayPanelOpen({ section }).catch(() => {}); },
+  title: (section) => (MENU.some((m) => m.id === section) ? sectionTitle(section as SectionId) : null),
 };
 
 /** Подсказка у строки «Ассистент хотел … — запрос заблокирован». */
@@ -306,7 +313,8 @@ function AgentMessage({ m, tools = [], more, chat, onTime, onShow, compact, disa
           : tools.length ? null
             : <div className="chat-typing"><span className="chat-typing__dots" aria-hidden="true" />Пишет…</div>
       ) : text.trim() ? (
-        <Markdown source={text} className="chat-msg__text" onTime={onTime} paths={inTauri() ? PATH_ACTIONS : null} />
+        <Markdown source={text} className="chat-msg__text" onTime={onTime} paths={inTauri() ? PATH_ACTIONS : null}
+          settings={inTauri() ? SETTINGS_LINKS : null} />
       ) : null}
       {continuing && <div className="chat-msg__text chat-msg__text--streaming chat-msg__more">{continuing}</div>}
       {m.status === "cancelled" && <div className="chat-msg__note">Остановлено</div>}

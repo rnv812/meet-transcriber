@@ -627,6 +627,7 @@ def test_claude_prompts_name_the_meet_tools_and_runners_do_not():
     for mode in ("auto", "confirm"):
         text = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, mode=mode)
         assert "Инструменты Meet (сервер meet): open_file" in text and "meet_settings" in text, mode
+        assert "[Открыть настройку](meet://settings/раздел)" in text and "assistant, analysis" in text, mode
     assert "сервер meet" not in pp._FREEDOM_RUNNER     # у Codex/OpenCode MCP нет
 
 

@@ -84,6 +84,7 @@
 .md hr { margin: 14px 0; border: 0; border-top: 1px solid var(--hairline); }
 .md del { color: var(--ink-3); }
 .md-link { color: var(--accent-line); border-bottom: 1px dotted currentColor; cursor: help; }
+.btn.md-settings { margin: 2px 0; vertical-align: middle; } /* «Открыть настройку» в ответе ассистента (0.5) */
 .md-table { overflow-x: auto; border: 1px solid var(--hairline); border-radius: var(--r-md); }
 .md table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .md th, .md td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--hairline); }
