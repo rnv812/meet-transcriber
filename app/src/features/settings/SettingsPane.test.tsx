@@ -214,6 +214,14 @@ test("«Приложение»: кнопка «Запустить мастер»
   expect(onRunWizard).toHaveBeenCalledWith("hardware");
 });
 
+test("«Дополнительно»: «Пройти мастер заново» — мастер первого запуска с первого шага", async () => {
+  const onRunWizard = vi.fn();
+  render(<SettingsPane endpoint={ep} recordingsDir={null} onRunWizard={onRunWizard} initial="advanced" />);
+  expect(await screen.findByRole("heading", { name: "Дополнительно" })).toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", { name: "Пройти мастер заново" }));
+  expect(onRunWizard).toHaveBeenCalledWith("hardware");
+});
+
 test("движок не загрузился — сообщение без «Error:»", async () => {
   vi.mocked(api.getEngine).mockRejectedValue(new Error("нет python"));
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);

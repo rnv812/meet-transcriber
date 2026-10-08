@@ -92,7 +92,7 @@ export function AppearanceSection({ endpoint, value, onPreview }: {
           ))}
         </div>
       </Row>
-      <Segmented label="Вид сияния" hint="Сияние — мягкие пятна, волны — слоистые листы. Видно на пустых экранах и в мастере"
+      <Segmented label="Вид сияния" hint="Сияние — мягкие пятна, волны — слоистые листы. Видно на пустых экранах и в мастере первого запуска"
         value={value.auroraStyle} options={STYLE_OPTIONS} onChange={(auroraStyle) => change({ ...value, auroraStyle })} />
       <Switch label="Живое сияние" hint="Медленный дрейф сияния. При «Уменьшить движение» в системе выключено всегда"
         value={value.motion} onChange={(motion) => change({ ...value, motion })} />

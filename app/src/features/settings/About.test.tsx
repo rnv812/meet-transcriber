@@ -227,7 +227,7 @@ test("авторы с ролями и лицензия", async () => {
   const authors = screen.getByRole("list", { name: "Авторы" });
   expect(Array.from(authors.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
     "Андрей Алейников — автор проекта",
-    "Андрей Сивуха — архитектура десктопного приложения",
+    "Андрей Сивуха — дизайнер, архитектура десктопного приложения",
     "Никита Резников — десктопное приложение и интерфейс",
   ]);
   expect(screen.getByText("Лицензия Apache-2.0")).toBeInTheDocument();

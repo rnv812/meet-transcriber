@@ -489,7 +489,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
               <About endpoint={endpoint} />
             </SettingsCard>
           ) : (
-            <AdvancedSection draft={draft} set={set} />
+            <AdvancedSection draft={draft} set={set} onRunWizard={onRunWizard && (() => onRunWizard("hardware"))} />
           )}
           </RevealFineTuning.Provider>
           </SeeAlsoSlot.Provider>

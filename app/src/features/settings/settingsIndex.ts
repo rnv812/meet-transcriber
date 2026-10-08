@@ -70,6 +70,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "app", label: "Расшифровывать сразу после записи", keywords: ["автоматически", "расшифровка"] },
   { section: "app", label: "Папка записей", hint: "Где лежат записи встреч", keywords: ["путь", "каталог"] },
   { section: "app", label: "Мастер первого запуска", keywords: ["мастер", "первая настройка"] },
+  { section: "advanced", label: "Пройти мастер первого запуска заново", keywords: ["мастер", "первая настройка", "заново"] },
   // Запись
   { section: "sound", label: "Микрофон", hint: "Устройство и проверка уровня", keywords: ["mic", "устройство"] },
   { section: "sound", label: "Звук собеседников (вывод)", hint: "Откуда записывается звук звонка", keywords: ["динамики", "наушники", "loopback"] },

@@ -2,15 +2,21 @@
  * «Дополнительно»: команда после записи (`hooks`), маркер занятости
  * видеокарты (`integrations.gpu_marker*`) и, с 0.4, запуск агента во вкладке
  * «Агент» (`agent.launch`, прежде — в «Ассистенте»); в «Тонкой настройке» —
- * путь к файлу-маркеру (раскрыта сразу, если путь задан).
+ * путь к файлу-маркеру (раскрыта сразу, если путь задан); «Пройти мастер первого
+ * запуска заново» (0.5 — там, где его ищут; та же кнопка и в «Приложении»).
  */
 
+import { Button } from "../../ui/Button";
 import { AgentLaunchSection } from "./AgentLaunchSection";
 import { TextRow } from "./fields";
 import { FineTuning, Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 import { GpuMarkerTip, HookCommandTip, RecurringWindowTip } from "./tips";
 
-export function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
+export function AdvancedSection({ draft, set, onRunWizard }: {
+  draft: Raw; set: SetFn;
+  /** «Пройти мастер заново»; без него строки нет. */
+  onRunWizard?: () => void;
+}) {
   const hooks = (k: string) => draft.hooks?.[k];
   const win = hooks("recurring_window") as string[] | null | undefined;
   const setWin = (i: 0 | 1, t: string) => {
@@ -62,6 +68,14 @@ export function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
           value={String(draft.integrations?.gpu_marker_path ?? "")}
           onChange={(x) => set("integrations", "gpu_marker_path", x || null)} />
       </FineTuning>
+      {onRunWizard && (
+        <SettingsCard title="Мастер первого запуска">
+          <Row label="Пройти мастер первого запуска заново"
+            hint="Пошаговая настройка: движок, токен Hugging Face, модели, запись и голос">
+            <Button onClick={onRunWizard}>Пройти мастер заново</Button>
+          </Row>
+        </SettingsCard>
+      )}
     </>
   );
 }
