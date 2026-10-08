@@ -185,6 +185,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "diagnostics", label: "Режим", hint: "Установленное приложение или запуск из репозитория" },
   { section: "about", label: "Версия" },
   { section: "about", label: "Обновления", hint: "Проверить обновления", keywords: ["обновить", "github"] },
+  { section: "about", label: "Другие версии", hint: "Установить другую версию",
+    keywords: ["откат", "откатить", "старая версия", "выпуски", "вернуть версию", "бэкап"] },
   { section: "about", label: "Журнал обновления", keywords: ["update.log", "лог"] },
   { section: "about", label: "Обновить вручную", keywords: ["установщик", "скачать"] },
   { section: "about", label: "Папка данных", hint: "Настройки, журналы и база голосов", keywords: ["путь", "данные"] },

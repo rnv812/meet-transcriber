@@ -12,6 +12,7 @@ import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Tip } from "../../ui/Tip";
 import { PathText, Row } from "./Section";
 import { VoiceBaseTip } from "./tips";
+import { VersionsRow } from "./Versions";
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -282,6 +283,7 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
       <Row label="Версия"><span>{pkg.version}</span></Row>
       <UpdateRow />
       {status?.offer_move && <MoveRow status={status} />}
+      <VersionsRow endpoint={endpoint} current={pkg.version} />
       <Row label="Журнал обновления" hint="update.log — пришлите его, если обновление не встало на место">
         {lastFailure && <span className="update__error">{lastFailure}</span>}
         <Button onClick={() => void openLogs()}>Открыть папку журналов</Button>

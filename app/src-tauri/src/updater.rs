@@ -80,6 +80,15 @@ pub const NO_DOWNLOAD: &str = "Не удалось скачать обновле
 pub const CANCELLED: &str = "Загрузка обновления отменена";
 pub const RECORDING_AFTER_DOWNLOAD: &str =
     "Остановите запись, затем нажмите «Скачать и установить» ещё раз — установщик уже скачан";
+pub const SAME_VERSION: &str = "Эта версия уже установлена";
+pub const NO_SUCH_RELEASE: &str = "Такого выпуска на GitHub нет";
+pub const BAD_VERSION: &str = "Непонятный номер версии";
+pub const MAC_DOWNGRADE: &str =
+    "На macOS более старую версию ставят вручную: скачайте образ со страницы выпуска";
+/// Сколько выпусков показывать в «Другие версии».
+pub const RELEASES_SHOWN: usize = 20;
+/// Длина краткого описания выпуска (символов).
+const SUMMARY_CHARS: usize = 180;
 pub const FOREIGN_HOST: &str =
     "Не удалось скачать обновление: GitHub перенаправил загрузку на чужой адрес";
 
@@ -89,6 +98,16 @@ pub fn releases_url() -> String {
 
 fn latest_api_url() -> String {
     format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest")
+}
+
+/// Список выпусков («Другие версии», 0.5): последние `RELEASES_SHOWN`.
+fn releases_api_url() -> String {
+    format!("https://api.github.com/repos/{UPDATE_REPO}/releases?per_page={RELEASES_SHOWN}")
+}
+
+/// Выпуск по версии: тег `v<версия>` (версия уже проверена `parse_version`).
+fn release_api_url(version: &str) -> String {
+    format!("https://api.github.com/repos/{UPDATE_REPO}/releases/tags/v{version}")
 }
 
 /// Ссылки на файлы выпуска — только этого репозитория (GitHub сам
@@ -262,6 +281,133 @@ pub fn parse_release(value: &Value) -> Option<Release> {
         notes_url,
         assets,
     })
+}
+
+/// Строка «Другие версии» («О программе», 0.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReleaseRow {
+    pub version: String,
+    /// Дата публикации `ГГГГ-ММ-ДД`.
+    pub date: Option<String>,
+    /// Начало заметок выпуска без разметки.
+    pub summary: Option<String>,
+    pub notes_url: String,
+    /// `current`, `newer` или `older` — относительно работающей версии.
+    pub relation: &'static str,
+    /// Ставится отсюда: есть установщик с контрольной суммой для этой ОС, и это
+    /// не откат на macOS (там — вручную, `MAC_DOWNGRADE`).
+    pub installable: bool,
+}
+
+/// Начало заметок: первый абзац без разметки, без вводного «Выпуск Meet x.y.z.»,
+/// не длиннее `SUMMARY_CHARS` (с «…»).
+pub fn release_summary(body: &str) -> Option<String> {
+    let paragraph: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| line.is_empty() || line.starts_with('#') || line.starts_with("<!--"))
+        .take_while(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let mut text = plain_markdown(&paragraph.join(" "));
+    if let Some(rest) = text.strip_prefix("Выпуск Meet ") {
+        if let Some((_, after)) = rest.split_once(". ") {
+            text = after.trim().to_string();
+        }
+    }
+    let text = text.trim_start_matches(['-', '*', ' ']).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    if text.chars().count() <= SUMMARY_CHARS {
+        return Some(text);
+    }
+    let cut: String = text.chars().take(SUMMARY_CHARS).collect();
+    let cut = cut.rsplit_once(' ').map(|(head, _)| head).unwrap_or(&cut);
+    Some(format!("{}…", cut.trim_end_matches([',', ';', ':', ' '])))
+}
+
+/// Разметка Markdown → текст: `**`, `__`, `` ` ``, ссылки `[текст](адрес)` → текст.
+fn plain_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('[') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 1..];
+        match tail.split_once("](") {
+            Some((label, after)) if !label.contains('[') => match after.find(')') {
+                Some(end) => {
+                    out.push_str(label);
+                    rest = &after[end + 1..];
+                }
+                None => {
+                    out.push('[');
+                    rest = tail;
+                }
+            },
+            _ => {
+                out.push('[');
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace("__", "").replace('`', "")
+}
+
+/// Ответ `releases` → строки: черновики, пре-релизы и не-версии пропускаются.
+pub fn release_rows(list: &Value, current: &str, os: Os) -> Vec<ReleaseRow> {
+    list.as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| {
+                    let release = parse_release(value)?;
+                    let relation = if same_version(&release.version, current) {
+                        "current"
+                    } else if is_newer(&release.version, current) {
+                        "newer"
+                    } else {
+                        "older"
+                    };
+                    let has_files =
+                        pick_installer_for(os, &release).is_some() && pick_sums(&release).is_some();
+                    let installable = has_files
+                        && match relation {
+                            "current" => false,
+                            "older" => os == Os::Windows,
+                            _ => true,
+                        };
+                    Some(ReleaseRow {
+                        date: value
+                            .get("published_at")
+                            .and_then(Value::as_str)
+                            .and_then(|text| text.get(..10))
+                            .map(str::to_string),
+                        summary: value
+                            .get("body")
+                            .and_then(Value::as_str)
+                            .and_then(release_summary),
+                        notes_url: release.notes_url.clone(),
+                        relation,
+                        installable,
+                        version: release.version,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Можно ли поставить выбранный выпуск (`install_update` с версией): та же —
+/// нет; откат на macOS — вручную.
+pub fn pick_refusal(release: &str, current: &str, os: Os) -> Option<&'static str> {
+    if same_version(release, current) {
+        return Some(SAME_VERSION);
+    }
+    if os == Os::MacOs && !is_newer(release, current) {
+        return Some(MAC_DOWNGRADE);
+    }
+    None
 }
 
 /// Префикс и суффикс файла выпуска для ОС. Регистр важен: `meet_` — Windows,
@@ -557,6 +703,40 @@ fn fetch_latest(app_version: &str) -> Result<Option<Release>, String> {
     Ok(parse_release(&value))
 }
 
+/// GET к API выпусков: `Ok(None)` — 404, `Err` — текст для окна.
+fn fetch_json(app_version: &str, url: &str) -> Result<Option<Value>, String> {
+    let agent = agent(app_version)?;
+    let reply = agent
+        .get(url)
+        .set("Accept", "application/vnd.github+json")
+        .set("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(API_TIMEOUT)
+        .call();
+    let response = match reply {
+        Ok(response) => response,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(ureq::Error::Status(code, _)) => {
+            shell_log!("выпуски: GitHub ответил {code}");
+            return Err(check_error(Some(code)));
+        }
+        Err(error) => {
+            shell_log!("выпуски: {error}");
+            return Err(check_error(None));
+        }
+    };
+    response.into_json().map(Some).map_err(|error| {
+        shell_log!("выпуски: ответ не разобран: {error}");
+        BAD_REPLY.to_string()
+    })
+}
+
+/// Выпуск выбранной версии (`None` — нет такого или это не выпуск).
+fn fetch_version(app_version: &str, version: &str) -> Result<Option<Release>, String> {
+    Ok(fetch_json(app_version, &release_api_url(version))?
+        .as_ref()
+        .and_then(parse_release))
+}
+
 fn app_version(app: &AppHandle) -> String {
     app.package_info().version.to_string()
 }
@@ -580,6 +760,20 @@ pub async fn check_update(app: AppHandle) -> Result<UpdateCheck, String> {
             result.latest.as_deref().unwrap_or("— (выпусков нет)")
         );
         Ok(result)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// «Другие версии»: последние выпуски на GitHub, отметка своей версии.
+#[tauri::command]
+pub async fn list_releases(app: AppHandle) -> Result<Vec<ReleaseRow>, String> {
+    let current = app_version(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let list = fetch_json(&current, &releases_api_url())?.unwrap_or(Value::Array(vec![]));
+        let rows = release_rows(&list, &current, platform::current());
+        shell_log!("выпуски: {} в списке, у нас {current}", rows.len());
+        Ok(rows)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -638,26 +832,50 @@ pub(crate) fn refusal_now(confirmed: bool) -> Option<&'static str> {
 /// «Скачать и установить»: скачать установщик последнего выпуска, сверить
 /// SHA-256 с `SHA256SUMS.txt` выпуска, запустить его и штатно выйти.
 /// `confirmed` — человек согласился прервать идущую расшифровку
-/// (см. WORK_IN_PROGRESS).
+/// (см. WORK_IN_PROGRESS). `version` — «Установить эту версию» из «Другие
+/// версии» (0.5): этот выпуск, в том числе более старый (копию настроек окно
+/// делает до вызова, `POST /backup` резидента).
 #[tauri::command]
-pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<Installed, String> {
+pub async fn install_update(
+    app: AppHandle,
+    confirmed: Option<bool>,
+    version: Option<String>,
+) -> Result<Installed, String> {
     let confirmed = confirmed.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || install_blocking(&app, confirmed))
+    tauri::async_runtime::spawn_blocking(move || install_blocking(&app, confirmed, version))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Installed, String> {
+fn install_blocking(
+    app: &AppHandle,
+    confirmed: bool,
+    version: Option<String>,
+) -> Result<Installed, String> {
     let _busy = Busy::begin()?;
     CANCEL.store(false, AtomicOrdering::SeqCst);
     if let Some(refusal) = refusal_now(confirmed) {
         return Err(refusal.to_string());
     }
     let current = app_version(app);
-    let release = fetch_latest(&current)?.ok_or(NOTHING_NEWER)?;
-    if !is_newer(&release.version, &current) {
-        return Err(NOTHING_NEWER.to_string());
-    }
+    let release = match version.as_deref().map(str::trim) {
+        Some(wanted) => {
+            parse_version(wanted).ok_or(BAD_VERSION)?;
+            let wanted = wanted.strip_prefix(['v', 'V']).unwrap_or(wanted);
+            let release = fetch_version(&current, wanted)?.ok_or(NO_SUCH_RELEASE)?;
+            if let Some(refusal) = pick_refusal(&release.version, &current, platform::current()) {
+                return Err(refusal.to_string());
+            }
+            release
+        }
+        None => {
+            let release = fetch_latest(&current)?.ok_or(NOTHING_NEWER)?;
+            if !is_newer(&release.version, &current) {
+                return Err(NOTHING_NEWER.to_string());
+            }
+            release
+        }
+    };
     let installer = pick_installer(&release).ok_or(no_installer(platform::current()))?;
     let sums = pick_sums(&release).ok_or(NO_SUMS)?;
     let agent = agent(&current)?;
@@ -1369,5 +1587,112 @@ mod tests {
             latest_api_url(),
             "https://api.github.com/repos/rnv812/meet-transcriber/releases/latest"
         );
+        assert_eq!(
+            release_api_url("0.4.0"),
+            "https://api.github.com/repos/rnv812/meet-transcriber/releases/tags/v0.4.0"
+        );
+    }
+
+    fn listed(version: &str, files: &[&str], extra: Value) -> Value {
+        let mut value = json!({
+            "tag_name": format!("v{version}"),
+            "draft": false,
+            "prerelease": false,
+            "html_url": format!("{}/tag/v{version}", releases_url()),
+            "published_at": "2026-10-08T12:00:00Z",
+            "assets": files.iter().map(|name| json!({
+                "name": name, "size": 1,
+                "browser_download_url": format!("{}v{version}/{name}", download_prefix()),
+            })).collect::<Vec<_>>(),
+        });
+        if let (Some(target), Some(more)) = (value.as_object_mut(), extra.as_object()) {
+            for (key, item) in more {
+                target.insert(key.clone(), item.clone());
+            }
+        }
+        value
+    }
+
+    #[test]
+    fn release_rows_mark_current_newer_and_older() {
+        let full = |v: &str| vec![format!("meet_{v}_x64-setup.exe"), SUMS.to_string()];
+        let files = |v: &str| full(v);
+        let list = json!([
+            listed(
+                "0.5.1",
+                &files("0.5.1")
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                json!({})
+            ),
+            listed(
+                "0.5.0",
+                &files("0.5.0")
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                json!({})
+            ),
+            listed(
+                "0.4.0",
+                &files("0.4.0")
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                json!({"body": "Выпуск **Meet** 0.4.0. Всё окно на [Atlas Aurora](https://x).\n\n## Главное"})
+            ),
+            listed("0.3.9", &["meet_0.3.9_x64-setup.exe"], json!({})),
+            listed("0.6.0-rc.1", &[], json!({"prerelease": true})),
+        ]);
+        let rows = release_rows(&list, "0.5.0", Os::Windows);
+        let brief: Vec<(&str, &str, bool)> = rows
+            .iter()
+            .map(|row| (row.version.as_str(), row.relation, row.installable))
+            .collect();
+        assert_eq!(
+            brief,
+            vec![
+                ("0.5.1", "newer", true),
+                ("0.5.0", "current", false),
+                ("0.4.0", "older", true),
+                // Без SHA256SUMS.txt — не ставится отсюда.
+                ("0.3.9", "older", false),
+            ]
+        );
+        assert_eq!(
+            rows[2].summary.as_deref(),
+            Some("Всё окно на Atlas Aurora.")
+        );
+        assert_eq!(rows[2].date.as_deref(), Some("2026-10-08"));
+        // macOS: откат — только вручную.
+        let mac = json!([listed(
+            "0.4.0",
+            &["Meet_0.4.0_aarch64.dmg", SUMS],
+            json!({})
+        )]);
+        assert!(!release_rows(&mac, "0.5.0", Os::MacOs)[0].installable);
+        assert_eq!(
+            pick_refusal("0.4.0", "0.5.0", Os::MacOs),
+            Some(MAC_DOWNGRADE)
+        );
+        assert_eq!(pick_refusal("0.4.0", "0.5.0", Os::Windows), None);
+        assert_eq!(
+            pick_refusal("v0.5.0", "0.5.0", Os::Windows),
+            Some(SAME_VERSION)
+        );
+        assert_eq!(pick_refusal("0.5.1", "0.5.0", Os::MacOs), None);
+    }
+
+    #[test]
+    fn release_summary_is_short_plain_text() {
+        assert_eq!(release_summary(""), None);
+        assert_eq!(
+            release_summary("# Заголовок\n\nКоротко `код`.\nДальше."),
+            Some("Коротко код. Дальше.".into())
+        );
+        let long = format!("Начало {}", "слово ".repeat(60));
+        let summary = release_summary(&long).unwrap();
+        assert!(summary.ends_with('…') && summary.chars().count() <= SUMMARY_CHARS + 1);
     }
 }

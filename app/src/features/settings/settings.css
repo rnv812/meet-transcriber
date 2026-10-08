@@ -192,6 +192,15 @@
 /* «Расположение» (macOS, не из «Программ»): пояснение и кнопка перемещения. */
 .move { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-2); font-size: var(--text-sm); }
 .update__progress { flex: 1 1 240px; }
+/* «Другие версии»: выпуски с GitHub, своя версия отмечена. */
+.releases { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.releases__item { padding: var(--s-2) 0; border-top: 1px solid var(--hairline); }
+.releases__item:first-child { border-top: 0; }
+.releases__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font-size: var(--text-sm); }
+.releases__version { font-weight: 600; color: var(--ink); }
+.releases__mark { color: var(--ink-3); }
+.releases__actions { margin-left: auto; display: flex; gap: var(--s-2); align-items: center; }
+.releases__summary { margin: 2px 0 0; font-size: var(--text-sm); color: var(--ink-2); }
 /* Подзаголовок внутри раздела (журналы «Диагностики»). */
 .shead { margin: var(--s-5) 0 var(--s-1); font-size: var(--text-sm); font-weight: 600; color: var(--ink-3); }
 .log {

@@ -7,7 +7,9 @@ vi.mock("../../lib/api", async (orig) => ({
   getDiagnostics: vi.fn(async () => ({ paths: { data_dir: "C:\\data\\meet" } })),
 }));
 
-let progressListener: ((p: { done: number; total: number }) => void) | null = null;
+// Подписчиков на ход загрузки два («Обновления» и «Другие версии») — событие получают все.
+const progressListeners = new Set<(p: { done: number; total: number }) => void>();
+const progressListener = (p: { done: number; total: number }) => progressListeners.forEach((cb) => cb(p));
 vi.mock("../../lib/shell", () => ({
   openUrl: vi.fn(async () => {}),
   releasesPage: vi.fn(async () => "https://github.com/example/updates/releases"),
@@ -19,8 +21,8 @@ vi.mock("../../lib/shell", () => ({
   moveToApplications: vi.fn(async () => {}),
   openLogs: vi.fn(async () => {}),
   onUpdateProgress: vi.fn(async (cb: (p: { done: number; total: number }) => void) => {
-    progressListener = cb;
-    return () => { progressListener = null; };
+    progressListeners.add(cb);
+    return () => { progressListeners.delete(cb); };
   }),
 }));
 
@@ -123,7 +125,7 @@ test("новая версия: «Что нового» и «Скачать и у
   expect(install).toHaveBeenCalledTimes(1);
   expect(await screen.findByText("Начинаю загрузку…")).toBeInTheDocument();
   expect(checkButton()).toBeDisabled();
-  act(() => progressListener?.({ done: 10485760, total: 52428800 }));
+  act(() => progressListener({ done: 10485760, total: 52428800 }));
   expect(screen.getByText("Скачиваю: 10 МБ из 50 МБ")).toBeInTheDocument();
   expect(screen.getByRole("progressbar", { name: "Загрузка обновления" })).toHaveAttribute("aria-valuenow", "20");
 
@@ -155,7 +157,7 @@ test("размер неизвестен — бегущая полоска; «О�
   await renderAbout();
   await userEvent.click(checkButton());
   await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
-  act(() => progressListener?.({ done: 1048576, total: 0 }));
+  act(() => progressListener({ done: 1048576, total: 0 }));
   expect(screen.getByRole("progressbar", { name: "Загрузка обновления" }))
     .toHaveClass("progressbar__track--indeterminate");
   await userEvent.click(screen.getByRole("button", { name: "Отменить загрузку" }));

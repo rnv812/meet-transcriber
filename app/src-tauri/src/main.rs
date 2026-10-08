@@ -175,6 +175,7 @@ fn main() {
             // «О программе»: обновление по кнопке с GitHub.
             updater::check_update,
             updater::install_update,
+            updater::list_releases,
             updater::cancel_update,
             tray::set_settings_dirty,
             appearance::set_appearance,

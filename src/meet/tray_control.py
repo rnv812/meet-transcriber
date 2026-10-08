@@ -1858,6 +1858,20 @@ class TrayControl:
         retired_profiles.dismiss(paths.data_dir())
         return {"ok": True}
 
+    def backup(self, body: dict) -> dict:
+        """Копия настроек, базы голосов и служебных файлов перед установкой
+        версии `target` (meet.backup, «О программе», 0.5): {"path"}."""
+        from meet import backup, voices
+
+        target = str((body or {}).get("target") or "").strip()
+        if not target:
+            raise _bad_request("Не указана версия, перед которой сохранить копию")
+        try:
+            folder = voices.voices_dir()
+        except Exception:
+            folder = paths.default_voices_dir()
+        return {"path": str(backup.make(paths.data_dir(), folder, target))}
+
     def patch_settings(self, updates: dict) -> dict:
         integrations = (updates or {}).get("integrations")
         if isinstance(integrations, dict) and str(integrations.get("hf_token") or "").strip():

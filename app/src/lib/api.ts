@@ -453,6 +453,9 @@ export const downloadModel = (ep: Endpoint, id: string) =>
 /** Удалить скачанную модель GigaAM. */
 export const removeModel = (ep: Endpoint, id: string) =>
   json<{ ok: boolean; error?: string }>(ep, "/models/remove", body("POST", { id }));
+/** Копия настроек, базы голосов и служебных файлов перед установкой версии `target` (0.5). */
+export const backupBefore = (ep: Endpoint, target: string) =>
+  json<{ path: string }>(ep, "/backup", body("POST", { target }));
 export const getDiagnostics = (ep: Endpoint, lines = 200) =>
   json<Record<string, unknown>>(ep, `/diagnostics?lines=${lines}`);
 export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");

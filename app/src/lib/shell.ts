@@ -313,9 +313,26 @@ export function toInstallResult(reply: unknown): InstallResult {
  * `confirmed` — человек согласился прервать идущую расшифровку (без него
  * оболочка в этом случае отвечает вопросом `UPDATE_CONFIRM_WORK` из About).
  */
-export async function installUpdate(confirmed = false): Promise<InstallResult> {
+export async function installUpdate(confirmed = false, version: string | null = null): Promise<InstallResult> {
   if (!inTauri()) throw new Error(NOT_IN_APP);
-  return toInstallResult(await invoke<unknown>("install_update", { confirmed }));
+  return toInstallResult(await invoke<unknown>("install_update", version ? { confirmed, version } : { confirmed }));
+}
+
+/** Строка «Другие версии» (`updater::ReleaseRow`). */
+export type ReleaseRow = {
+  version: string;
+  date: string | null;
+  summary: string | null;
+  notes_url: string;
+  relation: "current" | "newer" | "older";
+  /** Ставится отсюда (есть установщик с суммой; на macOS откат — вручную). */
+  installable: boolean;
+};
+
+/** Последние выпуски на GitHub (до 10 с). Ошибка — текст для человека. */
+export async function listReleases(): Promise<ReleaseRow[]> {
+  if (!inTauri()) throw new Error(NOT_IN_APP);
+  return invoke<ReleaseRow[]>("list_releases");
 }
 
 /** Где запущен Meet (macOS, `mac_install::Location`). */
