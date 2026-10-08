@@ -25,7 +25,13 @@
 import os
 import sys
 
-import pytest
+# Один поток BLAS на процесс тестов — до первого импорта numpy. Иначе OpenBLAS на
+# каждом процессе xdist держит буферы на все ядра; при занятой памяти машины
+# (локальная модель, WSL) он падает «Memory allocation still failed».
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
+import pytest  # noqa: E402
 
 MAX_WORKERS = 6
 
