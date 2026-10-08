@@ -627,6 +627,29 @@ pub fn close_live(app: &AppHandle) {
     }
 }
 
+/// Скрыть панель ассистента (0.5, ✕ в её шапке): запись и ассистент
+/// продолжают работать. Вернуть — `live_panel_show` (меню записи в главном
+/// окне); сама не откроется до следующей встречи с ассистентом.
+#[tauri::command]
+pub fn live_panel_hide(app: AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || close_live(&handle));
+}
+
+/// Показать панель ассистента снова (меню записи в главном окне): окно есть —
+/// показать и поднять, нет — открыть, как в начале встречи.
+#[tauri::command]
+pub fn live_panel_show(app: AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || match handle.get_webview_window(LIVE_LABEL) {
+        Some(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        None => open_live(&handle),
+    });
+}
+
 /// Окно панели сдвинули или изменили его размер (руками, кнопкой, системой):
 /// запомнить и, если сменился вид, сказать странице.
 pub fn on_window_event(window: &Window, event: &WindowEvent) {

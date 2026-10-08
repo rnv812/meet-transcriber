@@ -49,8 +49,19 @@ html, body { background: transparent; }
 .live-panel--open .live-head__state { font-size: var(--text-ui); }
 .live-head__count { flex: none; } /* вид — ui/count.css (count--new) */
 .live-head__actions { display: flex; align-items: center; gap: 0; flex: none; }
-/* «Стоп» с подписью отделён от значков. */
-.live-head__actions > .live-head__stop:not(.btn--icon) { margin-left: 6px; }
+/* «Стоп» (0.5) — подписанная кнопка сразу за индикатором записи и состоянием; значки — справа. */
+.live-head > .live-head__title { flex: 0 1 auto; }
+.live-head__stop { flex: none; }
+.live-head__spacer { flex: 1; min-width: 0; }
+/* Меню «Ещё» шапки. */
+.live-more { display: flex; flex-direction: column; }
+.live-more__item {
+  display: flex; align-items: center; gap: 8px; height: var(--control-sm); padding: 0 10px;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--ink); font: inherit;
+  font-size: var(--text-sm); text-align: left; cursor: pointer;
+}
+.live-more__item:hover { background: var(--surface-3); }
+.live-more__item--danger { color: var(--danger); }
 /* «Не отвлекать»: кроме нажатой кнопки — тихая метка у состояния (бейдж Aurora без точки). */
 .live-head__quiet-tag { flex: none; }
 /* Временная встреча: не сохранится — видно всегда, и в свёрнутой панели. */

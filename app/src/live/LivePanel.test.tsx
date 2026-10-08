@@ -255,19 +255,30 @@ test("скрыть или вернуть подсказку не вышло — 
   expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
 });
 
-test("кнопки шапки узкой панели — одинаковые значки с подписью в подсказке", async () => {
+test("0.5: кнопки окна справа — одинаковые значки с подписью в подсказке, последним ✕; «Стоп» — подписанный, отдельно", async () => {
   render(<LivePanel endpoint={ep} />);
   await act(async () => {});
-  const buttons = within(screen.getByRole("banner")).getAllByRole("button");
+  const actions = screen.getByRole("banner").querySelector(".live-head__actions")!;
+  const buttons = within(actions as HTMLElement).getAllByRole("button");
   expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(
-    ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Остановить и сохранить"]);
+    ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Скрыть окно ассистента"]);
   for (const b of buttons) {
     expect(b).toHaveClass("btn--icon");
     expect(b.textContent).toBe(""); // только значок, подпись — облачко Aurora (ui/Tip), не системный title
     expect(b).not.toHaveAttribute("title");
   }
   const stop = within(screen.getByRole("banner")).getByRole("button", { name: "Остановить и сохранить" });
+  expect(stop).toHaveTextContent("Стоп");
+  expect(stop).not.toHaveClass("btn--icon");
   expect(stop).toHaveAccessibleDescription("Остановить и сохранить запись");
+});
+
+test("0.5: ✕ скрывает окно — запись и ассистент не останавливаются", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть окно ассистента" }));
+  expect(invoke).toHaveBeenLastCalledWith("live_panel_hide");
+  expect(liveStop).not.toHaveBeenCalled();
 });
 
 test("«Поверх всех окон» включено по умолчанию и переключается", async () => {

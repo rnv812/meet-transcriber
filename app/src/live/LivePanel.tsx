@@ -6,7 +6,8 @@
  * ней — на весь экран и обратно), её растягивают за края. Шапка — 56 px в
  * развёрнутой (высота верхней панели Aurora) и 48 в свёрнутой: точка записи,
  * таймер, знак агента в его состоянии (`AgentMark`: слушает, ищет, пишет, ждёт)
- * и слово, бейдж непрочитанного, кнопки-значки; «Стоп» от STOP_LABEL_PX — с подписью.
+ * и слово, подписанный «Стоп» рядом с ними (0.5), бейдж непрочитанного, кнопки-значки;
+ * справа — «Ещё» (выключить ассистента, без сохранения) и ✕ — скрыть окно (запись идёт).
  *
  * Корень — плотное стекло на непрозрачной подложке (panel.css): окно прозрачное
  * ради скруглений, и размывать под панелью нечего — рабочий стол не просвечивает.
@@ -59,8 +60,8 @@ import {
 import { inTauri, invoke, trayPanelOpen } from "../lib/shell";
 import type { AgentProfile, ChatMessage, LiveHint } from "../lib/types";
 import {
-  Bell, BellOff, Check, ChevronDown, ChevronUp, Copy, CornerDownRight, Maximize2, Minimize2, Pin, PowerOff,
-  RefreshCw, Save, ShieldQuestion, SlidersHorizontal, Square, Trash2, TriangleAlert,
+  Bell, BellOff, Check, ChevronDown, ChevronUp, Copy, CornerDownRight, Maximize2, Minimize2, MoreHorizontal, Pin,
+  PowerOff, RefreshCw, Save, ShieldQuestion, SlidersHorizontal, Square, Trash2, TriangleAlert, X,
 } from "lucide-react";
 import { AgentMark, type AgentState } from "../ui/AgentMark";
 import { BADGE_CLASS } from "../ui/badge";
@@ -68,6 +69,7 @@ import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
+import { Popover } from "../ui/Popover";
 import { Tip } from "../ui/Tip";
 import { Truncate } from "../ui/Truncate";
 import { isFinalAgent } from "./chatModel";
@@ -87,8 +89,6 @@ import type { PanelStatus } from "./useLiveStatus";
 import "./live.css";
 
 const TICK_MS = 1000;
-/** Панель не уже этого — «Стоп» в шапке с подписью (макет MeetLive), уже — значком. */
-export const STOP_LABEL_PX = 420;
 /** Сколько держать в шапке заметку о несработавшем действии с подсказкой. */
 export const HINT_NOTE_MS = 8000;
 
@@ -221,7 +221,6 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const [quiet, setQuiet] = useQuiet(live.quietDefault);
   const root = useRef<HTMLDivElement>(null);
   const wide = useWide(root);
-  const stopLabelled = useWide(root, STOP_LABEL_PX);
   // На весь экран — всё содержимое, как у развёрнутой.
   const open = view.expanded || view.maximized;
   const ask = useLiveAsk(live, open);
@@ -292,6 +291,15 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
     setStopError(null);
     recordingCommand(endpoint, "keep").catch((e) => setStopError(errorText(e)));
   };
+  /** Меню «Ещё» шапки (0.5): выключить ассистента, сохранить временную, остановить без сохранения. */
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
+  const more: { label: string; icon: typeof X; danger?: boolean; run: () => void }[] = [
+    ...(attached ? [{ label: "Выключить ассистента", icon: PowerOff, run: () => stop(true) }] : []),
+    ...(temporary ? [{ label: KEEP_LABEL, icon: Save, run: keep }] : []),
+    ...(attached && !temporary ? [{ label: DISCARD_LABEL, icon: Trash2, danger: true, run: () => askStop("discard") }] : []),
+  ];
+  /** ✕ (0.5): скрыть окно — запись и ассистент продолжают работать; вернуть — в главном окне. */
+  const hide = () => { void invoke<void>("live_panel_hide").catch(() => {}); };
 
   const openHints = () => {
     ws.setTab(shown ? "hints" : "feed");
@@ -453,6 +461,26 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           )}
         </span>
         </Tip>
+        {/* «Стоп» — подписанная кнопка у индикатора записи (0.5): не в углу, где её принимали за «Закрыть». */}
+        {(!attached || withAssistant) && (
+          temporary ? (
+            <Tip content={`${TEMP_STOP_LABEL} — она будет удалена`}>
+              <Button variant="danger" size="sm" icon={Square} className="live-head__stop" aria-label={TEMP_STOP_LABEL}
+                onClick={() => askStop("temp-end")} disabled={stopping}>
+                Закончить
+              </Button>
+            </Tip>
+          ) : (
+            // Одно имя в обоих режимах: и ассистент, что пишет сам, на «Стоп» дописывает и сохраняет запись.
+            <Tip content="Остановить и сохранить запись">
+              <Button variant="danger" size="sm" icon={Square} className="live-head__stop"
+                aria-label="Остановить и сохранить" onClick={() => stop(false)} disabled={stopping}>
+                Стоп
+              </Button>
+            </Tip>
+          )
+        )}
+        <span className="live-head__spacer" />
         {!open && newHints > 0 && (
           <span className="count count--new num live-head__count">
             <span className="sr-only">{participant ? "новых сообщений" : "новых подсказок"}: </span>{newHints}
@@ -470,38 +498,31 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             tooltip={`${sizeLabel} (двойной щелчок по шапке)`} onClick={() => setMaximized(!view.maximized)} />
           <IconButton icon={open ? ChevronUp : ChevronDown} label={open ? "Свернуть" : "Развернуть"}
             aria-expanded={open} onClick={() => setExpanded(!open)} />
-          {attached && (
-            <IconButton icon={PowerOff} label="Выключить ассистента" variant={withAssistant ? undefined : "danger"}
-              className={withAssistant ? "live-head__detach" : "live-head__stop"}
-              tooltip="Выключить ассистента — запись продолжится" onClick={() => stop(true)} disabled={stopping} />
+          {more.length > 0 && (
+            <IconButton icon={MoreHorizontal} label="Ещё" aria-haspopup="menu" aria-expanded={!!moreAnchor}
+              tooltip="Выключить ассистента, остановить без сохранения" className="live-head__more" disabled={stopping}
+              onClick={(e) => { const b = e.currentTarget; setMoreAnchor((cur) => (cur ? null : b)); }} />
           )}
-          {temporary && (
-            <IconButton icon={Save} label={KEEP_LABEL} className="live-head__keep"
-              tooltip={`${KEEP_LABEL}: запись ляжет в библиотеку и расшифруется`} onClick={keep}
-              disabled={stopping} />
-          )}
-          {attached && !temporary && (
-            <IconButton icon={Trash2} label={DISCARD_LABEL} variant="danger" className="live-head__discard"
-              tooltip={`${DISCARD_LABEL}: запись, чат и материалы удалятся`} onClick={() => askStop("discard")}
-              disabled={stopping} />
-          )}
-          {(!attached || withAssistant) && (
-            temporary ? (
-              <IconButton icon={Square} label={TEMP_STOP_LABEL} variant="danger" className="live-head__stop"
-                tooltip={`${TEMP_STOP_LABEL} — она будет удалена`} onClick={() => askStop("temp-end")}
-                disabled={stopping} />
-            ) : (
-              // Одно имя в обоих режимах: и ассистент, что пишет сам, на «Стоп» дописывает и сохраняет запись.
-              <Tip content="Остановить и сохранить запись">
-                <Button variant="danger" icon={Square} className={`${stopLabelled ? "" : "btn--icon "}live-head__stop`}
-                  aria-label="Остановить и сохранить" onClick={() => stop(false)} disabled={stopping}>
-                  {stopLabelled ? "Стоп" : null}
-                </Button>
-              </Tip>
-            )
+          {inTauri() && (
+            <IconButton icon={X} label="Скрыть окно ассистента" className="live-head__hide"
+              tooltip="Скрыть окно — запись и ассистент продолжают работать; вернуть — в главном окне, меню записи"
+              onClick={hide} />
           )}
         </span>
       </header>
+      {moreAnchor && more.length > 0 && (
+        <Popover anchor={moreAnchor} onClose={() => setMoreAnchor(null)} label="Ещё" width={260} align="end" anchorToggles>
+          <div className="live-more" role="menu" aria-label="Ещё">
+            {more.map((m) => (
+              <button key={m.label} type="button" role="menuitem"
+                className={`live-more__item${m.danger ? " live-more__item--danger" : ""}`}
+                onClick={() => { setMoreAnchor(null); m.run(); }}>
+                <Icon as={m.icon} size="sm" />{m.label}
+              </button>
+            ))}
+          </div>
+        </Popover>
+      )}
       {/* Отдельной строкой под шапкой: в шапке узкой панели метка обрезалась бы.
           Свёрнутая — метка в строке карточки (`tempBadge`). */}
       {temporary && open && (

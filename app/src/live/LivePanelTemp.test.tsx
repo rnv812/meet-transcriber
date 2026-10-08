@@ -56,9 +56,10 @@ test("временная встреча: пометка в шапке и «Со�
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap({ temporary: true })));
   expect(screen.getByRole("note")).toHaveTextContent("Временная — не сохранится");
-  // Удалять её отдельно незачем: «Закончить» и так удаляет.
-  expect(screen.queryByRole("button", { name: "Остановить без сохранения" })).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Сохранить как обычную встречу" }));
+  // Удалять её отдельно незачем: «Закончить» и так удаляет. «Сохранить…» — в меню «Ещё» (0.5).
+  await userEvent.click(screen.getByRole("button", { name: "Ещё" }));
+  expect(screen.queryByRole("menuitem", { name: "Остановить без сохранения" })).toBeNull();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Сохранить как обычную встречу" }));
   expect(recordingCommand).toHaveBeenCalledWith(ep, "keep");
   // Сохранили (record.kept → снимок) — пометка снимается.
   vi.mocked(getState).mockResolvedValueOnce(snap({ temporary: false }));
@@ -89,14 +90,16 @@ test("«Остановить без сохранения»: вопрос, «Пр
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap()));
   expect(screen.queryByText("Временная — не сохранится")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Остановить без сохранения" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ещё" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Остановить без сохранения" }));
   const dialog = await screen.findByRole("alertdialog");
   expect(dialog).toHaveTextContent("Остановить без сохранения?");
   expect(dialog).toHaveTextContent("будут удалены без возможности восстановления");
   expect(screen.getByRole("button", { name: "Продолжить запись" })).toHaveFocus();
   await userEvent.click(screen.getByRole("button", { name: "Продолжить запись" }));
   expect(recordingCommand).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "Остановить без сохранения" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ещё" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Остановить без сохранения" }));
   await userEvent.click(await screen.findByRole("button", { name: "Удалить запись" }));
   expect(recordingCommand).toHaveBeenCalledWith(ep, "cancel");
   expect(liveStop).not.toHaveBeenCalled();

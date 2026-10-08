@@ -3,8 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
 import * as api from "../lib/api";
+import * as shell from "../lib/shell";
 import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { RecordingBadge } from "./RecordingBadge";
+
+vi.mock("../lib/shell", async (orig) => ({
+  ...(await orig<typeof import("../lib/shell")>()),
+  inTauri: vi.fn(() => false),
+  invoke: vi.fn(),
+}));
 
 /** «Включить ассистента» / «Выключить ассистента» посреди обычной записи. */
 
@@ -100,6 +107,27 @@ test("включён — «· ассистент» в подсказке и «В
   expect(detach).toHaveBeenCalledWith(ep);
   await waitFor(() => expect(status()).toHaveTextContent("Ассистент выключается…"));
   expect(stopButton()).toBeEnabled(); // запись можно остановить
+});
+
+test("0.5: окно ассистента скрыли ✕ — «Показать окно ассистента» в меню записи (только в приложении)", async () => {
+  vi.mocked(shell.inTauri).mockReturnValue(true);
+  vi.mocked(shell.invoke).mockResolvedValue(undefined);
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true, folder: "D:/rec/f" }))}
+    onSnapshot={() => {}} />);
+  await openMenu();
+  await userEvent.click(await screen.findByRole("menuitem", { name: /^Показать окно ассистента/ }));
+  expect(shell.invoke).toHaveBeenCalledWith("live_panel_show");
+  expect(screen.queryByRole("menu")).toBeNull();
+  vi.mocked(shell.inTauri).mockReturnValue(false);
+});
+
+test("вне приложения (браузер) пункта «Показать окно ассистента» нет", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true, folder: "D:/rec/f" }))} />);
+  await openMenu();
+  await screen.findByRole("menuitem", { name: /Выключить ассистента/ });
+  expect(screen.queryByRole("menuitem", { name: /Показать окно ассистента/ })).toBeNull();
 });
 
 test("отказ резидента виден рядом с кнопкой", async () => {

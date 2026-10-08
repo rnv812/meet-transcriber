@@ -1,4 +1,4 @@
-import { CircleAlert, Power, Save, Square, Timer, Trash2, TriangleAlert, X } from "lucide-react";
+import { AppWindow, CircleAlert, Power, Save, Square, Timer, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   Fragment, useEffect, useId, useRef, useState,
   type ComponentPropsWithRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode,
@@ -10,7 +10,7 @@ import { clock, errorText } from "../lib/format";
 import {
   DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_STOP_LABEL,
 } from "../lib/recordingStop";
-import { openScreenRecordingSettings } from "../lib/shell";
+import { inTauri, invoke, openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "../live/profiles";
 import { AgentMark } from "../ui/AgentMark";
@@ -425,9 +425,17 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
           title={temporary ? TEMP_STOP_LABEL : STOP_LABEL} note={temporary ? TEMP_STOP_NOTE : STOP_NOTE}
           onClick={() => act?.()} />
         {attached ? (
-          <RecItem icon={<Icon as={Power} />} title="Выключить ассистента"
-            note="запись продолжится, сводка останется в карточке"
-            disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)} />
+          <>
+            {/* Окно ассистента скрыли ✕ (0.5) — вернуть его; запись и ассистент всё это время работают. */}
+            {liveActive && inTauri() && (
+              <RecItem icon={<Icon as={AppWindow} />} title="Показать окно ассистента"
+                note="если его скрыли — встреча и ассистент идут"
+                onClick={() => { setMenu(false); void invoke<void>("live_panel_show").catch(() => {}); }} />
+            )}
+            <RecItem icon={<Icon as={Power} />} title="Выключить ассистента"
+              note="запись продолжится, сводка останется в карточке"
+              disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)} />
+          </>
         ) : (
           <MenuGroup label={ATTACH_GROUP}>
             {profiles.map((p) => (

@@ -143,6 +143,8 @@ fn main() {
             live_panel::live_set_maximized,
             live_panel::live_set_pinned,
             live_panel::live_start_drag,
+            live_panel::live_panel_hide,
+            live_panel::live_panel_show,
             // Панель записи под значком в строке меню macOS.
             tray_panel::tray_panel_fit,
             tray_panel::tray_panel_hide,

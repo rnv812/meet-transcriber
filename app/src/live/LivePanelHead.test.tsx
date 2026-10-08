@@ -61,7 +61,7 @@ test("знак агента по словам состояния: слушает
   expect(markOf("error")).toBeNull();
 });
 
-test("шапка: точка записи, таймер, знак агента «слушает» и слово; «Стоп» — красная кнопка-значок", () => {
+test("шапка: точка записи, таймер, знак агента «слушает» и слово; «Стоп» — красная подписанная кнопка (0.5)", () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW_S * 1000);
   try {
@@ -71,14 +71,15 @@ test("шапка: точка записи, таймер, знак агента �
     expect(head()).toHaveTextContent("12:34 Слушает");
     expect(mark()).toHaveAttribute("data-state", "listen");
     const stop = within(head()).getByRole("button", { name: "Остановить и сохранить" });
-    expect(stop).toHaveClass("btn", "btn--danger", "btn--icon", "btn--sm");
+    expect(stop).toHaveClass("btn", "btn--danger", "btn--sm");
+    expect(stop).toHaveTextContent("Стоп");
     expect(stop).not.toHaveClass("btn--ghost");
   } finally {
     vi.useRealTimers();
   }
 });
 
-test("шапка панели от 420 px: «Стоп» — красная кнопка с подписью (MeetLive), имя прежнее; уже — значок", () => {
+test("широкая шапка: «Стоп» — тоже красная кнопка с подписью, имя прежнее", () => {
   const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
     .mockReturnValue({ width: 480, height: 520, top: 0, left: 0, right: 480, bottom: 520, x: 0, y: 0, toJSON: () => ({}) });
   try {

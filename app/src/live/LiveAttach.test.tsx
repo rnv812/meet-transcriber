@@ -37,12 +37,13 @@ beforeEach(() => {
   vi.mocked(getState).mockResolvedValue(snap(status()));
 });
 
-test("подключённый к записи: «Выключить ассистента» вместо «Стоп», запись идёт", async () => {
+test("подключённый к записи: «Стопа» нет, «Выключить ассистента» — в меню «Ещё», запись идёт", async () => {
   vi.mocked(liveDetach).mockReturnValue(new Promise(() => {}));
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status())));
   expect(screen.queryByRole("button", { name: "Остановить и сохранить" })).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Выключить ассистента" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ещё" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Выключить ассистента" }));
   expect(liveDetach).toHaveBeenCalledWith(ep);
   expect(liveStop).not.toHaveBeenCalled();
   expect(screen.getByRole("banner")).toHaveTextContent("Выключаю…");
@@ -95,12 +96,18 @@ test("строки догнанного начала встают выше жи�
 });
 
 
-test("запись с ассистентом: в панели и «Остановить и сохранить», и «Выключить ассистента»", async () => {
+test("запись с ассистентом: «Стоп» у индикатора записи, «Выключить ассистента» — в меню «Ещё»", async () => {
   vi.mocked(liveStop).mockReturnValue(new Promise(() => {}));
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", { ...snap(status()), source: "live" } as Snapshot));
-  expect(screen.getByRole("button", { name: "Выключить ассистента" })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ещё" }));
+  expect(screen.getByRole("menuitem", { name: "Выключить ассистента" })).toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  const stopButton = screen.getByRole("button", { name: "Остановить и сохранить" });
+  expect(stopButton).toHaveTextContent("Стоп");
+  // Рядом с индикатором записи, не в углу с кнопками окна.
+  expect(stopButton.closest(".live-head__actions")).toBeNull();
+  await userEvent.click(stopButton);
   expect(liveStop).toHaveBeenCalledWith(ep);
   expect(liveDetach).not.toHaveBeenCalled();
   expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
