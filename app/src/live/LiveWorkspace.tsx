@@ -221,19 +221,26 @@ export function urgentQuestion(hint: LiveHint): string {
 }
 
 /**
- * Ассистент включён посреди записи и догоняет уже записанное: полоса хода над
- * рабочей областью. Строки начала встречи встают в ленту выше живых.
+ * Ассистент включён посреди записи и догоняет уже записанное: полоса хода
+ * (Aurora `.progress`) над рабочей областью, а в свёрнутой панели (`mini`) —
+ * под шапкой. Строки начала встречи встают в ленту выше живых.
  */
-export function CatchupNote({ catchup }: { catchup: LiveCatchup }) {
+export function CatchupNote({ catchup, mini = false }: { catchup: LiveCatchup; mini?: boolean }) {
   const from = catchup.capped && catchup.from_t != null ? clock(catchup.from_t) : null;
+  const percent = Math.round(Math.max(0, Math.min(100, catchup.percent)));
   return (
-    <div className="live-catchup" role="status"
+    <div className={`live-catchup${mini ? " live-catchup--mini" : ""}`} role="status"
       title="Ассистента включили посреди записи: он распознаёт уже записанное, чтобы сводка и подсказки знали начало встречи">
-      <span className="live-catchup__text">Догоняю начало встречи… <span className="num">{catchup.percent} %</span></span>
-      <span className="live-catchup__bar" aria-hidden="true">
-        <span className="live-catchup__fill" style={{ width: `${Math.max(0, Math.min(100, catchup.percent))}%` }} />
+      <span className="live-catchup__text">
+        Догоняю начало встречи… <span className="live-catchup__percent">{catchup.percent} %</span>
       </span>
-      {from && <span className="live-catchup__note muted">с {from}; раньше — в итогах по полной расшифровке</span>}
+      <span className="progress live-catchup__bar" role="progressbar" aria-label="Догоняю начало встречи"
+        aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+        <i style={{ width: `${percent}%` }} />
+      </span>
+      <span className="live-catchup__note">
+        {from ? `с ${from}; раньше — в итогах по полной расшифровке` : "Запись не прерывается."}
+      </span>
     </div>
   );
 }
@@ -402,11 +409,12 @@ function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, plac
   return (
     <div ref={narrow} className="live-ws">
       {catchup}
-      <div className="live-tabs" role="tablist" aria-label="Ассистент" onKeyDown={onKey}>
+      {/* Вкладки — Aurora `.tabs` (малые); `live-tabs` — только раскладка в области. */}
+      <div className="tabs tabs--sm live-tabs" role="tablist" aria-label="Ассистент" onKeyDown={onKey}>
         {TABS.map((t) => (
           <button key={t.id} type="button" role="tab" id={`${uid}-tab-${t.id}`} aria-selected={tab === t.id}
             tabIndex={tab === t.id ? 0 : -1}
-            aria-controls={`${uid}-panel`} className="live-tabs__tab" onClick={() => setTab(t.id)}>
+            aria-controls={`${uid}-panel`} onClick={() => setTab(t.id)}>
             {t.label}{count(counts[t.id], quiet)}
           </button>
         ))}

@@ -18,9 +18,13 @@ const RECONNECT_MS = 2000;
 
 /**
  * Состояние ассистента и откуда идущая запись (`source: "live"` — «Запись с
- * ассистентом»); `temporary` — идёт временная встреча (не сохранится).
+ * ассистентом»); `temporary` — идёт временная встреча (не сохранится);
+ * `recording` — резидент ведёт запись (ассистент к ней подключается, а не
+ * начинает свою).
  */
-export type PanelStatus = LiveStatus & { source?: string | null; temporary?: boolean; forget_gaps?: string[] };
+export type PanelStatus = LiveStatus & {
+  source?: string | null; temporary?: boolean; forget_gaps?: string[]; recording?: boolean;
+};
 
 export function useLiveStatus(ep: Endpoint | null): PanelStatus | null {
   const [live, setLive] = useState<PanelStatus | null>(null);
@@ -37,7 +41,7 @@ export function useLiveStatus(ep: Endpoint | null): PanelStatus | null {
       if (closed || !s.live) return;
       setLive({
         ...s.live, source: s.source ?? null, temporary: s.status === "recording" && !!s.temporary,
-        forget_gaps: s.forget_gaps ?? [],
+        forget_gaps: s.forget_gaps ?? [], recording: s.status === "recording",
       });
     };
     const connect = () => {

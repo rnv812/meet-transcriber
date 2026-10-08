@@ -60,9 +60,9 @@ test("свёрнутая: таймер от начала, «Слушает», п
   vi.setSystemTime(NOW_S * 1000);
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status())));
-  expect(screen.getByRole("banner")).toHaveTextContent("12:34 · Слушает");
+  expect(screen.getByRole("banner")).toHaveTextContent("12:34 Слушает");
   act(() => { vi.advanceTimersByTime(1000); });
-  expect(screen.getByRole("banner")).toHaveTextContent("12:35 · Слушает");
+  expect(screen.getByRole("banner")).toHaveTextContent("12:35 Слушает");
   act(() => {
     liveStream().emit("line", { t: 1, speaker: "Демьян", text: "первая" }, 0);
     liveStream().emit("line", { t: 2, speaker: "Мария", text: "вторая" }, 1);
@@ -78,7 +78,7 @@ test("Стоп вызывает liveStop и сразу показывает «О
   act(() => bus().emit("state", snap(status())));
   await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
   expect(liveStop).toHaveBeenCalledWith(ep);
-  expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
+  expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
   expect(screen.getByRole("button", { name: "Стоп" })).toBeDisabled();
 });
 
@@ -88,7 +88,7 @@ test("остановка снаружи (трей): снимок stopping — «
   vi.mocked(getState).mockResolvedValueOnce(snap(status({ active: false, stopping: true })));
   await act(async () => { bus().emit("live.stopping", { kind: "live.stopping", at: 1 }); });
   expect(getState).toHaveBeenCalledWith(ep);
-  expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
+  expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
   expect(screen.getByRole("button", { name: "Стоп" })).toBeDisabled();
 });
 
@@ -315,7 +315,7 @@ test("LiveWindow: ищет резидента, пока не найдёт, за�
 test("время начала неизвестно — вместо таймера прочерк", () => {
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status({ started_at: null }))));
-  expect(screen.getByRole("banner")).toHaveTextContent("— · Слушает");
+  expect(screen.getByRole("banner")).toHaveTextContent("— Слушает");
   expect(screen.getByRole("banner")).not.toHaveTextContent("00:00");
 });
 
@@ -330,9 +330,9 @@ test("снимок живого режима: применяется тольк�
     bus().emit("live.started", { kind: "live.started", at: 1 });
     bus().emit("live.stopping", { kind: "live.stopping", at: 2 });
   });
-  expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
+  expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
   await act(async () => { first(snap(status())); });
-  expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
+  expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
 });
 
 test("остановка: поток ассистента закрыт, пока он дописывает запись (active и stopping)", async () => {
@@ -363,7 +363,7 @@ test("свёрнутая: самая важная подсказка и счёт
   const line = screen.getByRole("button", { name: /Открыть подсказки/ });
   expect(line).toHaveTextContent("Без ответа");
   expect(line).toHaveTextContent("Вопрос про цену без ответа");
-  expect(within(line).getByLabelText("новых подсказок: 2")).toBeInTheDocument();
+  expect(within(head()).getByLabelText("новых подсказок: 2")).toBeInTheDocument();
   await userEvent.click(line);
   expect(invoke).toHaveBeenLastCalledWith("live_set_expanded", { expanded: true });
   expect(screen.getByRole("tab", { name: "Подсказки" })).toHaveAttribute("aria-selected", "true");

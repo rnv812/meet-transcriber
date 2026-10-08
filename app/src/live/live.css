@@ -1,11 +1,13 @@
-/* Лента, сводка, подсказки и вопросы живой записи — в плавающей панели и в карточке. */
+/* Лента, сводка, подсказки и вопросы живой записи — в плавающей панели и в карточке.
+   Только токены Atlas Aurora: цвет меняется вместе с темой и палитрой. */
 
+/* Точка «идёт работа» (карточка идущей записи, «Модель думает…»). */
 .live-dot {
   width: 8px; height: 8px; flex: none;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.25);
-  animation: live-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: live-pulse 1.6s var(--ease-in-out) infinite;
 }
 @keyframes live-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
@@ -15,30 +17,30 @@
   margin: 0; padding: 0; list-style: none; overflow-y: auto;
 }
 .live-feed__line { display: flex; gap: 8px; line-height: 1.45; }
-.live-feed__t { flex: none; color: var(--text-3); font-size: 11px; padding-top: 2px; }
-.live-feed__text { color: var(--text); overflow-wrap: anywhere; }
-.live-feed__who { margin-right: 6px; color: var(--accent-hover); font-weight: 500; }
-.live-feed__empty { font-size: 12px; }
+.live-feed__t { flex: none; color: var(--ink-3); font-family: var(--font-code); font-size: 11px; padding-top: 2px; }
+.live-feed__text { color: var(--ink); overflow-wrap: anywhere; }
+.live-feed__who { margin-right: 6px; color: var(--ink); font-weight: 600; }
+.live-feed__empty { font-size: var(--text-xs); }
 .live-feed__hint { flex: none; margin: 0 0 4px; font-size: 11px; }
 
 .live-ask { display: flex; flex-direction: column; gap: 6px; }
 .live-ask__row { display: flex; gap: 6px; }
 .live-ask__input {
   flex: 1; min-width: 0; height: 28px; padding: 0 8px;
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
-  color: var(--text); font: inherit;
+  background: var(--surface-1); border: 1px solid var(--hairline-strong); border-radius: var(--r-sm);
+  color: var(--ink); font: inherit;
 }
-.live-ask__input:focus { outline: none; border-color: var(--accent); }
+.live-ask__input:focus { outline: none; border-color: var(--accent-line); }
 .live-ask__input:disabled { opacity: 0.6; }
 .live-ask__history {
   display: flex; flex-direction: column; gap: 10px;
   margin: 0; padding: 0; list-style: none; max-height: 220px; overflow-y: auto;
 }
 .live-ask__item { display: flex; flex-direction: column; gap: 4px; }
-.live-ask__q { color: var(--text-2); font-size: 12px; font-weight: 500; white-space: pre-wrap; }
+.live-ask__q { color: var(--ink-2); font-size: var(--text-xs); font-weight: 500; white-space: pre-wrap; }
 .live-ask__a { font-size: 12.5px; }
 /* Ответ, который ещё пишется: тот же шрифт и место, что у готового. */
-.live-ask__a--streaming { color: var(--text); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-ask__a--streaming { color: var(--ink); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Быстрые вопросы переносятся на вторую строку, а не прячутся за краем:
    скрытая полоса прокрутки обрезала последний вопрос («Что…»). */
 .live-ask__quick { display: flex; flex-wrap: wrap; gap: 4px; flex: none; }
@@ -46,53 +48,48 @@
 
 /* Маленькая кнопка-«таблетка»: быстрые вопросы, действия подсказок. */
 .live-chip {
-  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px;
-  border: 1px solid var(--line-2); border-radius: 11px; background: transparent;
-  color: var(--text-2); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r-full); background: transparent;
+  color: var(--ink-2); font: inherit; font-size: var(--text-xs); cursor: pointer; white-space: nowrap;
+  transition: color var(--d) var(--ease-out), border-color var(--d) var(--ease-out);
 }
-.live-chip:hover:not(:disabled) { color: var(--text); border-color: var(--text-3); }
+.live-chip:hover:not(:disabled) { color: var(--ink); border-color: var(--control-line); }
 .live-chip:disabled { opacity: 0.5; cursor: default; }
 
 /* Таймкод в ответе модели: переход к реплике в ленте. */
 .md-time {
-  padding: 0 3px; border: 0; border-radius: var(--r-sm); background: rgba(94, 106, 210, 0.14);
-  color: var(--accent-hover); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer;
+  padding: 0 3px; border: 0; border-radius: var(--r-xs); background: var(--accent-soft);
+  color: var(--accent-line); font: inherit; font-family: var(--font-code); font-size: 0.92em; cursor: pointer;
 }
-.md-time:hover { background: rgba(94, 106, 210, 0.26); }
+.md-time:hover { background: var(--selection); }
 
 /* Реплика, к которой перешли по таймкоду. */
-.live-feed__line.is-target { background: rgba(94, 106, 210, 0.16); border-radius: var(--r-sm); }
-.live-ask__stage { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
-.live-ask__error { color: var(--err); font-size: 12px; white-space: pre-wrap; }
+.live-feed__line.is-target { background: var(--selection); border-radius: var(--r-xs); }
+.live-ask__stage { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--text-xs); }
+.live-ask__error { color: var(--danger); font-size: var(--text-xs); white-space: pre-wrap; }
 
 /* Статус ассистента в шапке: тихая точка («Подсказки временно недоступны»). */
-.live-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-3); font-weight: 400; font-size: 11.5px; }
-.live-status__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--amber); opacity: 0.8; }
+.live-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink-3); font-weight: 400; font-size: var(--text-xs); }
+.live-status__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--warning); }
 .live-status__text { overflow: hidden; text-overflow: ellipsis; }
-.live-status--error { color: var(--err); }
-.live-status--error .live-status__dot { background: var(--err); }
+.live-status--error { color: var(--danger); }
+.live-status--error .live-status__dot { background: var(--danger); }
 
 /* Рабочая область: вкладки (узкая) или две колонки (широкая, от 720). */
 .live-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 /* «Подсказка скрыта · Вернуть» — поверх низа области, ничего не сдвигая. */
 .live-undo {
-  position: absolute; left: 50%; bottom: 8px; z-index: 3; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: 8px; z-index: var(--z-raised); transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px; padding: 4px 12px; white-space: nowrap;
-  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); font-size: 12px;
+  background: var(--surface-2); border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
+  box-shadow: var(--elev-2); font-size: var(--text-xs);
 }
-.live-undo__text { color: var(--text-2); }
-.live-tabs { flex: none; display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
-.live-tabs__tab {
-  display: inline-flex; align-items: center; gap: 5px; margin-bottom: -1px; padding: 4px 8px 6px;
-  border: 0; border-bottom: 2px solid transparent; background: none;
-  color: var(--text-2); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer;
-}
-.live-tabs__tab:hover { color: var(--text); }
-.live-tabs__tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.live-undo__text { color: var(--ink-2); }
+/* Вкладки узкой области — Aurora `.tabs.tabs--sm` (controls.css); здесь — только место. */
+.live-tabs { flex: none; align-self: flex-start; max-width: 100%; overflow-x: auto; }
 .live-tabs__count {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  background: rgba(94, 106, 210, 0.22); color: var(--accent-hover);
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-full);
+  background: var(--accent-soft); color: var(--accent-line);
   font-size: 10.5px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
 }
 /* Узкая: полоса ленты (если есть) и вкладка одна над другой. */
@@ -101,7 +98,7 @@
 .live-ws__strip .live-ws__feed { flex: 1; min-height: 0; }
 /* Разделитель полосы — посреди промежутка и виден всегда: области разные. */
 .live-ws__stack > .splitter--y { margin: -4px 0; }
-.live-ws__stack > .splitter.splitter--y::after { background: var(--line); }
+.live-ws__stack > .splitter.splitter--y::after { background: var(--hairline); }
 .live-ws__stack > .splitter.splitter--y:hover::after, .live-ws__stack > .splitter.splitter--y[data-dragging]::after,
 .live-ws__stack > .splitter.splitter--y:focus-visible::after { background: var(--accent); }
 .live-ws__panel { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
@@ -128,16 +125,21 @@
 .live-ws--wide.live-ws--catchup { grid-template-rows: auto minmax(0, 1fr); }
 .live-ws--wide .live-catchup { grid-column: 1 / -1; }
 .live-catchup {
-  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
-  padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-md);
-  background: var(--surface-2); color: var(--text-2); font-size: 12px;
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  padding: 8px 12px; border: 1px solid var(--hairline); border-radius: var(--r-md);
+  background: var(--surface-1); color: var(--ink); font-size: var(--text-sm);
 }
-.live-catchup__bar { flex: 1 1 80px; min-width: 60px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
-.live-catchup__fill { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
-.live-catchup__note { flex-basis: 100%; font-size: 11px; }
+.live-catchup__text { flex: 1 1 auto; display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.live-catchup__percent { font-family: var(--font-code); color: var(--ink-2); white-space: nowrap; }
+/* Полоса — Aurora `.progress` (feedback.css), тоньше: 4 px. */
+.live-catchup__bar { flex: 1 1 100%; height: 4px; display: block; }
+.live-catchup__note { flex-basis: 100%; color: var(--ink-3); font-size: var(--text-xs); }
+/* Свёрнутая панель: без рамки — карточка под шапкой уже есть. */
+.live-catchup--mini { padding: 0; border: 0; background: none; gap: 6px; }
+.live-catchup--mini .live-catchup__note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .live-ws__side {
   --side-gap: 10px;
-  min-height: 0; display: flex; flex-direction: column; gap: var(--side-gap); padding-left: 12px; border-left: 1px solid var(--line);
+  min-height: 0; display: flex; flex-direction: column; gap: var(--side-gap); padding-left: 12px; border-left: 1px solid var(--hairline);
 }
 /* Подсказки первыми, сводка — ниже, 3 : 2; у каждой своя прокрутка. Высоту
    сводки человек может подобрать сам (--live-summary, разделитель) — тогда
@@ -148,14 +150,14 @@
 /* Разделитель высоты — посреди промежутка колонки, лишнего места не добавляет. */
 .live-ws__side > .splitter--y { margin: calc(var(--side-gap) / -2) 0; }
 .live-ws__scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.live-ws__n { color: var(--text-3); font-weight: 400; letter-spacing: 0; text-transform: none; }
-.live-ws__title { margin: 0; color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+.live-ws__n { color: var(--ink-3); font-weight: 400; }
+.live-ws__title { margin: 0; color: var(--ink-2); font-size: var(--text-xs); font-weight: 600; }
 /* «Спросить» внизу колонки: не выше ~30 %, история прокручивается внутри;
    пока им не пользуются — одна строка (поле вопроса). Развёрнутому человек
    может задать высоту сам (--live-ask, разделитель на верхней рамке). */
 .live-ws__ask {
   flex: none; max-height: var(--live-ask, 30%); min-height: 0;
-  display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--hairline);
 }
 .live-ws__ask:not(.live-ws__ask--compact) { height: var(--live-ask, auto); }
 .live-ws__ask > .splitter--y { margin: -8px 0 8px; }
@@ -164,59 +166,67 @@
 /* Ошибка вопроса видна и в одной строке. */
 .live-ws__ask--compact .live-ask__history, .live-ws__ask--compact .live-ask__quick { display: none; }
 
-.live-empty { margin: 4px 0; font-size: 12px; }
+.live-empty { margin: 4px 0; font-size: var(--text-xs); }
 
 /* Сводка. */
 .live-summary { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
-.live-summary__topic { margin: 0; color: var(--text); }
+.live-summary__topic { margin: 0; color: var(--ink); }
 .live-summary__section { display: flex; flex-direction: column; gap: 3px; }
-.live-summary__title { margin: 0; color: var(--text-2); font-size: 11.5px; font-weight: 500; }
+.live-summary__title { margin: 0; color: var(--ink-2); font-size: var(--text-xs); font-weight: 600; }
 .live-summary__list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
-.live-summary__item { color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
-.live-summary__item::marker { color: var(--text-3); }
-.live-summary__who { color: var(--accent-hover); font-weight: 500; }
+.live-summary__item { color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
+.live-summary__item::marker { color: var(--ink-3); }
+.live-summary__who { color: var(--ink); font-weight: 600; }
 
 /* Подсказки. Цвет вида — только у подписи, карточки спокойные. */
 .live-hints { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .live-hint {
-  display: flex; flex-direction: column; gap: 3px; padding: 6px 8px 7px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  display: flex; flex-direction: column; gap: 3px; padding: 8px 10px;
+  background: var(--surface-1); border: 1px solid var(--hairline); border-radius: var(--r-md);
 }
-.live-hint.is-pinned { border-color: var(--line-2); }
-.live-hint--question { --kind: var(--accent-hover); }
-.live-hint--risk { --kind: var(--amber); }
-.live-hint--unanswered { --kind: #e7787c; }
-.live-hint--term { --kind: var(--text-2); }
-.live-hint--followup { --kind: var(--ok); }
-/* «Вам вопрос»: наверху, с акцентной полосой и черновиком ответа. */
-.live-hint--ask_you { --kind: var(--accent-hover); border-color: rgba(94, 106, 210, 0.55); box-shadow: inset 3px 0 0 var(--accent); }
-.live-hint__reply { color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.live-hint__reply-label { color: var(--text-3); margin-right: 4px; }
-.live-hint--ask_you.is-urgent-new { animation: live-urgent 1.2s ease-out 2; }
-@keyframes live-urgent { 50% { background: rgba(94, 106, 210, 0.16); } }
+.live-hint.is-pinned { border-color: var(--hairline-strong); }
+.live-hint--question { --kind: var(--info); }
+.live-hint--risk { --kind: var(--warning); }
+.live-hint--unanswered { --kind: var(--danger); }
+.live-hint--term { --kind: var(--ink-2); }
+.live-hint--followup { --kind: var(--success); }
+/* «Вам вопрос»: наверху, с полосой и черновиком ответа. */
+.live-hint--ask_you { --kind: var(--info); background: var(--info-soft); border-color: transparent; box-shadow: inset 3px 0 0 var(--info); }
+.live-hint__reply { color: var(--ink); font-size: var(--text-xs); line-height: 1.45; overflow-wrap: anywhere; }
+.live-hint__reply-label { color: var(--ink-3); margin-right: 4px; }
+.live-hint--ask_you.is-urgent-new { animation: live-urgent 1.2s var(--ease-out) 2; }
+@keyframes live-urgent { 50% { background: var(--surface-3); } }
 @media (prefers-reduced-motion: reduce) { .live-hint--ask_you.is-urgent-new { animation: none; } }
 .live-hint__head { display: flex; align-items: center; gap: 6px; min-height: 22px; }
-.live-hint__kind { color: var(--kind); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.live-hint__kind { color: var(--kind); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .live-hint__time {
-  padding: 0 4px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--text-3); font: inherit; font-size: 11px; cursor: pointer;
+  padding: 0 4px; border: 0; border-radius: var(--r-xs); background: none;
+  color: var(--ink-3); font: inherit; font-family: var(--font-code); font-size: 11px; cursor: pointer;
 }
-.live-hint__time:hover { color: var(--accent-hover); background: rgba(94, 106, 210, 0.14); }
+.live-hint__time:hover { color: var(--accent-line); background: var(--accent-soft); }
 .live-hint__actions { margin-left: auto; display: flex; gap: 2px; }
-.live-hint__text { color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.live-hint__text { color: var(--ink); line-height: 1.45; overflow-wrap: anywhere; }
 .live-hint__why { font-size: 11.5px; }
 .live-hint__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
 .live-hint__ref { max-width: 60%; font-size: 11px; }
 .live-hint__copied { font-size: 11px; }
-.live-hint__error { color: var(--err); font-size: 11.5px; }
+.live-hint__error { color: var(--danger); font-size: 11.5px; }
 
 /* Новое и изменённое — мягкая подсветка на несколько секунд, гаснет плавно. */
-.live-summary__item, .live-summary__topic, .live-hint { transition: background-color 1.2s ease; }
-.live-summary__item.is-fresh, .live-summary__topic.is-fresh { background: rgba(94, 106, 210, 0.14); border-radius: var(--r-sm); }
-.live-hint.is-fresh { background: #191b26; }
+.live-summary__item, .live-summary__topic, .live-hint { transition: background-color 1.2s var(--ease-out); }
+.live-summary__item.is-fresh, .live-summary__topic.is-fresh { background: var(--accent-soft); border-radius: var(--r-xs); }
+.live-hint.is-fresh { background: var(--surface-2); }
 @media (prefers-reduced-motion: reduce) {
   .live-summary__item, .live-summary__topic, .live-hint { transition: none; }
 }
 
 /* «Запишите образец своего голоса» над рабочей областью (OwnerVoiceDialog.tsx). */
-.live-nudge { flex: none; margin: 6px 8px 0; }
+.live-nudge { flex: none; margin: 0; }
+
+/* Частота и профиль в шапке сессии — Aurora `.tabs.tabs--sm` с ролями радио:
+   выбранный — по `aria-checked` (у вкладок Aurora — по `aria-selected`). */
+.live-seg button[aria-checked='true'] {
+  background: var(--deep); color: var(--on-deep); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line);
+}
+.live-seg button[aria-checked='true']:focus-visible { box-shadow: var(--focus-ring), inset 0 0 0 1px var(--control-line); }
+.live-seg button:disabled { opacity: 0.5; cursor: default; }

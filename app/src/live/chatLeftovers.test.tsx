@@ -171,7 +171,9 @@ test("M6: шапка панели говорит, что с агентом; у �
   act(() => liveStream().emit("agent", agentInfo({ state: "writing" })));
   expect(head).toHaveTextContent("Думает…");
   expect(container.querySelector(".session-bar__dot")).toBeNull();
-  expect(container.querySelectorAll(".live-dot")).toHaveLength(1);
+  // Состояние агента в шапке — один знак (AgentMark): «думает» — «ищет».
+  expect(container.querySelectorAll(".agent-mark")).toHaveLength(1);
+  expect(head.querySelector(".agent-mark")).toHaveAttribute("data-state", "search");
 });
 
 test("M15: свёрнутая в «Не отвлекать» держит показанное сообщение; вопрос к вам встаёт и тогда", () => {

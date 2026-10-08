@@ -1,68 +1,101 @@
-/* Окно `live` прозрачное (transparent в оболочке): фон рисует сама панель,
-   со скруглёнными углами. Цвета — из tokens.css (Linear-dark). Только для
-   страницы live.html: главное окно этот файл не грузит. */
+/* Окно `live` прозрачное (transparent в оболочке): фон рисует сама панель —
+   стекло Atlas Aurora (`glass glass--dense`, грань `--glass-line`, тень
+   `--elev-3`, радиус `--r-lg`). Только для страницы live.html: главное окно
+   этот файл не грузит. Только токены Aurora. */
 html, body { background: transparent; }
 
 .live-panel {
   position: relative;
   height: 100%;
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 12px 12px;
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-xl);
+  display: flex; flex-direction: column;
+  border-radius: var(--r-lg);
+  box-shadow: var(--glass-edge), var(--elev-3);
+  color: var(--ink);
+  font-family: var(--font-body); font-size: var(--text-ui); line-height: 1.5;
   overflow: hidden;
 }
 
-/* Шапка — место, за которое окно таскают (`headPress`); двойной щелчок по
-   ней — на весь экран. */
-.live-head { display: flex; align-items: center; gap: 8px; min-height: 28px; user-select: none; }
-.live-head__title {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-  color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+/* Шапка 48 px — место, за которое окно таскают (`headPress`); двойной щелчок
+   по ней — на весь экран. Точка записи, таймер, знак агента и слово, бейдж
+   непрочитанного, кнопки-значки. */
+.live-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  height: var(--control-lg); padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  user-select: none;
 }
-.live-head__actions { display: flex; align-items: center; gap: 4px; flex: none; }
-/* Ширина окна от 300: заголовок сжимается, пять кнопок-значков остаются в одну строку. */
-.live-head__actions { gap: 2px; }
-.live-head__stop { color: var(--red); }
-.live-head__stop:hover:not(:disabled) { color: var(--red); background: rgba(229, 72, 77, 0.12); }
+.live-head__title {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  white-space: nowrap; overflow: hidden;
+}
+.live-head__rec { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--danger); }
+.live-head__clock { flex: none; font-family: var(--font-code); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.live-head__sep { width: 1px; height: 14px; flex: none; margin: 0 2px; background: var(--hairline); }
+.live-head__alert { flex: none; color: var(--danger); }
+.live-head__state { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: 600; }
+.live-panel--open .live-head__state { font-size: var(--text-ui); }
+.live-head__count { flex: none; height: 20px; padding: 0 7px; font-variant-numeric: tabular-nums; }
+.live-head__actions { display: flex; align-items: center; gap: 2px; flex: none; }
 /* «Не отвлекать»: кроме нажатой кнопки — тихая метка у состояния. */
 .live-head__quiet-tag {
-  flex: none; padding: 0 6px; border-radius: 8px; background: var(--surface-2);
-  color: var(--text-2); font-size: 11px; font-weight: 400; line-height: 16px;
+  flex: none; padding: 0 6px; border-radius: var(--r-xs); background: var(--surface-3);
+  color: var(--ink-2); font-size: 11px; font-weight: 400; line-height: 18px;
 }
 /* Временная встреча: не сохранится — видно всегда, и в свёрнутой панели. */
-.live-temp { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: -2px; font-size: 11px; line-height: 16px; }
-.live-temp__badge {
-  flex: none; padding: 0 6px; border-radius: 8px; background: rgba(245, 165, 36, 0.14);
-  color: var(--amber); font-weight: 500;
+.live-temp {
+  flex: none; display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 4px 14px; border-bottom: 1px solid var(--hairline); font-size: var(--text-xs);
 }
-.live-temp__note { min-width: 0; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.live-head__discard:hover:not(:disabled) { color: var(--red); background: rgba(229, 72, 77, 0.12); }
+.live-temp__badge { flex: none; height: 18px; }
+.live-temp__note { min-width: 0; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Вопрос «Остановить без сохранения?» / конец временной встречи — на месте содержимого. */
-.live-panel__confirm { flex: 1; min-height: 0; overflow: auto; }
+.live-panel__confirm { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 12px; }
 .live-panel__confirm .confirm { margin: 0; }
 
-
-
-/* Свёрнутая: одна строка — вид и текст самой важной подсказки (или последняя
-   реплика) и счётчик новых; щелчок разворачивает панель на «Подсказках». */
+/* Свёрнутая: одна строка — вид и текст самой важной подсказки (или
+   последнего сообщения агента, или последняя реплика); щелчок разворачивает. */
 .live-last {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 0 2px;
-  border: 0; border-radius: var(--r-md); background: none; text-align: left;
-  color: var(--text); font: inherit; line-height: 1.45; cursor: pointer;
+  flex: none; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 0 14px;
+  border: 0; border-radius: 0; background: none; text-align: left;
+  color: var(--ink); font: inherit; font-size: var(--text-sm); line-height: 1.45; cursor: pointer;
+  transition: background var(--d) var(--ease-out);
 }
-.live-last:hover { background: var(--surface-hover); }
-.live-last__kind { flex: none; color: var(--kind); font-size: 11px; font-weight: 500; }
-/* Класс вида нужен подписи только ради цвета: рамка и полоса карточки «Вам вопрос» ей ни к чему. */
-.live-last__kind.live-hint--ask_you { box-shadow: none; border-color: transparent; }
-.live-last--urgent { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
+.live-last:hover { background: var(--surface-3); }
+.live-last__kind { flex: none; color: var(--kind); font-size: var(--text-xs); font-weight: 600; }
+/* Класс вида нужен подписи только ради цвета: заливка и полоса карточки «Вам вопрос» ей ни к чему. */
+.live-last__kind.live-hint--ask_you { box-shadow: none; border-color: transparent; background: none; }
+.live-last--urgent { box-shadow: inset 3px 0 0 var(--info); }
 .live-last__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .live-last__text .live-feed__who { margin-right: 6px; }
-.live-last__count {
-  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
-  background: rgba(94, 106, 210, 0.22); color: var(--accent-hover);
-  font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+
+/* Свёрнутая, карточка под шапкой (MeetLiveMini): вопрос вам, «Догоняю»,
+   «Не удалось запустить». Высота свёрнутого окна — 120 (live_panel.rs): под
+   шапкой 48 остаются две строки — текст и кнопки. */
+.live-mini {
+  flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 6px 14px 8px;
+}
+.live-mini__open {
+  display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; padding: 0;
+  border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--text-ui); text-align: left; cursor: pointer;
+}
+.live-mini__open:hover .live-mini__text { text-decoration: underline; text-decoration-color: var(--hairline-strong); }
+.live-mini__badge { flex: none; height: 22px; }
+.live-mini__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-mini__actions { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.live-mini__time { flex: none; margin-right: 2px; color: var(--ink-3); font-family: var(--font-code); font-size: var(--text-xs); }
+
+/* «Не удалось запустить ассистента»: заголовок и причина, «Повторить», «Открыть настройки». */
+.live-fail__head { margin: 0; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.live-fail__title { font-size: var(--text-ui); font-weight: 600; }
+.live-fail__reason { color: var(--ink-2); font-size: var(--text-sm); overflow-wrap: anywhere; }
+/* Свёрнутая: заголовок и причина — в одну строку. */
+.live-fail--compact .live-fail__head { flex-direction: row; align-items: baseline; gap: 8px; white-space: nowrap; }
+.live-fail--compact .live-fail__title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.live-fail--compact .live-fail__reason { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Развёрнутая: карточка над рабочей областью. */
+.live-panel__body > .live-fail {
+  padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--r-md); background: var(--danger-soft);
 }
 
 /* На весь экран: рабочая область целиком, скругления ни к чему. */
@@ -70,4 +103,4 @@ html, body { background: transparent; }
 
 /* Развёрнутая: рабочая область (live.css) — вкладки или, в широком окне
    (от 720, решает LiveWorkspace по ширине панели), две колонки. */
-.live-panel__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.live-panel__body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; }

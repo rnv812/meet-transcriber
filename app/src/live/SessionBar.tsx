@@ -22,6 +22,7 @@ import { Popover } from "../ui/Popover";
 import { LiveSummary } from "./LiveSummary";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "./profiles";
 import "./chat.css";
+import "./live.css";
 
 export const FREQUENCIES: AgentFrequencyLabel[] = ["реже", "обычно", "чаще"];
 /** Пометка, когда модель не принимает картинки (как `llm.NO_VISION_NOTE` у резидента). */
@@ -117,7 +118,12 @@ export function stateOf(agent: AgentInfo, writingShown: boolean): { key: string;
   return { key: "listening", text: "слушает" };
 }
 
-/** Переключатель-радиогруппа шапки сессии (частота, профиль): стрелки двигают выбор. */
+/**
+ * Переключатель-радиогруппа шапки сессии (частота, профиль): сегменты Aurora
+ * `.tabs.tabs--sm` с ролями радио (`live-seg` — выбранный по `aria-checked`,
+ * live.css); стрелки двигают выбор. Группа не обрезает содержимое — рамка
+ * фокуса видна целиком.
+ */
 function Segmented<T extends string>({ label, options, text, titles, value, onChange, disabled = false }: {
   label: string; options: readonly T[]; text?: (v: T) => string; titles?: (v: T) => string;
   value: T; onChange: (v: T) => void; disabled?: boolean;
@@ -135,10 +141,10 @@ function Segmented<T extends string>({ label, options, text, titles, value, onCh
   return (
     <span className="session-freq">
       <span className="session-freq__label" id={labelId}>{label}</span>
-      <div className="session-freq__group" role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey}>
+      <div className="tabs tabs--sm live-seg" role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey}>
         {options.map((f) => (
           <button key={f} type="button" role="radio" aria-checked={value === f} tabIndex={value === f ? 0 : -1}
-            className="session-freq__opt" disabled={disabled} title={titles?.(f)}
+            disabled={disabled} title={titles?.(f)}
             onClick={() => { if (f !== value) onChange(f); }}>
             {text ? text(f) : f}
           </button>

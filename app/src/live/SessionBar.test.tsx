@@ -63,6 +63,15 @@ test("«Как часто писать»: реже / обычно / чаще, щ
   expect(onFrequency).toHaveBeenLastCalledWith("чаще");
 });
 
+test("частота и профиль — сегменты Aurora (.tabs--sm), роли радио сохранены", () => {
+  render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} onProfile={() => {}} />);
+  for (const name of ["Как часто писать", "Профиль"]) {
+    const group = screen.getByRole("radiogroup", { name });
+    expect(group).toHaveClass("tabs", "tabs--sm");
+    expect(within(group).getAllByRole("radio").length).toBeGreaterThan(1);
+  }
+});
+
 test("«Что я знаю» — поповер со сводкой на сейчас", async () => {
   render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} />);
   await userEvent.click(screen.getByRole("button", { name: "Что я знаю" }));
