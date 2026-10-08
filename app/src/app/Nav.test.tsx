@@ -59,3 +59,14 @@ test("рейка — 60 px на токенах Aurora; прежние прави
   expect(tokens).not.toMatch(/\.nav\b|data-nav-rail|\.content \{|--nav-w/);
   expect(css("features", "recordings", "recordings.css")).not.toMatch(/\.topbar|\.rec-badge|\.split\b/);
 });
+
+test("меню кнопки записи — меню Aurora: узкой «ещё» нет, пункты 44 px со значком, наведение и фокус — --surface-3", () => {
+  const rail = css("app", "rail.css");
+  expect(rail).not.toMatch(/rail-rec__more/);
+  expect(rail).toMatch(/\.rec-menu \{[^}]*border-radius: var\(--r-lg\)/);
+  expect(rail).toMatch(/\.rec-menu__item \{[^}]*min-height: 44px/);
+  expect(rail).toMatch(/\.rec-menu__item:hover:not\(:disabled\), \.rec-menu__item:focus-visible \{[^}]*background: var\(--surface-3\)/);
+  expect(rail).toMatch(/\.rec-menu__icon \{/);
+  // Открытое меню не прячется под подсказкой кнопки.
+  expect(rail).toMatch(/\.rail-rec--open \.tooltip \{[^}]*visibility: hidden/);
+});

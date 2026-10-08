@@ -1,5 +1,8 @@
-import { ChevronRight, CircleAlert, Square, TriangleAlert, X } from "lucide-react";
-import { Fragment, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { CircleAlert, Power, Save, Square, Timer, Trash2, TriangleAlert, X } from "lucide-react";
+import {
+  Fragment, useEffect, useId, useRef, useState,
+  type ComponentPropsWithRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode,
+} from "react";
 
 import { noProvider } from "../features/card/assistant";
 import { type Endpoint, getAssistant, liveAttach, liveDetach, liveStart, liveStop, recordingCommand } from "../lib/api";
@@ -10,6 +13,7 @@ import {
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "../live/profiles";
+import { AgentMark } from "../ui/AgentMark";
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { floatingStyle, useFloating } from "../ui/floating";
@@ -28,6 +32,12 @@ export const ATTACH_FAILED = "Не удалось включить ассист�
 const START_LABEL = "Начать запись";
 const STOP_LABEL = "Остановить и сохранить";
 const CANCEL_START_LABEL = "Отменить запуск";
+const RECORD_ITEM = "Записать";
+const RECORD_NOTE = "без ассистента; расшифровка — после остановки";
+const STOP_NOTE = "запись сохранится и расшифруется";
+const TEMP_STOP_NOTE = "встреча и разговор удалятся — с подтверждением";
+const IDLE_MENU = "Варианты записи";
+const RECORDING_MENU = "Действия с записью";
 
 /** Выбранное в настройках устройство не нашлось — с какого пишем вместо него. */
 export function fallbackText(f: { kind: "mic" | "output"; name: string }): string {
@@ -83,6 +93,25 @@ function RailError({ text, onDismiss, up = false }: { text: string; onDismiss: (
   );
 }
 
+/** Пункт меню кнопки записи: значок, название и строка пояснения под ним. */
+function RecItem({ icon, title, note, danger = false, ...rest }: {
+  icon: ReactNode;
+  title: ReactNode;
+  note: string;
+  danger?: boolean;
+} & Omit<ComponentPropsWithRef<"button">, "title" | "type" | "role">) {
+  return (
+    <button type="button" role="menuitem" tabIndex={-1}
+      className={`rec-menu__item${danger ? " rec-menu__item--danger" : ""}`} {...rest}>
+      <span className="rec-menu__icon" aria-hidden="true">{icon}</span>
+      <span className="rec-menu__text">
+        <span className="rec-menu__title">{title}</span>
+        <span className="rec-menu__note">{note}</span>
+      </span>
+    </button>
+  );
+}
+
 /** Ошибка гаснет сама через несколько секунд. */
 function useFadingError(): [string | null, (text: string | null) => void] {
   const [error, setError] = useState<string | null>(null);
@@ -106,8 +135,15 @@ function useFadingError(): [string | null, (text: string | null) => void] {
  * `elapsed_s` из снимка плюс время, прошедшее с его прихода (`snapshotAt`).
  * Ответ команды записи — тоже снимок: применяем его сразу, не дожидаясь опроса.
  *
- * Узкая кнопка под главной (и контекстное меню главной) — меню вариантов,
- * справа от кнопки. В простое: запись «С ассистентом» (живой режим). При нём
+ * Сама кнопка (щелчок, Enter, контекстное меню) открывает меню справа от себя;
+ * фокус — на первом пункте, это прежнее действие кнопки: «Записать» в простое,
+ * «Остановить и сохранить» (у временной — «Закончить временную встречу») во
+ * время записи. Поэтому Enter → Enter (или два щелчка) — как раньше один.
+ * Отдельной узкой кнопки «ещё» под главной нет (ревью 0.4: мелкая и
+ * некрасивая). Запись одного ассистента, его запуск и остановка — без меню:
+ * у кнопки одно действие («Остановить и сохранить», «Отменить запуск»).
+ *
+ * В простое в меню, кроме «Записать», — запись «С ассистентом» (живой режим). При нём
  * `snapshot.status` остаётся "idle", а состояние — в `snapshot.live`; часы
  * живого режима идут от `started_at` (стенное время резидента, когда пошёл
  * звук; неизвестно — без часов). Пока ассистент запускается — его этап
@@ -220,7 +256,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const [assistant, setAssistant] = useState<AssistantInfo | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);
-  const more = useRef<HTMLButtonElement>(null);
+  const main = useRef<HTMLButtonElement>(null);
   const item = useRef<HTMLButtonElement>(null);
   const menuBox = useRef<HTMLDivElement>(null);
   // Справа от кнопки, верхом вровень с ней; всегда в пределах окна (ui/floating).
@@ -235,12 +271,10 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const mark = (p: AgentProfile) => (p === fallback ? " (по умолчанию)" : "");
   // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню и вопрос больше не к месту.
   useEffect(() => { setMenu(false); setAsking(null); }, [mode]);
-  // Открытое меню — фокус на пункт; неактивен (нет провайдера) — остаётся на «ещё».
+  // Открытое меню — фокус на первый пункт (прежнее действие кнопки: он всегда доступен).
   useEffect(() => {
-    if (!menu) return;
-    if (item.current && !item.current.disabled) item.current.focus();
-    else more.current?.focus();
-  }, [menu, blocked]);
+    if (menu) item.current?.focus();
+  }, [menu]);
   useEffect(() => {
     if (!menu || !endpoint) return;
     let current = true;
@@ -255,7 +289,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     const key = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       setMenu(false);
-      more.current?.focus();
+      main.current?.focus();
     };
     document.addEventListener("mousedown", down);
     document.addEventListener("keydown", key);
@@ -331,95 +365,104 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     lines = [head.filter(Boolean).join(" · "), warming ? startingText(live) : null]
       .filter((x): x is string => !!x);
   }
-  // Меню — в простое и во время обычной записи; у записи ассистента — только «Остановить».
-  const menuLabel = idle ? "Другие варианты записи" : recording ? "Ещё действия с записью" : null;
+  // Меню — в простое и во время обычной записи; у записи ассистента — одно действие, без меню.
+  const menuLabel = idle ? IDLE_MENU : recording ? RECORDING_MENU : null;
   const openMenu = (e: MouseEvent) => {
     if (!menuLabel) return;
     e.preventDefault();
     setMenu(true);
   };
+  // Клавиатура меню: ↑/↓/Home/End — по доступным пунктам, Tab — закрыть (Esc — общий обработчик выше).
+  const menuKeys = (e: ReactKeyboardEvent) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      setMenu(false);
+      main.current?.focus();
+      return;
+    }
+    const all = [...(menuBox.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)") ?? [])];
+    if (!all.length) return;
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === "ArrowDown" ? (at + 1) % all.length
+      : e.key === "ArrowUp" ? (at - 1 + all.length) % all.length
+        : e.key === "Home" ? 0 : e.key === "End" ? all.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    all[next]?.focus();
+  };
+  const agentIcon = <AgentMark size={16} />;
+  const noProviderHint = blocked ? hintId : undefined;
 
   let items: ReactNode = null;
   if (menu && recording) {
     items = (
       <>
+        <RecItem ref={item} icon={<Icon as={Square} fill="currentColor" stroke="none" size="sm" />}
+          title={temporary ? TEMP_STOP_LABEL : STOP_LABEL} note={temporary ? TEMP_STOP_NOTE : STOP_NOTE}
+          onClick={() => act?.()} />
         {attached ? (
-          <button ref={item} type="button" role="menuitem" className="rec-menu__item"
-            disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)}>
-            Выключить ассистента
-            <span className="rec-menu__note">запись продолжится, сводка останется в карточке</span>
-          </button>
-        ) : profiles.map((p, k) => (
-          <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
-            disabled={blocked} aria-describedby={blocked ? hintId : undefined}
-            onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)}>
-            Включить ассистента · {PROFILE_LABELS[p]}{mark(p)}
-            <span className="rec-menu__note">догонит начало встречи; {PROFILE_NOTES[p]}</span>
-          </button>
+          <RecItem icon={<Icon as={Power} />} title="Выключить ассистента"
+            note="запись продолжится, сводка останется в карточке"
+            disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)} />
+        ) : profiles.map((p) => (
+          <RecItem key={p} icon={agentIcon} title={<>Включить ассистента · {PROFILE_LABELS[p]}{mark(p)}</>}
+            note={`догонит начало встречи; ${PROFILE_NOTES[p]}`}
+            disabled={blocked} aria-describedby={noProviderHint}
+            onClick={() => runLive((ep) => liveAttach(ep, p), ATTACH_FAILED)} />
         ))}
         {blocked && !attached && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
         {temporary ? (
-          <button type="button" role="menuitem" className="rec-menu__item" onClick={() => run("keep")}>
-            {KEEP_LABEL}
-            <span className="rec-menu__note">запись ляжет в библиотеку и расшифруется, как обычная</span>
-          </button>
+          <RecItem icon={<Icon as={Save} />} title={KEEP_LABEL}
+            note="запись ляжет в библиотеку и расшифруется, как обычная" onClick={() => run("keep")} />
         ) : (
-          <button type="button" role="menuitem" className="rec-menu__item rec-menu__item--danger"
-            onClick={() => ask("discard")}>
-            {DISCARD_LABEL}…
-            <span className="rec-menu__note">запись, чат и материалы удалятся</span>
-          </button>
+          <>
+            <div className="rec-menu__sep" role="separator" />
+            <RecItem danger icon={<Icon as={Trash2} />} title={`${DISCARD_LABEL}…`}
+              note="запись, чат и материалы удалятся" onClick={() => ask("discard")} />
+          </>
         )}
       </>
     );
   } else if (menu && idle) {
     items = (
       <>
-        {profiles.map((p, k) => (
-          <button key={p} ref={k === 0 ? item : undefined} type="button" role="menuitem" className="rec-menu__item"
-            disabled={blocked} aria-describedby={blocked ? hintId : undefined}
-            onClick={() => runLive((ep) => liveStart(ep, { profile: p }), START_FAILED)}>
-            С ассистентом · {PROFILE_LABELS[p]}{mark(p)}
-            <span className="rec-menu__note">{PROFILE_NOTES[p]}</span>
-          </button>
+        <RecItem ref={item} icon={<i className="rec-menu__dot" />} title={RECORD_ITEM} note={RECORD_NOTE}
+          onClick={() => act?.()} />
+        {profiles.map((p) => (
+          <RecItem key={p} icon={agentIcon} title={<>С ассистентом · {PROFILE_LABELS[p]}{mark(p)}</>}
+            note={PROFILE_NOTES[p]} disabled={blocked} aria-describedby={noProviderHint}
+            onClick={() => runLive((ep) => liveStart(ep, { profile: p }), START_FAILED)} />
         ))}
-        <button type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
-          aria-describedby={blocked ? hintId : undefined} onClick={startTemporary}>
-          {TEMP_LABEL}
-          <span className="rec-menu__note">{TEMP_NOTE}</span>
-        </button>
+        <RecItem icon={<Icon as={Timer} />} title={TEMP_LABEL} note={TEMP_NOTE}
+          disabled={blocked} aria-describedby={noProviderHint} onClick={startTemporary} />
         {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
       </>
     );
   }
+  const open = !!items && !!menuLabel;
 
   return (
-    <div className="rail-rec" ref={box}>
+    <div className={`rail-rec${open ? " rail-rec--open" : ""}`} ref={box}>
       <RailTip tip={lines.length ? <TipLines lines={lines} /> : label} id={lines.length ? tipId : undefined}>
-        <Button variant={idle ? "primary" : "danger"} size="lg" flat className="btn--icon" aria-label={label}
-          aria-describedby={lines.length ? tipId : undefined} disabled={!act} onClick={() => act?.()}
-          onContextMenu={openMenu}>
+        <Button ref={main} variant={idle ? "primary" : "danger"} size="lg" flat className="btn--icon" aria-label={label}
+          aria-describedby={lines.length ? tipId : undefined} disabled={!act}
+          aria-haspopup={menuLabel ? "menu" : undefined} aria-expanded={menuLabel ? open : undefined}
+          onClick={() => (menuLabel ? setMenu(!menu) : act?.())} onContextMenu={openMenu}>
           {idle ? <i className="rail-rec__dot" aria-hidden="true" />
             : <Icon as={Square} fill="currentColor" stroke="none" />}
         </Button>
       </RailTip>
-      {menuLabel && (
-        <Button ref={more} variant="ghost" size="xs" className="btn--icon rail-rec__more" aria-label={menuLabel}
-          title={menuLabel} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
-          <Icon as={ChevronRight} size="sm" />
-        </Button>
-      )}
       <span ref={anchor} className="rail-rec__anchor" aria-hidden="true" />
-      {items && menuLabel && (
-        <div ref={menuBox} className="rec-menu glass glass--dense" role="menu"
-          aria-label={idle ? "Варианты записи" : menuLabel} style={floatingStyle(menuPos)}>
+      {open && (
+        <div ref={menuBox} className="rec-menu glass glass--dense" role="menu" aria-label={menuLabel ?? undefined}
+          style={floatingStyle(menuPos)} onKeyDown={menuKeys}>
           {items}
         </div>
       )}
       {shownError && <RailError text={shownError} onDismiss={dismiss} />}
       {asking && (
         <ConfirmDialog {...(asking === "discard" ? discardConfirm(snapshot.forget_gaps) : TEMP_END_CONFIRM)}
-          returnFocus={more}
+          returnFocus={main}
           onCancel={() => setAsking(null)}
           onConfirm={() => {
             setAsking(null);

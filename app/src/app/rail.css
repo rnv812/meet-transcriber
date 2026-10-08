@@ -26,33 +26,42 @@
 .rail__tip .tooltip::after { top: 0; bottom: 0; left: auto; right: 100%; width: 8px; height: auto; }
 .rail__tip-line { display: block; }
 
-/* Кнопка записи: главная (primary) в простое, «Остановить» (danger) во время записи,
-   под ней — узкая «ещё» с меню вариантов; меню раскрывается вправо от кнопки. */
-.rail-rec { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+/* Кнопка записи: главная (primary) в простое, «Остановить» (danger) во время записи.
+   Сама кнопка открывает меню вариантов — справа от неё, верхом вровень. */
+.rail-rec { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; }
 .rail-rec__dot { width: 12px; height: 12px; border-radius: 50%; background: var(--on-accent-strong); }
-.rail .rail-rec__more { width: var(--control-lg); height: 18px; border-radius: var(--r-sm); }
 .rail-rec__anchor { position: absolute; left: calc(100% + 8px); top: 0; width: 0; height: 0; }
+/* Меню открыто — подсказка кнопки не всплывает поверх него. */
+.rail-rec--open .tooltip { visibility: hidden; opacity: 0; }
 
-/* Меню вариантов записи (ui/floating держит его в пределах окна). */
+/* Меню вариантов записи — меню Aurora (overlays.css `.menu`): плотное стекло, r-lg,
+   пункты со значком, названием и пояснением; ui/floating держит его в пределах окна. */
 .rec-menu {
-  position: fixed; z-index: var(--z-popover); width: 280px; max-width: calc(100vw - 16px);
+  position: fixed; z-index: var(--z-popover); width: 304px; max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px); overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding: 6px;
   border-radius: var(--r-lg); box-shadow: var(--elev-3); color: var(--ink);
+  animation: pop var(--d) var(--ease-out);
 }
 .rec-menu__item {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  padding: 8px 10px; border: 0; border-radius: var(--r-control-sm); background: none;
-  color: var(--ink); font: inherit; font-size: var(--text-ui); text-align: left; cursor: pointer;
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 44px; box-sizing: border-box;
+  padding: 7px 12px 7px 10px; border: 0; border-radius: var(--r-control-sm); background: none;
+  color: var(--ink); font: inherit; font-size: var(--text-ui); line-height: 1.35; text-align: left; cursor: pointer;
 }
-.rec-menu__item:hover:not(:disabled) { background: var(--surface-3); }
-.rec-menu__item:disabled { opacity: 0.5; cursor: default; }
+.rec-menu__item:hover:not(:disabled), .rec-menu__item:focus-visible { background: var(--surface-3); }
+.rec-menu__item:disabled { opacity: 0.45; cursor: default; }
+/* Значок — в колонке 16 px, по строке названия. */
+.rec-menu__icon {
+  flex: none; width: var(--icon); height: 20px; display: inline-grid; place-items: center; color: var(--ink-2);
+}
+.rec-menu__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
+.rec-menu__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rec-menu__title { font-weight: 500; }
+.rec-menu__note { color: var(--ink-3); font-size: var(--text-xs); line-height: 1.35; }
 /* «Остановить без сохранения…» — внизу меню, за чертой и красным: удаляет запись. */
-.rec-menu__item--danger {
-  margin-top: 4px; color: var(--danger);
-  border-top: 1px solid var(--hairline); border-radius: 0 0 var(--r-control-sm) var(--r-control-sm);
-}
-.rec-menu__note { color: var(--ink-3); font-size: var(--text-xs); }
-.rec-menu__hint { padding: 0 10px 6px; color: var(--warning); font-size: var(--text-xs); }
+.rec-menu__sep { flex: none; height: 1px; margin: 3px 4px; background: var(--hairline); }
+.rec-menu__item--danger, .rec-menu__item--danger .rec-menu__icon { color: var(--danger); }
+.rec-menu__hint { padding: 2px 12px 6px 36px; color: var(--warning); font-size: var(--text-xs); }
 
 /* Предупреждения записи внизу рейки: значок цвета --warning, текст — имя и подсказка. */
 .rail-warn { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; }

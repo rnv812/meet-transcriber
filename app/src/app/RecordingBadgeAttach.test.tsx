@@ -21,12 +21,13 @@ const recording = (l: LiveStatus = live()): Snapshot => ({
 const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
   provider: "claude", setting: "auto", available: {}, knowledge_dir: null, checking: false, ...o,
 });
-const openMenu = () => userEvent.click(screen.getByRole("button", { name: "Ещё действия с записью" }));
 /** Подсказка кнопки остановки: «Идёт запись · мм:сс», ассистент, этап его запуска. */
 const status = () => screen.getByRole("tooltip");
 const stopButton = () => screen.getByRole("button", { name: "Остановить и сохранить" });
+/** Меню «Действия с записью» открывает сама кнопка остановки. */
+const openMenu = () => userEvent.click(stopButton());
 
-test("во время записи «Ещё действия с записью»: «Включить ассистента» — ответ применяется сразу", async () => {
+test("во время записи меню кнопки «Действия с записью»: «Включить ассистента» — ответ применяется сразу", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   const attach = vi.spyOn(api, "liveAttach").mockResolvedValue(
     { ok: true, ...live({ starting: true, attached: true, folder: "D:/rec/f" }) });
@@ -108,8 +109,13 @@ test("отказ резидента виден рядом с кнопкой", as
 test("«Остановить и сохранить» во время записи с ассистентом — остановка самой записи", async () => {
   const stop = vi.spyOn(api, "recordingCommand").mockResolvedValue({} as never);
   const liveStop = vi.spyOn(api, "liveStop");
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   render(<RecordingBadge endpoint={ep} snapshot={recording(live({ active: true, attached: true }))} />);
-  await userEvent.click(stopButton());
+  await openMenu();
+  expect(screen.getAllByRole("menuitem").map((i) => i.querySelector(".rec-menu__title")?.textContent)).toEqual([
+    "Остановить и сохранить", "Выключить ассистента", "Остановить без сохранения…",
+  ]);
+  await userEvent.click(screen.getByRole("menuitem", { name: /^Остановить и сохранить/ }));
   expect(stop).toHaveBeenCalledWith(ep, "stop");
   expect(liveStop).not.toHaveBeenCalled();
 });
