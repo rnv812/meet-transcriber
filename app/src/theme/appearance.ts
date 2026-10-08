@@ -72,6 +72,11 @@ export function readCached(storage?: Storage): Appearance {
   }
 }
 
+/** Оформление из события оболочки: та же форма, что у кеша; мусор — умолчания. */
+export function appearanceFromEvent(payload: unknown): Appearance {
+  return isRecord(payload) ? fromFields(payload, "auroraStyle") : DEFAULT_APPEARANCE;
+}
+
 export function writeCached(a: Appearance, storage?: Storage): void {
   try {
     (storage ?? globalThis.localStorage)?.setItem(CACHE_KEY, JSON.stringify(a));

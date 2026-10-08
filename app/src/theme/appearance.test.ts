@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  CACHE_KEY, DEFAULT_APPEARANCE, appearanceFromSettings, appearanceToSettings, applyAppearance,
+  CACHE_KEY, DEFAULT_APPEARANCE, appearanceFromEvent, appearanceFromSettings, appearanceToSettings, applyAppearance,
   readCached, resolveTheme, writeCached,
 } from "./appearance";
 
@@ -122,4 +122,10 @@ test.each(PARITY_CASES)("ранний старт совпадает с readCache
     restore();
     clearAttrs(root);
   }
+});
+
+test("событие оболочки разбирается как кеш", () => {
+  expect(appearanceFromEvent({ theme: "light", aurora: "blue", auroraStyle: "waves", motion: false }))
+    .toEqual({ theme: "light", aurora: "blue", auroraStyle: "waves", motion: false });
+  expect(appearanceFromEvent("мусор")).toEqual(DEFAULT_APPEARANCE);
 });

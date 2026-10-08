@@ -12,6 +12,7 @@
 
 mod api;
 mod app_icon;
+mod appearance;
 mod autostart;
 mod close_guard;
 mod engine;
@@ -173,6 +174,7 @@ fn main() {
             updater::install_update,
             updater::cancel_update,
             tray::set_settings_dirty,
+            appearance::set_appearance,
             close_guard::settings_close_ack,
             close_guard::settings_close_stay,
             close_guard::settings_close_go,

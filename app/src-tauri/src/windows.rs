@@ -92,14 +92,16 @@ pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&st
         }
         return;
     }
+    let theme = crate::appearance::startup_theme();
     let built = WebviewWindowBuilder::new(
         app,
         "main",
         WebviewUrl::App(main_url(recording.as_deref(), section).into()),
     )
     .title("Meet")
-    // Окно тёмное: и системная рамка тёмная, без белой полосы при светлой теме Windows.
-    .theme(Some(tauri::Theme::Dark))
+    // Рамка — в тему окна («Оформление»): у «Системной» — как в Windows.
+    .theme(theme)
+    .background_color(crate::appearance::canvas(theme))
     .inner_size(1180.0, 760.0)
     .min_inner_size(820.0, 520.0)
     .center()
@@ -934,7 +936,9 @@ mod tests {
         )
         .is_ok()
         {
-            assert!(material_allowed(&root.join("link.pdf"), &[root.clone()]).is_none());
+            assert!(
+                material_allowed(&root.join("link.pdf"), std::slice::from_ref(&root)).is_none()
+            );
         }
         // Junction на папку снаружи создаётся без прав — путь через неё тоже вне корня.
         let junction = root.join("jn");

@@ -1,5 +1,7 @@
 /** Обёртки над командами оболочки Tauri; в браузере (dev) — мягкие запасные пути. */
 
+import { type Appearance, appearanceFromEvent } from "../theme/appearance";
+
 export const inTauri = (): boolean =>
   typeof window !== "undefined" &&
   (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== undefined;
@@ -505,4 +507,18 @@ export async function trayPanelHide(): Promise<void> {
 export async function trayPanelOpen(target: { recording?: string; section?: string } = {}): Promise<void> {
   if (!inTauri()) return;
   await invoke<void>("tray_panel_open", { recording: target.recording ?? null, section: target.section ?? null });
+}
+
+// --- оформление (appearance.rs) ---------------------------------------------
+
+/** Сообщить оболочке новое оформление: рамка главного окна и остальные окна. */
+export async function shareAppearance(a: Appearance): Promise<void> {
+  if (inTauri()) await invoke<void>("set_appearance", { appearance: a }).catch(() => {});
+}
+
+/** Другое окно сменило оформление (событие оболочки `appearance`). */
+export async function onAppearance(cb: (a: Appearance) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<unknown>("appearance", (e) => cb(appearanceFromEvent(e.payload)));
 }
