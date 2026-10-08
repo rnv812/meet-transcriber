@@ -102,6 +102,108 @@ test("запасные значения покрывают кнопки с color
   }
 });
 
+/*
+ * Переменные палитр на color-mix(): без него (macOS 13) var() такой переменной
+ * недействителен там, где она подставлена, — фон прозрачный (наведение главной
+ * кнопки, ::selection, --accent-soft окна). В @supports not у aurora-fallbacks.css
+ * каждая из них получает сплошное значение — кроме перечисленных здесь.
+ */
+const MIX_EXEMPT = new Map<string, string>([
+  // Только свечение в списке теней (`box-shadow: inset …, var(--aurora-edge-glow)`):
+  // `none` в середине списка недопустим; у пользователей переменной (.btn--aurora)
+  // запасные правила сами снимают тень.
+  ["--aurora-edge-glow", "свечение: тень .btn--aurora снята запасным правилом"],
+]);
+
+const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** Объявления `--имя: значение` с color-mix() в значении: имя → селекторы правил. */
+function mixedTokens(css: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const decl of (m[2] ?? "").split(";")) {
+      const d = /^\s*(--[\w-]+)\s*:([\s\S]*)$/.exec(decl);
+      if (!d || !d[2]!.includes("color-mix(")) continue;
+      out.set(d[1]!, [...(out.get(d[1]!) ?? []), (m[1] ?? "").trim()]);
+    }
+  }
+  return out;
+}
+
+/** Содержимое блока `@supports not (color: color-mix(…))` запасных значений. */
+function fallbackBlock(css: string): string {
+  const head = "@supports not (color: color-mix(in oklab, red, blue))";
+  const text = stripComments(css);
+  const start = text.indexOf("{", text.indexOf(head) + head.length);
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) return text.slice(start + 1, i);
+  }
+  return "";
+}
+
+/** Специфичность одной части селектора: [id, класс/атрибут/псевдокласс, элемент]. */
+function specificity(sel: string): [number, number, number] {
+  const s = sel.replace(/::[\w-]+/g, "");
+  const ids = (s.match(/#[\w-]+/g) ?? []).length;
+  const mid = (s.match(/\.[\w-]+|\[[^\]]*\]|:[\w-]+/g) ?? []).length;
+  const el = (s.match(/(?:^|[\s>+~])[a-z][\w-]*/g) ?? []).length;
+  return [ids, mid, el];
+}
+const notWeaker = (a: number[], b: number[]) => {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i]! > b[i]!;
+  return true;
+};
+
+/**
+ * Что не перекрыто: переменная без запасного значения или селектор палитры,
+ * которого запасное правило не перебивает (часть того же вида — с потомком или
+ * без — и не слабее; файл запасных значений подключён позже палитр).
+ */
+function mixGaps(palettes: string, fallbacks: string): string[] {
+  const block = fallbackBlock(fallbacks);
+  const own = new Map<string, string[]>();
+  for (const m of block.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const name of declared(m[2] ?? "")) {
+      own.set(name!, [...(own.get(name!) ?? []), ...(m[1] ?? "").split(",").map((p) => p.trim())]);
+    }
+  }
+  const gaps: string[] = [];
+  for (const [name, selectors] of mixedTokens(palettes)) {
+    if (MIX_EXEMPT.has(name)) continue;
+    const parts = own.get(name);
+    if (!parts) { gaps.push(name); continue; }
+    for (const p of selectors.flatMap((s) => s.split(",").map((x) => x.trim()))) {
+      const nested = /\S\s+\S/.test(p);
+      const beaten = parts.some((f) => /\S\s+\S/.test(f) === nested && notWeaker(specificity(f), specificity(p)));
+      if (!beaten) gaps.push(`${name} @ ${p}`);
+    }
+  }
+  return gaps;
+}
+
+test("разбор запасных переменных: пропуск и слабый селектор находит", () => {
+  const pal = ":root, [data-aurora] { --a: color-mix(in oklab, red, blue); --b: red }\n[data-theme='light'] [data-aurora='x'] { --a: color-mix(in oklab, red, blue) }";
+  expect(mixGaps(pal, "/* */")).toEqual(["--a"]);
+  const weak = "@supports not (color: color-mix(in oklab, red, blue)) { :root, [data-aurora], [data-theme] [data-aurora] { --a: red } }";
+  expect(mixGaps(pal, weak)).toEqual([]);
+  const missing = "@supports not (color: color-mix(in oklab, red, blue)) { :root, [data-aurora] { --a: red } }";
+  expect(mixGaps(pal, missing)).toEqual(["--a @ [data-theme='light'] [data-aurora='x']"]);
+  expect(specificity("html[data-theme][data-aurora]")).toEqual([0, 2, 1]);
+  expect(specificity(":root")).toEqual([0, 1, 0]);
+});
+
+test("каждая переменная палитр на color-mix() получает сплошное значение без color-mix()", () => {
+  const palettes = read("aurora", "palettes.css");
+  // Ожидаемые: без них главная кнопка при наведении и выделение текста прозрачны.
+  const mixed = mixedTokens(palettes);
+  for (const name of ["--accent-strong-hover", "--accent-soft", "--selection", "--accent-hover", "--accent-press", "--mark-bg", "--scrim-tint"]) {
+    expect(mixed.has(name), name).toBe(true);
+  }
+  expect(mixGaps(palettes, read("aurora-fallbacks.css"))).toEqual([]);
+});
+
 test("запасные значения покрывают фон под слоями", () => {
   const css = read("aurora-fallbacks.css");
   expect(css).toContain("dialog::backdrop");

@@ -1,8 +1,33 @@
 /* Запасные значения для WebKit без color-mix() (macOS 13): скопированные
    компоненты Atlas Aurora строят часть цветов через color-mix(), и без него
    такое значение не вычисляется. Здесь — сплошные цвета из токенов. Этап 2:
-   кнопки (Task 3), фон под диалогом и слоями (Task 5). */
+   переменные палитр, кнопки (Task 3), фон под диалогом и слоями (Task 5). */
 @supports not (color: color-mix(in oklab, red, blue)) {
+  /* Переменные палитр (palettes.css) на color-mix(): var() такой переменной
+     недействителен — фон прозрачный (наведение главной кнопки, ::selection,
+     --accent-soft окна). Сплошные значения из токенов той же палитры.
+     Селекторы не слабее селекторов палитр, в том числе с потомком
+     ([data-theme='light'] [data-aurora='x']); файл подключён после палитр
+     (theme/aurora.test.ts). Свечение кнопки ИИ (--aurora-edge-glow) не
+     заменяется: её тень снята ниже. */
+  :root, [data-aurora][data-aurora], html[data-theme][data-aurora], [data-theme] [data-aurora][data-aurora] {
+    --accent-strong-hover: var(--accent-strong);
+    --accent-hover: var(--accent);
+    --accent-press: var(--accent);
+    --accent-soft: var(--surface-3);
+    --selection: var(--surface-3);
+    --mark-bg: var(--surface-3);
+    --scrim-tint: oklch(8% 0 0);
+    --activity-1: var(--surface-3);
+    --activity-2: var(--wave-3);
+    --activity-3: var(--data-1);
+    /* Сцены сияния — картинки, чтобы оставаться слоем фона в любом месте списка. */
+    --aurora: linear-gradient(var(--wave-1), var(--wave-1));
+    --aurora-blobs: linear-gradient(var(--wave-1), var(--wave-1));
+    --aurora-glow: radial-gradient(60% 70% at 90% 105%, var(--wave-4), transparent 70%);
+    --aurora-glow-blobs: radial-gradient(60% 70% at 90% 105%, var(--wave-4), transparent 70%);
+    --aurora-scrim: linear-gradient(transparent, transparent);
+  }
   /* Главная и ИИ-кнопки: градиент на color-mix() не вычисляется — сплошная заливка. */
   .btn--primary { background: var(--accent-strong); box-shadow: none; }
   .btn--primary:hover { background: var(--accent-strong-hover); }
