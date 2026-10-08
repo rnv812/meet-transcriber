@@ -37,6 +37,11 @@ export function AsrSection({ draft, saved, set, endpoint, onOpenEngine }: {
   const v = (k: string) => draft.asr?.[k];
   return (
     <>
+      <SettingsCard title="Когда расшифровывать">
+        <Switch label="Расшифровывать сразу после записи" value={Boolean(draft.recording?.auto_transcribe)}
+          hint="Включено — расшифровка встаёт в очередь, как только запись остановлена; выключено — по кнопке «Расшифровать» в карточке"
+          onChange={(x) => set("recording", "auto_transcribe", x)} />
+      </SettingsCard>
       <SettingsCard title="Устройство и модель">
         <AsrChoice draft={draft} saved={saved} set={set} endpoint={endpoint} help={<AsrModelTip />}
           onOpenEngine={onOpenEngine} />

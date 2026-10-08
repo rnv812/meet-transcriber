@@ -104,7 +104,10 @@ const NO_DRAFT: SectionId[] = ["appearance", "diagnostics", "about"];
 export function sectionsOf(group: string, key: string): SectionId[] {
   switch (group) {
     case "recording":
-      return key === "mic_device" || key === "output_device" ? ["sound"] : ["app"];
+      if (key === "mic_device" || key === "output_device") return ["sound"];
+      // 0.5: имя — в «Спикерах», расшифровка сразу после записи — в «Распознавании».
+      if (key === "speaker_name") return ["speakers"];
+      return key === "auto_transcribe" ? ["asr"] : ["app"];
     case "ui":
       // Оформление пишется сразу, мимо черновика; в «Приложении» — уведомления.
       return ["theme", "aurora", "aurora_style", "motion"].includes(key) ? [] : ["app"];

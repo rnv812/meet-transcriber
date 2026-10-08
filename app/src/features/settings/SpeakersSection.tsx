@@ -1,7 +1,8 @@
 /**
  * «Спикеры» (0.4): всё про разделение на спикеров и узнавание голосов —
  * токен Hugging Face (прежде в «Движке и моделях»), «Мой голос» (прежде в
- * «Звуке»), порог узнавания и одновременная речь (прежде в «Распознавании»).
+ * «Звуке»), порог узнавания и одновременная речь (прежде в «Распознавании»);
+ * 0.5 — и «Ваше имя в расшифровке» (прежде в «Приложении»): подпись ваших реплик.
  *
  * Токен и образец голоса — мгновенные действия (свои запросы резиденту), порог
  * и одновременная речь — черновик `asr`. Образец пишется с микрофона из
@@ -10,7 +11,7 @@
 
 import type { Endpoint } from "../../lib/api";
 import { Slider } from "../../ui/Slider";
-import { SLIDER_WIDTH } from "./fields";
+import { SLIDER_WIDTH, TextRow } from "./fields";
 import { HfTokenRow } from "./HfTokenRow";
 import { OwnerVoiceRow } from "./OwnerVoice";
 import { Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
@@ -28,6 +29,9 @@ export function SpeakersSection({ draft, set, endpoint }: { draft: Raw; set: Set
           value={Boolean(v("overlap"))} onChange={(x) => set("asr", "overlap", x)} />
       </SettingsCard>
       <SettingsCard title="Узнавание голосов">
+        <TextRow id="speaker-name" label="Ваше имя в расшифровке" short
+          hint="Так подписываются реплики, записанные с вашего микрофона"
+          value={String(draft.recording?.speaker_name ?? "Вы")} onChange={(x) => set("recording", "speaker_name", x)} />
         <OwnerVoiceRow endpoint={endpoint} device={pickedName(draft.recording?.mic_device)} />
         <Row label="Порог узнавания голоса" htmlFor="asr-voice-threshold" help={<VoiceThresholdTip />}
           hint="Насколько голос должен быть похож на образец из базы голосов, чтобы спикер получил имя">

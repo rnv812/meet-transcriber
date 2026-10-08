@@ -613,7 +613,7 @@ test("«Движок и модели»: движок без GigaAM — уста�
 
 test("колонка по центру: шапка с «Сохранить» — внутри той же колонки, и в «О программе» тоже", async () => {
   const { container } = render(<SettingsPane endpoint={ep} recordingsDir={null} />);
-  await screen.findByLabelText("Ваше имя в расшифровке");
+  await screen.findByRole("radiogroup", { name: "Уведомления" });
   const column = container.querySelector(".settings__column")!;
   expect(column.querySelector(".settings__head")).toContainElement(screen.getByRole("button", { name: "Сохранить" }));
   expect(column.querySelector(".settings__content")).not.toBeNull();
@@ -624,21 +624,21 @@ test("колонка по центру: шапка с «Сохранить» —
 });
 
 test("правка — точка у своего раздела в меню и строка «Есть несохранённые изменения»; в другом разделе — где именно", async () => {
-  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="speakers" />);
   const name = await screen.findByLabelText("Ваше имя в расшифровке");
   const menuItem = (title: string) => screen.getByRole("button", { name: title });
-  expect(menuItem("Приложение").querySelector("[data-dirty]")).toBeNull();
+  expect(menuItem("Спикеры").querySelector("[data-dirty]")).toBeNull();
   expect(screen.getByRole("button", { name: "Сбросить…" })).toBeDisabled();
   await userEvent.type(name, "а");
-  expect(menuItem("Приложение").querySelector("[data-dirty]")).not.toBeNull();
+  expect(menuItem("Спикеры").querySelector("[data-dirty]")).not.toBeNull();
   // Подсказка — облачком Aurora (ui/Tip), не системным title.
-  expect(menuItem("Приложение")).not.toHaveAttribute("title");
+  expect(menuItem("Спикеры")).not.toHaveAttribute("title");
   // Экранному диктору — описанием кнопки, имя раздела то же.
-  expect(menuItem("Приложение")).toHaveAccessibleDescription("Есть несохранённые изменения");
+  expect(menuItem("Спикеры")).toHaveAccessibleDescription("Есть несохранённые изменения");
   expect(menuItem("Распознавание").querySelector("[data-dirty]")).toBeNull();
   expect(document.querySelector(".settings__state")).toHaveTextContent("Есть несохранённые изменения");
   await userEvent.click(menuItem("Распознавание"));
-  expect(screen.getByText("Не сохранено: Приложение")).toBeInTheDocument();
+  expect(screen.getByText("Не сохранено: Спикеры")).toBeInTheDocument();
   // Движок и модель выбираются только в «Распознавании» — и точка только там.
   await userEvent.click(within(screen.getByRole("group", { name: "Видеокарта" })).getByRole("radio", { name: "GigaAM" }));
   expect(menuItem("Распознавание").querySelector("[data-dirty]")).not.toBeNull();
@@ -646,13 +646,13 @@ test("правка — точка у своего раздела в меню и 
 });
 
 test("«Сбросить…» спрашивает и только потом отменяет правки всех разделов", async () => {
-  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="speakers" />);
   const name = await screen.findByLabelText("Ваше имя в расшифровке");
   await userEvent.type(name, "а");
   const loads = vi.mocked(api.getSettings).mock.calls.length;
   await userEvent.click(screen.getByRole("button", { name: "Сбросить…" }));
   const ask = screen.getByRole("alertdialog", { name: "Отменить несохранённые изменения?" });
-  expect(ask).toHaveTextContent("«Приложение»");
+  expect(ask).toHaveTextContent("«Спикеры»");
   expect(within(ask).getByRole("button", { name: "Оставить правки" })).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(name).toHaveValue("Выа");
@@ -663,18 +663,18 @@ test("«Сбросить…» спрашивает и только потом о
 });
 
 test("после сохранения — «Сохранено.» в той же строке, точки в меню нет", async () => {
-  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="speakers" />);
   await userEvent.type(await screen.findByLabelText("Ваше имя в расшифровке"), "а");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   expect(await screen.findByText("Сохранено.")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Приложение" }).querySelector("[data-dirty]")).toBeNull();
+  expect(screen.getByRole("button", { name: "Спикеры" }).querySelector("[data-dirty]")).toBeNull();
 });
 
 test("guardRef: список разделов с правками и save для вопроса при уходе", async () => {
   const guard = { current: null } as { current: import("./SettingsPane").SettingsGuard | null };
-  render(<SettingsPane endpoint={ep} recordingsDir={null} guardRef={guard} />);
+  render(<SettingsPane endpoint={ep} recordingsDir={null} guardRef={guard} initial="speakers" />);
   await userEvent.type(await screen.findByLabelText("Ваше имя в расшифровке"), "а");
-  expect(guard.current?.dirty).toEqual(["Приложение"]);
+  expect(guard.current?.dirty).toEqual(["Спикеры"]);
   expect(guard.current?.canSave).toBe(true);
   expect(await guard.current!.save()).toBe(true);
   expect(api.patchSettings).toHaveBeenCalledWith(ep, { recording: { speaker_name: "Выа" } });
@@ -753,7 +753,6 @@ test("без initial открывается «Приложение»; загол
   // Плотность compact (28 px кнопки) — только в таблицах; на теле настроек её нет (доводка 0.4, C1).
   expect(head.closest("[data-density='compact']")).toBeNull();
   expect(screen.getByRole("button", { name: "Сохранить" })).toHaveClass("btn--sm");
-  expect(screen.getByLabelText("Ваше имя в расшифровке")).toHaveClass("field", "field--sm");
   // Над поиском — заголовок «Настройки», как в макете.
   expect(within(screen.getByRole("navigation", { name: "Разделы настроек" })).getByText("Настройки")).toHaveClass("type-h3");
 });
@@ -836,11 +835,11 @@ test("«Словарь»: термины и исправления для буд
   expect(await savedPatch()).toEqual({ asr: { replacements: [{ from: "кафка", to: "Kafka" }] } });
 });
 
-test("«Приложение»: уведомления, имя, расшифровка сразу, папка записей и мастер первого запуска", async () => {
+test("«Приложение»: уведомления, папка записей и мастер первого запуска; имя — в «Спикерах», расшифровка сразу — в «Распознавании» (0.5)", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir="D:/rec" onRunWizard={vi.fn()} />);
-  expect(await screen.findByLabelText("Ваше имя в расшифровке")).toBeInTheDocument();
-  expect(screen.getByRole("radiogroup", { name: "Уведомления" })).toBeInTheDocument();
-  expect(screen.getByRole("switch", { name: "Расшифровывать сразу после записи" })).toBeInTheDocument();
+  expect(await screen.findByRole("radiogroup", { name: "Уведомления" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Ваше имя в расшифровке")).toBeNull();
+  expect(screen.queryByRole("switch", { name: "Расшифровывать сразу после записи" })).toBeNull();
   expect(screen.getByText("D:/rec")).toBeInTheDocument();
   expect(screen.getByText("Мастер первого запуска")).toBeInTheDocument();
 });
@@ -915,7 +914,7 @@ test("меню помещается в окно: пункты по 32 px; у к�
 });
 
 test.each([
-  ["recording", "speaker_name", ["app"]], ["recording", "auto_transcribe", ["app"]], ["recording", "mic_device", ["sound"]],
+  ["recording", "speaker_name", ["speakers"]], ["recording", "auto_transcribe", ["asr"]], ["recording", "mic_device", ["sound"]],
   ["ui", "notifications", ["app"]], ["ui", "theme", []], ["auto_record", "grace_minutes", ["auto"]],
   ["asr", "device", ["asr"]], ["asr", "align", ["asr"]], ["asr", "language", ["asr"]],
   ["asr", "voice_threshold", ["speakers"]], ["asr", "overlap", ["speakers"]], ["asr", "replacements", ["dictionary"]],

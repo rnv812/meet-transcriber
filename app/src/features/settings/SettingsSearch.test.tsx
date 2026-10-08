@@ -64,7 +64,7 @@ afterEach(() => {
 
 const open = async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
-  await screen.findByLabelText("Ваше имя в расшифровке");
+  await screen.findByRole("radiogroup", { name: "Уведомления" });
   return screen.getByRole("combobox", { name: "Поиск по настройкам" });
 };
 const options = () => within(screen.getByRole("listbox", { name: "Найденные настройки" })).getAllByRole("option");

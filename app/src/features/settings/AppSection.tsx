@@ -1,21 +1,20 @@
 /**
- * «Приложение» (0.4): запуск вместе с системой, уведомления, имя в
- * расшифровке, расшифровка сразу после записи, папка записей (прежний раздел
- * «Запись») и мастер первого запуска (прежде — в «Движке и моделях»).
+ * «Приложение» (0.4): запуск вместе с системой, уведомления, папка записей
+ * (прежний раздел «Запись») и мастер первого запуска (прежде — в «Движке и
+ * моделях»). 0.5: имя в расшифровке — в «Спикерах», расшифровка сразу после
+ * записи — в «Распознавании».
  */
 
 import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { AutostartRow } from "./AutostartRow";
-import { TextRow } from "./fields";
-import { PathText, Row, Segmented, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { PathText, Row, Segmented, SettingsCard, type Raw, type SetFn } from "./Section";
 
 export function AppSection({ draft, set, recordingsDir, onRunWizard }: {
   draft: Raw; set: SetFn; recordingsDir: string | null;
   /** «Запустить мастер» (без него строки мастера нет). */
   onRunWizard?: () => void;
 }) {
-  const v = (k: string) => draft.recording?.[k];
   return (
     <>
       <SettingsCard title="Запуск и уведомления">
@@ -30,12 +29,6 @@ export function AppSection({ draft, set, recordingsDir, onRunWizard }: {
           onChange={(x) => set("ui", "notifications", x)} />
       </SettingsCard>
       <SettingsCard title="Записи">
-        <TextRow id="speaker-name" label="Ваше имя в расшифровке" short
-          hint="Так подписываются реплики, записанные с вашего микрофона"
-          value={String(v("speaker_name") ?? "Вы")} onChange={(x) => set("recording", "speaker_name", x)} />
-        <Switch label="Расшифровывать сразу после записи" value={Boolean(v("auto_transcribe"))}
-          hint="Включено — расшифровка встаёт в очередь, как только запись остановлена; выключено — по кнопке «Расшифровать» в карточке"
-          onChange={(x) => set("recording", "auto_transcribe", x)} />
         <Row label="Папка записей" hint="Здесь хранятся записи встреч. Путь задаётся в файле настроек">
           {recordingsDir ? (
             <span className="folder">

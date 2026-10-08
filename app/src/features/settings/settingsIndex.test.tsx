@@ -96,7 +96,7 @@ const flush = () => act(() => new Promise((r) => setTimeout(r, 30)));
 async function collect(): Promise<Map<SectionId, Set<string>>> {
   const out = new Map<SectionId, Set<string>>();
   const view = render(<SettingsPane endpoint={ep} recordingsDir="D:\\rec" onRunWizard={() => {}} />);
-  await screen.findByRole("switch", { name: "Расшифровывать сразу после записи" });
+  await screen.findByRole("radiogroup", { name: "Уведомления" });
   for (const { id, title } of MENU) {
     await userEvent.click(screen.getByRole("button", { name: title }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(title));
