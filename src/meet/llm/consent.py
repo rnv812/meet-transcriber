@@ -1040,14 +1040,27 @@ def _commands(tokens: list[str]) -> list[list[str]]:
     k = 0
     while k < len(tokens):
         t = tokens[k]
+        # Подстановка процесса `<(…)` / `>(…)`: команда внутри выполняется —
+        # граница, а не перенаправление в файл (иначе `rm` внутри не увидим).
+        if t in ("<(", ">(", "<", ">") and k + 1 < len(tokens) and tokens[k + 1] == "(":
+            out.append([])
+            k += 2
+            continue
+        if t in ("<(", ">("):
+            out.append([])
+            k += 1
+            continue
         if t in _SEPARATORS or t == "$" or set(t) <= set(";&|(){}"):
             out.append([])
             k += 1
             continue
         if _REDIRECTS.match(t) or set(t) <= set("<>"):
-            # Перенаправление и его цель; разделитель целью не бывает (`# >↵rm …`).
+            # Перенаправление и его цель; целью не бывает разделитель (`# >↵rm …`)
+            # и открытие подстановки процесса (`< <(rm …)` — её разберём отдельно).
             nxt = tokens[k + 1] if k + 1 < len(tokens) else ""
-            k += 1 if not nxt or nxt in _SEPARATORS or set(nxt) <= set(";&|(){}") else 2
+            swallow = nxt and nxt not in ("<(", ">(", "(") and nxt not in _SEPARATORS \
+                and not set(nxt) <= set(";&|(){}")
+            k += 2 if swallow else 1
             continue
         if t.startswith("`"):
             out.append([])

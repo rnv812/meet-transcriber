@@ -248,3 +248,38 @@ def test_working_folders_on_a_network_share_still_work_without_touching_the_netw
     assert gate.decide("Read", {"file_path": r"\\evil\kb\a.md"}).why == "sensitive"
     gate.begin(USER)
     assert gate.decide("Write", {"file_path": r"\\nas\kb\new.md", "content": "x"}).outcome == consent.AUTO
+
+
+# --- состязательный проход: скрытое удаление -------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "cat <(rm -rf {out})", "diff <(rm -rf {out}) {rec}/a", "cat < <(rm -rf {out})",
+    "paste <(echo x) <(rm -rf {out})", "comm <(sort {rec}/a) >(rm -rf {out})",
+])
+def test_process_substitution_delete_is_seen(env, command):
+    """`<(rm …)` и `>(rm …)` выполняют команду внутри — это удаление, не чтение."""
+    cmd = _cmd(env, command)
+    assert consent.read_plan("Bash", cmd) is None, cmd
+    assert consent.shell_risk("Bash", cmd) == consent.DELETE, cmd
+    d = _decide(env, USER, "Bash", command)
+    assert d.outcome == ASK and d.why == consent.DELETE, d
+
+
+@pytest.mark.parametrize("command", [
+    "diff <(sort {rec}/a) <(sort {rec}/b)", "cat <(head -n 5 {rec}/a)",
+])
+def test_harmless_process_substitution_is_not_a_delete(env, command):
+    assert consent.shell_risk("Bash", _cmd(env, command)) == ""
+
+
+def test_writers_touching_a_sensitive_path_are_denied_even_in_auto(env):
+    """Команды, которые сами уходят автомоду (`cp`, `tee`, `Set-Content`,
+    `Out-File`, `sed -i`…), всё равно отказ, если задевают закрытый путь."""
+    for tool, command in [
+        ("Bash", "cat {rec}/a > {home}/.ssh/authorized_keys"), ("Bash", "cp {rec}/a {home}/.ssh/x"),
+        ("Bash", "cat {rec}/a | tee {home}/.ssh/x"), ("Bash", "sed -i 's/a/b/' {home}/.ssh/x"),
+        ("PowerShell", "Set-Content {home}/.ssh/x y"), ("PowerShell", "gc {rec}/a | Out-File {home}/.ssh/x"),
+        ("PowerShell", "Copy-Item {rec}/a -Destination {home}/.ssh/x"),
+    ]:
+        d = _decide(env, USER, tool, command)
+        assert d.outcome == DENY and d.why == "sensitive", (command, d)
