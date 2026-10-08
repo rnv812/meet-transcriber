@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
-  AGENT_MODE_HINTS, AGENT_MODE_LABEL, FREEDOM_FILES_NOTE, FREEDOM_LABEL, FREEDOM_OFF_HINT, KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL,
+  AGENT_MODE_HINTS, AGENT_MODE_LABEL, FREEDOM_ACT_NOTE, FREEDOM_FILES_NOTE, FREEDOM_LABEL, FREEDOM_OFF_HINT, KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL,
   VISION_NOTE,
 } from "./ParticipantRows";
 import * as api from "../../lib/api";
@@ -214,9 +214,11 @@ test("0.4: «Действия ассистента» — автомод по у�
     assist: expect.objectContaining({ agent_mode: "confirm" }) }));
 });
 
-test("расширенные возможности у Codex: только чтение файлов по просьбе, MCP и веб — только с Claude Code", async () => {
+test("расширенные возможности у Codex: в автомоде правит и выполняет по просьбе; с подтверждением — только чтение", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue(info("codex"));
   open();
   const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
+  await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_ACT_NOTE));
+  await userEvent.click(screen.getByRole("radio", { name: /Спрашивать каждое/ }));
   await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_FILES_NOTE));
 });

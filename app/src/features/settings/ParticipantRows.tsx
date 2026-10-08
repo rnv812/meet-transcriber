@@ -84,7 +84,9 @@ export const AGENT_MODE_HINTS: Record<AgentMode, string> = {
     + "наружу — только с вашего разрешения. Ход по одной речи встречи ничего не меняет",
   confirm: "Каждое действие — карточкой «Разрешить» в чате, как в 0.3.7. Ход по одной речи встречи ничего не меняет",
 };
+/** Codex/OpenCode по уровню «Действия ассистента»: в автомоде действуют по просьбе, с подтверждением — только читают. */
 export const FREEDOM_FILES_NOTE = "Codex/OpenCode: только чтение файлов по вашей просьбе; MCP, веб и действия — только с Claude Code";
+export const FREEDOM_ACT_NOTE = "Codex/OpenCode: по вашей просьбе правят рабочие папки и выполняют команды; MCP — только с Claude Code";
 /** Закрытые папки и чувствительные пути у моделей без проверки каждого вызова. */
 export const FREEDOM_CLOSED_NOTE: Record<string, string> = {
   codex: "У Codex закрытые папки и ключи с паролями закрыты только правилом в инструкции — песочница читает весь диск",
@@ -141,8 +143,9 @@ function FreedomTip() {
         Собственные хуки Claude Code не запускаются; ваши CLAUDE.md, навыки и плагины ассистент видит.
       </TipLine>
       <TipLine>
-        Codex и OpenCode остановить вызов до вашего решения не дают — им только чтение файлов по вашей просьбе
-        (без просьбы чтение вне встречи запрещено им лишь инструкцией); MCP, веб и действия — только с Claude Code.
+        Codex и OpenCode остановить вызов до вашего решения не дают: по вашей просьбе они правят рабочие папки и
+        выполняют команды сами (удаление и отправку наружу у Codex удерживают только инструкция и его проверка,
+        у OpenCode — правила разрешений); без просьбы — только чтение. MCP — только с Claude Code.
         У Codex и закрытые папки, и ключи с паролями закрыты только правилом в инструкции: его песочница читает
         весь диск.
       </TipLine>
@@ -256,7 +259,9 @@ export function ParticipantRows({ draft, set, provider }: {
           <Switch label={FREEDOM_LABEL} help={<FreedomTip />} value={freedom}
             onChange={(v) => set("assist", "agent_freedom", v)}
             hint={freedom
-              ? (filesOnly && provider ? `${FREEDOM_FILES_NOTE}. ${FREEDOM_CLOSED_NOTE[provider]}` : FREEDOM_ON_HINT)
+              ? (filesOnly && provider
+                ? `${draft.assist?.agent_mode === "confirm" ? FREEDOM_FILES_NOTE : FREEDOM_ACT_NOTE}. ${FREEDOM_CLOSED_NOTE[provider]}`
+                : FREEDOM_ON_HINT)
               : FREEDOM_OFF_HINT} />
           {/* Как действует по просьбе (`assist.agent_mode`, 0.4) — только с расширенными возможностями. */}
           {freedom && (
