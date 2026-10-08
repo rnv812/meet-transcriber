@@ -329,7 +329,7 @@ function ClassicWorkspace({ live, view, onAsk, disabled = false, onAskHint, plac
   const undoBar = dismissal.hidden && (
     <div className="live-undo" role="status">
       <span className="live-undo__text">Подсказка скрыта</span>
-      <Button ref={undoBtn} size="sm" variant="link" onClick={dismissal.undo}>Вернуть</Button>
+      <Button ref={undoBtn} size="xs" variant="link" onClick={dismissal.undo}>Вернуть</Button>
     </div>
   );
 

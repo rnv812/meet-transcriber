@@ -13,10 +13,15 @@ function cssFiles(dir: string): string[] {
   );
 }
 
+/** Запасные значения для WebKit без color-mix(): по замыслу переопределяют блоки
+ *  скопированной дизайн-системы и своих блоков не объявляют (проверка ниже). */
+const FALLBACKS = join("theme", "aurora-fallbacks.css");
+
 test("a CSS block class is declared in one file only", () => {
   const src = join(process.cwd(), "src");
   const owners = new Map<string, Set<string>>();
   for (const file of cssFiles(src)) {
+    if (relative(src, file) === FALLBACKS) continue;
     const text = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     for (const m of text.matchAll(/(?:^|})\s*([^{}@]+)\{/g)) {
       for (const part of (m[1] ?? "").split(",")) {
@@ -30,6 +35,17 @@ test("a CSS block class is declared in one file only", () => {
   }
   const clashes = [...owners].filter(([, files]) => files.size > 1).map(([name, files]) => `${name}: ${[...files].join(", ")}`);
   expect(clashes).toEqual([]);
+});
+
+test("запасные значения переопределяют только блоки скопированной дизайн-системы", () => {
+  const src = join(process.cwd(), "src");
+  const vendored = new Set(cssFiles(join(src, "theme", "aurora"))
+    .flatMap((f) => [...readFileSync(f, "utf8").matchAll(/\.([A-Za-z][\w-]*)/g)].map((m) => m[1]!)));
+  const css = readFileSync(join(src, FALLBACKS), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  // Первый класс каждого селектора правила (после «{», «}» или «,»).
+  const roots = [...css.matchAll(/(?:^|[{},])\s*\.([A-Za-z][\w-]*)/g)].map((m) => m[1]!);
+  expect(roots.length).toBeGreaterThan(0);
+  expect(roots.filter((name) => !vendored.has(name))).toEqual([]);
 });
 
 test("карточка человека в «Голосах» — колонка рядом с сеткой: не наезжает на неё и не выходит за край", () => {
@@ -62,4 +78,9 @@ test("«Фильтры»: измерение — и .cat-filter__list, но не
     .filter((sel) => sel.includes("cat-filter__list"));
   expect(selectors.length).toBeGreaterThan(0);
   expect(selectors.filter((sel) => sel !== ".cat-filter__list")).toEqual([]);
+});
+
+test("плотная кнопка (xs) — значок 14 px: правило окна сильнее «.btn svg» дизайн-системы", () => {
+  const css = readFileSync(join(process.cwd(), "src", "ui", "button.css"), "utf8");
+  expect(css).toMatch(/\.btn\[data-density="compact"\] svg \{[^}]*width: var\(--icon-sm\);[^}]*height: var\(--icon-sm\)/);
 });

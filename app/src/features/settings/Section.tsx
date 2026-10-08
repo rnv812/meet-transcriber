@@ -44,11 +44,9 @@ export function Switch({ label, hint, help, value, onChange }: {
       <div className="srow__control">
         <button
           type="button" role="switch" aria-checked={value} aria-label={label}
-          className={`switch${value ? " switch--on" : ""}`}
+          className="switch"
           onClick={() => onChange(!value)}
-        >
-          <span className="switch__knob" />
-        </button>
+        />
       </div>
     </div>
   );
@@ -66,8 +64,8 @@ export function Radio<T extends string>({ label, hint, help, value, options, dis
     <Row label={label} hint={hint} help={help} disabled={disabled}>
       <div role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} className="radios">
         {options.map((o) => (
-          <label key={o.value} className="radios__item">
-            <input type="radio" name={name} checked={value === o.value} disabled={disabled}
+          <label key={o.value} className="check-row radios__item">
+            <input type="radio" className="rd" name={name} checked={value === o.value} disabled={disabled}
               onChange={() => onChange(o.value)} />
             {o.label}
           </label>

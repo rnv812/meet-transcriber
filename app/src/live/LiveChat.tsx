@@ -135,7 +135,7 @@ function CopyButton({ text }: { text: string }) {
     return () => clearTimeout(t);
   }, [copied]);
   return (
-    <IconButton icon={Copy} size="sm" label={copied ? "Скопировано" : "Копировать"} className="chat-msg__copy"
+    <IconButton icon={Copy} size="xs" label={copied ? "Скопировано" : "Копировать"} className="chat-msg__copy"
       onClick={() => {
         if (!navigator.clipboard) return;
         void navigator.clipboard.writeText(text).then(() => setCopied(true), () => {});
@@ -346,7 +346,7 @@ function Pinned({ m, chat, onTime, onShow, onHide, disabled }: {
     <section className="chat-pin" aria-label="Вопрос вам">
       <div className="chat-pin__head">
         <button type="button" className="chat-pin__title" onClick={onShow} title="Показать в ленте">Вопрос вам</button>
-        <IconButton icon={X} size="sm" label="Убрать из закреплённых" onClick={onHide} />
+        <IconButton icon={X} size="xs" label="Убрать из закреплённых" onClick={onHide} />
       </div>
       <Markdown source={m.text ?? ""} className="chat-pin__text" onTime={onTime} />
       <AgentButtons m={m} chat={chat} disabled={disabled} />

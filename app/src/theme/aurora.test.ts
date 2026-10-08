@@ -75,13 +75,13 @@ test("псевдонимы окна ссылаются только на объ�
   expect(missing).toEqual([]);
 });
 
-test("компоненты Aurora: base и aurora перенесены скриптом и подключены после палитр", () => {
-  for (const name of ["base", "aurora"]) {
+test("компоненты Aurora: base, aurora и controls перенесены скриптом и подключены после палитр", () => {
+  for (const name of ["base", "aurora", "controls"]) {
     const css = read("aurora", `${name}.css`);
     expect(css.split("\n")[0]).toMatch(new RegExp(`^/\\* Atlas Aurora v2\\.6 — ${name}: `));
   }
   const index = read("aurora", "index.css");
-  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "../aurora-fallbacks.css"]
+  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "../aurora-fallbacks.css"]
     .map((f) => index.indexOf(`"./${f}"`.replace("./../", "../")));
   expect(order.every((i) => i >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -93,6 +93,13 @@ test("запасные значения без color-mix(): файл окна, �
   // Запрос возможности допустим, само значение с color-mix() в правилах — нет.
   const rules = css.replace(/\/\*[\s\S]*?\*\//g, "").replace("@supports not (color: color-mix(in oklab, red, blue))", "");
   expect(rules).not.toMatch(/color-mix\(/);
+});
+
+test("запасные значения покрывают кнопки с color-mix()", () => {
+  const css = read("aurora-fallbacks.css");
+  for (const sel of [".btn--primary {", ".btn--primary:hover", ".btn--aurora", ".btn--tonal:hover", ".btn--deep:hover", ".btn--danger {"]) {
+    expect(css, sel).toContain(sel);
+  }
 });
 
 test("прозрачные окна (live, tray) сбрасывают фон body из «Базы» Aurora", () => {

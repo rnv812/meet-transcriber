@@ -82,14 +82,14 @@ export function MicSplitNote({ info, diarization, endpoint, onOpenSettings, onSh
           <span className="mic-note__line">
             <span>{quiet.action === "sound" ? `${quiet.text}. ${NUDGE_TEXT}` : quiet.text}</span>
             {quiet.action && quiet.button && onOpenSettings && (
-              <Button variant="link" size="sm" onClick={() => onOpenSettings(quiet.action!)}>{quiet.button}</Button>
+              <Button variant="link" size="xs" onClick={() => onOpenSettings(quiet.action!)}>{quiet.button}</Button>
             )}
           </span>
         )}
         {removed && (
           <span className="mic-note__line">
             <span>{(info?.dropped?.owner_leak ?? 0) > 0 ? "Убраны повторы" : "С микрофона убраны повторы"}: {removed}</span>
-            {onShowRemoved && <Button variant="link" size="sm" onClick={onShowRemoved}>Показать</Button>}
+            {onShowRemoved && <Button variant="link" size="xs" onClick={onShowRemoved}>Показать</Button>}
           </span>
         )}
       </div>

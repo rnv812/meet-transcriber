@@ -3,4 +3,11 @@
    такое значение не вычисляется. Здесь — сплошные цвета из токенов. Этап 2:
    кнопки (Task 3), фон под диалогом и слоями (Task 5). */
 @supports not (color: color-mix(in oklab, red, blue)) {
+  /* Главная и ИИ-кнопки: градиент на color-mix() не вычисляется — сплошная заливка. */
+  .btn--primary { background: var(--accent-strong); box-shadow: none; }
+  .btn--primary:hover { background: var(--accent-strong-hover); }
+  .btn--aurora { box-shadow: none; }
+  .btn--tonal:hover { background: var(--accent-soft); }
+  .btn--deep:hover { background: var(--surface-2); }
+  .btn--danger { border-color: var(--danger); }
 }

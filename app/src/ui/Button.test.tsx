@@ -1,19 +1,35 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { Trash2 } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import { Button } from "./Button";
 import { IconButton } from "./IconButton";
 import { Truncate } from "./Truncate";
 import { Disclosure } from "./Disclosure";
 import { Loading, StatusSlot } from "./Loading";
 
-test("variants and sizes map to classes; default is secondary", () => {
+test("варианты Button — классы Atlas Aurora", () => {
   const { rerender } = render(<Button>Обычная</Button>);
-  expect(screen.getByRole("button")).toHaveClass("btn");
-  expect(screen.getByRole("button").className).not.toMatch(/btn--/);
-  rerender(<Button variant="ghost" size="sm">Тихая</Button>);
-  expect(screen.getByRole("button")).toHaveClass("btn", "btn--ghost", "btn--sm");
+  const b = () => screen.getByRole("button");
+  expect(b()).toHaveClass("btn", "btn--outline", "btn--sm");
+  rerender(<Button variant="primary">Главная</Button>);
+  expect(b()).toHaveClass("btn--primary");
+  rerender(<Button variant="primary" flat>Главная</Button>);
+  expect(b()).toHaveClass("btn--flat");
+  rerender(<Button variant="aurora">ИИ</Button>);
+  expect(b()).toHaveClass("btn--aurora");
+  rerender(<Button variant="ghost" size="md">Призрак</Button>);
+  expect(b()).toHaveClass("btn--ghost");
+  expect(b()).not.toHaveClass("btn--sm");
+  rerender(<Button size="lg">Крупная</Button>);
+  expect(b()).toHaveClass("btn--lg");
   rerender(<Button variant="link">Ссылка</Button>);
-  expect(screen.getByRole("button")).toHaveClass("btn--link");
+  expect(b()).toHaveClass("btn--link");
+});
+
+test("размер xs — 28 px через плотный режим Aurora", () => {
+  render(<Button size="xs">Мелкая</Button>);
+  const b = screen.getByRole("button");
+  expect(b).toHaveClass("btn--sm");
+  expect(b).toHaveAttribute("data-density", "compact");
 });
 
 test("a promise from onClick makes the button busy at once, keeping its label for width", async () => {
@@ -42,11 +58,23 @@ test("busy keeps focus on the button (aria-disabled, not disabled)", () => {
   expect(button).toHaveAttribute("aria-disabled", "true");
 });
 
+test("кнопка-значок: имя, подсказка, нажатая, плотная", () => {
+  const { rerender } = render(<IconButton icon={X} label="Закрыть" />);
+  const b = () => screen.getByRole("button", { name: "Закрыть" });
+  expect(b()).toHaveClass("btn", "btn--icon", "btn--sm", "btn--ghost");
+  expect(b()).toHaveAttribute("title", "Закрыть");
+  rerender(<IconButton icon={X} label="Закрыть" pressed />);
+  expect(b()).toHaveAttribute("aria-pressed", "true");
+  rerender(<IconButton icon={X} label="Закрыть" size="xs" variant="danger" />);
+  expect(b()).toHaveAttribute("data-density", "compact");
+  expect(b()).toHaveClass("btn--ghost-danger");
+});
+
 test("icon button: label is the accessible name and the tooltip", () => {
-  render(<IconButton icon={Trash2} label="Удалить категорию" variant="danger" size="sm" />);
+  render(<IconButton icon={Trash2} label="Удалить категорию" variant="danger" size="xs" />);
   const button = screen.getByRole("button", { name: "Удалить категорию" });
   expect(button).toHaveAttribute("title", "Удалить категорию");
-  expect(button).toHaveClass("icon-btn", "icon-btn--danger", "icon-btn--sm");
+  expect(button).toHaveClass("btn", "btn--icon", "btn--ghost-danger");
   expect(button.querySelector("svg")).toHaveAttribute("width", "14");
 });
 

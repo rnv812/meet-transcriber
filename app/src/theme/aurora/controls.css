@@ -1,0 +1,133 @@
+/* Atlas Aurora v2.6 — controls: Кнопки, Поле, Флажки и радио, Табы и фильтры, Переключатель, Поиск, Размеры полей, Ряд контролов, Свечение в тесных местах (components/bundle.css без правок; scripts/vendor_aurora.py) */
+/* ── Кнопки ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: var(--control); padding: 0 18px;
+  border-radius: var(--r-control); border: 1px solid transparent;
+  font: 500 var(--text-ui)/1 var(--font-body);
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--d) var(--ease-out), border-color var(--d) var(--ease-out), color var(--d) var(--ease-out);
+}
+.btn svg { width: var(--icon); height: var(--icon); flex: none; }
+.btn--sm { height: var(--control-sm); padding: 0 12px; gap: 6px; border-radius: var(--r-control-sm); font-size: var(--text-sm); }
+.btn--lg { height: var(--control-lg); padding: 0 22px; border-radius: var(--r-control-lg); font-size: 15px; }
+.btn--icon { width: var(--control); padding: 0; }
+.btn--sm.btn--icon { width: var(--control-sm); }
+.btn--primary {
+  --btn-g1: var(--wave-5); --btn-g2: var(--accent-strong); --btn-g3: color-mix(in oklab, var(--accent-strong), var(--wave-3) 35%);
+  background: linear-gradient(120deg, var(--btn-g1), var(--btn-g2) 40%, var(--btn-g3)); color: var(--on-accent-strong);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, white 45%, transparent), 0 10px 24px -12px var(--wave-4), 0 2px 8px -4px var(--wave-3);
+}
+[data-theme='light'] .btn--primary, .btn--primary[data-theme='light'] { --btn-g1: color-mix(in oklab, var(--accent-strong), var(--wave-4) 15%); --btn-g3: color-mix(in oklab, var(--accent-strong), var(--wave-2) 40%); box-shadow: inset 0 1px 0 color-mix(in oklab, white 30%, transparent), 0 10px 24px -12px var(--wave-3), 0 2px 6px -3px color-mix(in oklab, var(--wave-2) 60%, transparent); }
+[data-theme='light'] [data-theme='dark'] .btn--primary { --btn-g1: var(--wave-5); --btn-g3: color-mix(in oklab, var(--accent-strong), var(--wave-3) 35%); box-shadow: inset 0 1px 0 color-mix(in oklab, white 45%, transparent), 0 10px 24px -12px var(--wave-4), 0 2px 8px -4px var(--wave-3); }
+.btn--primary:hover { --btn-g2: var(--accent-strong-hover); }
+.btn--primary:active { --btn-g1: var(--accent-strong); }
+.btn--primary:focus-visible, [data-theme] .btn--primary:focus-visible, [data-theme] [data-theme] .btn--primary:focus-visible { box-shadow: var(--focus-ring); }
+/* Сияние — только для ИИ-действий: градиент волн палитры, тёмный текст, звезда агента */
+.btn--aurora { background: linear-gradient(120deg, var(--wave-6), var(--wave-4) 45%, var(--wave-5)); color: var(--wave-1); box-shadow: inset 0 1px 0 color-mix(in oklab, white 50%, transparent), var(--aurora-edge-glow); }
+.btn--aurora:hover { background: linear-gradient(120deg, var(--wave-6), var(--wave-6) 20%, var(--wave-4) 60%, var(--wave-5)); }
+.btn--aurora:focus-visible { box-shadow: var(--focus-ring); }
+/* Тональная — второе акцентное действие рядом с главной */
+.btn--tonal { background: linear-gradient(var(--accent-soft), var(--accent-soft)) padding-box, linear-gradient(120deg, var(--wave-4), transparent 70%) border-box; color: var(--accent-line); }
+.btn--tonal:hover { background: linear-gradient(color-mix(in oklab, var(--accent-soft), var(--accent-line) 12%), color-mix(in oklab, var(--accent-soft), var(--accent-line) 12%)) padding-box, linear-gradient(120deg, var(--wave-4), var(--wave-3) 80%) border-box; }
+/* Монохромная — бывшая главная: сильное вторичное действие без цвета */
+.btn--mono { background: var(--primary); color: var(--on-primary); }
+.btn--mono:hover, .btn--mono:active { background: var(--primary-hover); }
+.btn--deep { background: var(--surface-3); color: var(--ink); }
+.btn--deep:hover { background: color-mix(in oklab, var(--surface-3), var(--ink) 8%); }
+.btn--outline { background: transparent; color: var(--ink); border-color: var(--hairline-strong); }
+.btn--outline:hover { background: linear-gradient(var(--surface-2), var(--surface-2)) padding-box, var(--aurora-line) border-box; border-color: transparent; }
+.btn--ghost { background: transparent; color: var(--ink-2); }
+.btn--ghost:hover { background: var(--surface-2); color: var(--ink); }
+.btn--danger { background: transparent; color: var(--danger); border-color: color-mix(in oklab, var(--danger) 45%, transparent); }
+.btn--danger:hover { background: var(--danger-soft); border-color: var(--danger); }
+.btn--danger-solid { background: var(--danger); color: var(--chaos-black); }
+.btn--danger-solid:hover { background: oklch(78% 0.15 25); }
+[data-theme='light'] .btn--danger-solid { color: oklch(99% 0 0); }
+[data-theme='light'] .btn--danger-solid:hover { background: oklch(46% 0.18 25); }
+.btn:disabled { opacity: 0.5; pointer-events: none; }
+
+/* ── Поле ── */
+.field {
+  width: 100%; height: var(--control-lg); padding: 0 16px;
+  background: transparent; color: var(--ink);
+  border: 1px solid var(--control-line); border-radius: var(--r-control-lg);
+  font: 400 15px/1 var(--font-body);
+  transition: border-color var(--d) var(--ease-out);
+}
+.field::placeholder { color: var(--ink-3); }
+.field:hover { border-color: var(--ink-3); }
+/* Поле в фокусе — рамка цвета бренда 2px (1px рамка + 1px внутренняя), без кольца и свечения */
+.field:focus-visible { border-color: var(--accent-line); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.field[aria-invalid='true'] { border-color: var(--danger); }
+
+/* ── Флажки и радио ── */
+.check-row { display: flex; align-items: center; gap: 12px; min-height: var(--control-sm); cursor: pointer; font-size: var(--text-ui); }
+.cb { appearance: none; flex: none; width: var(--check); height: var(--check); margin: 0; border-radius: 7px; border: 1.5px solid var(--control-line); background: var(--surface-sunken); display: grid; place-items: center; cursor: pointer; transition: background var(--d-fast), border-color var(--d-fast); }
+.cb::after { content: ''; width: 11px; height: 6px; border-left: 2px solid var(--on-primary); border-bottom: 2px solid var(--on-primary); transform: rotate(-45deg) translate(1px, -1px) scale(0); transition: transform var(--d-fast) var(--ease-out); }
+.cb:checked { background: var(--primary); border-color: var(--primary); }
+.cb:checked::after { transform: rotate(-45deg) translate(1px, -1px) scale(1); }
+.cb:hover { border-color: var(--ink-3); }
+.rd { appearance: none; flex: none; width: var(--check); height: var(--check); margin: 0; border-radius: 50%; border: 1.5px solid var(--control-line); background: var(--surface-sunken); cursor: pointer; display: grid; place-items: center; }
+.rd::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--on-primary); transform: scale(0); transition: transform var(--d-fast) var(--ease-out); }
+.rd:checked { background: var(--primary); border-color: var(--primary); }
+.rd:checked::after { transform: scale(1); }
+
+/* ── Табы и фильтры ── */
+/* Контейнер = control: рамка 1 + отступ 3 + таб (control − 8) + 3 + 1 */
+.tabs { display: inline-flex; align-items: center; gap: 2px; height: var(--control); padding: 3px; background: var(--surface-sunken); border: 1px solid var(--hairline); border-radius: var(--r-control); }
+.tabs button { position: relative; height: calc(var(--control) - 8px); padding: 0 14px; border-radius: calc(var(--r-control) - 4px); border: 0; background: transparent; color: var(--ink-2); font: 500 var(--text-ui)/1 var(--font-body); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.tabs button:hover { color: var(--ink); background: var(--surface-2); }
+.tabs button[aria-selected='true'] { background: var(--deep); color: var(--on-deep); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line); }
+.tabs button:focus-visible { box-shadow: var(--focus-ring); }
+.tabs .ic { width: var(--icon-sm); height: var(--icon-sm); }
+.tabs--sm { height: var(--control-sm); border-radius: var(--r-control-sm); }
+.tabs--sm button { height: calc(var(--control-sm) - 8px); padding: 0 10px; border-radius: calc(var(--r-control-sm) - 4px); font-size: var(--text-sm); gap: 4px; }
+.tabs--lg { height: var(--control-lg); border-radius: var(--r-control-lg); }
+.tabs--lg button { height: calc(var(--control-lg) - 8px); padding: 0 18px; border-radius: calc(var(--r-control-lg) - 4px); }
+.filter { height: var(--control-sm); padding: 0 14px; border-radius: var(--r-control-sm); border: 1px solid var(--hairline-strong); background: transparent; color: var(--ink-2); font: 500 var(--text-sm)/1 var(--font-body); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.filter--md { height: var(--control); padding: 0 16px; border-radius: var(--r-control); font-size: var(--text-ui); }
+.filter:hover { background: var(--surface-2); color: var(--ink); }
+.filter[aria-pressed='true'] { background: var(--surface-3); border-color: var(--primary); color: var(--ink); }
+.filter[aria-pressed='true']::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+[data-theme='light'] .filter[aria-pressed='true'] { border-color: var(--stormy-teal); }
+[data-theme='light'] .filter[aria-pressed='true']::before { background: var(--stormy-teal); }
+
+/* ── Переключатель ── */
+.switch { width: 44px; height: 24px; border-radius: var(--r-full); border: 0; background: var(--surface-3); position: relative; cursor: pointer; transition: background var(--d) var(--ease-out); box-shadow: inset 0 0 0 1px var(--control-line); flex: none; }
+.switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--ink-2); transition: transform var(--d) var(--ease-out), background var(--d); }
+.switch[aria-checked='true'] { background: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.switch[aria-checked='true']::after { transform: translateX(20px); background: var(--on-primary); }
+.switch:focus-visible { box-shadow: var(--focus-ring), inset 0 0 0 1px var(--control-line); }
+.switch[aria-checked='true']:focus-visible { box-shadow: var(--focus-ring), inset 0 0 0 1px var(--primary); }
+
+/* ── Поиск ── */
+.search { position: relative; }
+.search > svg { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--ink-3); pointer-events: none; }
+.search .field { padding-left: 46px; padding-right: 76px; }
+.kbd { font: 500 var(--text-xs)/1 var(--font-body); color: var(--ink-3); border: 1px solid var(--hairline-strong); border-radius: var(--r-xs); padding: 5px 8px; }
+.search .kbd { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); }
+
+/* ── Размеры полей и списков: как у кнопок (по умолчанию 48) ── */
+.field--md, .select-btn--md { height: var(--control); border-radius: var(--r-control); font-size: var(--text-ui); padding-left: 12px; }
+.field--md { padding-right: 12px; } .select-btn--md { padding-right: 10px; }
+.field--sm, .select-btn--sm { height: var(--control-sm); border-radius: var(--r-control-sm); font-size: var(--text-sm); padding-left: 10px; }
+.field--sm { padding-right: 10px; } .select-btn--sm { padding-right: 8px; gap: 6px; }
+.search .field--md { padding-left: 38px; padding-right: 64px; }
+.search .field--sm { padding-left: 32px; padding-right: 54px; }
+.search:has(.field--md) > svg { left: 12px; width: var(--icon); height: var(--icon); }
+.search:has(.field--sm) > svg { left: 10px; width: var(--icon-sm); height: var(--icon-sm); }
+.search:has(.field--md) .kbd { right: 8px; padding: 4px 6px; }
+.search:has(.field--sm) .kbd { right: 6px; padding: 2px 5px; font-size: 11px; }
+
+/* ── Ряд контролов: одна высота, бейджи и иконки по центру ── */
+.ctl-row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ── Свечение в тесных местах: в шапке, тулбаре, шапке таблицы и тосте — только кромка ── */
+.topbar .btn--primary, .toolbar .btn--primary, .table-tools .btn--primary, .toast .btn--primary, .btn--primary.btn--flat { box-shadow: inset 0 1px 0 color-mix(in oklab, white 40%, transparent); }
+.topbar .btn--aurora, .toolbar .btn--aurora, .table-tools .btn--aurora, .toast .btn--aurora, .btn--aurora.btn--flat { box-shadow: inset 0 1px 0 color-mix(in oklab, white 50%, transparent); }
+.topbar .btn--primary:focus-visible, .toolbar .btn--primary:focus-visible, .table-tools .btn--primary:focus-visible, .toast .btn--primary:focus-visible, .btn--primary.btn--flat:focus-visible,
+.topbar .btn--aurora:focus-visible, .toolbar .btn--aurora:focus-visible, .table-tools .btn--aurora:focus-visible, .toast .btn--aurora:focus-visible, .btn--aurora.btn--flat:focus-visible { box-shadow: var(--focus-ring); }
+.topbar .field:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.help { font-size: var(--text-sm); color: var(--ink-3); margin-top: 6px; }
+.help--error { color: var(--danger); }

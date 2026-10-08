@@ -26,7 +26,6 @@ export type DraftCategory = Category & { key?: string };
 
 const NAME_MAX = 40;
 const DESCRIPTION_MAX = 200;
-const ICON = { size: 15, strokeWidth: 1.75, "aria-hidden": true } as const;
 
 export function draftCategories(value: unknown): DraftCategory[] {
   if (!Array.isArray(value)) return [];
@@ -205,14 +204,10 @@ export function CategoriesSection({ value, onChange, endpoint }: {
               <li key={k} data-key={k} className="catedit__item">
                 <div className="catedit__row">
                   <span className="catedit__move">
-                    <button type="button" className="icon-btn" data-move={-1} disabled={i === 0}
-                      aria-label={`Поднять «${shown}»`} title="Выше" onClick={() => move(i, -1)}>
-                      <ArrowUp {...ICON} />
-                    </button>
-                    <button type="button" className="icon-btn" data-move={1} disabled={i === list.length - 1}
-                      aria-label={`Опустить «${shown}»`} title="Ниже" onClick={() => move(i, 1)}>
-                      <ArrowDown {...ICON} />
-                    </button>
+                    <IconButton icon={ArrowUp} label={`Поднять «${shown}»`} tooltip="Выше" data-move={-1}
+                      disabled={i === 0} onClick={() => move(i, -1)} />
+                    <IconButton icon={ArrowDown} label={`Опустить «${shown}»`} tooltip="Ниже" data-move={1}
+                      disabled={i === list.length - 1} onClick={() => move(i, 1)} />
                   </span>
                   <ColorPicker value={c.color} name={clean(c.name)} onChange={(color) => update(i, { color })} />
                   <input type="text" className="catedit__name" aria-label="Название категории" maxLength={NAME_MAX}

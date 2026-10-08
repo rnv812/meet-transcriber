@@ -123,7 +123,7 @@ export function OwnerVoiceDialog({ endpoint, onClose, onDone, pollMs = POLL_MS, 
         tabIndex={-1}>
         <div className="ownv-dialog__head">
           <h3 className="ownv-dialog__title" id={titleId}>Мой голос</h3>
-          <IconButton icon={X} size="sm" label="Закрыть" onClick={onClose} />
+          <IconButton icon={X} size="xs" label="Закрыть" onClick={onClose} />
         </div>
         <p className="muted ownv-dialog__lead">
           По образцу голоса расшифровка отличает вас от людей, которые сидят рядом и попадают в ваш микрофон.
@@ -168,8 +168,8 @@ export function OwnerVoiceNudge({ endpoint, lead, className = "", pollMs, readyP
         <span className="ownv-nudge__lead">{lead}</span> {NUDGE_TEXT}
       </span>
       <span className="ownv-nudge__actions">
-        <Button size="sm" variant="primary" onClick={() => setOpen(true)}>Записать образец</Button>
-        <IconButton icon={X} size="sm" label="Скрыть до перезапуска"
+        <Button size="xs" variant="primary" onClick={() => setOpen(true)}>Записать образец</Button>
+        <IconButton icon={X} size="xs" label="Скрыть до перезапуска"
           onClick={() => { hideNudge(); setHidden(true); }} />
       </span>
       {open && (

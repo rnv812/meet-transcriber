@@ -38,7 +38,7 @@ function CopyPath({ path, label }: { path: string; label: string }) {
     }
   };
   return <IconButton icon={done ? Check : Copy} label={done ? "Скопировано" : `Копировать путь: ${label}`}
-    tooltip={done ? "Скопировано" : "Копировать путь"} size="sm" onClick={() => void copy()} />;
+    tooltip={done ? "Скопировано" : "Копировать путь"} size="xs" onClick={() => void copy()} />;
 }
 
 export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
@@ -63,7 +63,7 @@ export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
                 <PathText path={path} />
                 <CopyPath path={path} label={label} />
                 {inTauri() && FOLDERS.has(name) && (
-                  <IconButton icon={FolderOpen} label={`Открыть: ${label}`} tooltip="Открыть в проводнике" size="sm"
+                  <IconButton icon={FolderOpen} label={`Открыть: ${label}`} tooltip="Открыть в проводнике" size="xs"
                     onClick={() => openFolder(path)} />
                 )}
               </span>
@@ -79,7 +79,7 @@ export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
       </div>
       <div className="diag__logs-head">
         <h3 className="shead">Журнал автозаписи</h3>
-        <Button size="sm" variant="ghost" icon={RefreshCw} onClick={load}>Обновить журналы</Button>
+        <Button size="xs" variant="ghost" icon={RefreshCw} onClick={load}>Обновить журналы</Button>
       </div>
       <pre className="log">{(data.watch_log ?? []).slice(-120).join("\n") || "Журнал пуст"}</pre>
       <h3 className="shead">Журнал записи{data.folder ? ` — ${data.folder}` : ""}</h3>

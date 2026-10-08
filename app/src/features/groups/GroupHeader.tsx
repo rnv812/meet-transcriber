@@ -39,10 +39,10 @@ export function GroupHeader({ ui }: { ui: GroupsUi }) {
         </span>
       )}
       {editable && (
-        <IconButton ref={more} icon={Ellipsis} size="sm" label={`Действия с группой «${ui.scopeName}»`}
+        <IconButton ref={more} icon={Ellipsis} size="xs" label={`Действия с группой «${ui.scopeName}»`}
           aria-haspopup="menu" aria-expanded={menu} onClick={() => (menu ? close() : setMenu(true))} />
       )}
-      <IconButton icon={X} size="sm" label="Показать все записи" onClick={() => ui.setScope(null)} />
+      <IconButton icon={X} size="xs" label="Показать все записи" onClick={() => ui.setScope(null)} />
       {menu && <GroupMenu ui={ui} id={scope} anchor={more} align="end" onClose={close} />}
     </div>
   );

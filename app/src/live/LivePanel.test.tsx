@@ -240,7 +240,7 @@ test("кнопки шапки — одинаковые значки с подп�
   expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(
     ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Стоп"]);
   for (const b of buttons) {
-    expect(b).toHaveClass("icon-btn");
+    expect(b).toHaveClass("btn--icon");
     expect(b.textContent).toBe(""); // только значок, подпись — title
     expect(b.getAttribute("title")).toBeTruthy();
   }

@@ -5,4 +5,5 @@
 @import "./palettes.css";
 @import "./base.css";
 @import "./aurora.css";
+@import "./controls.css";
 @import "../aurora-fallbacks.css";

@@ -55,3 +55,14 @@ test("папка не задана — «Не задана», «Очистить
   expect(within(group).getByText("Не задана")).toBeInTheDocument();
   expect(within(group).getByRole("button", { name: "Очистить" })).toBeDisabled();
 });
+
+test("переключатель — role=switch и aria-checked, без своего бегунка", async () => {
+  const onChange = vi.fn();
+  render(<Switch label="Расшифровывать сразу" value={false} onChange={onChange} />);
+  const s = screen.getByRole("switch", { name: "Расшифровывать сразу" });
+  expect(s).toHaveClass("switch");
+  expect(s).toHaveAttribute("aria-checked", "false");
+  expect(s.querySelector(".switch__knob")).toBeNull();
+  await userEvent.click(s);
+  expect(onChange).toHaveBeenCalledWith(true);
+});

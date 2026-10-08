@@ -224,7 +224,7 @@ export function ChatComposer({
                   : <Icon as={d.kind === "image" ? ImageIcon : FileText} size="sm" />}
                 <span className="chat-draft__name">{d.name}</span>
                 {status && <span className="chat-draft__status">{status}</span>}
-                <IconButton icon={X} size="sm" label={`Убрать вложение ${d.name}`} onClick={() => remove(d.key)} />
+                <IconButton icon={X} size="xs" label={`Убрать вложение ${d.name}`} onClick={() => remove(d.key)} />
               </li>
             );
           })}

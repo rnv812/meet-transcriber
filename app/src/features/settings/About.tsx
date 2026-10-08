@@ -190,7 +190,7 @@ function UpdateRow() {
         {state.kind === "installing" && (
           <>
             <InstallProgress progress={state.progress} />
-            <Button size="sm" onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
+            <Button size="xs" onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
           </>
         )}
         {state.kind === "launched" && <span>{launchedText(state.result)}</span>}

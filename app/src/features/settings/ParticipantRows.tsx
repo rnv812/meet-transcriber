@@ -172,7 +172,7 @@ function KbExcludeEditor({ value, kbRoot, provider, onChange }: {
             {list.map((p) => (
               <li key={p} className="kb-exclude__item">
                 <code className="path">{p}</code>
-                <IconButton icon={X} size="sm" label={`Убрать исключение ${p}`}
+                <IconButton icon={X} size="xs" label={`Убрать исключение ${p}`}
                   onClick={() => onChange(list.filter((x) => x !== p))} />
               </li>
             ))}

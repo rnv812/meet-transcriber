@@ -88,14 +88,14 @@ export function LiveHints({
               {clock(h.source_t)}
             </button>
             <span className="live-hint__actions">
-              <IconButton icon={Pin} size="sm" className="live-hint__pin" pressed={h.pinned}
+              <IconButton icon={Pin} size="xs" className="live-hint__pin" pressed={h.pinned}
                 label={h.pinned ? "Открепить" : "Закрепить"}
                 tooltip={h.pinned ? "Открепить" : "Закрепить: подсказка не уйдёт сама"}
                 onClick={() => onAction(h.id, h.pinned ? "unpin" : "pin")} />
-              <IconButton icon={Copy} size="sm" label="Копировать"
+              <IconButton icon={Copy} size="xs" label="Копировать"
                 tooltip={copied === h.id ? "Скопировано" : isUrgent(h) && h.reply ? "Копировать черновик ответа" : "Копировать текст"}
                 onClick={() => copy(h)} />
-              <IconButton icon={X} size="sm" label="Скрыть"
+              <IconButton icon={X} size="xs" label="Скрыть"
                 tooltip="Скрыть: подсказка больше не появится (несколько секунд её можно вернуть)"
                 onClick={() => onAction(h.id, "dismiss")} />
             </span>

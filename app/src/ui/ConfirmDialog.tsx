@@ -144,12 +144,12 @@ export function ConfirmDialog({
       <div className="confirm__title" id={titleId}>{title}</div>
       {message && <div className="confirm__text" id={textId}>{message}</div>}
       <div className="confirm__actions">
-        <Button ref={safe} size={inline ? "sm" : "md"} onClick={onCancel}>{cancelLabel}</Button>
+        <Button ref={safe} size={inline ? "xs" : "sm"} onClick={onCancel}>{cancelLabel}</Button>
         {alt && (
-          <Button size={inline ? "sm" : "md"} variant={alt.danger ? "danger" : "default"} disabled={busy}
+          <Button size={inline ? "xs" : "sm"} variant={alt.danger ? "danger" : "default"} disabled={busy}
             onClick={alt.onClick}>{alt.label}</Button>
         )}
-        <Button size={inline ? "sm" : "md"} variant={danger ? "danger" : "primary"} busy={busy}
+        <Button size={inline ? "xs" : "sm"} variant={danger ? "danger" : "primary"} busy={busy}
           onClick={onConfirm}>{confirmLabel}</Button>
       </div>
     </div>

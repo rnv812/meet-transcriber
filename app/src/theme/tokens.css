@@ -29,59 +29,6 @@ body { overflow: hidden; }
    туда не переходили с клавиатуры, рамка только сбивает. */
 :is(h1, h2, h3, h4, section, [role="alertdialog"])[tabindex="-1"]:focus-visible { box-shadow: none; }
 
-/* Кнопки (ui/Button): secondary — по умолчанию, primary, ghost, danger, link;
-   размеры md 28 px и sm 24 px. Нажатие видно сразу (:active), занятость —
-   индикатором поверх подписи, ширина при этом не меняется. */
-.btn {
-  position: relative;
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 28px; padding: 0 10px; white-space: nowrap;
-  background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--line-2); border-radius: var(--r-md);
-  font: inherit; cursor: pointer;
-  transition: background var(--t), border-color var(--t), color var(--t), transform 60ms;
-}
-.btn__label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.btn:hover { background: var(--surface-hover); }
-.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
-.btn:disabled { opacity: 0.5; cursor: default; }
-.btn--sm { height: 24px; padding: 0 8px; font-size: 12px; }
-.btn--primary { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent-strong); }
-.btn--primary:hover { background: var(--accent-strong-hover); border-color: var(--accent-strong-hover); }
-.btn--danger { color: var(--red); }
-.btn--danger:hover { background: rgba(229, 72, 77, 0.12); border-color: var(--red); }
-.btn--ghost { background: transparent; border-color: transparent; color: var(--text-2); }
-.btn--ghost:hover { background: var(--surface-hover); color: var(--text); }
-.btn--link {
-  height: auto; padding: 0; border: 0; background: none; color: var(--accent-hi);
-  text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 2px;
-}
-.btn--link:hover { background: none; text-decoration-color: currentColor; }
-.btn--busy { cursor: progress; }
-.btn--busy .btn__label { visibility: hidden; }
-.btn__spinner {
-  position: absolute; top: 50%; left: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
-  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
-  animation: btn-spin 0.7s linear infinite;
-}
-.btn__spinner--static { position: static; margin: 0; flex: none; }
-@keyframes btn-spin { to { transform: rotate(360deg); } }
-
-.icon-btn {
-  display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 28px; height: 28px; padding: 0;
-  background: transparent; color: var(--text-2);
-  border: 1px solid transparent; border-radius: var(--r-md); cursor: pointer;
-  transition: background var(--t), color var(--t), border-color var(--t);
-}
-.icon-btn:hover { background: var(--surface-hover); color: var(--text); }
-.icon-btn:disabled { opacity: 0.4; cursor: default; background: none; }
-.icon-btn--sm { width: 24px; height: 24px; }
-.icon-btn--secondary { background: var(--surface-2); border-color: var(--line-2); color: var(--text); }
-.icon-btn--danger:hover { color: var(--red); background: rgba(229, 72, 77, 0.12); }
-.icon-btn[aria-pressed="true"] { background: rgba(94, 106, 210, 0.18); color: var(--accent-hi); }
-.icon-btn--busy { cursor: progress; }
-
 .eyebrow {
   font-size: 11px; font-weight: 500; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--text-3);

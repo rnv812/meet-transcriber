@@ -164,7 +164,7 @@ function AgentLaunchRows({ agent, label, launch, knowledge, model, onChange }: {
       <h4 className="agent-launch__title">
         {label}
         <LaunchTip agent={agent} />
-        <Button size="sm" onClick={() => onChange(EMPTY)} disabled={!dirty} aria-label={`Параметры ${label} по умолчанию`}
+        <Button size="xs" onClick={() => onChange(EMPTY)} disabled={!dirty} aria-label={`Параметры ${label} по умолчанию`}
           title="Вернуть параметры по умолчанию (вступит в силу после «Сохранить»)">
           По умолчанию
         </Button>

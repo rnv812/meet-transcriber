@@ -22,6 +22,7 @@ import {
 } from "../../lib/libraryQuery";
 import { searchable } from "../../lib/search";
 import type { Category, Facets, LibraryFilter, LibraryHas } from "../../lib/types";
+import { Button } from "../../ui/Button";
 import { CategoryDot } from "../../ui/Category";
 import { Icon } from "../../ui/Icon";
 import { Popover } from "../../ui/Popover";
@@ -238,7 +239,7 @@ export function FiltersButton({
                     {typedPeriod ? typedPeriod.label : dateHint(period, now) ?? "Не понял дату"}
                   </span>
                 )}
-                {typedPeriod && <button type="button" className="btn" onClick={applyPeriod}>Применить</button>}
+                {typedPeriod && <Button onClick={applyPeriod}>Применить</Button>}
               </div>
             </fieldset>
             </>)}
@@ -248,7 +249,7 @@ export function FiltersButton({
           </div>
           <div className="cat-filter__foot">
             <span className="cat-filter__scope">{scopeNote}</span>
-            {active > 0 && <button type="button" className="btn" onClick={onClear}>Сбросить все</button>}
+            {active > 0 && <Button onClick={onClear}>Сбросить все</Button>}
           </div>
         </Popover>
       )}
