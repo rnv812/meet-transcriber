@@ -74,6 +74,47 @@ test("preview: окно, кеш и оболочка сразу", () => {
   expect(JSON.parse(localStorage.getItem(CACHE_KEY)!)).toEqual(next);
 });
 
+test("поздний ответ настроек не затирает более новый выбор (последняя запись выигрывает)", async () => {
+  let resolve: (v: Record<string, unknown>) => void = () => {};
+  vi.mocked(api.getSettings).mockImplementation(() => new Promise((r) => { resolve = r; }));
+  const { result } = renderHook(() => useAppearance(ep));
+  await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+  const next = { ...DEFAULT_APPEARANCE, theme: "light" as const, aurora: "red" as const };
+  act(() => result.current.preview(next));
+  await act(async () => { resolve({ ui: { theme: "dark", aurora: "blue" } }); });
+  expect(root().theme).toBe("light");
+  expect(root().aurora).toBe("red");
+  expect(result.current.appearance).toEqual(next);
+});
+
+test("событие оболочки новее ответа настроек", async () => {
+  let push: (a: typeof DEFAULT_APPEARANCE) => void = () => {};
+  vi.mocked(shell.onAppearance).mockImplementation(async (cb) => { push = cb; return () => {}; });
+  let resolve: (v: Record<string, unknown>) => void = () => {};
+  vi.mocked(api.getSettings).mockImplementation(() => new Promise((r) => { resolve = r; }));
+  renderHook(() => useAppearance(ep));
+  await waitFor(() => expect(shell.onAppearance).toHaveBeenCalled());
+  act(() => push({ ...DEFAULT_APPEARANCE, theme: "light", aurora: "green" }));
+  await act(async () => { resolve({ ui: { theme: "dark", aurora: "blue" } }); });
+  expect(root().theme).toBe("light");
+  expect(root().aurora).toBe("green");
+});
+
+test("onAppearance отклонён — без необработанного отказа", async () => {
+  vi.mocked(shell.onAppearance).mockRejectedValue(new Error("no tauri"));
+  vi.mocked(api.getSettings).mockResolvedValue({ ui: {} });
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  try {
+    renderHook(() => useAppearance(ep));
+    await waitFor(() => expect(shell.onAppearance).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(unhandled).not.toHaveBeenCalled();
+  } finally {
+    process.off("unhandledRejection", unhandled);
+  }
+});
+
 test("резидент не ответил — остаётся кеш, без исключения", async () => {
   localStorage.setItem(CACHE_KEY, JSON.stringify({ ...DEFAULT_APPEARANCE, theme: "light" }));
   vi.mocked(api.getSettings).mockRejectedValue(new Error("offline"));

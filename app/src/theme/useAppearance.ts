@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Endpoint, getSettings } from "../lib/api";
 import { onAppearance, shareAppearance } from "../lib/shell";
 import {
@@ -14,6 +14,9 @@ import {
 export function useAppearance(endpoint: Endpoint | null) {
   const [appearance, setAppearance] = useState<Appearance>(() => readCached());
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
+  // Номер последнего выбора (свой или из другого окна): поздний ответ
+  // GET /settings не должен затирать более новый выбор.
+  const version = useRef(0);
 
   useEffect(() => {
     applyAppearance(document.documentElement, appearance, systemDark);
@@ -30,9 +33,10 @@ export function useAppearance(endpoint: Endpoint | null) {
   useEffect(() => {
     if (!endpoint) return;
     let alive = true;
+    const started = version.current;
     getSettings(endpoint)
       .then((raw) => {
-        if (!alive) return;
+        if (!alive || version.current !== started) return;
         const next = appearanceFromSettings(raw);
         writeCached(next);
         setAppearance(next);
@@ -47,16 +51,20 @@ export function useAppearance(endpoint: Endpoint | null) {
     let stop: (() => void) | null = null;
     let alive = true;
     void onAppearance((next) => {
+      version.current += 1;
       writeCached(next);
       setAppearance(next);
     }).then((unlisten) => {
       if (alive) stop = unlisten;
       else unlisten();
+    }).catch(() => {
+      // Нет оболочки или не загрузился модуль событий: окно живёт на своих настройках.
     });
     return () => { alive = false; stop?.(); };
   }, []);
 
   const preview = useCallback((next: Appearance) => {
+    version.current += 1;
     writeCached(next);
     setAppearance(next);
     void shareAppearance(next);
