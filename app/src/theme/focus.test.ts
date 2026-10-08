@@ -58,3 +58,62 @@ test("окно не рисует вторую рамку фокуса: нет с
   }
   expect(bad).toEqual([]);
 });
+
+/*
+ * Своя `box-shadow` у фокусируемого элемента вытесняет рамку фокуса Aurora:
+ * `:focus-visible` в base.css — (0,1,0), правило окна грузится позже и обычно
+ * не слабее. Выбранное рисуется `outline` (её правило фокуса не трогает), а
+ * тень, без которой элементу никак, повторяется в своём `:focus-visible`
+ * вместе с `var(--focus-ring)`. Фокусируемость угадывается по селектору:
+ * кнопки, состояния aria, известные фокусируемые блоки окна.
+ */
+const FOCUSABLE_HINT =
+  /\bbutton\b|\.btn\b|\[aria-(?:pressed|current|selected|expanded|checked)|\[tabindex|\[role=|__item\b|__swatch\b|-float\b|__new\b|__main\b|__opt\b/;
+
+/** Тень у элемента, который фокуса не получает, хотя селектор похож: селектор → причина. */
+const SHADOW_ALLOW = new Map<string, string>([]);
+
+const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+const shadowOf = (body: string) => /(?:^|[;\s])box-shadow\s*:\s*([^;]+)/.exec(body)?.[1]?.trim();
+
+/** Части селекторов с тенью на фокусируемом элементе без пары `:focus-visible` с рамкой фокуса. */
+function shadowBad(text: string): string[] {
+  const all = rules(text);
+  const ringed = new Set<string>();
+  for (const r of all) {
+    if (!/var\(--focus-ring\)/.test(shadowOf(r.body) ?? "")) continue;
+    for (const part of r.selector.split(",")) {
+      if (part.includes(":focus-visible")) ringed.add(norm(part.replace(":focus-visible", "")));
+    }
+  }
+  const bad: string[] = [];
+  for (const r of all) {
+    const shadow = shadowOf(r.body);
+    if (!shadow || /^none\b/.test(shadow)) continue;
+    for (const raw of r.selector.split(",")) {
+      const part = norm(raw);
+      if (part.includes(":focus") || !FOCUSABLE_HINT.test(part)) continue;
+      if (ringed.has(part) || SHADOW_ALLOW.has(part)) continue;
+      bad.push(part);
+    }
+  }
+  return bad;
+}
+
+test("разбор: тень на кнопке без пары с рамкой фокуса находит, пару и выбранное через outline — нет", () => {
+  expect(shadowBad('button.x[aria-pressed="true"] { box-shadow: inset 0 0 0 1px red }')).toEqual(['button.x[aria-pressed="true"]']);
+  expect(shadowBad(".a__new { box-shadow: 0 4px 14px red }")).toEqual([".a__new"]);
+  expect(shadowBad(".a__new { box-shadow: 0 4px 14px red } .a__new:focus-visible { box-shadow: var(--focus-ring), 0 4px 14px red }")).toEqual([]);
+  expect(shadowBad('.a__item[aria-current="page"] { outline: 1px solid var(--control-line); outline-offset: -1px }')).toEqual([]);
+  expect(shadowBad(".card { box-shadow: 0 4px 14px red } .a__swatch { box-shadow: none }")).toEqual([]);
+  // Пара без рамки фокуса не спасает.
+  expect(shadowBad(".a__swatch { box-shadow: 0 0 0 1px red } .a__swatch:focus-visible { box-shadow: 0 0 0 2px blue }")).toEqual([".a__swatch"]);
+});
+
+test("своя тень не прячет рамку фокуса у кнопок, пунктов и переключателей окна", () => {
+  const bad: string[] = [];
+  for (const f of css(SRC).filter((x) => !relative(SRC, x).startsWith(AURORA))) {
+    for (const part of shadowBad(readFileSync(f, "utf8"))) bad.push(`${relative(SRC, f)}: ${part}`);
+  }
+  expect(bad).toEqual([]);
+});

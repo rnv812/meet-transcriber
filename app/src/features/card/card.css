@@ -198,7 +198,8 @@ button.turn__speaker:hover { text-decoration: underline; }
 .live-card__head { display: flex; align-items: center; gap: 8px; }
 .live-card__title { color: var(--text); font-weight: 500; }
 .live-card__quiet { margin-left: auto; }
-.live-card__quiet[aria-pressed="true"] { color: var(--accent-hover); }
+/* Сильнее «button.btn[aria-pressed]» (ui/button.css, 0,2,1): иначе включённый колокольчик был бы цвета текста. */
+.btn.live-card__quiet[aria-pressed="true"] { color: var(--accent-hover); }
 .live-card__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 /* Поиск по расшифровке (TranscriptView): поле прилипает к верху прокрутки. */
@@ -274,6 +275,8 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
   box-shadow: 0 4px 14px #0006; font: inherit; font-size: 12px; cursor: pointer;
 }
 .tfix-float:hover { background: var(--accent-hover); }
+/* Своя тень вытесняет рамку фокуса Aurora — при фокусе с клавиатуры обе. */
+.tfix-float:focus-visible { box-shadow: var(--focus-ring), 0 4px 14px #0006; }
 .tfix-float--anchor { visibility: hidden; pointer-events: none; }
 .tfix { gap: 8px; }
 .tfix__heard { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--text); }

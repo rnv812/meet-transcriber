@@ -15,8 +15,12 @@
   transition: background var(--t), color var(--t);
 }
 .settings__item:hover { background: var(--surface-hover); color: var(--text); }
-/* Выбранное — не только цветом: рамка и насыщенный шрифт. */
-.settings__item[aria-current="page"] { background: var(--surface-3); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line); }
+/* Выбранное — не только цветом: рамка и насыщенный шрифт. Рамка — outline:
+   box-shadow заменил бы рамку фокуса Aurora (theme/focus.test.ts). */
+.settings__item[aria-current="page"] {
+  background: var(--surface-3); color: var(--ink); font-weight: 600;
+  outline: 1px solid var(--control-line); outline-offset: -1px;
+}
 .settings__item-title { flex: 1; min-width: 0; }
 /* Точка «в разделе есть несохранённые изменения». */
 .settings__dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
@@ -233,6 +237,10 @@
   box-shadow: 0 0 0 1px var(--line-2); cursor: pointer;
 }
 .catedit__swatch[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--accent); }
+/* Своя тень кружка вытесняет рамку фокуса Aurora — при фокусе с клавиатуры рамка вместо неё,
+   у открытого — рамка внутри, акцентное кольцо снаружи. */
+.catedit__swatch:focus-visible { box-shadow: var(--focus-ring); }
+.catedit__swatch[aria-expanded="true"]:focus-visible { box-shadow: var(--focus-ring), 0 0 0 4px var(--accent); }
 .catedit__name, .catedit__desc {
   min-width: 0; padding: 5px 8px; font: inherit;
   background: var(--surface); color: var(--text); border: 1px solid var(--line-2); border-radius: var(--r-md);
