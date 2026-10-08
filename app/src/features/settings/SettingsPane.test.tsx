@@ -864,6 +864,14 @@ test("меню: наведение тише выбранного (--surface-2 п
   expect(jira).not.toMatch(/var\(--(text|text-2|text-3|line|surface|surface-hover)\)/);
 });
 
+test("меню: подписи групп жирные, группы разделены линией и отступом", () => {
+  const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
+  const rule = (sel: string) => new RegExp(`${sel.replace(/[.+]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+  expect(rule(".settings__group-title")).toMatch(/font-weight: 700/);
+  expect(rule(".settings__group-title")).toMatch(/color: var\(--ink\)/);
+  expect(rule(".settings__group + .settings__group")).toMatch(/border-top: 1px solid var\(--hairline\)/);
+});
+
 test.each([
   ["recording", "speaker_name", ["app"]], ["recording", "auto_transcribe", ["app"]], ["recording", "mic_device", ["sound"]],
   ["ui", "notifications", ["app"]], ["ui", "theme", []], ["auto_record", "grace_minutes", ["auto"]],

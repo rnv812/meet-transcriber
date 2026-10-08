@@ -378,7 +378,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
         {/* Пока в поиске текст — выдача вместо меню. */}
         {query.trim() === "" && MENU_GROUPS.map((g, i) => (
           <div key={g.title} role="group" aria-labelledby={`${menuId}-${i}`} className="settings__group">
-            <span id={`${menuId}-${i}`} className="type-micro settings__group-title">{g.title}</span>
+            <span id={`${menuId}-${i}`} className="settings__group-title">{g.title}</span>
             {g.items.map((m) => (
               <button key={m.id} type="button" className="settings__item"
                 title={dirtySections.has(m.id) ? "Есть несохранённые изменения" : undefined}
