@@ -14,11 +14,16 @@
 .redia__count { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; border: 0; }
 .redia__count legend { margin-bottom: 6px; padding: 0; color: var(--ink); font-weight: 500; }
 .redia__count .check-row { gap: 8px; font-size: var(--text-sm); }
-.field.redia__n { width: 64px; padding-right: 4px; }
+/* Степпер числа: [−] поле 48 [+], всё по 32 px (btn--sm, field--sm); системные стрелки поля скрыты. */
+.redia__stepper { display: inline-flex; align-items: center; gap: 4px; }
+.field.redia__n { width: 48px; padding: 0 4px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.field.redia__n::-webkit-inner-spin-button, .field.redia__n::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+.field.redia__n:disabled { opacity: 0.5; }
 .redia__sens { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .redia__sens > label { color: var(--ink); font-weight: 500; }
-.redia__slider { display: flex; flex-basis: 100%; align-items: center; gap: 8px; font-size: var(--text-xs); }
-.redia__slider input { flex: 1; accent-color: var(--accent); }
+/* Значение — справа в строке подписи, как у бегунков настроек. */
+.redia__sens-value { margin-left: auto; color: var(--ink-2); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.redia__slider { display: flex; flex-basis: 100%; align-items: center; gap: 12px; font-size: var(--text-xs); }
 .sheet .redia__summary { color: var(--ink); line-height: 1.5; }
 .redia__list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .redia__list .spk-row { margin-top: 0; gap: 4px; }

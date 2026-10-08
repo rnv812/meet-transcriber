@@ -33,7 +33,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
-import { ChevronDown } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { getAgentContext, type Endpoint } from "../../lib/api";
 import { inTauri } from "../../lib/shell";
@@ -43,10 +42,12 @@ import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { Icon } from "../../ui/Icon";
+import { Select } from "../../ui/Select";
+import { Tip } from "../../ui/Tip";
 import {
   STOP_CONFIRM_MS, agentSession, pasteInto, type PendView, type Phase, type UnsentReason,
 } from "./agentSessions";
+import { Callout } from "./Callout";
 import { PastQuestions } from "./PastQuestions";
 import "./agent.css";
 
@@ -117,6 +118,16 @@ export function agentProviders(info: AssistantInfo | null): AgentProvider[] {
   return KNOWN.filter((p) => info.available?.[p.id]?.found
     && !(p.id === "codex" && codexScriptOnly(info)) && !(p.id === "opencode" && opencodeScriptOnly(info)));
 }
+
+/**
+ * Найдены только как сценарий npm (codex.cmd, opencode.cmd): в списке агентов
+ * они есть, но запустить их во вкладке нельзя — при выборе видно, как поставить.
+ */
+export function scriptOnlyProviders(info: AssistantInfo | null): AgentProvider[] {
+  return KNOWN.filter((p) => (p.id === "codex" && codexScriptOnly(info)) || (p.id === "opencode" && opencodeScriptOnly(info)));
+}
+
+const SCRIPT_NOTE: Record<string, string> = { codex: CODEX_SCRIPT_NOTE, opencode: OPENCODE_SCRIPT_NOTE };
 
 /** Агент по умолчанию: тот, что выбран для итогов и вопросов, иначе первый установленный. */
 export function defaultProvider(info: AssistantInfo | null, list: AgentProvider[]): string | null {
@@ -247,8 +258,15 @@ export function AgentTab({
   const providers = agentProviders(assistant);
   const codexNote = codexScriptOnly(assistant);
   const opencodeNote = opencodeScriptOnly(assistant);
+  const scripts = scriptOnlyProviders(assistant);
+  /** В списке: запускаемые и найденные только как сценарий npm (с пометкой) — в порядке KNOWN. */
+  const listed = KNOWN.filter((k) => providers.some((p) => p.id === k.id) || scripts.some((p) => p.id === k.id));
   const [choice, setChoice] = useState<string | null>(null);
-  const provider = providers.some((p) => p.id === choice) ? choice : defaultProvider(assistant, providers);
+  const provider = listed.some((p) => p.id === choice) ? choice : defaultProvider(assistant, providers);
+  /** Выбранного агента можно запустить (не сценарий npm). */
+  const launchable = providers.some((p) => p.id === provider);
+  /** Как поставить выбранного агента, чтобы он запускался; у запускаемого — нет. */
+  const scriptNote = provider && !launchable ? SCRIPT_NOTE[provider] ?? null : null;
   /** Есть ли где показать терминал: в приложении и с установленным агентом. */
   const withScreen = shell && !(assistant && providers.length === 0);
   /** Вставить ссылку негде: браузер или ни одного агента. */
@@ -301,17 +319,19 @@ export function AgentTab({
   }, [s, withScreen]);
 
   /** `resume` — «Продолжить прошлую»: последний разговор агента в папке встречи. */
-  const start = useCallback(async (resume = false, which = provider) => {
+  const start = useCallback(async (resume = false, which = launchable ? provider : null) => {
     if (!which) return;
     // Запуск обновил файлы встречи — строка «Контекст» тоже.
     if (await s.start(which, resume)) loadContext();
-  }, [s, provider, loadContext]);
+  }, [s, provider, launchable, loadContext]);
 
   // Просьба «Спросить агента»: ссылка ждёт вставки в агента своей записи; одна и та же просьба — один раз.
   useEffect(() => {
     if (!insert || taken.has(insert)) return;
     taken.add(insert);
     if (!insert.text) return;
+    // Выбран агент, который здесь не запускается (сценарий npm), — просьбу выполнит агент по умолчанию.
+    setChoice((c) => (assistant && agentProviders(assistant).some((p) => p.id === c) ? c : null));
     s.request(insert.text);
     loadContext();
     onTaken?.();
@@ -321,7 +341,7 @@ export function AgentTab({
       if (s.term && s.shown()) s.term.focus();
       else root.current?.focus();
     }, 0);
-  }, [insert, s, loadContext, onTaken]);
+  }, [insert, s, loadContext, onTaken, assistant]);
 
   // Вставить некуда — ссылка в уведомление (её можно скопировать).
   const pending = v.pending;
@@ -333,7 +353,7 @@ export function AgentTab({
 
   // Агент не запущен — запускаем сами (один раз на просьбу; упавший запуск — кнопкой).
   useEffect(() => {
-    if (!pending || unavailable || !ready || !provider || !contextTried || nothing) return;
+    if (!pending || unavailable || !ready || !launchable || !contextTried || nothing) return;
     if (s.autoStarted === pending.seq || (phase !== "idle" && phase !== "exited")) return;
     s.autoStarted = pending.seq;
     void start();
@@ -401,20 +421,28 @@ export function AgentTab({
 
   const active = phase === "starting" || phase === "running" || phase === "stopping";
   /** В папке встречи уже работал этот агент (метка резидента) — можно продолжить. */
-  const hadSession = !!provider && !!context?.sessions?.includes(provider);
+  const hadSession = launchable && !!provider && !!context?.sessions?.includes(provider);
   const evicted = v.evicted && !active ? v.evicted : null;
+  /** Подпись главной кнопки — её же называет подсказка на пустом терминале. */
+  const startLabel = hadSession || evicted ? "Новая сессия" : "Запустить";
+  const resumable = hadSession && !evicted;
+  const idleText = nothing
+    ? (textPhase ? "Текст уже виден — агент станет доступен, когда определятся спикеры."
+      : "Агент станет доступен, когда появится расшифровка.")
+    : !launchable
+      ? "Этот агент во встроенном терминале не запускается — выберите другого или установите его отдельной программой."
+      : `Нажмите «${startLabel}»${resumable ? " или «Продолжить прошлую»" : ""} — агент откроется в папке этой встречи.`;
   return (
     <div className="agent" ref={root} tabIndex={-1}>
       <div className="agent__bar">
         <label className="agent__label" htmlFor={`agent-provider-${id}`}>Агент</label>
-        {/* Список — родной <select> (клавиатура и диктор как у системы) в виде Aurora select-btn. */}
-        <span className="agent__pick">
-          <select id={`agent-provider-${id}`} className="select-btn select-btn--sm agent__select" value={provider ?? ""}
-            disabled={!providers.length || phase === "starting"} onChange={(e) => setChoice(e.target.value)}>
-            {providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-          </select>
-          <Icon as={ChevronDown} size="sm" className="agent__pick-chevron" />
-        </span>
+        {/* Сценарий npm (codex.cmd) — в списке с пометкой: выбрать можно, запустить нельзя (см. выноску). */}
+        <Select id={`agent-provider-${id}`} size="sm" width={170} value={provider ?? ""}
+          options={listed.map((p) => ({
+            value: p.id, label: p.label,
+            detail: providers.some((q) => q.id === p.id) ? undefined : `${p.id}.cmd`,
+          }))}
+          disabled={!listed.length || phase === "starting"} onChange={setChoice} />
         <HelpTip label="Что такое вкладка «Агент»" title="Агент в папке встречи">
           <TipLine>
             Здесь работает Claude Code, Codex или OpenCode — тот же, что в обычном терминале: можно задавать вопросы по встрече,
@@ -450,15 +478,15 @@ export function AgentTab({
         </HelpTip>
         {active ? (
           <>
-            <Button onClick={restart} disabled={!ready || !provider || phase === "starting"}>Перезапустить</Button>
+            <Button onClick={restart} disabled={!ready || !launchable || phase === "starting"}>Перезапустить</Button>
             <Button variant="ghost" onClick={stop} disabled={phase !== "running"}>Остановить</Button>
           </>
         ) : (
           <>
-            <Button variant="primary" onClick={() => void start()} disabled={!ready || !provider || nothing}>
-              {hadSession || evicted ? "Новая сессия" : "Запустить"}
+            <Button variant="primary" onClick={() => void start()} disabled={!ready || !launchable || nothing}>
+              {startLabel}
             </Button>
-            {hadSession && !evicted && (
+            {resumable && (
               <Button onClick={() => void start(true)} disabled={!ready || nothing}>Продолжить прошлую</Button>
             )}
           </>
@@ -468,9 +496,9 @@ export function AgentTab({
           {phaseText(phase, code)}
         </span>
         {model && (
-          <span className="agent__model" title="Модель, с которой запущен агент (--model): «Модель Claude Code» в настройках или свой --model в параметрах запуска">
-            модель: {model}
-          </span>
+          <Tip content="Модель, с которой запущен агент (--model): «Модель Claude Code» в настройках или свой --model в параметрах запуска">
+            <span className="agent__model">модель: {model}</span>
+          </Tip>
         )}
       </div>
       {context && <div className="agent__context">{contextText(context)}</div>}
@@ -478,8 +506,7 @@ export function AgentTab({
         {active ? "Агент запущен в папке встречи" : "Агент откроется в папке встречи"}. База знаний подключена для
         чтения; права на запись определяются настройками агента.
       </div>
-      {codexNote && <div className="agent__hint">{CODEX_SCRIPT_NOTE}</div>}
-      {opencodeNote && <div className="agent__hint">{OPENCODE_SCRIPT_NOTE}</div>}
+      {scriptNote && <Callout tone="warn" role="note">{scriptNote}</Callout>}
       {error && <div className="assist__error" role="alert">{error}</div>}
       {evicted && (
         <EvictedNote canResume={ready && !nothing && providers.some((p) => p.id === evicted.provider)}
@@ -490,15 +517,13 @@ export function AgentTab({
       <div className="codeblock agent__screen">
         <div className="code-head agent__head">
           <b className="agent__path" title={folder}>{folder ?? ""}</b>
-          <span>{providers.find((p) => p.id === provider)?.label ?? ""}</span>
+          <span>{listed.find((p) => p.id === provider)?.label ?? ""}</span>
         </div>
         <div className="agent__body" onContextMenu={onContextMenu}>
           <div className="agent__xterm" ref={screen} data-agent-terminal />
           {phase === "idle" && (
             <div className="agent__idle">
-              {nothing ? (textPhase ? "Текст уже виден — агент станет доступен, когда определятся спикеры."
-                : "Агент станет доступен, когда появится расшифровка.")
-                : "Нажмите «Запустить» — агент откроется в папке этой встречи."}
+              {idleText}
             </div>
           )}
         </div>

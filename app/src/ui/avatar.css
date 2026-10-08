@@ -5,5 +5,11 @@
   font-weight: 600; user-select: none;
 }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
+/* Человек с цветом: кольцо его цвета (--person) на --surface-2, инициалы — цветом текста темы.
+   Кольцо толщиной ~1/12 размера: 2 px у 24, 1.5 px у мелких (16–18), 3 px у крупных (72). */
+.avatar--person {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 clamp(1.5px, calc(1em * 0.2), 3px) var(--person);
+}
 /* Неназванный спикер: приглушённый, с тонким кольцом. */
 .avatar--unnamed { color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--hairline-strong); }

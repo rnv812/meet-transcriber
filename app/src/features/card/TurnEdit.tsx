@@ -19,6 +19,7 @@ import { NO_SPEAKER, runFrom, speakersOf, type Turn } from "../../lib/speakers";
 import { wordAt } from "../../lib/textfix";
 import type { Segment } from "../../lib/types";
 import { Popover } from "../../ui/Popover";
+import { Tip } from "../../ui/Tip";
 import { TargetPicker, type Target } from "./speakers/TargetPicker";
 import type { PersonColor } from "./Turns";
 import { Icon } from "../../ui/Icon";
@@ -298,9 +299,9 @@ export function useTurnEdit({
           <div className="tmenu__title">{title}</div>
           {one !== null && run.length > 1 && (
             <div className="tmenu__scope" role="radiogroup" aria-label="Какие реплики">
-              <label><input type="radio" name="tmenu-scope" checked={scope === "one"}
+              <label className="check-row"><input type="radio" className="rd" name="tmenu-scope" checked={scope === "one"}
                 onChange={() => setScope("one")} /> Только эта реплика</label>
-              <label><input type="radio" name="tmenu-scope" checked={scope === "run"}
+              <label className="check-row"><input type="radio" className="rd" name="tmenu-scope" checked={scope === "run"}
                 onChange={() => setScope("run")} /> Эта и следующие подряд того же спикера ({run.length})</label>
             </div>
           )}
@@ -359,10 +360,12 @@ export function useTurnEdit({
           {askGroup(splitAt.turn)}
           {word && onFixWord && (
             <div className="tmenu__links">
-              <button type="button" className="spk-link" title="Исправить распознанное (выделите слова и нажмите Ctrl+E)"
-                onClick={() => { const at = splitAt; closeMenu(); onFixWord(at.turn, at.offset, at.anchor); }}>
-                Исправить слово «{turnText.slice(word.start, word.end)}»…
-              </button>
+              <Tip content="Исправить распознанное (выделите слова и нажмите Ctrl+E)">
+                <button type="button" className="spk-link"
+                  onClick={() => { const at = splitAt; closeMenu(); onFixWord(at.turn, at.offset, at.anchor); }}>
+                  Исправить слово «{turnText.slice(word.start, word.end)}»…
+                </button>
+              </Tip>
             </div>
           )}
         </div>

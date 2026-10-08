@@ -69,10 +69,12 @@
 /* Фокус с клавиатуры — рамка Aurora вокруг полосы (у самой .pbar её нет: она шире полосы). */
 .pbar:focus-visible { box-shadow: none; }
 .pbar:focus-visible .pbar__track { border-radius: var(--r-xs); box-shadow: var(--focus-ring); }
-.pbar__seg { position: absolute; top: 0; bottom: 0; overflow: hidden; border-radius: 2px; background: var(--data-empty); }
+/* Отрезок главы: на фоне плеера (--surface-1) --data-empty (--surface-3) почти не виден —
+   пустая часть --hairline-strong, загруженная — светлее, пройденная — --data-1. */
+.pbar__seg { position: absolute; top: 0; bottom: 0; overflow: hidden; border-radius: 2px; background: var(--hairline-strong); }
 .pbar__buf, .pbar__hov, .pbar__fill { position: absolute; inset: 0; transform-origin: left center; }
 .pbar__buf {
-  background: var(--hairline-strong);
+  background: var(--ink-3); opacity: 0.35;
   transform: scaleX(clamp(0, calc((var(--buf) - var(--a)) / (var(--b) - var(--a))), 1));
 }
 .pbar__hov {
@@ -139,22 +141,14 @@
 }
 .pbar__label[data-past] { color: var(--ink); }
 
-/* Громкость: ползунок выезжает при наведении и фокусе. */
+/* Громкость — бегунок Aurora sm (ui/Slider): выезжает при наведении и фокусе. Свёрнутый —
+   нулевой ширины, но в порядке Tab: фокус с клавиатуры его раскрывает. */
 .pvol { flex: none; display: inline-flex; align-items: center; }
-.pvol__slider {
-  --vol: 100%;
-  width: 0; height: 16px; margin: 0; opacity: 0; cursor: pointer; background: none;
-  -webkit-appearance: none; appearance: none; transition: width var(--d), opacity var(--d), margin var(--d);
+.slider.pvol__slider {
+  flex: none; width: 0; margin: 0; opacity: 0; transition: width var(--d), opacity var(--d), margin var(--d);
 }
-.pvol:hover .pvol__slider, .pvol:focus-within .pvol__slider { width: 64px; margin: 0 4px 0 2px; opacity: 1; }
-.pvol__slider::-webkit-slider-runnable-track {
-  height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--ink) var(--vol), var(--hairline-strong) var(--vol));
-}
-.pvol__slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; width: 10px; height: 10px; margin-top: -3.5px; border: 0; border-radius: var(--r-full); background: var(--ink);
-}
-.pvol__slider:focus-visible { box-shadow: none; }
-.pvol__slider:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus-ring); }
+.pvol__slider .slider__input { min-width: 0; }
+.pvol:hover .slider.pvol__slider, .pvol:focus-within .slider.pvol__slider { width: 72px; margin: 0 8px 0 4px; opacity: 1; }
 
 /* Список глав. */
 .pchapters { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }

@@ -85,7 +85,9 @@ test("«Разделить…»: голоса готовы — предпрос�
   expect(within(screen.getByRole("region", { name: /^Спикер 2/ })).queryByRole("button", { name: "Разделить…" })).toBeNull();
   await userEvent.click(within(first).getByRole("button", { name: "Разделить…" }));
   const wizard = screen.getByRole("region", { name: "Разделить спикера «Спикер 1»" });
-  await userEvent.selectOptions(within(wizard).getAllByRole("combobox", { name: "Сколько голосов" })[0]!, "3");
+  await userEvent.click(within(wizard).getByRole("combobox", { name: "Сколько голосов" }));
+  await userEvent.click(screen.getByRole("option", { name: "3" }));
+  expect(within(wizard).getByRole("combobox", { name: "Сколько голосов" })).toHaveTextContent("3");
   await userEvent.click(within(wizard).getByRole("button", { name: "Разделить по голосу" }));
   expect(api.previewSplit).toHaveBeenCalledWith(ep, "r1", { label: "Спикер 1", mode: "auto", k: 3 });
   const g1 = await within(wizard).findByRole("region", { name: "Голос 1" });
@@ -98,7 +100,8 @@ test("«Разделить…»: голоса готовы — предпрос�
   await userEvent.click(within(g2).getByRole("button", { name: /Кому отдать группу «Голос 2»/ }));
   await userEvent.click(within(g2).getByRole("option", { name: /Новый спикер без имени/ }));
   // Другое число голосов — новый предпросмотр без задачи.
-  await userEvent.selectOptions(within(wizard).getByRole("combobox", { name: "Сколько голосов" }), "2");
+  await userEvent.click(within(wizard).getByRole("combobox", { name: "Сколько голосов" }));
+  await userEvent.click(screen.getByRole("option", { name: "2" }));
   await waitFor(() => expect(api.previewSplit).toHaveBeenLastCalledWith(ep, "r1", { label: "Спикер 1", mode: "auto", k: 2 }));
   const again = await within(wizard).findByRole("region", { name: "Голос 2" });
   await userEvent.click(within(again).getByRole("button", { name: /Кому отдать группу «Голос 2»/ }));
@@ -184,6 +187,8 @@ test("порог узнавания: предпросмотр изменений
   // fireEvent: у ползунка нет набора с клавиатуры в jsdom.
   const { fireEvent } = await import("@testing-library/react");
   fireEvent.change(slider, { target: { value: "70" } });
+  expect(slider).toHaveClass("slider__input"); // бегунок Aurora (ui/Slider), не системный
+  expect(slider).toHaveAttribute("aria-valuetext", "70%");
   expect(await screen.findByText(/Спикер 1 → Анна Смирнова/)).toBeInTheDocument();
   expect(screen.getByText(/похож на Анна Смирнова: 71%/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Применить" }));

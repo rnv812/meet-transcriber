@@ -320,11 +320,30 @@ test("компактный вид: одна строка, без подписе�
 
 test("громкость: ползунок меняет громкость, 0 — без звука", () => {
   const { audio } = setup();
-  fireEvent.change(screen.getByRole("slider", { name: "Громкость" }), { target: { value: "0.4" } });
+  const volume = screen.getByRole("slider", { name: "Громкость" });
+  expect(volume).toHaveClass("slider__input"); // бегунок Aurora (ui/Slider sm), не самодельный
+  expect(volume.closest(".slider")).toHaveClass("slider--sm");
+  fireEvent.change(volume, { target: { value: "0.4" } });
   expect(audio.volume).toBeCloseTo(0.4);
+  expect(screen.getByRole("slider", { name: "Громкость" })).toHaveAttribute("aria-valuetext", "40%");
   fireEvent.change(screen.getByRole("slider", { name: "Громкость" }), { target: { value: "0" } });
   expect(audio.muted).toBe(true);
   expect(screen.getByRole("button", { name: "Включить звук" })).toBeInTheDocument();
+});
+
+test("подсказки кнопок плеера — облачка Aurora, а не системный title", () => {
+  setup();
+  const buttons = [
+    screen.getByRole("button", { name: "Воспроизвести" }),
+    screen.getByRole("button", { name: "Выключить звук" }),
+    screen.getByRole("button", { name: "Главы" }),
+    screen.getByRole("button", { name: "Только важное" }),
+  ];
+  for (const b of buttons) expect(b).not.toHaveAttribute("title");
+  expect(screen.getByRole("button", { name: "Воспроизвести" })).toHaveAttribute("aria-keyshortcuts", "K");
+  expect(screen.getByRole("button", { name: "Выключить звук" })).toHaveAttribute("aria-keyshortcuts", "M");
+  expect(screen.getByRole("button", { name: "Только важное" }))
+    .toHaveAccessibleDescription("Играть только важные фрагменты встречи");
 });
 
 test("начало реплики в пузыре — не длиннее 60 символов", () => {

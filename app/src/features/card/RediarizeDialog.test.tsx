@@ -73,6 +73,35 @@ test("параметры: точное число собеседников и ч
   expect(onClose).toHaveBeenCalled();
 });
 
+test("число собеседников — степпер Aurora: − и + в пределах 1…20, без стрелок системного поля; чувствительность — бегунок Aurora", async () => {
+  setup();
+  const dialog = screen.getByRole("dialog", { name: "Переразделить на спикеров" });
+  const n = within(dialog).getByRole("spinbutton", { name: "Число собеседников" });
+  const less = within(dialog).getByRole("button", { name: "Число собеседников: меньше" });
+  const more = within(dialog).getByRole("button", { name: "Число собеседников: больше" });
+  // Пока выбрано «автоматически» — степпер недоступен целиком.
+  expect(n).toBeDisabled();
+  expect(less).toBeDisabled();
+  expect(more).toBeDisabled();
+  await userEvent.click(within(dialog).getByRole("radio", { name: /Точно/ }));
+  expect(n).toHaveValue(3);
+  await userEvent.click(more);
+  await userEvent.click(more);
+  expect(n).toHaveValue(5);
+  await userEvent.click(less);
+  expect(n).toHaveValue(4);
+  fireEvent.change(n, { target: { value: "1" } });
+  expect(less).toBeDisabled();
+  fireEvent.change(n, { target: { value: "20" } });
+  expect(more).toBeDisabled();
+  fireEvent.change(n, { target: { value: "4" } });
+  const sens = within(dialog).getByRole("slider", { name: "Чувствительность разделения" });
+  expect(sens).toHaveClass("slider__input");
+  expect(sens).toHaveAttribute("aria-valuetext", "как при расшифровке");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Запустить" }));
+  expect(api.rediarize).toHaveBeenCalledWith(ep, "r1", { num_speakers: 4 });
+});
+
 test("готовый результат открывается сразу; «Отказаться» удаляет его", async () => {
   const { onClose } = setup({ ready: true });
   expect(await screen.findByText(/Было спикеров: 2, станет: 3.*Сохранены имена: Анна Смирнова\./)).toBeInTheDocument();

@@ -5,15 +5,7 @@
 .agent--empty > .empty-state { flex: 1; height: auto; }
 .agent__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .agent__label { color: var(--ink-3); font-size: var(--text-sm); }
-/* Родной список в виде Aurora select-btn: своя стрелка поверх, системная скрыта. */
-.agent__pick { position: relative; display: inline-flex; width: 170px; }
-/* Три класса: сильнее размеров `.select-btn.select-btn--sm` (theme/aurora-fixes.css) при любом порядке файлов. */
-.agent__pick > .select-btn.agent__select { appearance: none; padding-right: 28px; }
-.agent__select:disabled { opacity: 0.5; cursor: default; }
-.agent__select option { background: var(--surface-1); color: var(--ink); }
-.agent__pick-chevron {
-  position: absolute; top: 50%; right: 8px; transform: translateY(-50%); color: var(--ink-3); pointer-events: none;
-}
+/* Список агентов — ui/Select size="sm" (170 px). */
 .agent__bar .helptip { margin-right: 4px; }
 .agent__phase {
   display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: var(--text-sm); color: var(--ink-2);

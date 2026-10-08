@@ -246,7 +246,11 @@ test("правый щелчок: выделение — «Исправить…�
   };
   fireEvent.contextMenu(p, { clientX: 10, clientY: 10 });
   const menu = await screen.findByRole("dialog", { name: "Разделить реплику здесь" });
-  await userEvent.click(within(menu).getByRole("button", { name: "Исправить слово «Кубер»…" }));
+  const fixWord = within(menu).getByRole("button", { name: "Исправить слово «Кубер»…" });
+  // Подсказка — облачко Aurora (описание кнопки), не системный title.
+  expect(fixWord).not.toHaveAttribute("title");
+  expect(fixWord).toHaveAccessibleDescription("Исправить распознанное (выделите слова и нажмите Ctrl+E)");
+  await userEvent.click(fixWord);
   await screen.findByRole("dialog", { name: "Исправить распознанное" });
   expect(api.previewTextFix).toHaveBeenLastCalledWith(ep, "r1", { find: "Кубер", segment: 2, offset: 0 });
   delete (document as unknown as { caretRangeFromPoint?: unknown }).caretRangeFromPoint;

@@ -113,14 +113,8 @@ test("ссылка-кнопка — шрифтом окружающего тек
  * нарушение. Пустой список — цель.
  */
 const NATIVE_ALLOWED = new Set<string>([
-  // Пакет B: карточка встречи и голоса.
-  "features/card/AgentTab.tsx: <select>",
-  "features/card/speakers/SplitView.tsx: <select>",
+  // Пакет B: голоса (перешли в пакет D).
   "features/voices/PersonCard.tsx: <select>",
-  "features/card/AudioPlayer.tsx: range",
-  "features/card/RediarizeDialog.tsx: range",
-  "features/card/speakers/ThresholdBox.tsx: range",
-  "features/card/TurnEdit.tsx: radio без .rd",
 
   // Пакет C: настройки.
   "features/settings/AsrChoice.tsx: <select>",

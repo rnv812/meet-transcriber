@@ -70,6 +70,11 @@ test("меню реплики: только эта реплика — челов
   const menu = await screen.findByRole("dialog", { name: "Кому отдать реплики" });
   expect(within(menu).getByText("Реплика 00:00 · Спикер 1")).toBeInTheDocument();
   expect(within(menu).getByRole("radio", { name: "Только эта реплика" })).toBeChecked();
+  // Радио Aurora (.rd в строке .check-row), не системные.
+  for (const r of within(menu).getAllByRole("radio")) {
+    expect(r).toHaveClass("rd");
+    expect(r.closest("label")).toHaveClass("check-row");
+  }
   // Нынешнего спикера среди вариантов нет; есть спикеры встречи, база, «Это я», новый безымянный.
   expect(within(menu).queryByRole("option", { name: /^Спикер 1/ })).toBeNull();
   expect(within(menu).getByRole("option", { name: /^Спикер 2/ })).toBeInTheDocument();

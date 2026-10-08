@@ -8,7 +8,7 @@
  * шаг истории встречи: его отменяет «Отменить» в панели «Спикеры».
  */
 
-import { Play, X } from "lucide-react";
+import { Minus, Play, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -23,6 +23,7 @@ import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
+import { Slider } from "../../ui/Slider";
 import "./speakers/speakers.css";
 import "./rediarize.css";
 
@@ -34,6 +35,35 @@ const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCas
 export function rediarizeJobOf(folder: string, jobs: Job[]): Job | null {
   return jobs.find((j) => j.kind === "rediarize" && norm(j.folder) === norm(folder)
     && (j.state === "queued" || j.state === "running")) ?? null;
+}
+
+/** Сколько людей можно указать: от и до. */
+const MIN_N = 1;
+const MAX_N = 20;
+
+/**
+ * Число людей: поле 48 px между кнопками − и + (вместо системных стрелок
+ * `input[type=number]`). Поле остаётся числовым: ↑↓ с клавиатуры и ввод цифр
+ * работают, значение прижимается к 1…20.
+ */
+function Stepper({ label, value, disabled, onChange }: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onChange: (n: number) => void;
+}) {
+  const clamp = (n: number) => Math.max(MIN_N, Math.min(MAX_N, n));
+  return (
+    <span className="redia__stepper">
+      <IconButton icon={Minus} variant="secondary" label={`${label}: меньше`} tooltip="Меньше"
+        disabled={disabled || value <= MIN_N} onClick={() => onChange(clamp(value - 1))} />
+      <input type="number" inputMode="numeric" min={MIN_N} max={MAX_N} className="field field--sm num redia__n"
+        aria-label={label} value={value} disabled={disabled}
+        onChange={(e) => onChange(clamp(Number(e.target.value) || MIN_N))} />
+      <IconButton icon={Plus} variant="secondary" label={`${label}: больше`} tooltip="Больше"
+        disabled={disabled || value >= MAX_N} onClick={() => onChange(clamp(value + 1))} />
+    </span>
+  );
 }
 
 type Count = "auto" | "exact" | "range";
@@ -195,17 +225,14 @@ export function RediarizeDialog({
               <label className="check-row">
                 <input type="radio" className="rd" name="redia-count" checked={count === "exact"} onChange={() => setCount("exact")} />
                 Точно:
-                <input type="number" min={1} max={20} className="field field--sm num redia__n" aria-label={`Число ${who}`} value={exact}
-                  disabled={count !== "exact"} onChange={(e) => setExact(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
+                <Stepper label={`Число ${who}`} value={exact} disabled={count !== "exact"} onChange={setExact} />
               </label>
               <label className="check-row">
                 <input type="radio" className="rd" name="redia-count" checked={count === "range"} onChange={() => setCount("range")} />
                 От
-                <input type="number" min={1} max={20} className="field field--sm num redia__n" aria-label={`Наименьшее число ${who}`} value={low}
-                  disabled={count !== "range"} onChange={(e) => setLow(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
+                <Stepper label={`Наименьшее число ${who}`} value={low} disabled={count !== "range"} onChange={setLow} />
                 до
-                <input type="number" min={1} max={20} className="field field--sm num redia__n" aria-label={`Наибольшее число ${who}`} value={high}
-                  disabled={count !== "range"} onChange={(e) => setHigh(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
+                <Stepper label={`Наибольшее число ${who}`} value={high} disabled={count !== "range"} onChange={setHigh} />
               </label>
               {invalid && <span className="redia__error">Наименьшее число больше наибольшего</span>}
             </fieldset>
@@ -216,14 +243,15 @@ export function RediarizeDialog({
                 <TipLine>Выше — разные люди с похожими голосами разделяются лучше, но один человек чаще оказывается двумя спикерами. Ниже — наоборот.</TipLine>
                 <TipLine>Середина — как при обычной расшифровке. Если знаете, сколько было {who}, надёжнее указать их число.</TipLine>
               </HelpTip>
+              <span className="redia__sens-value" aria-hidden="true">
+                {sensitivity === 50 ? "Как при расшифровке" : `${sensitivity}%`}
+              </span>
               <div className="redia__slider">
                 <span className="muted">ниже</span>
-                <input id="redia-sens" type="range" min={0} max={100} step={5} value={sensitivity}
-                  aria-valuetext={sensitivity === 50 ? "как при расшифровке" : `${sensitivity}%`}
-                  onChange={(e) => setSensitivity(Number(e.target.value))} />
+                <Slider id="redia-sens" min={0} max={100} step={5} value={sensitivity} showValue={false}
+                  format={(v) => (v === 50 ? "как при расшифровке" : `${v}%`)} onChange={setSensitivity} />
                 <span className="muted">выше</span>
               </div>
-              <span className="muted redia__hint">{sensitivity === 50 ? "Как при расшифровке" : `${sensitivity}%`}</span>
             </div>
             <p className="muted redia__hint">Займёт несколько минут на час записи. Окно можно закрыть: результат сохранится до вашего решения.</p>
             <div className="redia__actions">

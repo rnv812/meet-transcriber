@@ -14,6 +14,7 @@ import type { SpeakersView, ThresholdPlan } from "../../../lib/types";
 import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import { Icon } from "../../../ui/Icon";
+import { Slider } from "../../../ui/Slider";
 
 const PLAN_DELAY_MS = 250;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -68,10 +69,8 @@ export function ThresholdBox({ endpoint, recordingId, own, fallback, busy, onApp
       {open && (
         <div className="spk-thr__body">
           <div className="spk-thr__row">
-            <input type="range" min={50} max={95} step={1} value={Math.round(value * 100)}
-              aria-label="Порог узнавания голоса, %" aria-valuetext={pct(value)}
-              onChange={(e) => setValue(Number(e.target.value) / 100)} />
-            <span className="num spk-thr__value">{pct(value)}</span>
+            <Slider min={50} max={95} value={Math.round(value * 100)} aria-label="Порог узнавания голоса, %"
+              format={(v) => `${v}%`} onChange={(v) => setValue(v / 100)} />
             <HelpTip label="Что такое порог узнавания" title="Порог узнавания голоса">
               <TipLine>Насколько голос спикера должен быть похож на образец человека из базы голосов, чтобы спикер получил его имя.</TipLine>
               <TipLine>Ниже порог — узнаётся больше людей, но чаще бывают ошибки. Выше — имена надёжнее, но больше спикеров остаётся без имени.</TipLine>

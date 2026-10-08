@@ -117,6 +117,13 @@ async function show(info: AssistantInfo | null = assistant(), more: More = {}) {
   return view;
 }
 const startButton = () => screen.getByRole("button", { name: "Запустить" });
+/** Выбрать агента в списке (ui/Select): раскрыть и нажать пункт; `check` — подписи пунктов. */
+async function pickAgent(label: string, check?: (names: string[]) => void) {
+  await userEvent.click(screen.getByRole("combobox", { name: "Агент" }));
+  const options = screen.getAllByRole("option");
+  check?.(options.map((o) => o.querySelector(".selectbox__label")?.textContent ?? ""));
+  await userEvent.click(options.find((o) => o.querySelector(".selectbox__label")?.textContent === label)!);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -148,7 +155,7 @@ test("агенты — только установленные Claude Code и Co
   expect(agentProviders(null)).toEqual([]);
 });
 
-test("Codex только как сценарий npm (codex.cmd) в список не попадает — вместо него подсказка", async () => {
+test("Codex только как сценарий npm (codex.cmd): в списке с пометкой, подсказка — только когда он выбран", async () => {
   const npm = assistant({ available: {
     "claude-code": { found: true, path: "C:/bin/claude.exe" },
     codex: { found: true, path: "C:/npm/codex.cmd" },
@@ -158,8 +165,17 @@ test("Codex только как сценарий npm (codex.cmd) в список
   expect(codexScriptOnly(assistant())).toBe(false);
   await show(npm);
   const select = screen.getByRole("combobox", { name: "Агент" });
-  expect([...(select as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Claude Code"]);
-  expect(screen.getByText(CODEX_SCRIPT_NOTE)).toBeInTheDocument();
+  expect(select).toHaveTextContent("Claude Code");
+  // Выбран Claude Code — про Codex ни слова.
+  expect(screen.queryByText(CODEX_SCRIPT_NOTE)).toBeNull();
+  await userEvent.click(select);
+  const options = screen.getAllByRole("option");
+  expect(options.map((o) => o.querySelector(".selectbox__label")?.textContent)).toEqual(["Claude Code", "Codex"]);
+  expect(options[1]).toHaveTextContent("codex.cmd");
+  await userEvent.click(options[1]!);
+  const note = screen.getByText(CODEX_SCRIPT_NOTE);
+  expect(note.closest(".callout")).toHaveClass("callout--warn", "card__callout");
+  expect(startButton()).toBeDisabled();
   expect(CODEX_SCRIPT_NOTE).toContain("codex.exe");
 });
 
@@ -222,9 +238,8 @@ test("без агентов — подсказка и «Открыть наст�
 test("выбор агента: только установленные, запуск выбранного с размером терминала", async () => {
   await show(assistant({ provider: "codex" }));
   const select = screen.getByRole("combobox", { name: "Агент" });
-  expect(select).toHaveValue("codex");
-  expect([...(select as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Claude Code", "Codex"]);
-  await userEvent.selectOptions(select, "claude-code");
+  expect(select).toHaveTextContent("Codex");
+  await pickAgent("Claude Code", (names) => expect(names).toEqual(["Claude Code", "Codex"]));
   await userEvent.click(startButton());
   expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24, false);
   expect(await screen.findByText("Работает")).toBeInTheDocument();
@@ -243,7 +258,7 @@ test("строка управления: выбор агента, «Запуст
   await show(assistant());
   const status = screen.getByText("Не запущен");
   expect(status.querySelector(".agent-mark")).toHaveAttribute("data-state", "rest");
-  expect(screen.getByRole("combobox", { name: "Агент" })).toHaveValue("claude-code");
+  expect(screen.getByRole("combobox", { name: "Агент" })).toHaveTextContent("Claude Code");
   await userEvent.click(startButton());
   const working = await screen.findByText("Работает");
   expect(working.querySelector(".agent-mark")).toHaveAttribute("data-state", "write");
@@ -257,7 +272,7 @@ test("терминал — блок кода: в шапке папка встр�
   const head = block.querySelector(".code-head") as HTMLElement;
   expect(head).toHaveTextContent("C:\\rec\\2026-09-14_11-00");
   expect(head).toHaveTextContent("Codex");
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Агент" }), "claude-code");
+  await pickAgent("Claude Code");
   expect(head).toHaveTextContent("Claude Code");
 });
 
@@ -899,7 +914,7 @@ test("«Продолжить прошлую» — только если этот
   // Claude Code в этой папке не запускался — как раньше, только «Запустить».
   expect(screen.queryByRole("button", { name: "Продолжить прошлую" })).toBeNull();
   expect(startButton()).toBeInTheDocument();
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Агент" }), "codex");
+  await pickAgent("Codex");
   const resume = screen.getByRole("button", { name: "Продолжить прошлую" });
   expect(screen.getByRole("button", { name: "Новая сессия" })).toHaveClass("btn--primary");
   await userEvent.click(resume);
@@ -915,6 +930,24 @@ test("«Новая сессия» при прошлом сеансе запус�
   await show(assistant(), { endpoint: ep });
   await userEvent.click(await screen.findByRole("button", { name: "Новая сессия" }));
   expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24, false);
+});
+
+test("подсказка на пустом терминале: «Запустить» — как подписана кнопка", async () => {
+  await show(assistant(), { endpoint: ep });
+  await screen.findByText(/Контекст: transcript\.md/);
+  expect(startButton()).toBeInTheDocument();
+  expect(screen.getByText("Нажмите «Запустить» — агент откроется в папке этой встречи.")).toBeInTheDocument();
+});
+
+test("подсказка на пустом терминале: был прошлый сеанс — «Новая сессия» или «Продолжить прошлую», а не «Запустить»", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({
+    files: ["transcript.md"], live: false, sessions: ["claude-code"],
+  });
+  await show(assistant(), { endpoint: ep });
+  await screen.findByRole("button", { name: "Новая сессия" });
+  expect(screen.getByText("Нажмите «Новая сессия» или «Продолжить прошлую» — агент откроется в папке этой встречи."))
+    .toBeInTheDocument();
+  expect(screen.queryByText(/Нажмите «Запустить»/)).toBeNull();
 });
 
 // --- сеанс живёт вне карточки: вкладки, другие записи, разделы -----------------------

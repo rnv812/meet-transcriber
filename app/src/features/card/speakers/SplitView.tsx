@@ -26,9 +26,11 @@ import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
 import { TargetPicker, type Target } from "./TargetPicker";
 import { Icon } from "../../../ui/Icon";
+import { Select } from "../../../ui/Select";
 
 const PHRASE_S = 6;
-const KS = [2, 3, 4, 5];
+/** Сколько голосов можно задать при автоматическом разделении. */
+const K_OPTIONS = [2, 3, 4, 5].map((n) => ({ value: String(n), label: String(n) }));
 /** Сходство голосов групп, выше которого это, скорее всего, один человек (замер на реальной встрече: свои 0,91–0,94, чужие 0,02–0,08). */
 const SAME_VOICE = 0.8;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -178,11 +180,8 @@ export function SplitView({
             <label className="spk-split__mode">
               <input type="radio" className="rd" name="split-mode" checked={mode === "auto"} onChange={() => setMode("auto")} />
               <span>Автоматически на</span>
-              <select className="field field--sm spk-split__select" aria-label="Сколько голосов" value={k}
-                disabled={mode !== "auto"}
-                onChange={(e) => setK(Number(e.target.value))}>
-                {KS.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
+              <Select size="sm" aria-label="Сколько голосов" options={K_OPTIONS} value={String(k)}
+                disabled={mode !== "auto"} onChange={(v) => setK(Number(v))} />
               <span>{plural(k, "голос", "голоса", "голосов")}</span>
               <HelpTip label="Как работает автоматическое разделение" title="Автоматически на K голосов">
                 <TipLine>Реплики спикера группируются по сходству голоса: получится столько групп, сколько вы укажете.</TipLine>
@@ -233,16 +232,14 @@ export function SplitView({
           {phase.preview.mode === "auto" && (
             <label className="spk-split__k">
               Голосов:
-              <select className="field field--sm spk-split__select" aria-label="Сколько голосов" value={k}
+              <Select size="sm" aria-label="Сколько голосов" options={K_OPTIONS} value={String(k)}
                 disabled={busy}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
+                onChange={(v) => {
+                  const n = Number(v);
                   setK(n);
                   setBusy(true);
                   void showPreview(n).catch((x) => setError(errorText(x))).finally(() => setBusy(false));
-                }}>
-                {KS.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
+                }} />
             </label>
           )}
           <div className="muted spk-split__hint">

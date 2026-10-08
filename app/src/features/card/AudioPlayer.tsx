@@ -46,6 +46,8 @@ import { Avatar } from "../../ui/Avatar";
 import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
 import { Popover } from "../../ui/Popover";
+import { Slider } from "../../ui/Slider";
+import { Tip } from "../../ui/Tip";
 import type { PersonColor } from "./Turns";
 import { PlayerKeysTip } from "./PlayerKeysTip";
 import "./player.css";
@@ -623,20 +625,24 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         )}
       </div>
       <div className="player__left">
-        <button type="button" className="btn btn--deep btn--flat btn--icon player__play" onClick={toggle}
-          aria-label={playing ? "Пауза" : "Воспроизвести"} title={playing ? "Пауза (K)" : "Воспроизвести (K)"}>
-          <Icon as={playing ? Pause : Play} fill="currentColor" />
-        </button>
-        <span className="pvol">
-          <button type="button" className="btn btn--ghost btn--sm btn--icon player__mute" onClick={toggleMute}
-            aria-pressed={muted} aria-label={muted ? "Включить звук" : "Выключить звук"}
-            title={muted ? "Включить звук (M)" : "Выключить звук (M)"}>
-            <Icon as={volumeIcon(muted, volume)} />
+        {/* Подсказки — облачка Aurora (ui/Tip); клавиша — в подсказке и в aria-keyshortcuts. */}
+        <Tip content={playing ? "Пауза · K" : "Воспроизвести · K"} describe={false}>
+          <button type="button" className="btn btn--deep btn--flat btn--icon player__play" onClick={toggle}
+            aria-label={playing ? "Пауза" : "Воспроизвести"} aria-keyshortcuts="K">
+            <Icon as={playing ? Pause : Play} fill="currentColor" />
           </button>
-          <input type="range" className="pvol__slider" aria-label="Громкость" min={0} max={1} step={0.05}
-            value={muted ? 0 : volume} aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`}
-            style={{ ["--vol" as string]: `${(muted ? 0 : volume) * 100}%` }}
-            onChange={(e) => changeVolume(Number(e.target.value))} />
+        </Tip>
+        <span className="pvol">
+          <Tip content={muted ? "Включить звук · M" : "Выключить звук · M"} describe={false}>
+            <button type="button" className="btn btn--ghost btn--sm btn--icon player__mute" onClick={toggleMute}
+              aria-pressed={muted} aria-label={muted ? "Включить звук" : "Выключить звук"} aria-keyshortcuts="M">
+              <Icon as={volumeIcon(muted, volume)} />
+            </button>
+          </Tip>
+          {/* Бегунок Aurora sm: выезжает при наведении и фокусе (player.css). */}
+          <Slider size="sm" className="pvol__slider" aria-label="Громкость" min={0} max={1} step={0.05}
+            value={muted ? 0 : volume} showValue={false} format={(v) => `${Math.round(v * 100)}%`}
+            onChange={changeVolume} />
         </span>
         {loading ? (
           <span className="player__status" role="status">
@@ -650,22 +656,27 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           </span>
         )}
         {here && (
-          <button type="button" className="btn btn--ghost btn--sm player__chapter" aria-haspopup="dialog"
-            aria-expanded={chaptersAnchor?.classList.contains("player__chapter") ?? false}
-            aria-label={`Глава ${here.n}: ${here.title}. Список глав`} title="Главы встречи" onMouseDown={keepChapters} onClick={openChapters}>
-            <span className="player__chapter-title" title={here.title}>{here.title}</span>
-            <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
-          </button>
+          // Подсказка — полное название главы (на кнопке оно обрезается); имя кнопки уже его содержит.
+          <Tip content={`Глава ${here.n}: ${here.title}`} describe={false}>
+            <button type="button" className="btn btn--ghost btn--sm player__chapter" aria-haspopup="dialog"
+              aria-expanded={chaptersAnchor?.classList.contains("player__chapter") ?? false}
+              aria-label={`Глава ${here.n}: ${here.title}. Список глав`} onMouseDown={keepChapters} onClick={openChapters}>
+              <span className="player__chapter-title">{here.title}</span>
+              <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </Tip>
         )}
         {fragments > 0 && (
           <span className="player__only" role="status">
             <span className="player__only-text">
               Только важное · {fragments} {plural(fragments, "фрагмент", "фрагмента", "фрагментов")}
             </span>
-            <button type="button" className="player__only-off" aria-label="Выключить «Только важное»"
-              title="Выключить «Только важное»" onClick={() => setOnlyImportant(false)}>
-              <X size={12} strokeWidth={1.75} aria-hidden="true" />
-            </button>
+            <Tip content="Выключить «Только важное»" describe={false}>
+              <button type="button" className="player__only-off" aria-label="Выключить «Только важное»"
+                onClick={() => setOnlyImportant(false)}>
+                <X size={12} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            </Tip>
           </span>
         )}
       </div>
@@ -675,21 +686,24 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           {speedText(rate)}
         </button>
         {hasChapters && (
-          <button type="button" className="btn btn--ghost btn--sm player__btn player__btn--chapters" aria-haspopup="dialog"
-            aria-expanded={chaptersAnchor?.classList.contains("player__btn--chapters") ?? false}
-            aria-label="Главы" title="Главы встречи" onMouseDown={keepChapters} onClick={openChapters}>
-            <Icon as={ListVideo} />
-            <span className="player__btn-text">Главы</span>
-          </button>
+          <Tip content="Главы встречи" describe={false}>
+            <button type="button" className="btn btn--ghost btn--sm player__btn player__btn--chapters" aria-haspopup="dialog"
+              aria-expanded={chaptersAnchor?.classList.contains("player__btn--chapters") ?? false}
+              aria-label="Главы" onMouseDown={keepChapters} onClick={openChapters}>
+              <Icon as={ListVideo} />
+              <span className="player__btn-text">Главы</span>
+            </button>
+          </Tip>
         )}
         {spans && spans.length > 0 && (
-          <button type="button" className="filter player__important" aria-pressed={onlyImportant}
-            aria-label="Только важное" title="Играть только важные фрагменты встречи"
-            onClick={() => setOnlyImportant((v) => !v)}>
-            {/* Значок — только в узкой карточке, вместо подписи. */}
-            <Icon as={Sparkles} size="sm" className="player__important-icon" />
-            <span className="player__btn-text">Только важное</span>
-          </button>
+          <Tip content="Играть только важные фрагменты встречи">
+            <button type="button" className="filter player__important" aria-pressed={onlyImportant}
+              aria-label="Только важное" onClick={() => setOnlyImportant((v) => !v)}>
+              {/* Значок — только в узкой карточке, вместо подписи. */}
+              <Icon as={Sparkles} size="sm" className="player__important-icon" />
+              <span className="player__btn-text">Только важное</span>
+            </button>
+          </Tip>
         )}
         <span className="player__keys"><PlayerKeysTip /></span>
         <IconButton icon={compact ? Maximize2 : Minimize2} label={compact ? "Развернуть плеер" : "Компактный плеер"}
