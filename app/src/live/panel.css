@@ -47,7 +47,7 @@ html, body { background: transparent; }
 .live-head__alert { flex: none; color: var(--danger); }
 .live-head__state { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); font-weight: 600; }
 .live-panel--open .live-head__state { font-size: var(--text-ui); }
-.live-head__count { flex: none; height: 20px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.live-head__count { flex: none; } /* вид — ui/count.css (count--new) */
 .live-head__actions { display: flex; align-items: center; gap: 0; flex: none; }
 /* «Стоп» с подписью отделён от значков. */
 .live-head__actions > .live-head__stop:not(.btn--icon) { margin-left: 6px; }

@@ -44,6 +44,7 @@
  */
 
 import { type MouseEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import "../ui/count.css";
 
 import { TermsNotice } from "../features/legal/TermsNotice";
 import { useTermsAccepted } from "../features/legal/useTermsAccepted";
@@ -453,7 +454,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
         </span>
         </Tip>
         {!open && newHints > 0 && (
-          <span className={`${BADGE_CLASS.run} badge--plain live-head__count`}>
+          <span className="count count--new num live-head__count">
             <span className="sr-only">{participant ? "новых сообщений" : "новых подсказок"}: </span>{newHints}
           </span>
         )}

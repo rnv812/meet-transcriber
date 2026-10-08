@@ -72,11 +72,8 @@
 .live-undo__text { color: var(--ink-2); }
 /* Вкладки узкой области — Aurora `.tabs.tabs--sm` (controls.css); здесь — только место. */
 .live-tabs { flex: none; align-self: flex-start; max-width: 100%; overflow-x: auto; }
-.live-tabs__count {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--r-full);
-  background: var(--accent-soft); color: var(--accent-line);
-  font-size: var(--text-xs); line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
-}
+/* Счётчик новых на вкладке — ui/Count (tone="new"). */
+.live-tabs__count { margin-left: 2px; }
 /* Узкая: полоса ленты (если есть) и вкладка одна над другой. */
 .live-ws__stack { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .live-ws__strip { flex: 0 0 var(--live-feed-h, 35%); min-height: 0; display: flex; flex-direction: column; }

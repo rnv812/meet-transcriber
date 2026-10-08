@@ -1,0 +1,11 @@
+/* Счётчик (ui/Count): одно правило на всё окно (0.5). Нейтральный — число на --surface-3;
+   новое — мягкий акцент; тревога (ошибки, «нужно решение») — мягкий красный. Плоско, без заливки
+   полным цветом: число не должно выглядеть знаком «стоп». */
+.count {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-full);
+  font: 600 var(--text-xs)/1 var(--font-body); font-variant-numeric: tabular-nums;
+}
+.count--neutral { background: var(--surface-3); color: var(--ink); box-shadow: inset 0 0 0 1px var(--hairline); }
+.count--new { background: var(--accent-soft); color: var(--accent-line); }
+.count--alert { background: var(--danger-soft); color: var(--danger); }

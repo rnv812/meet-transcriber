@@ -14,6 +14,7 @@
 
 import { ListFilter } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Count } from "../../ui/Count";
 import { ApiError, getCategoriesInfo, getFacets, libraryFilterKey, type Endpoint } from "../../lib/api";
 import { NO_CATEGORY, NO_CATEGORY_NAME } from "../../lib/categories";
 import { DATE_PRESETS, dateHint, parseDateExpr } from "../../lib/dateExpr";
@@ -184,7 +185,7 @@ export function FiltersButton({
           aria-expanded={open} label={active ? `Фильтры · ${active}` : "Фильтры"}
           tooltip="Фильтры: категория, группа, участник, период, длительность"
           onClick={() => { if (!open) onOpen?.(); setOpen((v) => !v); }} />
-        {active > 0 && <span className="cat-filter__count num" aria-hidden="true">{active}</span>}
+        {active > 0 && <Count value={active} className="cat-filter__count" />}
       </span>
       {open && button.current && (
         <Popover anchor={button.current} label="Фильтры" width={290} align="end" onClose={close} anchorToggles>

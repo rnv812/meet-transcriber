@@ -19,6 +19,7 @@ import {
 } from "react";
 
 import { clock } from "../lib/format";
+import { Count } from "../ui/Count";
 import type { LiveCatchup, LiveHint, LiveQuick } from "../lib/types";
 import { Button } from "../ui/Button";
 import { PaneResizer } from "../ui/PaneResizer";
@@ -136,7 +137,7 @@ export function useLiveView(live: Live, { open, wide, quiet }: { open: boolean; 
 
 function count(n: number, quiet: boolean) {
   if (quiet || n <= 0) return null;
-  return <span className="live-tabs__count" aria-label={`новых: ${n}`}>{n}</span>;
+  return <Count value={n} tone="new" label={`новых: ${n}`} className="live-tabs__count" />;
 }
 
 /** Сколько «Скрыть» ещё можно отменить. */

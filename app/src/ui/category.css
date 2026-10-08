@@ -23,10 +23,8 @@
 /* Фильтр списка по категориям; число условий — значком поверх кнопки «Фильтры»
    (features/recordings, обёртка .rec-filter). */
 .cat-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.cat-filter__count {
-  position: absolute; top: -7px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  background: var(--accent); color: var(--on-accent); font-size: 10px; line-height: 16px; text-align: center;
-}
+/* Сколько фильтров выбрано — нейтральный ui/Count (0.5: акцентом палитры число путали с ошибкой). */
+.cat-filter__count { position: absolute; top: -7px; right: -7px; }
 .cat-filter__list {
   display: flex; flex-direction: column; gap: 1px; max-height: 340px; overflow-y: auto;
   min-width: 0; margin: 0; padding: 0; border: 0;
