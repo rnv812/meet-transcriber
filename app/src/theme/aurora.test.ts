@@ -31,17 +31,28 @@ test("палитры — только переменные: классов ко�
 
 test("окно не переопределяет токены Aurora: свои имена — только псевдонимы", () => {
   const aurora = new Set([...declared(read("aurora", "tokens.css")), ...declared(read("aurora", "palettes.css"))]);
-  const own = [...declared(read("tokens.css"))].filter((name) => aurora.has(name));
-  expect(own).toEqual([]);
+  for (const file of ["legacy-aliases.css", "tokens.css"]) {
+    const own = [...declared(read(file))].filter((name) => aurora.has(name));
+    expect(own, file).toEqual([]);
+  }
 });
 
-test("все три окна подключают основу Aurora раньше своих стилей", () => {
+test("псевдонимы перехода 0.4 — в legacy-aliases.css, не в tokens.css", () => {
+  const tokens = read("tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  expect(tokens).not.toMatch(/(?:^|\n)(:root|\[data-theme="light"\])\s*\{/);
+  const aliases = declared(read("legacy-aliases.css"));
+  for (const name of ["--bg", "--text", "--sb-thumb"]) expect(aliases.has(name), name).toBe(true);
+});
+
+const cssImports = (src: string) => [...src.matchAll(/import "([^"]+\.css)";/g)].map((m) => m[1]!);
+
+test("все три окна подключают основу Aurora раньше своих стилей, псевдонимы — сразу после неё", () => {
   for (const entry of ["main.tsx", join("live", "main.tsx"), join("tray", "main.tsx")]) {
-    const src = readFileSync(join(process.cwd(), "src", entry), "utf8");
-    const at = src.indexOf("theme/aurora/index.css");
-    expect(at, entry).toBeGreaterThan(-1);
-    const firstCss = src.search(/import "[^"]+\.css";/);
-    expect(firstCss, entry).toBe(src.lastIndexOf('import "', at));
+    const css = cssImports(readFileSync(join(process.cwd(), "src", entry), "utf8"));
+    expect(css[0], entry).toMatch(/theme\/aurora\/index\.css$/);
+    // Панель трея рисует себя своими --tp-* и прежних имён не знает.
+    if (entry.startsWith("tray")) expect(css.some((c) => c.endsWith("legacy-aliases.css")), entry).toBe(false);
+    else expect(css[1], entry).toMatch(/theme\/legacy-aliases\.css$/);
   }
 });
 
@@ -52,7 +63,7 @@ test("шрифт Onest из npm больше не подключается", () 
 });
 
 test("псевдонимы окна ссылаются только на объявленные переменные", () => {
-  const own = read("tokens.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const own = read("legacy-aliases.css").replace(/\/\*[\s\S]*?\*\//g, "");
   const known = new Set([
     ...declared(read("aurora", "tokens.css")),
     ...declared(read("aurora", "palettes.css")),
