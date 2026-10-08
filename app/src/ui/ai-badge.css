@@ -4,7 +4,7 @@
   font-size: 10px; font-weight: 600; letter-spacing: 0.04em; line-height: 1; vertical-align: middle;
   color: var(--ink-2); background: transparent; border: 1px solid var(--accent-line);
   border-radius: var(--r-sm); cursor: pointer; user-select: none;
-  transition: background var(--t), color var(--t);
+  transition: background var(--d), color var(--d);
 }
 .ai-badge .agent-mark { color: inherit; }
 .ai-badge:hover { background: var(--accent-soft); color: var(--ink); }

@@ -13,7 +13,7 @@
 }
 .splitter::after {
   content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 1px;
-  background: transparent; pointer-events: none; transition: background var(--t);
+  background: transparent; pointer-events: none; transition: background var(--d);
 }
 /* Панель справа: её рамка — слева у панели, то есть ровно на месте разделителя. */
 .splitter--after::after { left: 0; }

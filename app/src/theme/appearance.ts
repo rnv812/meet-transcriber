@@ -14,7 +14,7 @@ export type Appearance = { theme: ThemePref; aurora: Palette; auroraStyle: Auror
 export const THEMES: readonly ThemePref[] = ["system", "dark", "light"];
 export const PALETTES: readonly Palette[] = ["violet", "green", "blue", "red", "amber"];
 export const STYLES: readonly AuroraStyle[] = ["glow", "waves"];
-export const DEFAULT_APPEARANCE: Appearance = { theme: "system", aurora: "violet", auroraStyle: "glow", motion: true };
+export const DEFAULT_APPEARANCE: Readonly<Appearance> = Object.freeze({ theme: "system", aurora: "violet", auroraStyle: "glow", motion: true });
 export const CACHE_KEY = "meet.appearance";
 
 const pick = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>

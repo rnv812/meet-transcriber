@@ -1,0 +1,9 @@
+/* Круглый аватар (ui/Avatar): картинка человека или инициалы; цвет человека задаёт компонент, остальное — токены Aurora. */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  border-radius: var(--r-full); overflow: hidden; background: var(--surface-3); color: var(--ink);
+  font-weight: 600; user-select: none;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+/* Неназванный спикер: приглушённый, с тонким кольцом. */
+.avatar--unnamed { color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--hairline-strong); }

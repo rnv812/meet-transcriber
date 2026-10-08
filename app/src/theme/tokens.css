@@ -31,7 +31,7 @@ body { overflow: hidden; }
 
 .eyebrow {
   font-size: 11px; font-weight: 500; letter-spacing: 0.04em;
-  text-transform: uppercase; color: var(--text-3);
+  text-transform: uppercase; color: var(--ink-3);
 }
 .num { font-variant-numeric: tabular-nums; }
 
@@ -39,13 +39,13 @@ body { overflow: hidden; }
 .app { position: relative; display: flex; height: 100%; min-width: 820px; }
 .nav {
   width: var(--nav-w); flex: none; padding: 12px 8px;
-  background: var(--surface); border-right: 1px solid var(--line);
+  background: var(--surface-1); border-right: 1px solid var(--hairline);
   display: flex; flex-direction: column; gap: 2px;
 }
-/* Знак и имя приложения над разделами: кольцо — как значок в трее. */
+/* Знак и имя приложения над разделами: диск-знак Meet (ui/MeetMark). */
 .nav__brand {
   display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; margin-bottom: 6px;
-  color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; user-select: none;
+  color: var(--ink); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; user-select: none;
 }
 .nav__mark {
   display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none;
@@ -53,11 +53,11 @@ body { overflow: hidden; }
 .nav__item {
   display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px;
   border: 0; border-radius: var(--r-md); background: transparent;
-  color: var(--text-2); font: inherit; text-align: left; cursor: pointer;
-  transition: background var(--t), color var(--t);
+  color: var(--ink-2); font: inherit; text-align: left; cursor: pointer;
+  transition: background var(--d), color var(--d);
 }
-.nav__item:hover { background: var(--surface-hover); color: var(--text); }
-.nav__item[aria-current="page"] { background: var(--surface-2); color: #fff; }
+.nav__item:hover { background: var(--surface-3); color: var(--ink); }
+.nav__item[aria-current="page"] { background: var(--surface-2); color: var(--ink); }
 .nav__icon { flex: none; }
 .nav__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -78,12 +78,12 @@ body { overflow: hidden; }
 .panes { flex: 1; min-height: 0; display: flex; }
 .pane-list {
   width: var(--list-w); flex: none; overflow: auto; scrollbar-gutter: stable;
-  border-right: 1px solid var(--line); background: var(--bg);
+  border-right: 1px solid var(--hairline); background: var(--canvas);
   /* Прилипший заголовок раздела по дате (recordings.css): строка, к которой прокручивают
      (фокус, открытая запись), не прячется под ним. */
   --date-sec-head-h: 30px; scroll-padding-top: calc(var(--date-sec-head-h) + 2px);
 }
-.pane-detail { flex: 1; min-width: 0; overflow: auto; background: var(--bg); }
+.pane-detail { flex: 1; min-width: 0; overflow: auto; background: var(--canvas); }
 
 /* Пустое состояние окна: по центру, заголовок и пояснение. Пустое на сиянии
    (Aurora .empty) — экран «Записей пока нет», этап 3. */
@@ -93,13 +93,6 @@ body { overflow: hidden; }
 }
 .empty-state__title { color: var(--ink); font: 600 var(--text-ui)/1.4 var(--font-body); }
 
-.avatar {
-  display: inline-flex; align-items: center; justify-content: center; flex: none;
-  border-radius: 50%; overflow: hidden; background: var(--surface-2); color: var(--text-2);
-  font-weight: 600; user-select: none;
-}
-.avatar img { width: 100%; height: 100%; object-fit: cover; }
-.avatar--unnamed { background: var(--surface-2); color: var(--text-3); }
 /* Разделённая кнопка: действие и узкая стрелка выбора варианта (модели) вплотную. */
 .split-btn { display: inline-flex; align-items: stretch; }
 .split-btn > .btn.split-btn__main { border-top-right-radius: 0; border-bottom-right-radius: 0; }

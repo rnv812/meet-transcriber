@@ -201,3 +201,7 @@ test("событие оболочки разбирается как кеш", () 
     .toEqual({ theme: "light", aurora: "blue", auroraStyle: "waves", motion: false });
   expect(appearanceFromEvent("мусор")).toEqual(DEFAULT_APPEARANCE);
 });
+
+test("умолчания оформления не меняются по ссылке", () => {
+  expect(Object.isFrozen(DEFAULT_APPEARANCE)).toBe(true);
+});

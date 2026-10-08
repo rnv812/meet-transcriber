@@ -1,14 +1,14 @@
 /* Категория встречи: точка цвета и имя. Тихая метка — не спорит с названием. */
 .cat-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; }
-.cat-dot--none { background: none; border: 1px solid var(--text-3); }
+.cat-dot--none { background: none; border: 1px solid var(--ink-3); }
 
 .cat-chip {
   display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; height: 20px; padding: 0 8px;
-  font-size: 12px; line-height: 1; color: var(--text-2);
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px;
+  font-size: 12px; line-height: 1; color: var(--ink-2);
+  background: var(--surface-1); border: 1px solid var(--hairline-strong); border-radius: 10px;
 }
 .cat-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-chip--none { color: var(--text-3); border-style: dashed; }
+.cat-chip--none { color: var(--ink-3); border-style: dashed; }
 
 /* В узком списке записей — только точка цвета; имя — в подсказке и для экранного диктора. */
 .cat-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 12px; height: 12px; }
@@ -19,7 +19,7 @@
 .cat-button {
   display: inline-flex; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; border-radius: 10px;
 }
-.cat-button:hover .cat-chip { background: var(--surface-hover); color: var(--text); }
+.cat-button:hover .cat-chip { background: var(--surface-3); color: var(--ink); }
 .cat-button[aria-expanded="true"] .cat-chip { border-color: var(--accent); }
 
 .cat-menu { display: flex; flex-direction: column; gap: 1px; }
@@ -27,28 +27,28 @@
 .cat-menu__list { display: flex; flex-direction: column; gap: 1px; max-height: min(400px, 60vh); overflow-y: auto; }
 .cat-menu__item {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-md);
-  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
-.cat-menu__item:hover, .cat-menu__item:focus-visible { background: var(--surface-hover); outline: none; }
+.cat-menu__item:hover, .cat-menu__item:focus-visible { background: var(--surface-3); outline: none; }
 .cat-menu__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-menu__check { color: var(--accent-hi); }
+.cat-menu__check { color: var(--accent-hover); }
 .cat-menu__item--action { color: var(--accent-hover); }
-.cat-menu__sep { height: 1px; margin: 3px 4px; background: var(--line-2); }
+.cat-menu__sep { height: 1px; margin: 3px 4px; background: var(--hairline-strong); }
 
 /* Фильтр списка по категориям. */
 .cat-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .cat-filter__button {
   position: relative;
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; flex: none;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--surface-1); color: var(--ink-2); border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
   font: inherit; cursor: pointer;
 }
-.cat-filter__button:hover { color: var(--text); background: var(--surface-hover); }
+.cat-filter__button:hover { color: var(--ink); background: var(--surface-3); }
 .cat-filter__button[aria-expanded="true"] { border-color: var(--accent); }
-.cat-filter__button--active { color: var(--text); border-color: var(--accent); }
+.cat-filter__button--active { color: var(--ink); border-color: var(--accent); }
 .cat-filter__count {
   position: absolute; top: -7px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
-  background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center;
+  background: var(--accent); color: var(--on-accent); font-size: 10px; line-height: 16px; text-align: center;
 }
 .cat-filter__list {
   display: flex; flex-direction: column; gap: 1px; max-height: 340px; overflow-y: auto;
@@ -58,25 +58,25 @@
 .cat-filter__option {
   display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r-md); cursor: pointer;
 }
-.cat-filter__option:hover { background: var(--surface-hover); }
+.cat-filter__option:hover { background: var(--surface-3); }
 .cat-filter__option input { margin: 0; accent-color: var(--accent); }
 .cat-filter__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-filter__option-count { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cat-filter__option-count { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .cat-filter__foot {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 4px 0; margin-top: 4px; border-top: 1px solid var(--line-2);
+  padding: 6px 4px 0; margin-top: 4px; border-top: 1px solid var(--hairline-strong);
 }
-.cat-filter__scope { flex: 1; min-width: 0; font-size: 11px; color: var(--text-3); }
+.cat-filter__scope { flex: 1; min-width: 0; font-size: 11px; color: var(--ink-3); }
 .cat-filter__foot .btn { flex: none; white-space: nowrap; }
 .cat-filter__reset { font-size: 12px; }
 .cat-filter__chip {
   display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 8px; max-width: 100%;
-  font-size: 12px; color: var(--text); background: rgba(94, 106, 210, 0.12);
-  border: 1px solid rgba(124, 134, 240, 0.35); border-radius: 11px;
+  font-size: 12px; color: var(--ink); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 11px;
 }
 .cat-filter__chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-filter__clear {
   display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0;
-  border: 0; border-radius: 50%; background: none; color: var(--text-2); font: inherit; font-size: 11px; cursor: pointer;
+  border: 0; border-radius: 50%; background: none; color: var(--ink-2); font: inherit; font-size: 11px; cursor: pointer;
 }
-.cat-filter__clear:hover { background: var(--surface-hover); color: var(--text); }
+.cat-filter__clear:hover { background: var(--surface-3); color: var(--ink); }

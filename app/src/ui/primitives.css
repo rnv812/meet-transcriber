@@ -81,13 +81,13 @@
 .truncate { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* --- Раскрывающийся блок ------------------------------------------------ */
-.disclosure { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.disclosure { border-bottom: 1px solid var(--hairline); padding: 4px 0; }
 .disclosure__head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 0; border: 0; background: none;
-  color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer;
 }
-.disclosure__head:hover { color: #fff; }
-.disclosure__chevron { flex: none; color: var(--text-2); transition: transform var(--t); }
+.disclosure__head:hover .disclosure__chevron { color: var(--ink); }
+.disclosure__chevron { flex: none; color: var(--ink-2); transition: transform var(--d); }
 .disclosure--open > .disclosure__head .disclosure__chevron { transform: rotate(90deg); }
 .disclosure__body { padding: 0 0 4px; }
 

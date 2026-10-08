@@ -4,8 +4,7 @@
   width: 24px; height: 24px; padding: 0; vertical-align: middle;
   background: transparent; color: var(--ink-2);
   border: 0; border-radius: var(--r-md); cursor: pointer;
-  transition: background var(--t), color var(--t), opacity var(--t);
+  transition: background var(--d), color var(--d), opacity var(--d);
 }
 .ask-agent .agent-mark { color: inherit; }
-.ask-agent:hover { background: var(--surface-hover); color: var(--ink); }
-.ask-agent:focus-visible { outline: 1px solid var(--accent-line); outline-offset: 1px; }
+.ask-agent:hover { background: var(--surface-3); color: var(--ink); }

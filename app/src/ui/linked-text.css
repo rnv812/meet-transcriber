@@ -1,10 +1,9 @@
 /* Ключ задачи Jira в тексте — ссылка в цвет акцента; подсветка поиска внутри неё сохраняется. */
 .jira-link {
-  color: var(--accent-hi); text-decoration: underline; text-decoration-color: rgba(124, 134, 240, 0.45);
+  color: var(--accent-hover); text-decoration: underline; text-decoration-color: var(--accent-line);
   text-underline-offset: 2px; cursor: pointer; border-radius: 2px;
 }
 .jira-link:hover { color: var(--accent-hover); text-decoration-color: currentColor; }
-.jira-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /*
  * Задача, сказанная словами («орион двадцать один двадцать два»): значок с
@@ -12,15 +11,15 @@
  * в DOM прежний: выделение, правка слов и поиск видят сказанное.
  */
 .jira-ref {
-  color: inherit; text-decoration: underline dotted; text-decoration-color: rgba(124, 134, 240, 0.6);
-  border-radius: 4px; background: rgba(124, 134, 240, 0.1); padding: 0 2px; box-decoration-break: clone;
+  color: inherit; text-decoration: underline dotted; text-decoration-color: var(--accent-line);
+  border-radius: 4px; background: var(--accent-soft); padding: 0 2px; box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
 .jira-ref::before {
   content: attr(data-key); display: inline-block; margin-right: 4px; padding: 0 5px; border-radius: 3px;
-  background: rgba(124, 134, 240, 0.22); color: var(--accent-hi);
+  background: var(--selection); color: var(--accent-hover);
   font: 600 11px/16px ui-monospace, Consolas, monospace; letter-spacing: 0.02em; vertical-align: 1px;
   text-decoration: none; user-select: none;
 }
-.jira-ref:hover { color: inherit; background: rgba(124, 134, 240, 0.18); }
-.jira-ref:hover::before { background: rgba(124, 134, 240, 0.34); color: var(--accent-hover); }
+.jira-ref:hover { color: inherit; background: var(--selection); }
+.jira-ref:hover::before { background: var(--accent); color: var(--on-accent); }
