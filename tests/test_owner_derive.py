@@ -13,6 +13,16 @@ import pytest
 
 from meet import owner_derive, owner_voice, segvoices
 
+
+def test_cut_short_tail_of_two_pieces_joins_the_first_without_index_error():
+    """0.5, «Поиск не удался: IndexError: list assignment index out of range»:
+    реплика чуть длиннее RUN_MAX_S режется на два куска, короткий хвост — к
+    первому. `pieces[-2] += pieces.pop()` брал pieces[-2] до pop, а присваивал
+    после — при двух кусках индекса уже не было."""
+    words = [(float(k), float(k + 1)) for k in range(11)]        # 0–11 с сплошной речью
+    runs = owner_derive._cut(words, (0.0, 11.0))
+    assert [(r.start, r.end) for r in runs] == [(0.0, 11.0)]
+
 DIM = 16
 VOICES = {v: np.eye(DIM)[v] for v in range(1, 10)}
 OWNER, OTHER = 1, 2

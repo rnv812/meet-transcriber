@@ -244,7 +244,10 @@ def _cut(spans: list[tuple[float, float]], seg: tuple[float, float]) -> list[Run
                 cur.append((a, b))
         if (len(pieces) > 1 and pieces[-1][-1][1] - pieces[-1][0][0] < RUN_MIN_S
                 and pieces[-1][-1][1] - pieces[-2][0][0] <= RUN_MAX_S + RUN_MIN_S):
-            pieces[-2] += pieces.pop()
+            # Сначала снять хвост, потом дописать: `pieces[-2] += pieces.pop()` присваивал
+            # по индексу уже укороченного списка (IndexError при двух кусках).
+            tail = pieces.pop()
+            pieces[-1] += tail
         for p in pieces:
             start, end = p[0][0], max(b for _, b in p)
             if end - start >= RUN_MIN_S:
