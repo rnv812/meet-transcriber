@@ -1,0 +1,198 @@
+/* Atlas Aurora — компоненты. Значения цветов, отступов, радиусов, теней и шрифтов — в tokens.json (tokens.css).
+   Здесь — только то, что не является токеном: шкала кегля, движение, сияние, размытие стекла, плотность и сами классы. */
+
+:root {
+  --aurora-wash-opacity: 0.62;
+  /* Семантическая шкала кегля */
+  --text-xs: 12px; --text-sm: 13px; --text-ui: 14px; --text-body: 16px; --text-lg: 18px;
+  --text-h3: 20px; --text-h2: 24px; --text-h1: 32px; --text-hero: 44px;
+  --lh-tight: 1.15; --lh-snug: 1.3; --lh-body: 1.5;
+  --track-display: -0.02em;
+
+  /* Движение */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --d-fast: 100ms; --d: 150ms; --d-slow: 240ms; --d-aurora: 40s;
+
+  /* Карта активности: ступени 1–3 — смесь data-1 и surface-1 */
+  --activity-1: color-mix(in oklab, var(--data-1) 32%, var(--surface-1));
+  --activity-2: color-mix(in oklab, var(--data-1) 55%, var(--surface-1));
+  --activity-3: color-mix(in oklab, var(--data-1) 78%, var(--surface-1));
+
+  /* Сияние: вход, пустые состояния, сцена Atlas AI */
+  --glass-blur-1: blur(var(--blur-glass)) saturate(1.4);
+  --glass-blur-2: blur(var(--blur-glass-dense)) saturate(1.5);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+:root, [data-theme='dark'] { color-scheme: dark; }
+[data-theme='light'] { color-scheme: light; --aurora-wash-opacity: 0.4; }
+/* Градиент звезды агента в рабочих состояниях: ≥ 3:1 к поверхности в каждой теме */
+:root, [data-theme='dark'] { --agent-g1: var(--green-ice); --agent-g2: var(--green-signal); --agent-g3: var(--green-crest); }
+[data-theme='light'] { --agent-g1: var(--green-mid); --agent-g2: var(--green-deep); --agent-g3: var(--green-abyss); }
+
+/* ── Палитры сияния ──
+   Волны строятся из --wave-1…6 (глубина → нижние волны → середина → сигнал → гребень → блик).
+   По умолчанию и бренд — зелёная; data-aurora="blue|red|green|violet|amber" на <html> или на блоке меняет сияние, знак ИИ, сигнал и акцентные кнопки.
+   Вид: «сияние» (по умолчанию, мягкие пятна) или «волны» — data-aurora-style="waves".
+   Статусы (success, danger, warning, info) от палитры не зависят. */
+:root { --wave-1: var(--green-abyss); --wave-2: var(--green-deep); --wave-3: var(--green-mid); --wave-4: var(--green-signal); --wave-5: var(--green-crest); --wave-6: var(--green-ice); }
+/* Градиенты объявлены и на элементах с data-aurora, чтобы пересчитываться от их --wave-* */
+:root, [data-aurora] {
+  /* Тон затемнения под слоями — глубина текущей палитры */
+  --scrim-tint: color-mix(in oklab, var(--wave-1), black 30%);
+  --aurora-line: linear-gradient(120deg, var(--wave-4) 0%, var(--wave-5) 45%, var(--wave-3) 100%);
+  --aurora-glow:
+    radial-gradient(60% 70% at 90% 105%, color-mix(in oklab, var(--wave-6) 75%, transparent), transparent 70%),
+    radial-gradient(55% 65% at 60% 120%, color-mix(in oklab, var(--wave-4) 85%, transparent), transparent 72%),
+    radial-gradient(45% 60% at 105% 45%, color-mix(in oklab, var(--wave-3) 80%, transparent), transparent 70%);
+  --aurora:
+    radial-gradient(28% 20% at 82% 74%, color-mix(in oklab, var(--wave-6) 55%, transparent), transparent 70%),
+    radial-gradient(135% 62% at 112% 118%, var(--wave-6) 0%, var(--wave-5) 22%, var(--wave-3) 54%, transparent 54.4%),
+    radial-gradient(120% 70% at 96% 92%, var(--wave-4) 0%, var(--wave-3) 52%, transparent 52.4%),
+    radial-gradient(150% 85% at 78% 66%, var(--wave-3) 0%, var(--wave-2) 48%, transparent 48.4%),
+    radial-gradient(70% 55% at 100% 0%, color-mix(in oklab, var(--wave-3) 80%, transparent), transparent 70%),
+    var(--wave-1);
+  /* Вид «сияние» (data-aurora-style="glow"): мягкие круглые пятна — ранняя раскладка Aurora в цветах палитры */
+  --aurora-blobs:
+    radial-gradient(60% 55% at 78% 82%, color-mix(in oklab, var(--wave-4) 90%, transparent), transparent 70%),
+    radial-gradient(55% 60% at 18% 42%, color-mix(in oklab, var(--wave-3) 85%, transparent), transparent 72%),
+    radial-gradient(50% 45% at 62% 30%, color-mix(in oklab, color-mix(in oklab, var(--wave-3), var(--wave-5) 30%) 80%, transparent), transparent 70%),
+    radial-gradient(45% 35% at 70% 0%, color-mix(in oklab, var(--wave-5) 60%, transparent), transparent 70%),
+    var(--wave-1);
+  --aurora-glow-blobs:
+    radial-gradient(55% 70% at 85% 100%, color-mix(in oklab, var(--wave-4) 90%, transparent), transparent 70%),
+    radial-gradient(50% 60% at 55% 110%, color-mix(in oklab, var(--wave-3) 90%, transparent), transparent 72%),
+    radial-gradient(45% 60% at 100% 40%, color-mix(in oklab, var(--wave-2) 80%, transparent), transparent 70%);
+  --aurora-scrim: linear-gradient(160deg, color-mix(in oklab, var(--wave-1) 60%, transparent) 0%, color-mix(in oklab, var(--wave-1) 20%, transparent) 38%, transparent 60%);
+}
+[data-aurora='blue'] {
+  --accent-strong: var(--sky); --accent-strong-hover: color-mix(in oklab, var(--sky), white 18%); --on-accent-strong: var(--abyss);
+  --wave-1: var(--abyss); --wave-2: var(--deep-ocean); --wave-3: var(--cerulean); --wave-4: var(--sky); --wave-5: var(--glacier); --wave-6: var(--ice);
+  --accent: var(--sky); --accent-hover: color-mix(in oklab, var(--sky), white 18%); --accent-press: color-mix(in oklab, var(--sky), black 12%);
+  --on-accent: var(--abyss); --accent-soft: color-mix(in oklab, var(--cerulean) 32%, var(--surface-1)); --accent-line: var(--sky);
+  --data-1: var(--sky); --selection: color-mix(in oklab, var(--cerulean) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--sky) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--sky) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--cerulean) 60%, transparent);
+  --agent-g1: var(--ice); --agent-g2: var(--sky); --agent-g3: var(--glacier);
+}
+[data-theme='light'][data-aurora='blue'], [data-theme='light'] [data-aurora='blue'] {
+  --accent-strong: var(--cerulean); --accent-strong-hover: color-mix(in oklab, var(--cerulean), black 18%); --on-accent-strong: white;
+  --accent-line: var(--cerulean); --data-1: var(--cerulean); --accent-soft: color-mix(in oklab, var(--cerulean) 8%, white);
+  --selection: color-mix(in oklab, var(--sky) 32%, white); --mark-bg: color-mix(in oklab, var(--sky) 45%, transparent);
+  --aurora-edge-glow: 0 8px 28px -14px color-mix(in oklab, var(--cerulean) 45%, transparent);
+  --agent-g1: var(--cerulean); --agent-g2: var(--deep-ocean); --agent-g3: var(--abyss);
+}
+[data-aurora='blue'][data-theme='dark'], [data-theme='dark'] [data-aurora='blue'] {
+  --accent-strong: var(--sky); --accent-strong-hover: color-mix(in oklab, var(--sky), white 18%); --on-accent-strong: var(--abyss);
+  --accent-line: var(--sky); --data-1: var(--sky); --accent-soft: color-mix(in oklab, var(--cerulean) 32%, var(--surface-1));
+  --selection: color-mix(in oklab, var(--cerulean) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--sky) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--sky) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--cerulean) 60%, transparent);
+  --agent-g1: var(--ice); --agent-g2: var(--sky); --agent-g3: var(--glacier);
+}
+[data-aurora='red'] {
+  --accent-strong: var(--red-signal); --accent-strong-hover: color-mix(in oklab, var(--red-signal), white 18%); --on-accent-strong: var(--red-abyss);
+  --wave-1: var(--red-abyss); --wave-2: var(--red-deep); --wave-3: var(--red-mid); --wave-4: var(--red-signal); --wave-5: var(--red-crest); --wave-6: var(--red-ice);
+  --accent: var(--red-signal); --accent-hover: color-mix(in oklab, var(--red-signal), white 18%); --accent-press: color-mix(in oklab, var(--red-signal), black 12%);
+  --on-accent: var(--red-abyss); --accent-soft: color-mix(in oklab, var(--red-mid) 32%, var(--surface-1)); --accent-line: var(--red-signal);
+  --data-1: var(--red-signal); --selection: color-mix(in oklab, var(--red-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--red-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--red-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--red-mid) 60%, transparent);
+  --agent-g1: var(--red-ice); --agent-g2: var(--red-signal); --agent-g3: var(--red-crest);
+}
+[data-theme='light'][data-aurora='red'], [data-theme='light'] [data-aurora='red'] {
+  --accent-strong: var(--red-mid); --accent-strong-hover: color-mix(in oklab, var(--red-mid), black 18%); --on-accent-strong: white;
+  --accent-line: var(--red-mid); --data-1: var(--red-mid); --accent-soft: color-mix(in oklab, var(--red-mid) 8%, white);
+  --selection: color-mix(in oklab, var(--red-signal) 32%, white); --mark-bg: color-mix(in oklab, var(--red-signal) 45%, transparent);
+  --aurora-edge-glow: 0 8px 28px -14px color-mix(in oklab, var(--red-mid) 45%, transparent);
+  --agent-g1: var(--red-mid); --agent-g2: var(--red-deep); --agent-g3: var(--red-abyss);
+}
+[data-aurora='red'][data-theme='dark'], [data-theme='dark'] [data-aurora='red'] {
+  --accent-strong: var(--red-signal); --accent-strong-hover: color-mix(in oklab, var(--red-signal), white 18%); --on-accent-strong: var(--red-abyss);
+  --accent-line: var(--red-signal); --data-1: var(--red-signal); --accent-soft: color-mix(in oklab, var(--red-mid) 32%, var(--surface-1));
+  --selection: color-mix(in oklab, var(--red-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--red-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--red-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--red-mid) 60%, transparent);
+  --agent-g1: var(--red-ice); --agent-g2: var(--red-signal); --agent-g3: var(--red-crest);
+}
+[data-aurora='green'] {
+  --accent-strong: var(--green-signal); --accent-strong-hover: color-mix(in oklab, var(--green-signal), white 18%); --on-accent-strong: var(--green-abyss);
+  --wave-1: var(--green-abyss); --wave-2: var(--green-deep); --wave-3: var(--green-mid); --wave-4: var(--green-signal); --wave-5: var(--green-crest); --wave-6: var(--green-ice);
+  --accent: var(--green-signal); --accent-hover: color-mix(in oklab, var(--green-signal), white 18%); --accent-press: color-mix(in oklab, var(--green-signal), black 12%);
+  --on-accent: var(--green-abyss); --accent-soft: color-mix(in oklab, var(--green-mid) 32%, var(--surface-1)); --accent-line: var(--green-signal);
+  --data-1: var(--green-signal); --selection: color-mix(in oklab, var(--green-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--green-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--green-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--green-mid) 60%, transparent);
+  --agent-g1: var(--green-ice); --agent-g2: var(--green-signal); --agent-g3: var(--green-crest);
+}
+[data-theme='light'][data-aurora='green'], [data-theme='light'] [data-aurora='green'] {
+  --accent-strong: var(--green-mid); --accent-strong-hover: color-mix(in oklab, var(--green-mid), black 18%); --on-accent-strong: white;
+  --accent-line: var(--green-mid); --data-1: var(--green-mid); --accent-soft: color-mix(in oklab, var(--green-mid) 8%, white);
+  --selection: color-mix(in oklab, var(--green-signal) 32%, white); --mark-bg: color-mix(in oklab, var(--green-signal) 45%, transparent);
+  --aurora-edge-glow: 0 8px 28px -14px color-mix(in oklab, var(--green-mid) 45%, transparent);
+  --agent-g1: var(--green-mid); --agent-g2: var(--green-deep); --agent-g3: var(--green-abyss);
+}
+[data-aurora='green'][data-theme='dark'], [data-theme='dark'] [data-aurora='green'] {
+  --accent-strong: var(--green-signal); --accent-strong-hover: color-mix(in oklab, var(--green-signal), white 18%); --on-accent-strong: var(--green-abyss);
+  --accent-line: var(--green-signal); --data-1: var(--green-signal); --accent-soft: color-mix(in oklab, var(--green-mid) 32%, var(--surface-1));
+  --selection: color-mix(in oklab, var(--green-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--green-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--green-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--green-mid) 60%, transparent);
+  --agent-g1: var(--green-ice); --agent-g2: var(--green-signal); --agent-g3: var(--green-crest);
+}
+[data-aurora='violet'] {
+  --accent-strong: var(--violet-signal); --accent-strong-hover: color-mix(in oklab, var(--violet-signal), white 18%); --on-accent-strong: var(--violet-abyss);
+  --wave-1: var(--violet-abyss); --wave-2: var(--violet-deep); --wave-3: var(--violet-mid); --wave-4: var(--violet-signal); --wave-5: var(--violet-crest); --wave-6: var(--violet-ice);
+  --accent: var(--violet-signal); --accent-hover: color-mix(in oklab, var(--violet-signal), white 18%); --accent-press: color-mix(in oklab, var(--violet-signal), black 12%);
+  --on-accent: var(--violet-abyss); --accent-soft: color-mix(in oklab, var(--violet-mid) 32%, var(--surface-1)); --accent-line: var(--violet-signal);
+  --data-1: var(--violet-signal); --selection: color-mix(in oklab, var(--violet-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--violet-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--violet-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--violet-mid) 60%, transparent);
+  --agent-g1: var(--violet-ice); --agent-g2: var(--violet-signal); --agent-g3: var(--violet-crest);
+}
+[data-theme='light'][data-aurora='violet'], [data-theme='light'] [data-aurora='violet'] {
+  --accent-strong: var(--violet-mid); --accent-strong-hover: color-mix(in oklab, var(--violet-mid), black 18%); --on-accent-strong: white;
+  --accent-line: var(--violet-mid); --data-1: var(--violet-mid); --accent-soft: color-mix(in oklab, var(--violet-mid) 8%, white);
+  --selection: color-mix(in oklab, var(--violet-signal) 32%, white); --mark-bg: color-mix(in oklab, var(--violet-signal) 45%, transparent);
+  --aurora-edge-glow: 0 8px 28px -14px color-mix(in oklab, var(--violet-mid) 45%, transparent);
+  --agent-g1: var(--violet-mid); --agent-g2: var(--violet-deep); --agent-g3: var(--violet-abyss);
+}
+[data-aurora='violet'][data-theme='dark'], [data-theme='dark'] [data-aurora='violet'] {
+  --accent-strong: var(--violet-signal); --accent-strong-hover: color-mix(in oklab, var(--violet-signal), white 18%); --on-accent-strong: var(--violet-abyss);
+  --accent-line: var(--violet-signal); --data-1: var(--violet-signal); --accent-soft: color-mix(in oklab, var(--violet-mid) 32%, var(--surface-1));
+  --selection: color-mix(in oklab, var(--violet-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--violet-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--violet-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--violet-mid) 60%, transparent);
+  --agent-g1: var(--violet-ice); --agent-g2: var(--violet-signal); --agent-g3: var(--violet-crest);
+}
+[data-aurora='amber'] {
+  --accent-strong: var(--amber-signal); --accent-strong-hover: color-mix(in oklab, var(--amber-signal), white 18%); --on-accent-strong: var(--amber-abyss);
+  --wave-1: var(--amber-abyss); --wave-2: var(--amber-deep); --wave-3: var(--amber-mid); --wave-4: var(--amber-signal); --wave-5: var(--amber-crest); --wave-6: var(--amber-ice);
+  --accent: var(--amber-signal); --accent-hover: color-mix(in oklab, var(--amber-signal), white 18%); --accent-press: color-mix(in oklab, var(--amber-signal), black 12%);
+  --on-accent: var(--amber-abyss); --accent-soft: color-mix(in oklab, var(--amber-mid) 32%, var(--surface-1)); --accent-line: var(--amber-signal);
+  --data-1: var(--amber-signal); --selection: color-mix(in oklab, var(--amber-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--amber-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--amber-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--amber-mid) 60%, transparent);
+  --agent-g1: var(--amber-ice); --agent-g2: var(--amber-signal); --agent-g3: var(--amber-crest);
+}
+[data-theme='light'][data-aurora='amber'], [data-theme='light'] [data-aurora='amber'] {
+  --accent-strong: var(--amber-mid); --accent-strong-hover: color-mix(in oklab, var(--amber-mid), black 18%); --on-accent-strong: white;
+  --accent-line: var(--amber-mid); --data-1: var(--amber-mid); --accent-soft: color-mix(in oklab, var(--amber-mid) 8%, white);
+  --selection: color-mix(in oklab, var(--amber-signal) 32%, white); --mark-bg: color-mix(in oklab, var(--amber-signal) 45%, transparent);
+  --aurora-edge-glow: 0 8px 28px -14px color-mix(in oklab, var(--amber-mid) 45%, transparent);
+  --agent-g1: var(--amber-mid); --agent-g2: var(--amber-deep); --agent-g3: var(--amber-abyss);
+}
+[data-aurora='amber'][data-theme='dark'], [data-theme='dark'] [data-aurora='amber'] {
+  --accent-strong: var(--amber-signal); --accent-strong-hover: color-mix(in oklab, var(--amber-signal), white 18%); --on-accent-strong: var(--amber-abyss);
+  --accent-line: var(--amber-signal); --data-1: var(--amber-signal); --accent-soft: color-mix(in oklab, var(--amber-mid) 32%, var(--surface-1));
+  --selection: color-mix(in oklab, var(--amber-mid) 60%, var(--canvas)); --mark-bg: color-mix(in oklab, var(--amber-signal) 30%, transparent);
+  --aurora-edge-glow: 0 10px 36px -14px color-mix(in oklab, var(--amber-signal) 55%, transparent), 0 4px 18px -10px color-mix(in oklab, var(--amber-mid) 60%, transparent);
+  --agent-g1: var(--amber-ice); --agent-g2: var(--amber-signal); --agent-g3: var(--amber-crest);
+}
+
+/* Меньше прозрачности или нет backdrop-filter — сплошная поверхность того же тона */
+@media (prefers-reduced-transparency: reduce) {
+  :root, [data-theme] { --glass-1: var(--surface-1); --glass-2: var(--surface-2); --glass-blur-1: none; --glass-blur-2: none; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root, [data-theme] { --glass-1: var(--surface-1); --glass-2: var(--surface-2); }
+}
+
+/* Плотность для таблиц */
+[data-density='compact'] {
+  --control-sm: 28px; --control: 32px; --control-lg: 40px; --row: 44px;
+  --s-3: 10px; --s-4: 12px; --s-5: 20px; --s-6: 28px;
+  --lh-body: 1.45;
+}
+

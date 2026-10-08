@@ -26,6 +26,15 @@ function sources(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * Файлы основы Atlas Aurora (0.4), где `color-mix()` допущен осознанно: палитры сияния
+ * — копия дизайн-системы, правке по месту не подлежат, а псевдонимы окна строятся на
+ * токенах Aurora. На macOS 13.0 (Safari 16.1) такое значение переменной не
+ * вычисляется, и сияние/свечение пропадает, остальное окно работает. Любой другой
+ * файл с `color-mix()` по-прежнему падает.
+ */
+const COLOR_MIX_OK = new Set([join("theme", "aurora", "palettes.css"), join("theme", "tokens.css")]);
+
 /** Код без комментариев: в них о запретном можно писать. */
 const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
@@ -37,7 +46,7 @@ test("в коде окна нет просмотра назад в регуля�
   for (const path of files) {
     const text = code(readFileSync(path, "utf8"));
     if (/\(\?<[=!]/.test(text)) bad.push(`${relative(ROOT, path)}: (?<= / (?<!`);
-    if (/color-mix\(/.test(text)) bad.push(`${relative(ROOT, path)}: color-mix()`);
+    if (/color-mix\(/.test(text) && !COLOR_MIX_OK.has(relative(ROOT, path))) bad.push(`${relative(ROOT, path)}: color-mix()`);
   }
   expect(bad).toEqual([]);
 });

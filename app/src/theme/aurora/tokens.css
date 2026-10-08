@@ -1,0 +1,286 @@
+/* Atlas Aurora — generated from tokens.json */
+@font-face { font-family: 'Unbounded'; src: url('fonts/unbounded-cyrillic-ext.woff2') format('woff2'); font-weight: 500 700; font-style: normal; font-display: swap; unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
+@font-face { font-family: 'Unbounded'; src: url('fonts/unbounded-latin-ext.woff2') format('woff2'); font-weight: 500 700; font-style: normal; font-display: swap; unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Unbounded'; src: url('fonts/unbounded-cyrillic.woff2') format('woff2'); font-weight: 500 700; font-style: normal; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Unbounded'; src: url('fonts/unbounded-latin.woff2') format('woff2'); font-weight: 500 700; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Onest'; src: url('fonts/onest-cyrillic-ext.woff2') format('woff2'); font-weight: 400 700; font-style: normal; font-display: swap; unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
+@font-face { font-family: 'Onest'; src: url('fonts/onest-latin-ext.woff2') format('woff2'); font-weight: 400 700; font-style: normal; font-display: swap; unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Onest'; src: url('fonts/onest-cyrillic.woff2') format('woff2'); font-weight: 400 700; font-style: normal; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Onest'; src: url('fonts/onest-latin.woff2') format('woff2'); font-weight: 400 700; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-symbols.woff2') format('woff2'); font-weight: 400 500; font-style: normal; font-display: swap; unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F; }
+@font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-cyrillic-ext.woff2') format('woff2'); font-weight: 400 500; font-style: normal; font-display: swap; unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
+@font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-latin-ext.woff2') format('woff2'); font-weight: 400 500; font-style: normal; font-display: swap; unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-cyrillic.woff2') format('woff2'); font-weight: 400 500; font-style: normal; font-display: swap; unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-latin.woff2') format('woff2'); font-weight: 400 500; font-style: normal; font-display: swap; unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+:root, [data-theme="dark"] {
+  --chaos-black: #0f0f0f;
+  --abyss: #011d33;
+  --deep-ocean: #044660;
+  --cerulean: #005c8e;
+  --sky: #7cbaee;
+  --glacier: #72ccec;
+  --ice: #c0f1ff;
+  --red-abyss: oklch(21% 0.06 20);
+  --red-deep: oklch(35% 0.11 22);
+  --red-mid: oklch(48% 0.17 25);
+  --red-signal: oklch(73% 0.15 25);
+  --red-crest: oklch(80% 0.11 45);
+  --red-ice: oklch(93% 0.04 50);
+  --green-abyss: oklch(21% 0.05 168);
+  --green-deep: oklch(35% 0.08 162);
+  --green-mid: oklch(47% 0.11 158);
+  --green-signal: oklch(80% 0.14 155);
+  --green-crest: oklch(85% 0.12 135);
+  --green-ice: oklch(94% 0.06 130);
+  --violet-abyss: oklch(20% 0.06 290);
+  --violet-deep: oklch(34% 0.11 292);
+  --violet-mid: oklch(46% 0.16 295);
+  --violet-signal: oklch(75% 0.12 300);
+  --violet-crest: oklch(81% 0.1 325);
+  --violet-ice: oklch(93% 0.04 315);
+  --amber-abyss: oklch(22% 0.05 50);
+  --amber-deep: oklch(36% 0.09 48);
+  --amber-mid: oklch(47% 0.12 52);
+  --amber-signal: oklch(82% 0.15 75);
+  --amber-crest: oklch(88% 0.14 92);
+  --amber-ice: oklch(96% 0.05 95);
+  --dark-teal: #174142;
+  --stormy-teal: #1d6666;
+  --blue-slate: #306a7e;
+  --light-green: #65ea7e;
+  --moss-green: #7dd15b;
+  --gray-950: oklch(14.5% 0 0);
+  --gray-900: oklch(19.5% 0 0);
+  --gray-850: oklch(22.5% 0 0);
+  --gray-800: oklch(26.5% 0 0);
+  --gray-750: oklch(28% 0 0);
+  --gray-700: oklch(34% 0 0);
+  --gray-500: oklch(55% 0 0);
+  --gray-300: oklch(80% 0 0);
+  --gray-100: oklch(94.5% 0 0);
+  --gray-50: oklch(97.5% 0 0);
+  --canvas: var(--chaos-black);
+  --surface-1: oklch(19% 0 0);
+  --surface-2: oklch(22% 0 0);
+  --surface-3: oklch(26% 0 0);
+  --surface-sunken: oklch(14.5% 0 0);
+  --hairline: oklch(27% 0 0);
+  --hairline-strong: oklch(34% 0 0);
+  --control-line: oklch(54% 0 0);
+  --ink: oklch(97% 0 0);
+  --ink-2: oklch(80% 0 0);
+  --ink-3: oklch(66% 0 0);
+  --accent: var(--green-signal);
+  --accent-hover: oklch(86% 0.11 155);
+  --accent-press: oklch(72% 0.14 155);
+  --on-accent: var(--green-abyss);
+  --accent-soft: oklch(28% 0.05 158);
+  --accent-line: var(--green-signal);
+  --accent-strong: var(--green-signal);
+  --accent-strong-hover: oklch(86% 0.11 155);
+  --on-accent-strong: var(--green-abyss);
+  --link: var(--ink);
+  --primary: oklch(97% 0 0);
+  --primary-hover: oklch(86% 0 0);
+  --on-primary: var(--chaos-black);
+  --ring: oklch(60% 0 0);
+  --deep: var(--surface-3);
+  --on-deep: var(--ink);
+  --success: var(--moss-green);
+  --info: oklch(76% 0.08 230);
+  --warning: oklch(84% 0.14 82);
+  --danger: oklch(72% 0.16 25);
+  --success-soft: oklch(26% 0.05 140);
+  --info-soft: oklch(26% 0.035 230);
+  --warning-soft: oklch(27% 0.045 82);
+  --danger-soft: oklch(27% 0.055 25);
+  --data-1: var(--green-signal);
+  --data-2: oklch(58% 0.09 240);
+  --data-3: var(--green-ice);
+  --data-4: oklch(58% 0 0);
+  --data-empty: var(--surface-3);
+  --selection: oklch(40% 0.07 158);
+  --tip: oklch(80% 0.06 190);
+  --tip-soft: oklch(26% 0.025 190);
+  --mark-bg: oklch(80% 0.14 155 / 0.3);
+  --inline-code-bg: oklch(100% 0 0 / 0.08);
+  --inline-code-ink: var(--ink);
+  --cell-tone-neutral: oklch(27% 0 0);
+  --cell-tone-blue: oklch(30% 0.075 235);
+  --cell-tone-green: oklch(31% 0.09 148);
+  --cell-tone-amber: oklch(32% 0.075 75);
+  --cell-tone-red: oklch(30% 0.085 25);
+  --cell-tone-violet: oklch(30% 0.07 190);
+  --activity-0: var(--surface-3);
+  --activity-4: var(--data-1);
+  --code-bg: oklch(15.5% 0 0);
+  --code-ink: oklch(90% 0 0);
+  --code-comment: oklch(62% 0 0);
+  --code-keyword: oklch(80% 0.09 190);
+  --code-string: oklch(85% 0.11 80);
+  --code-number: oklch(80% 0.08 230);
+  --code-function: oklch(84% 0.1 240);
+  --code-property: oklch(82% 0.04 220);
+  --code-punct: oklch(70% 0 0);
+  --code-line-hl: oklch(100% 0 0 / 0.05);
+  --glass-1: oklch(19% 0 0 / 0.7);
+  --glass-2: oklch(21% 0 0 / 0.9);
+  --glass-line: oklch(100% 0 0 / 0.09);
+  --aurora-plate: oklch(12% 0 0 / 0.6);
+  --focus-ring: 0 0 0 2px oklch(60% 0 0);
+  --elev-1: none;
+  --elev-2: 0 8px 24px -8px oklch(0% 0 0 / 0.5);
+  --elev-3: 0 16px 48px -12px oklch(0% 0 0 / 0.6), 0 0 0 1px oklch(27% 0 0);
+  --glass-edge: inset 0 1px 0 oklch(100% 0 0 / 0.08), inset 0 0 0 1px oklch(100% 0 0 / 0.03);
+  --aurora-edge-glow: 0 10px 36px -14px oklch(80% 0.14 155 / 0.55), 0 4px 18px -10px oklch(47% 0.11 158 / 0.6);
+}
+[data-theme="light"] {
+  --canvas: oklch(100% 0 0);
+  --surface-1: oklch(100% 0 0);
+  --surface-2: oklch(97% 0 0);
+  --surface-3: oklch(94.5% 0 0);
+  --surface-sunken: oklch(98.5% 0 0);
+  --hairline: oklch(92% 0 0);
+  --hairline-strong: oklch(86% 0 0);
+  --control-line: oklch(62% 0 0);
+  --ink: oklch(14.5% 0 0);
+  --ink-2: oklch(38% 0 0);
+  --ink-3: oklch(50% 0 0);
+  --accent: var(--green-signal);
+  --accent-hover: oklch(72% 0.14 155);
+  --accent-press: oklch(64% 0.13 156);
+  --on-accent: var(--green-abyss);
+  --accent-soft: oklch(95.5% 0.03 155);
+  --accent-line: var(--green-mid);
+  --accent-strong: var(--green-mid);
+  --accent-strong-hover: oklch(40% 0.1 158);
+  --on-accent-strong: oklch(100% 0 0);
+  --link: var(--ink);
+  --primary: oklch(14.5% 0 0);
+  --primary-hover: oklch(30% 0 0);
+  --on-primary: oklch(100% 0 0);
+  --ring: oklch(55% 0 0);
+  --deep: var(--surface-3);
+  --on-deep: var(--ink);
+  --success: oklch(48% 0.13 140);
+  --info: var(--blue-slate);
+  --warning: oklch(52% 0.12 65);
+  --danger: oklch(52% 0.18 25);
+  --success-soft: oklch(96% 0.035 140);
+  --info-soft: oklch(96% 0.015 230);
+  --warning-soft: oklch(96.5% 0.035 82);
+  --danger-soft: oklch(96% 0.025 25);
+  --data-1: var(--green-mid);
+  --data-2: oklch(60% 0.1 240);
+  --data-3: var(--green-deep);
+  --data-4: oklch(55% 0 0);
+  --data-empty: var(--surface-3);
+  --selection: oklch(90% 0.06 155);
+  --tip: oklch(42% 0.05 190);
+  --tip-soft: oklch(96.5% 0.012 190);
+  --mark-bg: oklch(80% 0.14 155 / 0.45);
+  --inline-code-bg: oklch(0% 0 0 / 0.06);
+  --inline-code-ink: var(--ink);
+  --cell-tone-neutral: oklch(95.5% 0 0);
+  --cell-tone-blue: oklch(94.5% 0.035 235);
+  --cell-tone-green: oklch(94.5% 0.065 148);
+  --cell-tone-amber: oklch(95.5% 0.06 85);
+  --cell-tone-red: oklch(94.5% 0.04 25);
+  --cell-tone-violet: oklch(94.5% 0.04 190);
+  --activity-0: var(--surface-3);
+  --activity-4: var(--data-1);
+  --code-bg: oklch(98% 0 0);
+  --code-ink: oklch(22% 0 0);
+  --code-comment: oklch(50% 0 0);
+  --code-keyword: var(--stormy-teal);
+  --code-string: oklch(48% 0.1 65);
+  --code-number: var(--blue-slate);
+  --code-function: oklch(45% 0.12 250);
+  --code-property: oklch(40% 0.04 230);
+  --code-punct: oklch(45% 0 0);
+  --code-line-hl: oklch(0% 0 0 / 0.04);
+  --glass-1: oklch(100% 0 0 / 0.8);
+  --glass-2: oklch(100% 0 0 / 0.92);
+  --glass-line: oklch(0% 0 0 / 0.08);
+  --focus-ring: 0 0 0 2px oklch(55% 0 0);
+  --elev-1: 0 1px 2px 0 oklch(0% 0 0 / 0.04);
+  --elev-2: 0 8px 24px -10px oklch(0% 0 0 / 0.16);
+  --elev-3: 0 16px 48px -16px oklch(0% 0 0 / 0.22), 0 0 0 1px oklch(92% 0 0);
+  --glass-edge: inset 0 1px 0 oklch(100% 0 0 / 0.9);
+  --aurora-edge-glow: 0 8px 28px -14px oklch(47% 0.11 158 / 0.45);
+}
+:root {
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-control-sm: 10px;
+  --r-control: 12px;
+  --r-control-lg: 14px;
+  --r-full: 999px;
+  --control-sm: 32px;
+  --control: 40px;
+  --control-lg: 48px;
+  --row: 56px;
+  --check: 22px;
+  --icon-sm: 14px;
+  --icon: 16px;
+  --icon-lg: 18px;
+  --icon-xl: 20px;
+  --icon-stroke: 1.75;
+  --topbar-h: 56px;
+  --sidebar-w: 256px;
+  --layout-max: 1200px;
+  --measure-article: clamp(620px, 52vw, 720px);
+  --z-raised: 2;
+  --z-sticky: 15;
+  --z-header: 30;
+  --z-dropdown: 60;
+  --z-overlay: 900;
+  --z-modal: 1000;
+  --z-popover: 1050;
+  --z-palette: 1100;
+  --z-toast: 1300;
+  --blur-plate: 10px;
+  --blur-glass: 16px;
+  --blur-glass-dense: 28px;
+  --blur-spotlight: 12px;
+  --blur-modal: 8px;
+  --blur-drawer: 4px;
+  --dim-spotlight: 0.45;
+  --dim-modal: 0.45;
+  --dim-drawer: 0.3;
+  --dim-light: 0.67;
+  --dim-reduced: 0.2;
+  --backdrop-saturate: 0.9;
+  --font-display: 'Unbounded', 'Onest', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Onest', 'Golos UI', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-code: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.type-hero { font-family: var(--font-display); font-size: 44px; line-height: 1.05; font-weight: 500; letter-spacing: -0.02em; }
+.type-h1 { font-family: var(--font-display); font-size: 32px; line-height: 1.15; font-weight: 500; letter-spacing: -0.02em; }
+.type-h2 { font-family: var(--font-display); font-size: 24px; line-height: 1.15; font-weight: 500; letter-spacing: -0.02em; }
+.type-h3 { font-family: var(--font-display); font-size: 20px; line-height: 1.15; font-weight: 500; letter-spacing: -0.02em; }
+.type-article-title { font-family: var(--font-display); font-size: 22px; line-height: 1.3; font-weight: 500; letter-spacing: -0.02em; }
+.type-article-subtitle { font-family: var(--font-display); font-size: 18px; line-height: 1.35; font-weight: 500; letter-spacing: -0.01em; }
+.type-wordmark { font-family: var(--font-display); font-size: 17px; line-height: 1; font-weight: 700; letter-spacing: 0.04em; }
+.type-reading { font-family: var(--font-body); font-size: 16px; line-height: 1.6; font-weight: 400; }
+.type-ui { font-family: var(--font-body); font-size: 14px; line-height: 1.5; font-weight: 400; }
+.type-ui-medium { font-family: var(--font-body); font-size: 14px; line-height: 1; font-weight: 500; }
+.type-card-title { font-family: var(--font-body); font-size: 17px; line-height: 1.3; font-weight: 600; }
+.type-dialog-title { font-family: var(--font-body); font-size: 20px; line-height: 1.3; font-weight: 600; }
+.type-ai-question { font-family: var(--font-body); font-size: 18px; line-height: 1.4; font-weight: 600; }
+.type-caption { font-family: var(--font-body); font-size: 13px; line-height: 1.4; font-weight: 500; }
+.type-micro { font-family: var(--font-body); font-size: 12px; line-height: 1; font-weight: 500; }
+.type-code-block { font-family: var(--font-code); font-size: 14px; line-height: 1.7; font-weight: 400; }
+.type-code-inline { font-family: var(--font-code); font-size: 13px; line-height: 1.4; font-weight: 400; }

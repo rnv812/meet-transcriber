@@ -1,44 +1,35 @@
-/* Тёмный стиль Linear (макет A). Только тёмная тема, без стекла и градиентов;
-   акценты бренда (кольцо Meet, баннер) — лёгкое свечение у записи и знака. */
-@import "@fontsource-variable/onest";
+/* Стили окна поверх Atlas Aurora (theme/aurora). Переменные ниже — прежние
+   имена окна, ставшие псевдонимами токенов Aurora на время перехода 0.4;
+   общие с Aurora имена (--accent, --surface-2, --r-*, --danger, --primary,
+   --link) берутся из Aurora как есть. Палитра сияния — data-aurora на <html>. */
 
 :root {
-  --bg: #0f1012;
-  --surface: #15161a;
-  --surface-2: #1a1b21;
-  --surface-hover: #1f2026;
-  --line: #1f2126;
-  --line-2: #2a2c33;
-  --text: #d6d7dc;
-  --text-2: #8e9099;
-  --text-3: #8a8c96;
-  --accent: #5e6ad2;
-  --accent-hover: #6e79f7;
-  /* Бренд — те же цвета, что у значка (scripts/make_app_icons.py) и баннера:
-     светлый акцент — свечение, фиолетовый — тень кольца. */
-  --accent-hi: #7c86f0;
-  --accent-glow: rgba(124, 134, 240, 0.35);
-  --violet: #3f4bb8;
-  --red-glow: rgba(229, 72, 77, 0.45);
-  --red: #e5484d;
-  --ok: #4cc38a;
-  --run: #5e6ad2;
-  --err: #e5484d;
-  --amber: #f5a524;
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 8px;
-  --r-xl: 12px;
+  --bg: var(--canvas);
+  --surface: var(--surface-1);
+  --surface-hover: var(--surface-2);
+  --line: var(--hairline);
+  --line-2: var(--hairline-strong);
+  --text: var(--ink);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+  --accent-hi: var(--accent-hover);
+  --accent-glow: color-mix(in oklab, var(--accent) 35%, transparent);
+  --violet: var(--accent-press);
+  --red-glow: color-mix(in oklab, var(--danger) 45%, transparent);
+  --red: var(--danger);
+  --ok: var(--success);
+  --run: var(--accent);
+  --err: var(--danger);
+  --amber: var(--warning);
   --t: 120ms;
   --nav-w: 200px;
   --list-w: 320px;
-  --topbar-h: 40px;
-  /* Полосы прокрутки: ползунок — text-3 с прозрачностью; ярче при наведении на область, ещё ярче — на сам ползунок, при перетаскивании — максимально. */
-  --sb-thumb: rgba(138, 140, 150, 0.28);
-  --sb-thumb-area: rgba(138, 140, 150, 0.42);
-  --sb-thumb-hover: rgba(138, 140, 150, 0.62);
-  --sb-thumb-active: rgba(138, 140, 150, 0.8);
-  color-scheme: dark;
+  /* Высота прежней шапки окна; в Aurora --topbar-h — 56 (шапка уйдёт на этапе 3). */
+  --app-topbar-h: 40px;
+  --sb-thumb: color-mix(in oklab, var(--ink-3) 28%, transparent);
+  --sb-thumb-area: color-mix(in oklab, var(--ink-3) 42%, transparent);
+  --sb-thumb-hover: color-mix(in oklab, var(--ink-3) 62%, transparent);
+  --sb-thumb-active: color-mix(in oklab, var(--ink-3) 80%, transparent);
 }
 
 * { box-sizing: border-box; }
@@ -66,7 +57,7 @@ html, body, #root { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.45 "Onest Variable", "Onest", system-ui, sans-serif;
+  font: 13px/1.45 var(--font-body);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
@@ -93,8 +84,8 @@ body {
 .btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn--sm { height: 24px; padding: 0 8px; font-size: 12px; }
-.btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn--primary { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent-strong); }
+.btn--primary:hover { background: var(--accent-strong-hover); border-color: var(--accent-strong-hover); }
 .btn--danger { color: var(--red); }
 .btn--danger:hover { background: rgba(229, 72, 77, 0.12); border-color: var(--red); }
 .btn--ghost { background: transparent; border-color: transparent; color: var(--text-2); }
@@ -191,7 +182,7 @@ body {
 /* Разделители навигации и списка — поверх границ колонок. У навигации захват
    внутри неё самой; у списка — ниже полосы заголовка: та перетаскивает окно. */
 .app > .shell-split { position: absolute; top: 0; bottom: 0; left: var(--nav-w); }
-.app > .shell-split--list { top: var(--topbar-h); left: calc(var(--nav-w) + var(--list-w)); }
+.app > .shell-split--list { top: var(--app-topbar-h); left: calc(var(--nav-w) + var(--list-w)); }
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panes { flex: 1; min-height: 0; display: flex; }
 .pane-list {

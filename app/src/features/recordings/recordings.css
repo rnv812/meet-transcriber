@@ -119,7 +119,7 @@
 }
 
 .topbar {
-  height: var(--topbar-h); flex: none; display: flex; align-items: center; justify-content: flex-end;
+  height: var(--app-topbar-h); flex: none; display: flex; align-items: center; justify-content: flex-end;
   padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .rec-badge { display: flex; align-items: center; gap: 10px; }

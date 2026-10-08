@@ -1,0 +1,4 @@
+/* Основа Atlas Aurora для всех окон Meet: токены (обе темы, шрифты) и палитры
+   сияния. Файлы рядом — копия дизайн-системы, см. SOURCE.md. */
+@import "./tokens.css";
+@import "./palettes.css";
