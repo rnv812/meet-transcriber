@@ -18,6 +18,15 @@
 .terms .terms__agree > span { padding-top: 1px; line-height: 1.4; }
 .terms__error { color: var(--danger); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 
+/* «Идёт запись» с остановкой — компактная строка под заголовком (рейка под заслонкой недоступна). */
+.terms__rec { display: flex; flex-direction: column; gap: var(--s-2); }
+.terms__rec-row {
+  display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--hairline); border-radius: var(--r-control); background: var(--surface-sunken);
+}
+.terms__rec-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--danger); }
+.terms__rec-text { flex: 1 1 auto; min-width: 0; color: var(--ink); font-size: var(--text-sm); }
+
 /* Текст условий: разделы с заголовками (в заслонке и в мастере). */
 .terms-text { display: flex; flex-direction: column; gap: var(--s-4); color: var(--ink-2); }
 .terms-text__section { display: flex; flex-direction: column; gap: var(--s-1); }

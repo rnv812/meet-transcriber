@@ -196,7 +196,8 @@ export function App() {
   // Условия использования — поверх всего окна, и мастера тоже. У мастера свой шаг условий:
   // пока он открыт, заслонка ждёт, а после него перечитывает настройки.
   const terms = (content: ReactNode) => (
-    <TermsGate endpoint={resident.endpoint ?? null} deferred={gate.wizard !== null}>{content}</TermsGate>
+    <TermsGate endpoint={resident.endpoint ?? null} deferred={gate.wizard !== null}
+      snapshot={resident.snapshot ?? null} onSnapshot={resident.applySnapshot}>{content}</TermsGate>
   );
 
   if (gate.wizard) {

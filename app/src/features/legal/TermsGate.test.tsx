@@ -3,13 +3,16 @@ import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import { acceptTerms, TERMS_SECTIONS, TERMS_VERSION, termsAccepted } from "../../lib/terms";
-import { TermsGate } from "./TermsGate";
+import type { Snapshot } from "../../lib/types";
+import { TermsGate, TERMS_RECORDING } from "./TermsGate";
 import { TermsText } from "./TermsText";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getSettings: vi.fn(),
   patchSettings: vi.fn(),
+  recordingCommand: vi.fn(),
+  liveStop: vi.fn(),
 }));
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
@@ -25,6 +28,8 @@ const notAccepted = () => getSettings.mockResolvedValue({ ui: { wizard_done: tru
 beforeEach(() => {
   getSettings.mockReset();
   patchSettings.mockReset();
+  vi.mocked(api.recordingCommand).mockReset();
+  vi.mocked(api.liveStop).mockReset();
   patchSettings.mockResolvedValue({ settings: { ui: { terms_accepted: TERMS_VERSION } }, restart_required: [] });
   vi.mocked(shell.closeWindow).mockClear();
 });
@@ -206,4 +211,69 @@ test("текст условий — в пределах 150–220 слов", () 
     .filter((w) => /[\p{L}\d]/u.test(w));
   expect(words.length).toBeGreaterThanOrEqual(150);
   expect(words.length).toBeLessThanOrEqual(220);
+});
+
+// --- Идёт запись (M3): остановить можно, не принимая условий ---------------------------------
+
+const snap = (extra: Partial<Snapshot>): Snapshot => ({
+  status: "idle", source: null, folder: null, elapsed_s: 0, levels: {},
+  auto_record: { enabled: false, processes: [], grace_seconds: 0, state: null, mic: null, render: null },
+  recordings_dir: "", gpu_busy: false, disk_free_gb: 100, last_stop: null, ...extra,
+});
+const recLine = async () => within(await dialog()).findByRole("group", { name: TERMS_RECORDING });
+
+test("записи нет — строки «Идёт запись» в заслонке нет", async () => {
+  notAccepted();
+  render(<TermsGate endpoint={ep} snapshot={snap({})}>{app}</TermsGate>);
+  const box = await dialog();
+  expect(within(box).queryByRole("group", { name: TERMS_RECORDING })).toBeNull();
+  expect(within(box).queryByRole("button", { name: "Остановить и сохранить" })).toBeNull();
+});
+
+test("идёт запись — «Остановить и сохранить» в заслонке: та же команда, что у рейки; условия не приняты", async () => {
+  notAccepted();
+  const stopped = { ...snap({ status: "idle" }), ok: true, action: "stop" };
+  vi.mocked(api.recordingCommand).mockResolvedValue(stopped);
+  const onSnapshot = vi.fn();
+  render(<TermsGate endpoint={ep} snapshot={snap({ status: "recording", source: "auto", elapsed_s: 90 })}
+    onSnapshot={onSnapshot}>{app}</TermsGate>);
+  const line = await recLine();
+  expect(line).toHaveTextContent(TERMS_RECORDING);
+  await userEvent.click(within(line).getByRole("button", { name: "Остановить и сохранить" }));
+  expect(api.recordingCommand).toHaveBeenCalledWith(ep, "stop");
+  await waitFor(() => expect(onSnapshot).toHaveBeenCalledWith(stopped));
+  // Условия не приняты и не сохранялись — заслонка на месте.
+  expect(patchSettings).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog", { name: "Прежде чем продолжить" })).toBeInTheDocument();
+});
+
+test("временная встреча — «Закончить временную встречу» с тем же вопросом, что в рейке", async () => {
+  notAccepted();
+  vi.mocked(api.recordingCommand).mockResolvedValue({ ...snap({}), ok: true, action: "stop" });
+  render(<TermsGate endpoint={ep} snapshot={snap({ status: "recording", temporary: true })}>{app}</TermsGate>);
+  const line = await recLine();
+  await userEvent.click(within(line).getByRole("button", { name: "Закончить временную встречу" }));
+  const ask = within(line).getByRole("alertdialog", { name: "Временная встреча закончится и будет удалена." });
+  await userEvent.click(within(ask).getByRole("button", { name: "Продолжить" }));
+  expect(api.recordingCommand).not.toHaveBeenCalled();
+  await userEvent.click(within(line).getByRole("button", { name: "Закончить временную встречу" }));
+  await userEvent.click(within(line).getByRole("button", { name: "Закончить" }));
+  expect(api.recordingCommand).toHaveBeenCalledWith(ep, "stop");
+});
+
+test("запись с ассистентом без обычной — остановка через /live/stop; ошибка — в строке", async () => {
+  notAccepted();
+  const live = { active: true, starting: false, stopping: false, folder: "C:/rec/1", error: null, started_at: 1 };
+  vi.mocked(api.liveStop).mockRejectedValueOnce(new Error("нет связи"))
+    .mockResolvedValueOnce({ ok: true, action: "stop", ...live, active: false, stopping: true });
+  const onSnapshot = vi.fn();
+  render(<TermsGate endpoint={ep} snapshot={snap({ live })} onSnapshot={onSnapshot}>{app}</TermsGate>);
+  const line = await recLine();
+  const stop = within(line).getByRole("button", { name: "Остановить и сохранить" });
+  await userEvent.click(stop);
+  expect(await within(line).findByRole("alert")).toHaveTextContent("Не удалось остановить запись: нет связи");
+  await userEvent.click(stop);
+  await waitFor(() => expect(onSnapshot).toHaveBeenCalled());
+  expect(onSnapshot.mock.calls[0]![0].live).toMatchObject({ active: false, stopping: true });
+  expect(api.recordingCommand).not.toHaveBeenCalled();
 });
