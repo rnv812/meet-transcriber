@@ -6,7 +6,7 @@
 /* Шапка: заголовок со сводкой слева, поиск справа. */
 .voices__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-3); }
 .voices__heading { min-width: 0; }
-.voices__title { margin: 0; font-size: var(--text-xl); }
+.voices__title { margin: 0; font-size: var(--text-h2); }
 .voices__sub { margin: 2px 0 0; font-size: var(--text-sm); color: var(--ink-3); }
 .voices__sub .helptip { margin-left: 6px; }
 .voices__search { flex: 0 1 260px; min-width: 180px; }
