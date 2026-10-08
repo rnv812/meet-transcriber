@@ -13,7 +13,7 @@
  * размер, когда меняется размер окна приложения и при прокрутке.
  */
 
-import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 export const GAP = 6;
 export const MARGIN = 8;
@@ -112,3 +112,17 @@ export function useFloating(
  */
 export const floatingStyle = (pos: Placement | null) =>
   pos ? { left: pos.left, top: pos.top } : { left: 0, top: 0, opacity: 0 };
+
+/**
+ * «Нажатие внутри» по дереву React, а не DOM. Подсказка «?» выносится порталом
+ * в body (внутри стекла — backdrop-filter — `position: fixed` считается от
+ * стекла, а не от окна), и для окна вокруг неё `contains()` её уже не видит.
+ * Корню вешается `onMouseDownCapture={mark}`: React доставляет событие и через
+ * портал, раньше обработчика на document; тот спрашивает `inside(e)`.
+ */
+export function useTreeInside() {
+  const last = useRef<Event | null>(null);
+  const mark = useCallback((e: { nativeEvent: Event }) => { last.current = e.nativeEvent; }, []);
+  const inside = useCallback((e: Event) => last.current === e, []);
+  return { mark, inside };
+}

@@ -4,11 +4,15 @@
  *
  * Положение — fixed, по координатам кнопки: подсказка не обрезается краем
  * прокручиваемой области и не уходит за край окна (раскрывается туда, где
- * есть место, как Popover).
+ * есть место, как Popover). Сама подсказка — порталом в body: внутри стекла
+ * (Popover, диалог, боковая панель — backdrop-filter) `position: fixed`
+ * отсчитывалась бы от стекла и обрезалась его краем. Для событий React она
+ * по-прежнему внутри «?»: наведение, фокус и «клик внутри» — как раньше.
  */
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { placeFloating, type AnchorRect } from "./floating";
+import { createPortal } from "react-dom";
+import { placeFloating, useTreeInside, type AnchorRect } from "./floating";
 import "./helptip.css";
 
 const WIDTH = 300;
@@ -40,6 +44,7 @@ export function HelpTip({ label, title, children }: {
   const tip = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const id = useId();
+  const { mark, inside } = useTreeInside();
   const shown = hover || focus || pinned;
 
   const close = useCallback(() => { setHover(false); setFocus(false); setPinned(false); }, []);
@@ -69,7 +74,7 @@ export function HelpTip({ label, title, children }: {
       e.stopPropagation();
       close();
     };
-    const down = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) close(); };
+    const down = (e: MouseEvent) => { if (!inside(e)) close(); };
     const scroll = (e: Event) => {
       const target = e.target;
       if (target instanceof Node && root.current && target.contains(root.current)) close();
@@ -84,25 +89,29 @@ export function HelpTip({ label, title, children }: {
       window.removeEventListener("scroll", scroll, true);
       window.removeEventListener("resize", place);
     };
-  }, [shown, close, place]);
+  }, [shown, close, place, inside]);
 
   return (
-    <span ref={root} className="helptip"
+    <span ref={root} className="helptip" onMouseDownCapture={mark}
       onMouseEnter={() => { clearTimeout(timer.current); setHover(true); }}
       onMouseLeave={() => { clearTimeout(timer.current); timer.current = setTimeout(() => setHover(false), CLOSE_DELAY_MS); }}>
       <button ref={button} type="button" className="helptip__button" aria-label={label}
         aria-expanded={shown} aria-describedby={shown ? id : undefined}
         onClick={() => setPinned((v) => !v)}
         onFocus={() => setFocus(true)}
-        onBlur={(e) => { if (!root.current?.contains(e.relatedTarget as Node | null)) { setFocus(false); setPinned(false); } }}>
+        onBlur={(e) => {
+          const to = e.relatedTarget as Node | null;
+          if (!root.current?.contains(to) && !tip.current?.contains(to)) { setFocus(false); setPinned(false); }
+        }}>
         ?
       </button>
-      {shown && (
+      {shown && createPortal(
         <span ref={tip} role="tooltip" id={id} className="helptip__tip"
           style={pos ? { left: pos.left, top: pos.top } : { visibility: "hidden", left: 0, top: 0 }}>
           {title && <span className="helptip__title">{title}</span>}
           {children}
-        </span>
+        </span>,
+        document.body,
       )}
     </span>
   );

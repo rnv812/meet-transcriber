@@ -1,5 +1,7 @@
 /* «?» с пояснением (ui/HelpTip.tsx): общий для настроек, мастера и карточки.
-   Облачко — цвета и форма подсказки Atlas Aurora; положение — fixed, задаёт компонент. */
+   Облачко — цвета и форма подсказки Atlas Aurora; положение — fixed, задаёт компонент.
+   Облачко живёт в body (портал), поэтому слой — --z-popover: выше диалогов и панелей,
+   внутри которых стоит «?». */
 .helptip { position: relative; display: inline-flex; flex: none; vertical-align: middle; }
 .helptip__button {
   width: 18px; height: 18px; padding: 0; border: 1px solid var(--hairline-strong); border-radius: 50%;
@@ -8,7 +10,7 @@
 .helptip__button:hover, .helptip__button:focus-visible, .helptip__button[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
 .helptip__button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .helptip__tip {
-  position: fixed; z-index: 50; width: 300px; max-width: calc(100vw - 16px);
+  position: fixed; z-index: var(--z-popover); width: 300px; max-width: calc(100vw - 16px);
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   background: var(--surface-3); border: 1px solid var(--hairline-strong); border-radius: var(--r-sm);
   color: var(--ink); font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left;

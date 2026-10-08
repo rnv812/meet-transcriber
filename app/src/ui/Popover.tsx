@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { floatingStyle, useFloating, type Align } from "./floating";
+import { floatingStyle, useFloating, useTreeInside, type Align } from "./floating";
 import "./popover.css";
 
 const W = 260;
@@ -26,11 +26,14 @@ export function Popover({ anchor, onClose, children, label, width = W, anchorTog
   const box = useRef<HTMLDivElement>(null);
   // Положение — общее правило (ui/floating): в пределах окна, с переворотом и пересчётом.
   const pos = useFloating(anchor, box, { align, width });
+  // Своё — и то, что вынесено порталом из содержимого окна (подсказка «?»).
+  const { mark, inside } = useTreeInside();
 
   useEffect(() => {
     const down = (e: MouseEvent) => {
       const target = e.target as Node;
       if (anchorToggles && anchor.contains(target)) return;
+      if (inside(e)) return;
       if (box.current && !box.current.contains(target)) onClose();
     };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -40,11 +43,11 @@ export function Popover({ anchor, onClose, children, label, width = W, anchorTog
       document.removeEventListener("mousedown", down);
       document.removeEventListener("keydown", key);
     };
-  }, [onClose, anchor, anchorToggles]);
+  }, [onClose, anchor, anchorToggles, inside]);
 
   return (
     <div ref={box} className="popover glass glass--dense" role="dialog" aria-label={label}
-      style={{ ...floatingStyle(pos), width }}>
+      style={{ ...floatingStyle(pos), width }} onMouseDownCapture={mark}>
       {children}
     </div>
   );

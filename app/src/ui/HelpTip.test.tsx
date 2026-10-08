@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CLOSE_DELAY_MS, HelpTip, TipLine, placeTip } from "./HelpTip";
+import { Popover } from "./Popover";
 
 const tip = () => (
   <div>
@@ -105,6 +106,84 @@ test("изменение размера окна пересчитывает по
   act(() => { window.dispatchEvent(new Event("resize")); });
   expect(tooltip.style.left).toBe("500px");
   expect(tooltip.style.top).toBe("64px");
+});
+
+describe("внутри всплывающего окна (стекло: backdrop-filter — свой отсчёт для position: fixed)", () => {
+  const inPopover = (onClose = vi.fn()) => {
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    render(
+      <div>
+        <Popover anchor={anchor} onClose={onClose} label="Окно с подсказкой">
+          <HelpTip label="Что такое база голосов" title="База голосов">
+            <TipLine>Образцы голосов людей, которых вы назвали.</TipLine>
+          </HelpTip>
+        </Popover>
+        <button type="button">Снаружи</button>
+      </div>,
+    );
+    return { onClose, cleanup: () => anchor.remove() };
+  };
+
+  test("подсказка выносится в body — вне .popover, связь и роль на месте", async () => {
+    const { cleanup } = inPopover();
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Что такое база голосов" }));
+      const tooltip = screen.getByRole("tooltip");
+      const button = screen.getByRole("button", { name: "Что такое база голосов" });
+      expect(tooltip.closest(".popover")).toBeNull();
+      expect(tooltip.parentElement).toBe(document.body);
+      expect(button.closest(".popover")).not.toBeNull();
+      expect(button).toHaveAttribute("aria-describedby", tooltip.id);
+      expect(button).toHaveAccessibleDescription(/Образцы голосов/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("фокус открывает, Esc закрывает только подсказку", async () => {
+    const { onClose, cleanup } = inPopover();
+    try {
+      act(() => { screen.getByRole("button", { name: "Что такое база голосов" }).focus(); });
+      expect(screen.getByRole("tooltip")).toHaveTextContent("База голосов");
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("нажатие в самой подсказке не закрывает ни её, ни окно; снаружи — закрывает", async () => {
+    const { onClose, cleanup } = inPopover();
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Что такое база голосов" }));
+      await userEvent.click(screen.getByText("Образцы голосов людей, которых вы назвали."));
+      expect(screen.getByRole("tooltip")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Снаружи" }));
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      expect(onClose).toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("курсор переходит с «?» на подсказку — она не закрывается", () => {
+    vi.useFakeTimers();
+    const { cleanup } = inPopover();
+    try {
+      const root = screen.getByRole("button", { name: "Что такое база голосов" }).parentElement!;
+      fireEvent.mouseEnter(root);
+      fireEvent.mouseLeave(root);
+      fireEvent.mouseEnter(screen.getByRole("tooltip"));
+      act(() => { vi.advanceTimersByTime(CLOSE_DELAY_MS + 10); });
+      expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("placeTip", () => {
