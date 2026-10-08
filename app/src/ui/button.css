@@ -24,7 +24,24 @@ button.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: transl
   text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px;
 }
 .btn--link:hover { background: none; text-decoration-color: var(--ink-3); }
-.btn--ghost-danger:hover { color: var(--danger); background: var(--danger-soft); }
+.btn--ghost-danger:hover:not(:disabled) { color: var(--danger); background: var(--danger-soft); }
+/* Недоступная кнопка принимает указатель (см. выше) — наведение на ней вид не меняет:
+   у каждого варианта Aurora с :hover — его обычный вид (значения controls.css).
+   Исключение — рамка «опасной»: обычная строится через color-mix(), которого в
+   стилях окна нет (macOS 13); при наведении она полная --danger под opacity 0.5. */
+button.btn--primary:disabled:hover { --btn-g2: var(--accent-strong); }
+button.btn--aurora:disabled:hover { background: linear-gradient(120deg, var(--wave-6), var(--wave-4) 45%, var(--wave-5)); }
+button.btn--tonal:disabled:hover {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)) padding-box,
+    linear-gradient(120deg, var(--wave-4), transparent 70%) border-box;
+}
+button.btn--mono:disabled:hover { background: var(--primary); }
+button.btn--deep:disabled:hover { background: var(--surface-3); }
+button.btn--outline:disabled:hover { background: transparent; border-color: var(--hairline-strong); }
+button.btn--ghost:disabled:hover { background: transparent; color: var(--ink-2); }
+button.btn--danger:disabled:hover { background: transparent; }
+button.btn--danger-solid:disabled:hover { background: var(--danger); }
+button.btn--link:disabled:hover { background: none; text-decoration-color: var(--hairline-strong); }
 /* Нажатая — заливка и контур. Контур — outline, не box-shadow: тень заменила бы
    рамку фокуса Aurora (box-shadow в :focus-visible), и нажатая кнопка с клавиатуры
    выглядела бы без фокуса. */
@@ -32,3 +49,5 @@ button.btn[aria-pressed="true"] {
   background: var(--surface-3); color: var(--ink);
   outline: 1px solid var(--control-line); outline-offset: -1px;
 }
+/* Сильнее «button.btn--…:disabled:hover» выше: нажатая недоступная остаётся нажатой. */
+button.btn[aria-pressed="true"]:disabled:hover { background: var(--surface-3); color: var(--ink); }
