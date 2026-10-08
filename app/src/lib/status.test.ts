@@ -6,6 +6,11 @@ test("совет к известной ошибке расшифровки; не
   expect(failureAdvice("что-то совсем другое")).toBeNull();
 });
 
+test("нет доступа к Hugging Face — токен в разделе «Спикеры» (0.4)", () => {
+  expect(failureAdvice("HTTPError: 401 Client Error for huggingface.co")).toBe(
+    "Нет доступа к модели Hugging Face: проверьте токен в «Настройки → Спикеры».");
+});
+
 const rec = (o = {}) => ({ id: "2026-09-30_16-04", path: "C:/r/2026-09-30_16-04",
   started_at: null, duration_s: 60, tracks: { sys: "x" }, has_transcript: false,
   has_voices: false, title: null, source: "record", ...o }) as any;

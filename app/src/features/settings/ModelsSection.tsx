@@ -1,6 +1,7 @@
 /**
  * «Модели ИИ» (0.4, прежде — верх раздела «Ассистент»): какие модели включены и
- * какая по умолчанию, модель Claude Code и OpenCode, локальная модель, прокси.
+ * какая по умолчанию, модель Claude Code и OpenCode, локальная модель, прокси; в «Тонкой
+ * настройке» — «Локальную модель — через прокси».
  *
  * «Модели» (0.3.4): включённые модели (`llm.enabled`) можно выбрать у действий
  * карточки — «Переанализировать», «Итоги», «Улучшить расшифровку», «Предложить
@@ -22,8 +23,8 @@ import { openUrl } from "../../lib/shell";
 import type { AssistantInfo, ProxyInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { Row, SettingsCard, type Raw, type SetFn } from "./Section";
-import { LocalModelRows } from "./LocalModelRows";
+import { FineTuning, Row, SettingsCard, type Raw, type SetFn } from "./Section";
+import { LocalModelRows, LocalViaProxyRow } from "./LocalModelRows";
 import { ProviderTip } from "./tips";
 import { PRIVACY_CLOUD, PRIVACY_LOCAL } from "../../lib/llm";
 
@@ -441,6 +442,9 @@ export function ModelsSection({ draft, saved, set, endpoint }: {
           )}
         </Row>
       </SettingsCard>
+      <FineTuning>
+        <LocalViaProxyRow value={llm("local_via_proxy") === true} set={set} disabled={!on(LOCAL)} />
+      </FineTuning>
     </>
   );
 }

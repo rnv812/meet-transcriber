@@ -151,7 +151,7 @@ export function failureAdvice(error: string): string | null {
   if (/no space left|недостаточно места|errno 28/.test(e))
     return "На диске не хватает места: освободите несколько гигабайт и повторите.";
   if (/huggingface|hf_token|401|403/.test(e))
-    return "Нет доступа к модели Hugging Face: проверьте токен в «Настройки → Движок и модели».";
+    return "Нет доступа к модели Hugging Face: проверьте токен в «Настройки → Спикеры».";
   return null;
 }
 

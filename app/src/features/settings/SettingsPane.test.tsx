@@ -272,7 +272,9 @@ test("«Автозапись»: браузер для звонков сохра�
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
   const group = await screen.findByRole("group", { name: "Звонки в браузере" });
   await userEvent.click(within(group).getByRole("checkbox", { name: "Google Chrome" }));
-  await userEvent.click(within(group).getByRole("checkbox", { name: /Только если в заголовке окна сайт звонка/ }));
+  // Строгий режим и сайты звонков — в «Тонкой настройке».
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: /Только если в заголовке окна сайт звонка/ }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
   expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
@@ -786,6 +788,7 @@ test("«Распознавание» — устройство, движок, я�
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="asr" />);
   expect(await screen.findByLabelText("Язык речи")).toBeInTheDocument();
   expect(screen.getByRole("group", { name: "Видеокарта" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   expect(screen.getByRole("switch", { name: "Уточнять время каждого слова" })).toBeInTheDocument();
   expect(screen.queryByRole("slider")).toBeNull();
   expect(screen.queryByRole("switch", { name: "Отмечать одновременную речь" })).toBeNull();
@@ -835,9 +838,9 @@ test("«Дополнительно»: команда после записи, м
   expect(screen.getByRole("group", { name: "Запуск Claude Code" })).toBeInTheDocument();
 });
 
-test("«Анализ встречи» вобрал «Подсветку расшифровки» (без Jira); Jira — свой раздел", async () => {
+test("«Анализ встречи» вобрал «Подсветку расшифровки» (адрес и проекты Jira — нет); Jira — свой раздел", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="analysis" />);
-  expect(await screen.findByRole("switch", { name: "Значки типов реплик" })).toBeInTheDocument();
+  expect(await screen.findByRole("switch", { name: "Типы реплик: показывать" })).toBeInTheDocument();
   expect(screen.getByRole("switch", { name: "Подписи глав на полосе плеера" })).toBeInTheDocument();
   expect(screen.queryByRole("switch", { name: "Ссылки на задачи Jira" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Jira" }));
@@ -852,6 +855,15 @@ test("подзаголовки — обычным регистром: стили
   }
 });
 
+test("меню: наведение тише выбранного (--surface-2 против --surface-3 с контуром); Jira — без старых переменных", () => {
+  const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
+  const rule = (sel: string) => new RegExp(`${sel.replace(/[.[\]"=]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+  expect(rule('.settings__item:hover')).toMatch(/background: var\(--surface-2\)/);
+  expect(rule('.settings__item[aria-current="page"]')).toMatch(/background: var\(--surface-3\)/);
+  const jira = readFileSync(join(process.cwd(), "src", "features", "settings", "jira-settings.css"), "utf8");
+  expect(jira).not.toMatch(/var\(--(text|text-2|text-3|line|surface|surface-hover)\)/);
+});
+
 test.each([
   ["recording", "speaker_name", ["app"]], ["recording", "auto_transcribe", ["app"]], ["recording", "mic_device", ["sound"]],
   ["ui", "notifications", ["app"]], ["ui", "theme", []], ["auto_record", "grace_minutes", ["auto"]],
@@ -860,7 +872,7 @@ test.each([
   ["llm", "provider", ["models"]], ["llm", "proxy", ["models"]], ["assist", "participant", ["assistant"]],
   ["assist", "window_seconds", ["assistant"]], ["assistant", "knowledge_dir", ["assistant"]],
   ["assistant", "auto_title", ["analysis"]], ["agent", "launch", ["advanced"]], ["analysis", "auto", ["analysis"]],
-  ["transcript_view", "types", ["analysis"]], ["transcript_view", "curve", ["analysis"]], ["transcript_view", "jira", ["jira"]],
+  ["transcript_view", "types", ["analysis"]], ["transcript_view", "curve", ["analysis"]], ["transcript_view", "jira", ["analysis", "jira"]],
   ["integrations", "jira_base_url", ["jira"]], ["integrations", "gpu_marker", ["advanced"]], ["hooks", "command", ["advanced"]],
   ["export", "folder_template", ["export"]],
 ] as const)("sectionsOf(%s, %s) — %j", (group, key, sections) => {

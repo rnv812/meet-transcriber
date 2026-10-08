@@ -222,6 +222,7 @@ test("отказ в диалоге выбора папки ничего не м�
 
 test("окно живой расшифровки уходит в assist.window_seconds; вне 5..120 — не сохранить", async () => {
   openAssistant();
+  await userEvent.click(await screen.findByRole("button", { name: "Тонкая настройка" }));
   const win = await screen.findByLabelText("Окно живой расшифровки, с");
   expect(win).toHaveAttribute("min", "5");
   expect(win).toHaveAttribute("max", "120");
@@ -365,6 +366,7 @@ test.each([
 test("живые подсказки (агент-участник выключен): по умолчанию «Сдержанно» и «Как у агента»; выбор уходит в assist", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { participant: false } }));
   openAssistant();
+  await userEvent.click(await screen.findByRole("button", { name: "Тонкая настройка" }));
   const activity = await screen.findByRole("radiogroup", { name: "Активность подсказок" });
   expect(within(activity).getByRole("radio", { name: "Сдержанно" })).toBeChecked();
   const tier = screen.getByRole("radiogroup", { name: "Модель для живых подсказок" });
@@ -384,6 +386,7 @@ test("живые подсказки (агент-участник выключе�
 test("«Только сводка» — число подсказок не выбирается; у каждой настройки есть «?»", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0, participant: false } }));
   openAssistant();
+  await userEvent.click(await screen.findByRole("button", { name: "Тонкая настройка" }));
   expect(await screen.findByLabelText("Сколько подсказок держать")).toBeDisabled();
   expect(screen.getByRole("option", { name: "По активности (5 или 8)" })).toBeInTheDocument();
   for (const label of ["Что такое активность подсказок", "Какая модель ведёт подсказки", "Что значит «Не отвлекать»"]) {

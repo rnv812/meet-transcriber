@@ -126,11 +126,21 @@ export function LocalModelRows({ baseUrl, model, set, endpoint, viaProxy = false
           onChange={(e) => set("llm", "local_model", e.target.value.trim() ? e.target.value : null)} />
         {missing && <span className="error">Модели «{name}» на сервере нет — выберите другую из списка</span>}
       </Row>
-      <Row label="Локальную модель — через прокси" htmlFor="llm-local-via-proxy"
-        hint="Обычно сервер модели в своей сети и прокси не нужен. Включите, если он доступен только через прокси">
-        <input id="llm-local-via-proxy" type="checkbox" checked={viaProxy}
-          onChange={(e) => set("llm", "local_via_proxy", e.target.checked)} />
-      </Row>
     </>
+  );
+}
+
+/**
+ * «Локальную модель — через прокси» (`llm.local_via_proxy`) — «Тонкая настройка»
+ * раздела «Модели ИИ». Без включённой локальной модели — недоступно, с причиной.
+ */
+export function LocalViaProxyRow({ value, set, disabled = false }: { value: boolean; set: SetFn; disabled?: boolean }) {
+  return (
+    <Row label="Локальную модель — через прокси" htmlFor="llm-local-via-proxy" disabled={disabled}
+      hint={disabled ? "Включите локальную модель в «Провайдерах», чтобы выбрать"
+        : "Обычно сервер модели в своей сети и прокси не нужен. Включите, если он доступен только через прокси"}>
+      <input id="llm-local-via-proxy" type="checkbox" checked={value} disabled={disabled}
+        onChange={(e) => set("llm", "local_via_proxy", e.target.checked)} />
+    </Row>
   );
 }

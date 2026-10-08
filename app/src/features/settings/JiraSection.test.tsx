@@ -87,7 +87,7 @@ test("Jira: проекты — чипы ключей с вариантами н�
   }));
 });
 
-test("Jira: убрали проект по умолчанию — он сбрасывается; шаблон ключа — в «Дополнительно»", async () => {
+test("Jira: убрали проект по умолчанию — он сбрасывается; шаблон ключа — в «Тонкой настройке»", async () => {
   vi.mocked(api.getSettings).mockResolvedValue({
     ...structuredClone(settings),
     integrations: {
@@ -99,8 +99,8 @@ test("Jira: убрали проект по умолчанию — он сбра�
   expect(await screen.findByRole("combobox", { name: "Проект по умолчанию" })).toHaveValue("OPS");
   await userEvent.click(screen.getByRole("button", { name: "Убрать проект OPS" }));
   expect(screen.getByRole("combobox", { name: "Проект по умолчанию" })).toHaveValue("");
-  // Шаблон скрыт под «Дополнительно», подсказка в поле — то, что действует без него.
-  await userEvent.click(screen.getByText("Дополнительно: шаблон ключа для текста"));
+  // Шаблон скрыт в «Тонкой настройке», подсказка в поле — то, что действует без него.
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   const pattern = screen.getByRole("textbox", { name: "Шаблон ключа для текста" });
   expect(pattern).toHaveAttribute("placeholder", "(?:SPR)-\\d+");
   await userEvent.type(pattern, "(");

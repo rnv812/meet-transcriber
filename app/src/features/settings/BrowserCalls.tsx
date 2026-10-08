@@ -44,27 +44,16 @@ export const browsersFor = (os: Os): Browser[] => (os === "macos" ? MAC_BROWSERS
 
 const lower = (s: string) => s.toLowerCase();
 
-export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequireSite, onSites, os = OS }: {
+/** Браузеры, в которых вы созваниваетесь (`auto_record.browsers`). */
+export function BrowserCalls({ browsers, onBrowsers, os = OS }: {
   os?: Os;
-  browsers: string[]; requireSite: boolean; sites: string[];
-  onBrowsers: (v: string[]) => void; onRequireSite: (v: boolean) => void; onSites: (v: string[]) => void;
+  browsers: string[];
+  onBrowsers: (v: string[]) => void;
 }) {
-  const [draft, setDraft] = useState("");
   const selected = new Set(browsers.map(lower));
-  const typed = draft.trim();
-  const duplicate = typed !== "" && sites.some((s) => lower(s) === lower(typed));
-
   const toggle = (exe: string) => onBrowsers(selected.has(lower(exe))
     ? browsers.filter((b) => lower(b) !== lower(exe))
     : [...browsers, exe]);
-  const add = () => {
-    if (!typed || duplicate) return;
-    onSites([...sites, typed]);
-    setDraft("");
-  };
-  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") { e.preventDefault(); add(); }
-  };
 
   return (
     <div className="callapps" role="group" aria-label="Звонки в браузере">
@@ -83,7 +72,7 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
           </TipLine>
           <TipLine>
             Если в заголовке окна браузера есть сайт звонка, запись получит название по нему,
-            например «Google Meet — Планёрка». Название можно изменить.
+            например «Google Meet — Планёрка». Название можно изменить. Сайты звонков — в «Тонкой настройке».
           </TipLine>
         </HelpTip>
       </div>
@@ -99,17 +88,43 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
           </label>
         ))}
       </div>
-      <label className="callapps__item callapps__strict">
+    </div>
+  );
+}
+
+/**
+ * Строгий режим (`browser_require_site`) и сайты звонков (`call_sites`) —
+ * «Тонкая настройка» раздела «Автозапись».
+ */
+export function CallSites({ requireSite, sites, onRequireSite, onSites }: {
+  requireSite: boolean; sites: string[];
+  onRequireSite: (v: boolean) => void; onSites: (v: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const typed = draft.trim();
+  const duplicate = typed !== "" && sites.some((s) => lower(s) === lower(typed));
+  const add = () => {
+    if (!typed || duplicate) return;
+    onSites([...sites, typed]);
+    setDraft("");
+  };
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") { e.preventDefault(); add(); }
+  };
+
+  return (
+    <div className="callapps" role="group" aria-label="Сайты звонков">
+      <label className="callapps__item">
         <input type="checkbox" checked={requireSite} onChange={(e) => onRequireSite(e.target.checked)} />
         <span className="callapps__name">
-          <span>Только если в заголовке окна сайт звонка</span>
+          <span className="srow__label">Только если в заголовке окна сайт звонка</span>
           <span className="callapps__exes">
             Микрофон в браузере нужен не только для звонков: диктовка, голосовой поиск. В этом режиме они запись не запускают
           </span>
         </span>
       </label>
       <div className="callapps__head callapps__head--sub">
-        <span className="srow__hint">Сайты звонков</span>
+        <span className="srow__label">Сайты звонков</span>
         <HelpTip label="Что такое сайт звонка" title="Сайты звонков">
           <TipLine>
             Часть заголовка окна браузера, по которой узнаётся звонок, например «Google Meet» или «Телемост».

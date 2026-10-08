@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { BROWSERS, BrowserCalls, browsersFor } from "./BrowserCalls";
+import { BROWSERS, BrowserCalls, CallSites, browsersFor } from "./BrowserCalls";
 
 type Value = { browsers: string[]; requireSite: boolean; sites: string[] };
 
@@ -12,10 +12,13 @@ function Harness({ initial, onChange }: { initial: Partial<Value>; onChange?: (v
     onChange?.(next);
     return next;
   });
+  // Браузеры — на виду в «Автозаписи», строгий режим и сайты — в её «Тонкой настройке».
   return (
-    <BrowserCalls browsers={v.browsers} requireSite={v.requireSite} sites={v.sites}
-      onBrowsers={(browsers) => put({ browsers })} onRequireSite={(requireSite) => put({ requireSite })}
-      onSites={(sites) => put({ sites })} />
+    <>
+      <BrowserCalls browsers={v.browsers} onBrowsers={(browsers) => put({ browsers })} />
+      <CallSites requireSite={v.requireSite} sites={v.sites}
+        onRequireSite={(requireSite) => put({ requireSite })} onSites={(sites) => put({ sites })} />
+    </>
   );
 }
 
@@ -38,6 +41,15 @@ test("отметить и снять браузер", async () => {
   expect(changes.at(-1)?.browsers).toEqual(["chrome.exe", "browser.exe"]);
   await userEvent.click(screen.getByRole("checkbox", { name: "Google Chrome" }));
   expect(changes.at(-1)?.browsers).toEqual(["browser.exe"]);
+});
+
+test("строгий режим и сайты — своя группа «Сайты звонков», не внутри браузеров", () => {
+  render(<Harness initial={{}} />);
+  const browsers = screen.getByRole("group", { name: "Звонки в браузере" });
+  expect(within(browsers).queryByRole("checkbox", { name: /Только если в заголовке/ })).toBeNull();
+  const sites = screen.getByRole("group", { name: "Сайты звонков" });
+  expect(within(sites).getByRole("checkbox", { name: /Только если в заголовке окна сайт звонка/ })).toBeInTheDocument();
+  expect(within(sites).getByRole("textbox", { name: "Новый сайт звонка" })).toBeInTheDocument();
 });
 
 test("строгий режим — флажок", async () => {
@@ -85,8 +97,7 @@ test("подсказка честно говорит про мьют в веб-�
 
 test("macOS: браузеры — имена процессов без .exe", () => {
   const onBrowsers = vi.fn();
-  render(<BrowserCalls os="macos" browsers={["google chrome"]} requireSite={false} sites={[]}
-    onBrowsers={onBrowsers} onRequireSite={() => {}} onSites={() => {}} />);
+  render(<BrowserCalls os="macos" browsers={["google chrome"]} onBrowsers={onBrowsers} />);
   expect(browsersFor("macos").some((b) => /\.exe$/i.test(b.exe))).toBe(false);
   expect(screen.getByRole("checkbox", { name: "Google Chrome" })).toBeChecked();
   expect(screen.getByText("Brave Browser")).toBeInTheDocument();

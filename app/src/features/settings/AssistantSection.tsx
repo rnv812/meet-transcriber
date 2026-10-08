@@ -1,7 +1,7 @@
 /**
  * «Ассистент» (0.4): агент-участник встречи (профиль, как часто писать,
- * расширенные возможности), база знаний (папка, карта, исключения) и живая
- * расшифровка (окно, «Не отвлекать», прежний режим подсказок). Какая модель
+ * расширенные возможности) и база знаний (папка, карта, исключения); в «Тонкой
+ * настройке» — живая расшифровка (окно, «Не отвлекать», прежний режим подсказок). Какая модель
  * его ведёт — в «Моделях ИИ»; запуск агента во вкладке «Агент» — в
  * «Дополнительно». Куда выгружаются встречи — раздел «Экспорт».
  */
@@ -11,7 +11,7 @@ import { Button } from "../../ui/Button";
 import { LiveHintsRows } from "./LiveHintsRows";
 import { currentProvider, useAssistantInfo } from "./ModelsSection";
 import { KnowledgeRows, ParticipantRows } from "./ParticipantRows";
-import { FolderRow, Row, SeeAlso, SettingsCard, type Raw, type SetFn } from "./Section";
+import { FineTuning, FolderRow, Row, SeeAlso, SettingsCard, type Raw, type SetFn } from "./Section";
 import { KnowledgeTip, LiveWindowTip } from "./tips";
 
 export const WINDOW_MIN = 5;
@@ -56,7 +56,7 @@ export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: 
           onChange={(v) => set("assistant", "knowledge_dir", v)} />
         <KnowledgeRows draft={draft} set={set} provider={provider} />
       </SettingsCard>
-      <SettingsCard title="Живая расшифровка">
+      <FineTuning>
         <Row label="Окно живой расшифровки, с" htmlFor="assist-window" help={<LiveWindowTip min={WINDOW_MIN} max={WINDOW_MAX} />}
           hint="Как часто расшифровывается новый звук. Применяется со следующего запуска ассистента">
           <input id="assist-window" type="number" className="num" min={WINDOW_MIN} max={WINDOW_MAX} step={5}
@@ -68,7 +68,7 @@ export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: 
           {win !== undefined && windowInvalid(win) && <span className="error">От {WINDOW_MIN} до {WINDOW_MAX} секунд</span>}
         </Row>
         <LiveHintsRows draft={draft} set={set} provider={provider} hints={draft.assist?.participant === false} />
-      </SettingsCard>
+      </FineTuning>
     </>
   );
 }

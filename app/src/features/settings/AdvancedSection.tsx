@@ -1,12 +1,13 @@
 /**
  * «Дополнительно»: команда после записи (`hooks`), маркер занятости
  * видеокарты (`integrations.gpu_marker*`) и, с 0.4, запуск агента во вкладке
- * «Агент» (`agent.launch`, прежде — в «Ассистенте»).
+ * «Агент» (`agent.launch`, прежде — в «Ассистенте»); в «Тонкой настройке» —
+ * путь к файлу-маркеру (раскрыта сразу, если путь задан).
  */
 
 import { AgentLaunchSection } from "./AgentLaunchSection";
 import { TextRow } from "./fields";
-import { Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { FineTuning, Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 import { GpuMarkerTip, HookCommandTip, RecurringWindowTip } from "./tips";
 
 export function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
@@ -48,15 +49,17 @@ export function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
         <Switch label="Сообщать другим программам о занятости видеокарты" help={<GpuMarkerTip />}
           hint="На время расшифровки создаётся файл-маркер"
           value={markerOn} onChange={(x) => set("integrations", "gpu_marker", x)} />
+      </SettingsCard>
+      <SettingsCard title="Запуск агента (вкладка «Агент»)">
+        <AgentLaunchSection draft={draft} set={set} />
+      </SettingsCard>
+      <FineTuning defaultOpen={Boolean(draft.integrations?.gpu_marker_path)}>
         <TextRow id="gpu-marker-path" label="Путь к файлу-маркеру" placeholder="По умолчанию" wide disabled={!markerOn}
           hint={markerOn ? "Если не задан — gpu.lock в папке данных приложения"
             : "Включите сообщение о занятости видеокарты, чтобы задать путь"}
           value={String(draft.integrations?.gpu_marker_path ?? "")}
           onChange={(x) => set("integrations", "gpu_marker_path", x || null)} />
-      </SettingsCard>
-      <SettingsCard title="Запуск агента (вкладка «Агент»)">
-        <AgentLaunchSection draft={draft} set={set} />
-      </SettingsCard>
+      </FineTuning>
     </>
   );
 }

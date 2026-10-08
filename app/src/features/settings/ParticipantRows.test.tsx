@@ -67,7 +67,8 @@ test("участник включён (по умолчанию): частота,
   expect(screen.getByRole("switch", { name: KB_MAP_LABEL })).toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("list", { name: "Исключённые папки базы знаний" })).toHaveTextContent("Личное/");
   expect(screen.getByText(VISION_NOTE)).toBeInTheDocument();
-  // Прежние подсказки и их ритм скрыты; «Не отвлекать по умолчанию» — общее.
+  // Прежние подсказки и их ритм скрыты; «Не отвлекать по умолчанию» — общее, в «Тонкой настройке».
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   expect(screen.queryByRole("radiogroup", { name: "Активность подсказок" })).toBeNull();
   expect(screen.queryByRole("radiogroup", { name: "Модель для живых подсказок" })).toBeNull();
   expect(screen.queryByLabelText("Сколько подсказок держать")).toBeNull();
@@ -94,6 +95,7 @@ test("«Профиль по умолчанию»: рабочая встреча,
 test("участник выключен: прежние подсказки видны (запасной режим), настроек участника нет", async () => {
   open();
   await userEvent.click(await screen.findByRole("switch", { name: PARTICIPANT_LABEL }));
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   expect(screen.getByRole("radiogroup", { name: "Активность подсказок" })).toBeInTheDocument();
   expect(screen.getByLabelText("Сколько подсказок держать")).toBeInTheDocument();
   expect(screen.queryByRole("radiogroup", { name: "Как часто писать" })).toBeNull();

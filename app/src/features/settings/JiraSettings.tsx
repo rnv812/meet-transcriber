@@ -1,12 +1,12 @@
 /**
  * «Ссылки на Jira» — раздел «Jira» (0.4; в 0.3.1 — «Подсветка расшифровки»): адрес Jira, проекты —
  * чипы ключей со своими вариантами произношения, проект по умолчанию и, в
- * «Дополнительно», шаблон ключа для текста.
+ * «Тонкой настройке» раздела, шаблон ключа для текста (JiraPatternRow).
  *
  * Что узнаётся в речи, решает резидент (meet.jira_refs): ключ проекта
  * латиницей, его русская запись и чтение по буквам — сами, варианты здесь —
  * сверх них. Номер — цифрами или словами. Регулярное выражение для обычной
- * работы не нужно: шаблон в «Дополнительно» — только для ключей, написанных
+ * работы не нужно: шаблон в «Тонкой настройке» — только для ключей, написанных
  * текстом, если ключи проектов не подходят.
  */
 
@@ -128,11 +128,9 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
   const on = draft.transcript_view?.jira !== false;
   const integrations = draft.integrations ?? {};
   const base = String(integrations.jira_base_url ?? "");
-  const pattern = String(integrations.jira_pattern ?? "");
   const projects = jiraProjects(integrations);
   const fallback = String(integrations.jira_default_project ?? "");
   const baseError = jiraBaseError(base);
-  const patternError = jiraKeysError(pattern);
   const [newKey, setNewKey] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const keys = projects.map((p) => p.key);
@@ -151,8 +149,6 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
     if (open === key) setOpen(null);
   };
   const opened = projects.find((p) => p.key === open) ?? null;
-  // Шаблон, который действует при пустом поле, — подсказка в нём.
-  const effective = literalPattern({ jira_projects: projects });
 
   return (
     <>
@@ -225,17 +221,27 @@ export function JiraSettings({ draft, set }: { draft: Raw; set: SetFn }) {
           {projects.map((p) => <option key={p.key} value={p.key}>{p.key}</option>)}
         </select>
       </Row>
-      <details className="jadv" open={pattern ? true : undefined}>
-        <summary className="jadv__summary">Дополнительно: шаблон ключа для текста</summary>
-        <Row label="Шаблон ключа для текста" htmlFor="jira-pattern" stack disabled={!on} hint={patternError
-          ? <span className="error">{patternError}</span>
-          : <>Ключи, написанные текстом, например <code>SPR-131</code>: регулярное выражение или проекты через
-            запятую. Пусто — {projects.length ? "ключи проектов выше" : <>любой ключ (<code>{DEFAULT_JIRA_KEYS}</code>)</>}</>}>
-          <input id="jira-pattern" type="text" className="input--wide" placeholder={effective} value={pattern}
-            spellCheck={false} disabled={!on} aria-invalid={patternError ? true : undefined}
-            onChange={(e) => set("integrations", "jira_pattern", e.target.value)} />
-        </Row>
-      </details>
     </>
+  );
+}
+
+/** Шаблон ключа для текста — «Тонкая настройка» раздела «Jira». */
+export function JiraPatternRow({ draft, set }: { draft: Raw; set: SetFn }) {
+  const on = draft.transcript_view?.jira !== false;
+  const integrations = draft.integrations ?? {};
+  const pattern = String(integrations.jira_pattern ?? "");
+  const projects = jiraProjects(integrations);
+  const patternError = jiraKeysError(pattern);
+  // Шаблон, который действует при пустом поле, — подсказка в нём.
+  const effective = literalPattern({ jira_projects: projects });
+  return (
+    <Row label="Шаблон ключа для текста" htmlFor="jira-pattern" stack disabled={!on} hint={patternError
+      ? <span className="error">{patternError}</span>
+      : <>Ключи, написанные текстом, например <code>SPR-131</code>: регулярное выражение или проекты через
+        запятую. Пусто — {projects.length ? "ключи проектов" : <>любой ключ (<code>{DEFAULT_JIRA_KEYS}</code>)</>}</>}>
+      <input id="jira-pattern" type="text" className="input--wide" placeholder={effective} value={pattern}
+        spellCheck={false} disabled={!on} aria-invalid={patternError ? true : undefined}
+        onChange={(e) => set("integrations", "jira_pattern", e.target.value)} />
+    </Row>
   );
 }

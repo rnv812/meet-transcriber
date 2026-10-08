@@ -154,6 +154,7 @@ test("Ollama: «llama3.2» — это «llama3.2:latest» из списка, а 
 test("«Локальную модель — через прокси»: по умолчанию выключено; включить — новый поиск через прокси и сохранение", async () => {
   open();
   await picker();
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   const box = screen.getByRole("checkbox", { name: "Локальную модель — через прокси" });
   expect(box).not.toBeChecked();
   await userEvent.click(box);
@@ -179,6 +180,7 @@ test("«через прокси» с SOCKS-адресом — понятное �
   open();
   await picker();
   expect(screen.queryByRole("alert")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   await userEvent.click(screen.getByRole("checkbox", { name: "Локальную модель — через прокси" }));
   expect(screen.getByRole("alert")).toHaveTextContent("SOCKS-прокси для локальной модели не поддерживается");
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();

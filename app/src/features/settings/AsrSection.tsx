@@ -1,13 +1,13 @@
 /**
  * «Распознавание»: устройство, движок и модель для видеокарты и процессора
- * (AsrChoice), язык речи и уточнение времени слов. Порог узнавания голоса и
+ * (AsrChoice), язык речи; в «Тонкой настройке» — уточнение времени слов. Порог узнавания голоса и
  * одновременная речь — в «Спикерах», термины и исправления — в «Словаре» (0.4).
  */
 
 import { type Endpoint, GIGAAM_PREFIX } from "../../lib/api";
 import { AsrChoice, backendOf } from "./AsrChoice";
 import { TextRow } from "./fields";
-import { SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { FineTuning, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 import { AsrModelTip } from "./tips";
 
 /**
@@ -45,9 +45,11 @@ export function AsrSection({ draft, saved, set, endpoint, onOpenEngine }: {
         <TextRow id="asr-language" label="Язык речи" short
           hint="Код языка, например ru или en; auto — определить по записи. GigaAM понимает только русский"
           value={String(v("language") ?? "ru")} onChange={(x) => set("asr", "language", x)} />
+      </SettingsCard>
+      <FineTuning>
         <Switch label="Уточнять время каждого слова" hint="Точнее границы реплик; расшифровка занимает немного больше времени. После GigaAM не нужно: время слов у него своё"
           value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />
-      </SettingsCard>
+      </FineTuning>
     </>
   );
 }

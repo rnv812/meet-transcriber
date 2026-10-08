@@ -19,7 +19,8 @@
   color: var(--ink-2); font: inherit; text-align: left; cursor: pointer;
   transition: background var(--d), color var(--d);
 }
-.settings__item:hover { background: var(--surface-3); color: var(--ink); }
+/* Наведение тише выбранного: выбранный — --surface-3 с контуром, под мышью — --surface-2. */
+.settings__item:hover { background: var(--surface-2); color: var(--ink); }
 /* Выбранное — не только цветом: рамка и насыщенный шрифт. Рамка — outline:
    box-shadow заменил бы рамку фокуса Aurora (theme/focus.test.ts). */
 .settings__item[aria-current="page"] {
@@ -50,6 +51,31 @@
 .scard__title { margin: var(--s-4) 0 var(--s-1); color: var(--ink); }
 .scard > .srow:last-child, .scard > :last-child .srow:last-child { border-bottom: 0; }
 .see-also { margin: 0; }
+
+/* «Тонкая настройка» — последняя карточка раздела, свёрнута; заголовок тише подгрупп. */
+.sfine { padding: var(--s-1) var(--s-5); }
+.sfine .disclosure { border-bottom: 0; }
+.sfine .disclosure__head { padding: var(--s-2) 0; color: var(--ink-2); }
+.sfine .disclosure__head:hover { color: var(--ink); }
+.sfine .disclosure__body > :last-child, .sfine .disclosure__body > :last-child .srow:last-child { border-bottom: 0; }
+
+/* «Анализ встречи»: таблица «Размечать / Показывать в карточке». */
+.amark { width: 100%; border-collapse: collapse; margin: var(--s-2) 0 var(--s-1); }
+.amark__col {
+  padding: 0 0 var(--s-2); border-bottom: 1px solid var(--hairline);
+  color: var(--ink-3); font-size: 12px; font-weight: 500; text-align: left;
+}
+.amark__col--ctl { width: 120px; padding-left: var(--s-3); }
+.amark__row + .amark__row > * { border-top: 1px solid var(--hairline); }
+.amark__item {
+  padding: var(--s-3) 0; text-align: left; font-weight: inherit; vertical-align: top;
+}
+.amark__item .srow__label, .amark__item .srow__hint { display: block; }
+.amark__item .srow__hint { margin-top: 2px; }
+.amark__cell { padding: var(--s-3) 0 var(--s-3) var(--s-3); vertical-align: top; }
+.amark .switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.amark__note { display: block; margin-top: 4px; color: var(--ink-3); font-size: 12px; line-height: 1.4; }
+.amark__intro { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 1000px) {
   .settings__body { padding: 0 20px 24px; }
   .settings__state { max-width: 160px; }
@@ -215,7 +241,6 @@
 .callapps__option { padding: 4px 8px; border-radius: var(--r-md); cursor: pointer; }
 .callapps__option:hover, .callapps__option--active { background: var(--surface-3); }
 .callapps__note { margin: 0; font-size: 12px; }
-.callapps__strict { margin-top: 6px; }
 
 /* Исправления для будущих расшифровок (ReplacementsEditor). */
 .repl { padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }

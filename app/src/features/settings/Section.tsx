@@ -1,6 +1,7 @@
-import { useId, type ReactNode } from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
+import { Disclosure } from "../../ui/Disclosure";
 
 /**
  * Строка настроек: слева подпись с пояснением (переносится, сжимается),
@@ -118,6 +119,33 @@ export function SettingsCard({ title, children }: { title?: string; children: Re
     <section className="card scard">
       {title && <h3 className="type-card-title scard__title">{title}</h3>}
       {children}
+    </section>
+  );
+}
+
+/**
+ * Просьба раскрыть «Тонкую настройку» (поиск по настройкам нашёл строку в ней):
+ * номер просьбы, 0 — просьбы нет. Каждый новый номер раскрывает блок ещё раз.
+ */
+export const RevealFineTuning = createContext(0);
+
+/**
+ * «Тонкая настройка» (0.4): свёрнутый блок внизу раздела для редкого. Раскрыт
+ * сразу, если `defaultOpen` (например, в нём уже есть заданное значение), и
+ * по просьбе поиска (`RevealFineTuning`).
+ */
+export function FineTuning({ defaultOpen = false, children }: { defaultOpen?: boolean; children: ReactNode }) {
+  const reveal = useContext(RevealFineTuning);
+  const [open, setOpen] = useState(defaultOpen);
+  const [seen, setSeen] = useState(0);
+  // Новая просьба раскрыть — до отрисовки, чтобы поиск сразу нашёл строку.
+  if (reveal !== 0 && reveal !== seen) {
+    setSeen(reveal);
+    setOpen(true);
+  }
+  return (
+    <section className="card scard sfine">
+      <Disclosure title="Тонкая настройка" open={open} onToggle={setOpen}>{children}</Disclosure>
     </section>
   );
 }

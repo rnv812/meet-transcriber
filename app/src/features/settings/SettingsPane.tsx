@@ -46,7 +46,7 @@ import { DictionarySection } from "./DictionarySection";
 import { EngineSection } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { JiraSection } from "./JiraSection";
-import { dropHiddenJira, markupChangesInvalid } from "./MarkupSection";
+import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { ModelsSection, modelsChangesInvalid } from "./ModelsSection";
 import { SettingsCard, type Raw, type SetFn } from "./Section";
 import { SoundSection } from "./SoundSection";
@@ -140,7 +140,7 @@ export function sectionsOf(group: string, key: string): SectionId[] {
     case "assistant": return key === "auto_title" ? ["analysis"] : ["assistant"];
     case "analysis": return ["analysis"];
     case "categories": return ["categories"];
-    case "transcript_view": return key === "jira" ? ["jira"] : ["analysis"];
+    case "transcript_view": return key === "jira" ? ["analysis", "jira"] : ["analysis"];
     case "integrations": return key.startsWith("jira") ? ["jira"] : ["advanced"];
     case "hooks": return ["advanced"];
     default: return [];
@@ -236,12 +236,12 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
       }
     }
   }
-  dropHiddenJira(changes, draft);
+  dropHiddenJiraChanges(changes, draft);
   const categoriesDirty = settings !== null && categoriesChanged(draft.categories, settings.categories);
   const dirty = [...Object.keys(changes), ...(categoriesDirty ? ["categories"] : [])];
   const invalid = modelsChangesInvalid(changes, draft) || assistantChangesInvalid(changes)
     || agentLaunchChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {})
-    || markupChangesInvalid(changes) || (categoriesDirty && categoriesError(draftCategories(draft.categories)) !== null);
+    || jiraChangesInvalid(changes) || (categoriesDirty && categoriesError(draftCategories(draft.categories)) !== null);
   // Разделы с правками — точки в меню и список в вопросе при уходе.
   const dirtySections = new Set<SectionId>(categoriesDirty ? ["categories"] : []);
   for (const [g, keys] of Object.entries(changes)) {
@@ -381,7 +381,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}
               onOpenModels={() => setSection("models")} />
           ) : section === "analysis" ? (
-            <AnalysisSection draft={draft} set={set} />
+            <AnalysisSection draft={draft} set={set} onOpenJira={() => setSection("jira")} />
           ) : section === "categories" ? (
             <SettingsCard>
               <CategoriesSection value={draft.categories} onChange={setCategories} endpoint={endpoint} />

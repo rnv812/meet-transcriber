@@ -1,42 +1,54 @@
 /**
- * Настройки «Анализ встречи»: ставить ли анализ сам (`analysis.auto`), что
- * размечать (типы реплик, важность, главы, наблюдения, категория, название,
- * ссылки на задачи Jira), что из этого показывать в карточке и плеере
- * (`transcript_view`, с 0.4 — здесь, прежде раздел «Подсветка расшифровки»),
- * «Улучшать расшифровку автоматически после распознавания»
- * (`analysis.improve_auto`) и «Придумывать название встречи»
- * (`assistant.auto_title`).
+ * Настройки «Анализ встречи» (0.4): ставить ли анализ сам (`analysis.auto`);
+ * одна таблица «Размечать / Показывать» — что анализ размечает (`analysis.*`)
+ * и что из этого видно в карточке (`transcript_view.*`; прежде — раздел
+ * «Подсветка расшифровки»); плеер (кривая важности, подписи глав);
+ * «Улучшать расшифровку автоматически» (`analysis.improve_auto`); название
+ * (`analysis.title`, `assistant.auto_title`) и категория (`analysis.category`).
  *
  * Выключенная часть не запрашивается у модели (промпт короче) и не
- * показывается в карточке. Анализ делает тот же агент, что итоги, — провайдер
- * выбирается в разделе «Модели ИИ».
+ * показывается в карточке, поэтому «Показывать» без «Размечать» недоступно.
+ * «Ссылки на задачи: показывать» — тот же ключ `transcript_view.jira`, что
+ * «Ссылки на задачи Jira» в разделе «Jira». Анализ делает тот же агент, что
+ * итоги, — провайдер выбирается в разделе «Модели ИИ».
  */
 
+import { useId } from "react";
+import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { PlayerRows, ShowRows } from "./MarkupSection";
-import { SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { PlayerKeysTip } from "../card/PlayerKeysTip";
+import { Radio, SeeAlso, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 
-/** Части разметки: ключ в `analysis`, подпись и пояснение. */
-export const ANALYSIS_PARTS: { key: string; label: string; hint: string }[] = [
-  { key: "types", label: "Типы реплик", hint: "Вопрос, решение, задача, риск, идея, согласие, возражение" },
-  { key: "importance", label: "Важность реплик", hint: "Какие реплики важны тому, кто не был на встрече" },
-  { key: "chapters", label: "Главы", hint: "Разделы встречи по темам с названиями — для плеера и расшифровки" },
-  { key: "insights", label: "Наблюдения", hint: "Противоречия, на что обратить внимание, что сделать после встречи" },
+/** Строка таблицы: подпись, ключ в `analysis` (размечать) и в `transcript_view` (показывать). */
+export type MarkShowItem = { label: string; mark: string; show: string; hint: string };
+
+/** Таблица «Размечать / Показывать» (порядок — как в окне). */
+export const MARK_SHOW: MarkShowItem[] = [
   {
-    key: "category", label: "Определять категорию автоматически",
-    hint: "ИИ выбирает категорию из списка в разделе «Категории». Выбранную вами категорию он не меняет",
+    label: "Типы реплик", mark: "types", show: "types",
+    hint: "Вопрос, решение, задача, риск, идея, согласие, возражение. В карточке — значок в начале реплики и фильтры над лентой",
   },
   {
-    key: "title", label: "Название встречи",
-    hint: "Модель предлагает название по содержанию встречи. Ставится само, только если включено "
-      + "«Придумывать название встречи» ниже; иначе — по кнопке «Предложить название» в карточке",
+    label: "Важность", mark: "importance", show: "importance",
+    hint: "Какие реплики важны тому, кто не был на встрече. В карточке — полоса у самых важных (около 15 %)",
   },
   {
-    key: "issues", label: "Ссылки на задачи",
+    label: "Главы", mark: "chapters", show: "chapters",
+    hint: "Разделы встречи по темам с названиями. В карточке — заголовки в ленте с кнопкой «Обсудить главу с агентом»",
+  },
+  {
+    label: "Наблюдения", mark: "insights", show: "insights",
+    hint: "Противоречия, на что обратить внимание, что сделать после встречи. В карточке — блок над лентой реплик",
+  },
+  {
+    label: "Ссылки на задачи", mark: "issues", show: "jira",
     hint: "Задачи Jira, названные неполно или неразборчиво («тот баг про экспорт, сорок четыре пятьдесят два»). "
-      + "Работает, если в разделе «Jira» заданы проекты",
+      + "Показ — те же ссылки на задачи Jira, что в разделе «Jira»",
   },
 ];
+
+/** Подсказка у недоступного «Показывать». */
+export const MARK_FIRST = "Сначала включите разметку";
 
 export function AnalysisTip() {
   return (
@@ -81,7 +93,107 @@ export function ImproveTip() {
   );
 }
 
-export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
+export function MarkupTip() {
+  return (
+    <HelpTip label="Что такое подсветка и разметка" title="Подсветка и разметка">
+      <TipLine>
+        Разметку делает анализ встречи: типы реплик, важность, главы, наблюдения и ссылки на задачи. «Показывать в
+        карточке» выбирает, что из размеченного видно в карточке записи.
+      </TipLine>
+      <TipLine>Выключенное в «Размечать» у модели не запрашивается — показывать нечего.</TipLine>
+      <TipLine>Пока анализа нет, расшифровка и плеер выглядят как обычно.</TipLine>
+    </HelpTip>
+  );
+}
+
+export function CurveTip() {
+  return (
+    <HelpTip label="Что такое кривая важности" title="Кривая важности">
+      <TipLine>
+        Над полосой плеера рисуется кривая: чем она выше, тем важнее этот момент встречи по оценке анализа.
+        Так проще найти главное, как «самые пересматриваемые» моменты на YouTube.
+      </TipLine>
+      <TipLine>«Только важное» в плеере проигрывает лишь самые важные фрагменты, пропуская остальное.</TipLine>
+    </HelpTip>
+  );
+}
+
+/** Переключатель в ячейке таблицы: имя — «<Элемент>: размечать» / «<Элемент>: показывать». */
+function CellSwitch({ label, value, disabled, describedBy, onChange }: {
+  label: string; value: boolean; disabled?: boolean; describedBy?: string; onChange: (v: boolean) => void;
+}) {
+  return (
+    <button type="button" role="switch" aria-checked={value} aria-label={label} className="switch"
+      disabled={disabled} aria-describedby={describedBy} onClick={() => onChange(!value)} />
+  );
+}
+
+/** Таблица «Размечать / Показывать в карточке». */
+function MarkShowTable({ draft, set }: { draft: Raw; set: SetFn }) {
+  const id = useId();
+  const marked = (k: string) => draft.analysis?.[k] !== false;
+  const shown = (k: string) => draft.transcript_view?.[k] !== false;
+  return (
+    <table className="amark" aria-label="Что размечать и что показывать">
+      <thead>
+        <tr>
+          <th scope="col" className="amark__col">Элемент</th>
+          <th scope="col" className="amark__col amark__col--ctl">Размечать</th>
+          <th scope="col" className="amark__col amark__col--ctl">Показывать в карточке</th>
+        </tr>
+      </thead>
+      <tbody>
+        {MARK_SHOW.map((item) => {
+          const mark = marked(item.mark);
+          const note = `${id}-${item.mark}`;
+          return (
+            <tr key={item.mark} className="amark__row">
+              <th scope="row" className="amark__item">
+                <span className="srow__label">{item.label}</span>
+                <span className="srow__hint">{item.hint}</span>
+              </th>
+              <td className="amark__cell">
+                <CellSwitch label={`${item.label}: размечать`} value={mark}
+                  onChange={(x) => set("analysis", item.mark, x)} />
+              </td>
+              <td className="amark__cell">
+                <CellSwitch label={`${item.label}: показывать`} value={shown(item.show)} disabled={!mark}
+                  describedBy={mark ? undefined : note} onChange={(x) => set("transcript_view", item.show, x)} />
+                {!mark && <span id={note} className="amark__note">{MARK_FIRST}</span>}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** «Плеер»: кривая важности и подписи глав на полосе. */
+export function PlayerRows({ draft, set }: { draft: Raw; set: SetFn }) {
+  const v = (k: string) => draft.transcript_view?.[k];
+  const curve = (v("curve") as "always" | "hover" | "off" | undefined) ?? "hover";
+  return (
+    <>
+      <Radio label="Кривая важности над плеером" help={<CurveTip />} value={curve}
+        options={[
+          { value: "always", label: "Всегда" },
+          { value: "hover", label: "При наведении" },
+          { value: "off", label: "Не показывать" },
+        ]}
+        onChange={(x) => set("transcript_view", "curve", x)} />
+      <Switch label="Подписи глав на полосе плеера" help={<PlayerKeysTip />}
+        hint="Номер и короткое название главы под полосой; в узком плеере — только номера"
+        value={v("bar_labels") !== false} onChange={(x) => set("transcript_view", "bar_labels", x)} />
+    </>
+  );
+}
+
+export function AnalysisSection({ draft, set, onOpenJira }: {
+  draft: Raw; set: SetFn;
+  /** Перейти в «Jira» (адрес и проекты); без него ссылки нет. */
+  onOpenJira?: () => void;
+}) {
   const v = (k: string) => draft.analysis?.[k];
   const on = (k: string) => v(k) !== false;
   return (
@@ -97,15 +209,16 @@ export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
               + "Повторить анализ можно в карточке записи"}
           value={on("auto")} onChange={(x) => set("analysis", "auto", x)} />
       </SettingsCard>
-      <SettingsCard title="Что размечать">
-        <p className="muted sdesc">Выключенное не запрашивается у модели и не показывается в карточке.</p>
-        {ANALYSIS_PARTS.map((part) => (
-          <Switch key={part.key} label={part.label} hint={part.hint} value={on(part.key)}
-            onChange={(x) => set("analysis", part.key, x)} />
-        ))}
-      </SettingsCard>
-      <SettingsCard title="Что показывать в карточке">
-        <ShowRows draft={draft} set={set} />
+      <SettingsCard title="Разметка">
+        <p className="muted sdesc amark__intro">
+          Выключенное в «Размечать» не запрашивается у модели и не показывается в карточке. <MarkupTip />
+        </p>
+        <MarkShowTable draft={draft} set={set} />
+        {onOpenJira && (
+          <SeeAlso>
+            Адрес Jira и проекты — в разделе <Button variant="link" onClick={onOpenJira}>«Jira»</Button>.
+          </SeeAlso>
+        )}
       </SettingsCard>
       <SettingsCard title="Плеер">
         <PlayerRows draft={draft} set={set} />
@@ -115,10 +228,17 @@ export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
           hint="ИИ сам готовит список исправлений терминов; текст меняется, только когда вы примените выбранное"
           value={draft.analysis?.improve_auto === true} onChange={(x) => set("analysis", "improve_auto", x)} />
       </SettingsCard>
-      <SettingsCard title="Название">
+      <SettingsCard title="Название и категория">
+        <Switch label="Название встречи"
+          hint={"Модель предлагает название по содержанию встречи. Ставится само, только если включено "
+            + "«Придумывать название встречи»; иначе — по кнопке «Предложить название» в карточке"}
+          value={on("title")} onChange={(x) => set("analysis", "title", x)} />
         <Switch label="Придумывать название встречи" help={<AutoTitleTip />}
           hint="Название из анализа или итогов ставится само; заданные вами названия не меняются"
           value={Boolean(draft.assistant?.auto_title)} onChange={(x) => set("assistant", "auto_title", x)} />
+        <Switch label="Определять категорию автоматически"
+          hint="ИИ выбирает категорию из списка в разделе «Категории». Выбранную вами категорию он не меняет"
+          value={on("category")} onChange={(x) => set("analysis", "category", x)} />
       </SettingsCard>
     </>
   );
