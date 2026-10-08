@@ -10,6 +10,7 @@ import {
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "../live/profiles";
+import { BADGE_CLASS } from "../ui/badge";
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { floatingStyle, useFloating } from "../ui/floating";
@@ -264,8 +265,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     main = (
       <>
         <span className="rec-badge__live num">● REC {clock(snapshot.elapsed_s + since)}{listening ? " · ассистент" : ""}</span>
-        {snapshot.source === "auto" && <span className="badge">авто</span>}
-        {temporary && <span className="badge badge--temp" title={TEMP_NOTE}>{TEMP_BADGE}</span>}
+        {snapshot.source === "auto" && <span className={BADGE_CLASS.plain}>авто</span>}
+        {temporary && <span className={BADGE_CLASS.temp} title={TEMP_NOTE}>{TEMP_BADGE}</span>}
         {note && <span className="muted">{note}</span>}
         <span className="split split--plain" ref={split}>
           <Button variant="danger" className="split__main"

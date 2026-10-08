@@ -23,7 +23,7 @@ export function Loading({ label = "Загрузка…", delay = 300, className 
 
 /** Серая заготовка на месте строки, чипа или кнопки, пока нет данных. */
 export function Skeleton({ width, height = 12, className = "" }: { width?: number | string; height?: number; className?: string }) {
-  return <span className={`skeleton ${className}`.trim()} aria-hidden="true" style={{ width, height }} />;
+  return <span className={`skeleton sk ${className}`.trim()} aria-hidden="true" style={{ width, height }} />;
 }
 
 /**

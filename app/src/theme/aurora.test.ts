@@ -75,13 +75,13 @@ test("псевдонимы окна ссылаются только на объ�
   expect(missing).toEqual([]);
 });
 
-test("компоненты Aurora: base, aurora и controls перенесены скриптом и подключены после палитр", () => {
-  for (const name of ["base", "aurora", "controls"]) {
+test("компоненты Aurora: base, aurora, controls и feedback перенесены скриптом и подключены после палитр", () => {
+  for (const name of ["base", "aurora", "controls", "feedback"]) {
     const css = read("aurora", `${name}.css`);
     expect(css.split("\n")[0]).toMatch(new RegExp(`^/\\* Atlas Aurora v2\\.6 — ${name}: `));
   }
   const index = read("aurora", "index.css");
-  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "../aurora-fallbacks.css"]
+  const order = ["tokens.css", "palettes.css", "base.css", "aurora.css", "controls.css", "feedback.css", "../aurora-fallbacks.css"]
     .map((f) => index.indexOf(`"./${f}"`.replace("./../", "../")));
   expect(order.every((i) => i >= 0)).toBe(true);
   expect([...order].sort((a, b) => a - b)).toEqual(order);

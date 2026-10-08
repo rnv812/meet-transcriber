@@ -77,7 +77,7 @@
 .rec-item:hover { background: var(--surface-hover); }
 .rec-item--selected, .rec-item--selected:hover { background: var(--surface-2); }
 /* Бейдж без своего цвета («Не расшифровано», «В очереди») не сливается с выделенной строкой. */
-.rec-item--selected .badge:not(.badge--ok):not(.badge--run):not(.badge--err) { background: var(--line-2); }
+.rec-item--selected .badge--plain { background: var(--line-2); }
 .rec-item__main {
   display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-md);
   background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -123,6 +123,7 @@
   padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .rec-badge { display: flex; align-items: center; gap: 10px; }
+.rec-badge .badge { white-space: nowrap; }
 .rec-badge__live { color: var(--red); font-weight: 500; text-shadow: 0 0 12px var(--red-glow); }
 .rec-badge__warn { color: var(--amber); font-size: 12px; }
 

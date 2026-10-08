@@ -26,17 +26,17 @@
 .progressbar { display: flex; flex-direction: column; gap: 6px; min-width: 0; width: 100%; }
 .progressbar__head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 18px;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
-.progressbar__label { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.progressbar__detail { color: var(--text-2); flex: none; white-space: nowrap; }
+.progressbar__label { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progressbar__detail { color: var(--ink-2); flex: none; white-space: nowrap; }
 .progressbar__track {
-  position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: var(--surface-2);
+  position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: var(--data-empty);
 }
 .progressbar--sm .progressbar__track { height: 4px; border-radius: 2px; }
 /* Ширину ведёт rAF; короткий переход сглаживает кадры без rAF (фоновая вкладка). */
 .progressbar__fill {
-  position: relative; height: 100%; overflow: hidden; border-radius: inherit; background: var(--accent);
+  position: relative; height: 100%; overflow: hidden; border-radius: inherit; background: var(--data-1);
   transition: width 200ms linear;
 }
 /*
@@ -46,7 +46,7 @@
  */
 .progressbar__track--working .progressbar__fill::after {
   content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
-  background: linear-gradient(90deg, transparent, var(--accent-hi), transparent);
+  background: linear-gradient(90deg, transparent, var(--accent-hover), transparent);
   animation: progressbar-shimmer 1.6s ease-in-out infinite;
 }
 /*
@@ -55,7 +55,7 @@
  */
 .progressbar__track--indeterminate::after {
   content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 30%; border-radius: inherit;
-  background: linear-gradient(90deg, transparent, var(--accent-hi), transparent);
+  background: linear-gradient(90deg, transparent, var(--accent-hover), transparent);
   opacity: 0.45;
   animation: progressbar-shimmer 2s ease-in-out infinite;
 }
@@ -69,20 +69,16 @@
 /* --- Загрузка, заготовки, строки состояния ------------------------------ */
 .loading {
   display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 32px; padding: 12px;
-  color: var(--text-2);
+  color: var(--ink-2);
 }
-.skeleton {
-  display: inline-block; max-width: 100%; border-radius: var(--r-sm); vertical-align: middle;
-  background: linear-gradient(90deg, var(--surface-2), var(--surface-hover), var(--surface-2));
-  background-size: 200% 100%; animation: skeleton-wave 1.6s ease-in-out infinite;
-}
-@keyframes skeleton-wave { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-.status-slot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); min-width: 0; }
+/* Мерцание — Aurora .sk (feedback.css); здесь — что это строчный блок любого размера. */
+.skeleton { display: inline-block; max-width: 100%; vertical-align: middle; }
+.status-slot { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--ink-2); min-width: 0; }
 .status-slot--1 { min-height: 18px; }
 .status-slot--2 { min-height: 36px; align-items: flex-start; }
-.status-slot--ok { color: var(--ok); }
-.status-slot--error { color: var(--err); }
-.status-slot--muted { color: var(--text-2); }
+.status-slot--ok { color: var(--success); }
+.status-slot--error { color: var(--danger); }
+.status-slot--muted { color: var(--ink-3); }
 
 /* --- Обрезанный текст --------------------------------------------------- */
 .truncate { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

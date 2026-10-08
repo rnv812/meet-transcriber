@@ -8,6 +8,7 @@ import { useSmoothProgress } from "../../ui/ProgressBar";
 import { stageLabel, type RecStatus } from "../../lib/status";
 import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
+import { BADGE_CLASS } from "../../ui/badge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
 import { whoRanges } from "../../lib/libraryQuery";
@@ -296,7 +297,7 @@ export const RecordingItem = memo(function RecordingItem({
               {category && <CategoryMark category={category} />}
               {agentLive && <span className="rec-item__agent" role="img" aria-label="агент работает" title="Агент работает" />}
             </span>
-            {badge && <span className={`badge${badge.tone ? ` badge--${badge.tone}` : ""}`}>{badge.text}</span>}
+            {badge && <span className={BADGE_CLASS[badge.tone || "plain"]}>{badge.text}</span>}
           </span>
         </button>
       )}
