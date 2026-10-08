@@ -387,7 +387,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
         {/* Пока в поиске текст — выдача вместо меню. */}
         {query.trim() === "" && MENU_GROUPS.map((g, i) => (
           <div key={g.title} role="group" aria-labelledby={`${menuId}-${i}`} className="settings__group">
-            <span id={`${menuId}-${i}`} className="eyebrow settings__group-title">{g.title}</span>
+            <span id={`${menuId}-${i}`} className="settings__group-title">{g.title}</span>
             {g.items.map((m) => (
               <Tip key={m.id} side="right" describe={false}
                 content={dirtySections.has(m.id) ? "Есть несохранённые изменения" : null}>

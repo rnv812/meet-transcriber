@@ -1,0 +1,9 @@
+/* Сегменты (ui/Segmented): Aurora .tabs / .tabs--sm с ролями радио. Выбранный — по aria-checked
+   (у вкладок Aurora — по aria-selected), вид — как выбранная вкладка. Группа не обрезает
+   содержимое: рамка фокуса видна целиком. Только токены Atlas Aurora. */
+.segmented { flex: none; max-width: 100%; }
+.segmented button[aria-checked='true'] {
+  background: var(--deep); color: var(--on-deep); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line);
+}
+.segmented button[aria-checked='true']:focus-visible { box-shadow: var(--focus-ring), inset 0 0 0 1px var(--control-line); }
+.segmented button:disabled { opacity: 0.5; cursor: default; }

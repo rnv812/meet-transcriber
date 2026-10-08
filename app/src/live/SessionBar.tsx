@@ -16,7 +16,7 @@
  */
 
 import { BookOpen, X } from "lucide-react";
-import { type KeyboardEvent, useId, useState } from "react";
+import { useId, useState } from "react";
 
 import { plural } from "../lib/format";
 import type { AgentFrequencyLabel, AgentInfo, AgentProfile, LiveSummary as Summary } from "../lib/types";
@@ -24,6 +24,7 @@ import { BADGE_CLASS } from "../ui/badge";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Popover } from "../ui/Popover";
+import { Segmented } from "../ui/Segmented";
 import { Tip } from "../ui/Tip";
 import { LiveSummary } from "./LiveSummary";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "./profiles";
@@ -160,38 +161,19 @@ export function stateOf(agent: AgentInfo, writingShown: boolean): { key: string;
 }
 
 /**
- * Переключатель-радиогруппа шапки сессии (частота, профиль): сегменты Aurora
- * `.tabs.tabs--sm` с ролями радио (`live-seg` — выбранный по `aria-checked`,
- * live.css); стрелки двигают выбор. Группа не обрезает содержимое — рамка
- * фокуса видна целиком.
+ * Переключатель шапки сессии (частота, профиль): видимая подпись и общие
+ * сегменты `ui/Segmented` (`sm`, роли радио, стрелки двигают выбор).
  */
-function Segmented<T extends string>({ label, options, text, titles, value, onChange, disabled = false }: {
+function SessionChoice<T extends string>({ label, options, text, titles, value, onChange, disabled = false }: {
   label: string; options: readonly T[]; text?: (v: T) => string; titles?: (v: T) => string;
   value: T; onChange: (v: T) => void; disabled?: boolean;
 }) {
   const labelId = useId();
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    const at = options.indexOf(value);
-    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? Math.min(options.length - 1, at + 1)
-      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? Math.max(0, at - 1) : -1;
-    if (next < 0 || next === at) return;
-    e.preventDefault();
-    onChange(options[next]!);
-    (e.currentTarget.querySelectorAll("button")[next] as HTMLButtonElement | undefined)?.focus();
-  };
   return (
     <span className="session-freq">
       <span className="session-freq__label" id={labelId}>{label}</span>
-      <div className="tabs tabs--sm live-seg" role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey}>
-        {options.map((f) => (
-          <Tip key={f} content={titles?.(f)}>
-            <button type="button" role="radio" aria-checked={value === f} tabIndex={value === f ? 0 : -1}
-              disabled={disabled} onClick={() => { if (f !== value) onChange(f); }}>
-              {text ? text(f) : f}
-            </button>
-          </Tip>
-        ))}
-      </div>
+      <Segmented labelledBy={labelId} value={value} onChange={onChange} disabled={disabled}
+        options={options.map((f) => ({ value: f, label: text ? text(f) : f, tip: titles?.(f) }))} />
     </span>
   );
 }
@@ -199,7 +181,7 @@ function Segmented<T extends string>({ label, options, text, titles, value, onCh
 export function FrequencySelect({ value, onChange, disabled = false }: {
   value: AgentFrequencyLabel; onChange: (v: AgentFrequencyLabel) => void; disabled?: boolean;
 }) {
-  return <Segmented label="Как часто писать" options={FREQUENCIES} value={value} onChange={onChange} disabled={disabled} />;
+  return <SessionChoice label="Как часто писать" options={FREQUENCIES} value={value} onChange={onChange} disabled={disabled} />;
 }
 
 /** «Профиль»: роль ассистента на эту сессию (настройка по умолчанию не меняется). */
@@ -207,7 +189,7 @@ export function ProfileSelect({ value, onChange, disabled = false }: {
   value: AgentProfile; onChange: (v: AgentProfile) => void; disabled?: boolean;
 }) {
   return (
-    <Segmented label="Профиль" options={PROFILES} value={value} onChange={onChange} disabled={disabled}
+    <SessionChoice label="Профиль" options={PROFILES} value={value} onChange={onChange} disabled={disabled}
       text={(p) => PROFILE_LABELS[p].toLowerCase()} titles={(p) => PROFILE_NOTES[p]} />
   );
 }

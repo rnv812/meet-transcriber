@@ -877,6 +877,14 @@ test("подзаголовки — обычным регистром: стили
   }
 });
 
+test("меню: подписи групп жирные и контрастные, группы разделены чертой (просьба пользователя)", () => {
+  const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
+  const rule = (sel: string) => new RegExp(`${sel.replace(/[.+]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+  expect(rule(".settings__group-title")).toMatch(/font-weight: 700/);
+  expect(rule(".settings__group-title")).toMatch(/color: var\(--ink\)/);
+  expect(rule(".settings__group + .settings__group")).toMatch(/border-top: 1px solid var\(--hairline\)/);
+});
+
 test("меню: наведение тише выбранного (--surface-2 против --surface-3 с контуром); Jira — без старых переменных", () => {
   const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
   const rule = (sel: string) => new RegExp(`${sel.replace(/[.[\]"=]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
@@ -886,17 +894,15 @@ test("меню: наведение тише выбранного (--surface-2 п
   expect(jira).not.toMatch(/var\(--(text|text-2|text-3|line|surface|surface-hover)\)/);
 });
 
-test("меню помещается в окно: пункты по 32 px, подписи групп — .eyebrow, без черт между группами (доводка 0.4, C4)", async () => {
+test("меню помещается в окно: пункты по 32 px; у каждой группы — подпись-заголовок (доводка 0.4, C4)", async () => {
   const css = readFileSync(join(process.cwd(), "src", "features", "settings", "settings.css"), "utf8");
   const rule = (sel: string) => new RegExp(`(?:^|\\n)${sel.replace(/[.+[\]"=]/g, "\\$&")} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
   expect(rule(".settings__item")).toMatch(/height: var\(--control-sm\)/);
   expect(rule(".settings__item")).toMatch(/var\(--text-ui\)/);
-  expect(css).not.toMatch(/\.settings__group \+ \.settings__group/);
-  expect(css).not.toMatch(/border-top/);
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   const nav = await screen.findByRole("navigation", { name: "Разделы настроек" });
   for (const title of within(nav).getAllByRole("group").map((g) => g.getAttribute("aria-labelledby")!)) {
-    expect(document.getElementById(title)).toHaveClass("eyebrow");
+    expect(document.getElementById(title)).toHaveClass("settings__group-title");
   }
 });
 

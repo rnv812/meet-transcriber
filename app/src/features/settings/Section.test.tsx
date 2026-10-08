@@ -72,7 +72,7 @@ test("короткое перечисление — сегменты Aurora (.ta
   const { rerender } = render(<Segmented label="Тема" value="dark" onChange={onChange}
     options={[{ value: "system", label: "Системная" }, { value: "dark", label: "Тёмная" }, { value: "light", label: "Светлая" }]} />);
   const group = screen.getByRole("radiogroup", { name: "Тема" });
-  expect(group).toHaveClass("tabs", "tabs--sm", "sseg");
+  expect(group).toHaveClass("tabs", "tabs--sm", "segmented");
   expect(group.closest(".srow")).not.toBeNull();
   const dark = screen.getByRole("radio", { name: "Тёмная" });
   expect(dark).toBeChecked();

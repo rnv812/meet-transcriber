@@ -1,8 +1,9 @@
-import { createContext, useContext, useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Disclosure } from "../../ui/Disclosure";
+import { radioKeys, Segmented as SegmentedControl } from "../../ui/Segmented";
 
 /**
  * Строка настроек: слева подпись с пояснением (переносится, сжимается),
@@ -90,31 +91,13 @@ export function Radio<T extends string>({ label, hint, help, value, options, dis
   );
 }
 
-/**
- * Стрелки в группе радио-кнопок (сегменты, образцы палитры): ←/↑ и →/↓ —
- * соседний вариант, Home/End — крайние; выбор сразу и фокус на нём. Кнопки
- * группы — по порядку `values`.
- */
-export function radioKeys<T extends string>(values: readonly T[], value: T, onChange: (v: T) => void) {
-  return (e: KeyboardEvent<HTMLElement>) => {
-    const at = values.indexOf(value);
-    const last = values.length - 1;
-    const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? Math.min(last, at + 1)
-      : e.key === "ArrowLeft" || e.key === "ArrowUp" ? Math.max(0, at - 1)
-        : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
-    if (next < 0) return;
-    e.preventDefault();
-    if (next === at) return;
-    onChange(values[next]!);
-    e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
-  };
-}
+/** Стрелки в группе радио-кнопок — общие с сегментами (`ui/Segmented`). */
+export { radioKeys };
 
 /**
- * Короткое перечисление (2–3 варианта в слово-два): сегменты Aurora
- * `.tabs.tabs--sm` с ролями радио, справа в строке — как «Как часто писать» и
- * «Профиль» в панели встречи. Выбранный — по `aria-checked` (`.sseg`), в
- * порядке обхода — только он (стрелки двигают выбор).
+ * Короткое перечисление (2–3 варианта в слово-два) справа в строке: общие
+ * сегменты `ui/Segmented` (`sm`) — те же, что «Как часто писать» и «Профиль»
+ * в панели встречи. `title` варианта — пояснение диктору.
  */
 export function Segmented<T extends string>({ label, hint, help, value, options, disabled, onChange }: {
   label: string; hint?: ReactNode; help?: ReactNode; value: T;
@@ -122,21 +105,10 @@ export function Segmented<T extends string>({ label, hint, help, value, options,
   disabled?: boolean;
   onChange: (v: T) => void;
 }) {
-  const values = options.map((o) => o.value);
-  // Значения нет среди вариантов — в обход попадает первый.
-  const focusable = values.includes(value) ? value : values[0];
   return (
     <Row label={label} hint={hint} help={help} disabled={disabled}>
-      <div role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} className="tabs tabs--sm sseg"
-        onKeyDown={disabled ? undefined : radioKeys(values, value, onChange)}>
-        {options.map((o) => (
-          <button key={o.value} type="button" role="radio" aria-checked={value === o.value}
-            tabIndex={o.value === focusable ? 0 : -1} disabled={disabled} aria-description={o.title}
-            onClick={() => { if (o.value !== value) onChange(o.value); }}>
-            {o.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl label={label} value={value} disabled={disabled} onChange={onChange}
+        options={options.map((o) => ({ value: o.value, label: o.label, description: o.title }))} />
     </Row>
   );
 }

@@ -16,10 +16,19 @@
   border-right: 1px solid var(--hairline); overflow: auto;
 }
 /* «Настройки» — заголовок меню, как в макете (type-h3). */
-.settings__menu-title { padding: 0 10px 10px; color: var(--ink); }
-.settings__group { display: flex; flex-direction: column; gap: 2px; margin-top: var(--s-1); }
-/* Подпись группы — .eyebrow (11 px, верхний регистр, --ink-3): тише пунктов, без черты между группами. */
-.settings__group-title { padding: 10px 10px var(--s-1); }
+.settings__menu-title { padding: 0 10px var(--s-3); color: var(--ink); }
+/* Ритм меню по высоте (сверху вниз — от крупного к мелкому): заголовок → поиск 12 px, поиск → первая
+   группа 24 px, между группами 16 + черта + 16, подпись группы → пункты 8 px, между пунктами 2 px. */
+.settings__menu > .ssearch { margin-bottom: var(--s-5); }
+.settings__group { display: flex; flex-direction: column; gap: 2px; }
+/* Группы — отдельными блоками: черта и отступ между ними (просьба пользователя: «не понятно, где
+   заканчиваются и начинаются разделы»). */
+.settings__group + .settings__group { margin-top: var(--s-4); padding-top: var(--s-4); border-top: 1px solid var(--hairline); }
+/* Подпись группы — жирная и контрастная (--ink): заметнее пунктов, хотя мельче их. */
+.settings__group-title {
+  padding: 0 10px var(--s-2); color: var(--ink); font-size: var(--text-sm); line-height: 1.2;
+  font-weight: 700; letter-spacing: 0; text-transform: none;
+}
 .settings__item {
   display: flex; align-items: center; gap: 8px; height: var(--control-sm); flex: none;
   padding: 0 10px; border: 0; border-radius: var(--r-control-sm); background: none;
@@ -137,15 +146,8 @@
 /* Бегунок в карточке: кольцо бегунка — цвета карточки, а не фона окна. */
 .scard .slider__input::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--surface-1); }
 
-/* Короткое перечисление — сегменты Aurora .tabs.tabs--sm с ролями радио (Segmented):
-   выбранный — по aria-checked (у вкладок Aurora — по aria-selected), как «Как часто писать» в панели. */
-.sseg { flex: none; max-width: 100%; }
-.sseg button[aria-checked='true'] {
-  background: var(--deep); color: var(--on-deep); font-weight: 600; box-shadow: inset 0 0 0 1px var(--control-line);
-}
-.sseg button[aria-checked='true']:focus-visible { box-shadow: var(--focus-ring), inset 0 0 0 1px var(--control-line); }
-.sseg button:disabled { cursor: default; }
-.srow:not(.srow--disabled) .sseg button:disabled { opacity: 0.5; }
+/* Короткое перечисление — общие сегменты ui/Segmented (segmented.css). В приглушённой строке
+   прозрачность даёт сама строка: правило .srow--disabled … :disabled выше. */
 
 /* Радио и флажки — Aurora .rd / .cb в .check-row. */
 .radios { display: flex; flex-wrap: wrap; gap: 4px var(--s-5); justify-content: flex-end; }
@@ -418,6 +420,8 @@
 
 /* «Поиск по настройкам» над меню: поле Aurora .search + .field--sm, выдача — вместо групп меню. */
 .ssearch { display: flex; flex-direction: column; gap: var(--s-2); }
+/* Поле поиска в меню — уже меню: отступ 10 px с боков, левый край — по тексту пунктов и подписей групп. */
+.settings__menu > .ssearch { margin-inline: 10px; }
 /* Системная «×» поля type=search — прочь: очищает своя кнопка (и Esc). */
 .ssearch__input::-webkit-search-cancel-button, .ssearch__input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
 .ssearch__clear {
