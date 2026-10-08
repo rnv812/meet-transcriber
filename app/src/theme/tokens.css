@@ -13,9 +13,9 @@
   --text-2: var(--ink-2);
   --text-3: var(--ink-3);
   --accent-hi: var(--accent-hover);
-  --accent-glow: color-mix(in oklab, var(--accent) 35%, transparent);
+  --accent-glow: var(--accent-soft);
   --violet: var(--accent-press);
-  --red-glow: color-mix(in oklab, var(--danger) 45%, transparent);
+  --red-glow: var(--danger-soft);
   --red: var(--danger);
   --ok: var(--success);
   --run: var(--accent);
@@ -26,10 +26,18 @@
   --list-w: 320px;
   /* Высота прежней шапки окна; в Aurora --topbar-h — 56 (шапка уйдёт на этапе 3). */
   --app-topbar-h: 40px;
-  --sb-thumb: color-mix(in oklab, var(--ink-3) 28%, transparent);
-  --sb-thumb-area: color-mix(in oklab, var(--ink-3) 42%, transparent);
-  --sb-thumb-hover: color-mix(in oklab, var(--ink-3) 62%, transparent);
-  --sb-thumb-active: color-mix(in oklab, var(--ink-3) 80%, transparent);
+  /* Ползунки прокрутки — нейтральный серый яркости --ink-3 своей темы, без color-mix():
+     его нет в WebKit macOS 13.0 (Safari 16.1). */
+  --sb-thumb: oklch(66% 0 0 / 0.28);
+  --sb-thumb-area: oklch(66% 0 0 / 0.42);
+  --sb-thumb-hover: oklch(66% 0 0 / 0.62);
+  --sb-thumb-active: oklch(66% 0 0 / 0.8);
+}
+[data-theme="light"] {
+  --sb-thumb: oklch(50% 0 0 / 0.28);
+  --sb-thumb-area: oklch(50% 0 0 / 0.42);
+  --sb-thumb-hover: oklch(50% 0 0 / 0.62);
+  --sb-thumb-active: oklch(50% 0 0 / 0.8);
 }
 
 * { box-sizing: border-box; }
