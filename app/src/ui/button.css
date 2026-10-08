@@ -10,8 +10,8 @@ button.btn { position: relative; }
 button.btn:disabled { pointer-events: auto; cursor: default; }
 button.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: translateY(1px); }
 .btn__label { display: inline-flex; align-items: center; gap: inherit; min-width: 0; }
-/* Знак агента в кнопке («Спросить агента», «Улучшить» на сиянии) — цвета подписи: свой
-   --ink-2 (.agent-mark) на светлой заливке btn--aurora не читался. */
+/* Знак агента в кнопке («Спросить агента», «Улучшить») — цвета подписи: свой
+   --ink-2 (.agent-mark) на заливке btn--aurora не читался. */
 .btn .agent-mark { color: inherit; }
 .btn--busy { cursor: progress; }
 .btn--busy .btn__label { visibility: hidden; }
@@ -33,11 +33,8 @@ button.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: transl
    Исключение — рамка «опасной»: обычная строится через color-mix(), которого в
    стилях окна нет (macOS 13); при наведении она полная --danger под opacity 0.5. */
 button.btn--primary:disabled:hover { --btn-g2: var(--accent-strong); }
-button.btn--aurora:disabled:hover { background: linear-gradient(120deg, var(--wave-6), var(--wave-4) 45%, var(--wave-5)); }
-button.btn--tonal:disabled:hover {
-  background: linear-gradient(var(--accent-soft), var(--accent-soft)) padding-box,
-    linear-gradient(120deg, var(--wave-4), transparent 70%) border-box;
-}
+button.btn--aurora:disabled:hover { background: var(--accent-soft); border-color: transparent; }
+button.btn--tonal:disabled:hover { background: var(--accent-soft); border-color: transparent; }
 button.btn--mono:disabled:hover { background: var(--primary); }
 button.btn--deep:disabled:hover { background: var(--surface-3); }
 button.btn--outline:disabled:hover { background: transparent; border-color: var(--hairline-strong); }
@@ -54,3 +51,17 @@ button.btn[aria-pressed="true"] {
 }
 /* Сильнее «button.btn--…:disabled:hover» выше: нажатая недоступная остаётся нажатой. */
 button.btn[aria-pressed="true"]:disabled:hover { background: var(--surface-3); color: var(--ink); }
+
+/* 0.5 — плоско: без градиентов, свечения и градиентных кромок у кнопок (сияние — только на
+   пустых экранах и в мастере). Главная — ровная заливка акцента (наведение — темнее, через
+   --btn-g2 дизайн-системы); действие ИИ и тональная — мягкий акцент, наведение — рамка
+   акцента; контурная — без кромки сияния. `:root` и повтор класса — сильнее правил
+   controls.css для светлой и вложенной темы; рамку фокуса (box-shadow) не трогаем. */
+:root .btn.btn--primary.btn--primary { --btn-g1: var(--btn-g2); --btn-g3: var(--btn-g2); }
+:root .btn.btn--primary.btn--primary:not(:focus-visible),
+:root .btn.btn--aurora.btn--aurora:not(:focus-visible) { box-shadow: none; }
+:root .btn.btn--aurora.btn--aurora { background: var(--accent-soft); color: var(--accent-line); }
+:root .btn.btn--tonal.btn--tonal { background: var(--accent-soft); }
+:root .btn.btn--aurora.btn--aurora:hover:not(:disabled),
+:root .btn.btn--tonal.btn--tonal:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent-line); }
+:root .btn.btn--outline.btn--outline:hover:not(:disabled) { background: var(--surface-2); border-color: var(--hairline-strong); }

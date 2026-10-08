@@ -64,10 +64,11 @@ test.each([["Включить", "granted"], ["Не сейчас", "declined"]] a
     const { rerender } = render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
     await screen.findByText(/Начинаем планёрку/);
     await waitFor(() => expect(offer()).not.toBeNull());
-    // Одна строка над лентой «Расшифровки» (на месте «Наблюдений» макета), на тихом сиянии;
+    // Одна строка над лентой «Расшифровки» (на месте «Наблюдений» макета), плоская (0.5);
     // подробности — что текст уходит модели — в «?».
     expect(offer()).toHaveTextContent(ANALYSIS_OFFER_SHORT);
-    expect(offer()).toHaveClass("card", "aurora-wash");
+    expect(offer()).toHaveClass("card");
+    expect(offer()).not.toHaveClass("aurora-wash");
     expect(offer()!.closest('[role="tabpanel"]')).toHaveAccessibleName("Расшифровка");
     expect(document.querySelector(".card__notices [aria-label='Предложение: анализ встречи']")).toBeNull();
     await userEvent.click(within(offer()!).getByRole("button", { name: "Что такое анализ встречи" }));

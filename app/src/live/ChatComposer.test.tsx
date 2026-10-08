@@ -161,11 +161,11 @@ test("«Стоп» — пока ответ пишется и виден", async 
   expect(stopChat).toHaveBeenCalledWith(ep, "m1");
 });
 
-test("Atlas Aurora: строка ввода — aurora-edge; быстрые вопросы — кнопки над полем; «Стоп» — кнопка со значком", () => {
+test("строка ввода — плоская (0.5, без кромки сияния); быстрые вопросы — кнопки над полем; «Стоп» — кнопка со значком", () => {
   render(<Host />);
   load([agentMsg("m1", { status: "writing", text: "" })]);
   const box = field().closest(".chat-compose")!;
-  expect(box).toHaveClass("aurora-edge");
+  expect(box).not.toHaveClass("aurora-edge");
   const quick = screen.getByRole("group", { name: "Быстрые вопросы" });
   // Как в макете MeetLive: btn--outline btn--sm (32), не плотные 28.
   for (const b of within(quick).getAllByRole("button")) {

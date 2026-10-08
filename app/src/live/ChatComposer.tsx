@@ -17,8 +17,8 @@
  * - Поле фокус само не берёт (панель поверх звонка), но после отправки
  *   остаётся в нём.
  * - Над пустым полем — быстрые вопросы (QUICK_QUESTIONS): щелчок отправляет.
- * - Вид — Atlas Aurora: рамка «Знак ИИ» (`aurora-edge`) на своей плотной
- *   поверхности (`--edge-bg`: `--surface-2`, в светлой — `--surface-1`), кнопки — `Button`.
+ * - Вид — Atlas Aurora: плоская строка (0.5: без кромки сияния) на своей плотной
+ *   поверхности (`--surface-2`, в светлой — `--surface-1`), кнопки — `Button`.
  * - Текст и вложения живут в `useChat` (`chat.composer`): сворачивание панели и
  *   смена раскладки их не теряют.
  *
@@ -269,8 +269,8 @@ export function ChatComposer({
 
   const sendTitle = uploading ? "Вложение ещё разбирается…" : "Отправить (Enter)";
   return (
-    // Знак ИИ (aurora-edge): строка ввода к ассистенту.
-    <div className={`chat-compose aurora-edge${over ? " is-over" : ""}${disabled ? " is-disabled" : ""}`}>
+    // Строка ввода к ассистенту (0.5: плоская, фокус — рамка акцента).
+    <div className={`chat-compose${over ? " is-over" : ""}${disabled ? " is-disabled" : ""}`}>
       {over && <div className="chat-compose__drop" aria-hidden="true">Отпустите, чтобы приложить</div>}
       {chat.note && <div className="chat-compose__note" role="alert">{chat.note}</div>}
       {error && <div className="chat-compose__note" role="alert">{error}</div>}

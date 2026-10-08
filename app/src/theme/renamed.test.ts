@@ -117,7 +117,7 @@ const AURORA_IN_MARKUP = new Map<string, string[]>([
   [join("features", "settings", "SettingsSearch.tsx"), ["search"]],
   // Вкладки карточки записи — `.tabs` Aurora (controls.css), этап 3.
   [join("features", "card", "CardTabs.tsx"), ["tabs"]],
-  // Поиск над лентой «Расшифровки» — `.search` Aurora; «Наблюдения» — `.card aurora-wash`, этап 3.
+  // Поиск над лентой «Расшифровки» — `.search` Aurora; «Наблюдения» — `.card` (0.5 — плоско), этап 3.
   [join("features", "card", "TranscriptView.tsx"), ["search"]],
   [join("features", "card", "markup.tsx"), ["card"]],
   // «Мой голос» и таблица людей — `.card`, «Найти человека» — `.search` Aurora, этап 3.
@@ -131,13 +131,11 @@ const AURORA_IN_MARKUP = new Map<string, string[]>([
   [join("features", "recordings", "LibraryEmpty.tsx"), ["empty"]],
   // Ничего не выбрано: «Новая встреча» и «Последняя» — `.card` Aurora (доводка 0.4, D2).
   [join("features", "recordings", "LibraryHome.tsx"), ["card"]],
-  // Предложение анализа над лентой — `.card aurora-wash` Aurora (доводка 0.4, D4).
+  // Предложение анализа над лентой — `.card` Aurora (доводка 0.4, D4; 0.5 — плоско).
   [join("features", "card", "analysis.tsx"), ["card"]],
   // Живая панель: вкладки узкой области и сегменты частоты и профиля — `.tabs` Aurora, этап 5.
   [join("live", "LiveWorkspace.tsx"), ["tabs"]],
   [join("live", "SessionBar.tsx"), ["tabs"]],
-  // Сообщение агента в чате — `.card aurora-wash` Aurora (макет MeetLive), этап 5.
-  [join("live", "LiveChat.tsx"), ["card"]],
   // Подсказка прежнего режима — `.card` Aurora (доводка 0.4, A9).
   [join("live", "LiveHints.tsx"), ["card"]],
 ]);

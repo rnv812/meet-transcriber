@@ -1,6 +1,6 @@
 /* Чат агента-участника (0.3.6): рабочая область, лента, строка ввода, шапка сессии.
    Atlas Aurora (0.4): только токены дизайн-системы; сообщения агента — карточки
-   `.card.aurora-wash`, его кнопки — `.filter`, строка ввода — `.aurora-edge`.
+   плоские карточки (0.5), его кнопки — `.filter`, строка ввода — плоская, с рамкой.
    Кегль — только шкала Aurora: текст сообщений --text-ui, мета и кнопки --text-sm,
    подписи и счётчики --text-xs. */
 
@@ -122,15 +122,14 @@
 .chat-msg__error { color: var(--danger); font-size: var(--text-sm); }
 .chat-msg__via { color: var(--ink-3); font-size: var(--text-xs); }
 
-/* Сообщение агента — карточка Aurora с отсветом сияния (вывод ИИ, макет MeetLive: 12 × 14, промежуток 8). */
-.chat-msg--agent { gap: 8px; padding: 12px 14px; }
-/*
- * Сияние плывёт только у последнего сообщения ленты: в долгой встрече сотни
- * анимированных слоёв грузили бы видеокарту поверх звонка. Остальные — тот же
- * отсвет, но неподвижный.
- */
-.chat__list > .chat-msg--agent:not(:last-child)::before { animation: none; }
-.chat-msg--agent.is-pin { border-color: var(--accent); }
+/* Сообщение агента (0.5 — плоско): простая карточка, как у пользователя — нейтральный фон
+   и тонкая рамка, знак агента в заголовке; без отсвета сияния и тени (12 × 14, промежуток 8).
+   Особое (вопрос вам) — тонкий акцент слева. */
+.chat-msg--agent {
+  gap: 8px; padding: 12px 14px;
+  border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--surface-1);
+}
+.chat-msg--agent.is-pin { box-shadow: inset 2px 0 0 var(--accent-line); }
 .chat-msg--user {
   align-self: flex-end; max-width: 85%; padding: 8px 12px; gap: 2px;
   border: 1px solid transparent; border-radius: var(--r-lg); background: var(--surface-3);
@@ -241,18 +240,18 @@
 .chat--compact .chat-msg--user { max-width: 92%; }
 .chat--compact .chat__list { gap: 10px; }
 
-/* --- Строка ввода: Знак ИИ (aurora-edge) на своей плотной поверхности, быстрые вопросы над полем --- */
+/* --- Строка ввода: плоская (0.5) на своей плотной поверхности, быстрые вопросы над полем --- */
 .chat-compose {
   position: relative; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 10px 12px;
   border-radius: var(--r-xl);
 }
-/* Своя поверхность: в тёмной — на ступень светлее панели (не «дыра»), в светлой — белая; тень отрывает её от фона. */
-.chat-compose.aurora-edge { --edge-bg: var(--surface-2); box-shadow: var(--aurora-edge-glow), var(--elev-2); }
-/* Фокус — кромка сияния (.aurora-edge:focus-within) вместе со своей тенью. */
-.chat-compose.aurora-edge:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line), var(--aurora-edge-glow), var(--elev-2); }
-[data-theme='light'] .chat-compose.aurora-edge { --edge-bg: var(--surface-1); }
-/* Над строкой несут файл: подложка акцента (фон aurora-edge — через --edge-bg). Позже светлой темы — сильнее её. */
-.chat-compose.aurora-edge.is-over { --edge-bg: var(--accent-soft); }
+/* Своя поверхность (0.5 — плоско, без кромки сияния): в тёмной — на ступень светлее панели
+   (не «дыра»), в светлой — белая; тонкая рамка. Фокус — рамка акцента у всей строки. */
+.chat-compose { border: 1px solid var(--hairline-strong); background: var(--surface-2); }
+.chat-compose:focus-within { border-color: var(--accent-line); }
+[data-theme='light'] .chat-compose { background: var(--surface-1); }
+/* Над строкой несут файл: подложка акцента. Позже светлой темы — сильнее её. */
+.chat-compose.is-over { background: var(--accent-soft); }
 /* Недоступна: гаснут поле и кнопки, причина — нет (контраст ≥ 4,5 : 1). */
 .chat-compose.is-disabled .chat-compose__row { opacity: 0.6; }
 .chat-compose__drop {
@@ -264,8 +263,8 @@
   flex: 1; min-width: 0; min-height: var(--control-sm); max-height: 132px; padding: 6px 4px; resize: none;
   border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-ui); line-height: 20px;
 }
-/* Фокус показывает вся строка (кромка сияния .aurora-edge:focus-within), своего кольца у поля нет —
-   иначе внутри светящейся рамки рисуется вторая, серая. */
+/* Фокус показывает вся строка (рамка акцента .chat-compose:focus-within), своего кольца у поля нет —
+   иначе внутри рамки строки рисуется вторая. */
 .chat-compose__field:focus, .chat-compose__field:focus-visible { outline: none; box-shadow: none; }
 .chat-compose__field::placeholder { color: var(--ink-3); }
 .chat-compose__note { color: var(--danger); font-size: var(--text-sm); }

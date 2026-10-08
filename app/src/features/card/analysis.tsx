@@ -243,7 +243,7 @@ export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
 }) {
   // Одна строка над лентой «Расшифровки» (на месте «Наблюдений» макета): вкладки не сдвигаются.
   return (
-    <div className="card aurora-wash analysis-offer" role="region" aria-label="Предложение: анализ встречи">
+    <div className="card analysis-offer" role="region" aria-label="Предложение: анализ встречи">
       <AgentMark size={16} />
       <span className="analysis-offer__text">{ANALYSIS_OFFER_SHORT}</span>
       <HelpTip label="Что такое анализ встречи" title="Анализ встречи">

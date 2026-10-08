@@ -168,8 +168,8 @@ test("ImproveStatus: очередь, готово, ошибка, подсказ�
   expect(screen.getByRole("status")).toHaveTextContent("Улучшение в очереди…");
   rerender(<ImproveStatus state={ready} busy={false} onOpen={onOpen} onRetry={onOpen} onDismiss={onDismiss} />);
   expect(screen.getByRole("status")).toHaveTextContent("ИИ предлагает исправить 3 термина");
-  // Предложение ИИ — выноска на сиянии, а не тихая строка.
-  expect(screen.getByRole("status")).toHaveClass("callout", "aurora-wash");
+  // Предложение ИИ — выноска с акцентом слева (0.5 — плоско), а не тихая строка.
+  expect(screen.getByRole("status")).toHaveClass("callout", "card__callout--ai");
   await userEvent.click(screen.getByRole("button", { name: "Просмотреть" }));
   rerender(<ImproveStatus state={{ state: "failed", error: "таймаут" }} busy={false} onOpen={onOpen} onRetry={onOpen}
     onDismiss={onDismiss} />);
@@ -177,7 +177,7 @@ test("ImproveStatus: очередь, готово, ошибка, подсказ�
   rerender(<ImproveStatus state={{ state: "none", hint: true }} busy={false} onOpen={onOpen} onRetry={onOpen}
     onDismiss={onDismiss} />);
   expect(screen.getByRole("status")).toHaveTextContent("Похоже, в тексте есть термины латиницей — улучшить?");
-  expect(screen.getByRole("status")).toHaveClass("callout", "aurora-wash");
+  expect(screen.getByRole("status")).toHaveClass("callout", "card__callout--ai");
   await userEvent.click(screen.getByRole("button", { name: "Не нужно" }));
   expect(onDismiss).toHaveBeenCalled();
   rerender(<ImproveStatus state={{ state: "none", hint: false }} busy={false} onOpen={onOpen} onDismiss={onDismiss} />);

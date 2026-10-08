@@ -86,14 +86,15 @@ test("A1: корень панели — плотное стекло на неп�
 
 test("A2: строка ввода — своя плотная поверхность, док под ней сплошной и с линией сверху", () => {
   const css = clean(join("live", "chat.css"));
-  expect(css).toMatch(/\.chat-compose\.aurora-edge \{[^}]*--edge-bg: var\(--surface-2\)/);
-  expect(css).toMatch(/\[data-theme='light'\] \.chat-compose\.aurora-edge \{[^}]*--edge-bg: var\(--surface-1\)/);
-  expect(css).toMatch(/\.chat-compose\.aurora-edge \{[^}]*box-shadow: var\(--aurora-edge-glow\), var\(--elev-2\)/);
-  // Фокус — кромка сияния вместе с тенью (своя тень не вытесняет кольцо .aurora-edge:focus-within).
-  expect(css).toMatch(/\.chat-compose\.aurora-edge:focus-within \{[^}]*inset 0 0 0 1px var\(--accent-line\)/);
-  // Подсветка «несут файл» сильнее светлой темы: объявлена позже с той же силой.
-  expect(css.lastIndexOf(".chat-compose.aurora-edge.is-over"))
-    .toBeGreaterThan(css.indexOf("[data-theme='light'] .chat-compose.aurora-edge"));
+  // 0.5 — плоско: своя поверхность и тонкая рамка, без кромки сияния и свечения.
+  expect(css).toMatch(/\.chat-compose \{ border: 1px solid var\(--hairline-strong\); background: var\(--surface-2\); \}/);
+  expect(css).toMatch(/\[data-theme='light'\] \.chat-compose \{ background: var\(--surface-1\); \}/);
+  expect(css).not.toMatch(/aurora-edge/);
+  // Фокус — рамка акцента у всей строки.
+  expect(css).toMatch(/\.chat-compose:focus-within \{ border-color: var\(--accent-line\); \}/);
+  // Подсветка «несут файл» сильнее светлой темы: объявлена позже.
+  expect(css.lastIndexOf(".chat-compose.is-over"))
+    .toBeGreaterThan(css.indexOf("[data-theme='light'] .chat-compose"));
   expect(css).toMatch(/\.chat-dock \{[^}]*padding: 10px 12px 12px[^}]*border-top: 1px solid var\(--hairline\)/);
 });
 

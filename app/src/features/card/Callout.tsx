@@ -4,8 +4,8 @@
  * нет токена Hugging Face, заметки распознавания, предложения ИИ.
  *
  * Тон: `note` — сведения, `tip` — совет, `ok` — сделано, `warn` — стоит
- * поправить, `err` — не удалось; `ai` — предложение модели (на сиянии
- * `aurora-wash`, значок ✦). Роль и подпись — как у прежних строк карточки:
+ * поправить, `err` — не удалось; `ai` — предложение модели (плоско,
+ * тонкий акцент слева, значок ✦ — 0.5). Роль и подпись — как у прежних строк карточки:
  * тесты и экранный диктор находят выноску по ним.
  */
 
@@ -29,7 +29,7 @@ export function Callout({ tone, role = "status", label, actions, children, class
   children: ReactNode;
   className?: string;
 }) {
-  const look = tone === "ai" ? "aurora-wash card__callout--ai" : `callout--${tone}`;
+  const look = tone === "ai" ? "card__callout--ai" : `callout--${tone}`;
   return (
     <div className={`callout ${look} card__callout ${className}`.trim()} role={role} aria-label={label}>
       <Icon as={ICON[tone]} size="md" className="ic" />

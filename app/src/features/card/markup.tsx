@@ -139,7 +139,7 @@ export function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: 
   );
 }
 
-/** Карточка «Наблюдения» под поиском (aurora-wash — вывод ИИ): вид, текст, «почему», ссылки на реплики, ✦. */
+/** Карточка «Наблюдения» под поиском (вывод ИИ: плоско, тонкий акцент слева — 0.5): вид, текст, «почему», ссылки на реплики, ✦. */
 export function InsightsBlock({ insights, turns, onJump, onAsk }: {
   insights: InsightView[];
   turns: Turn[];
@@ -154,7 +154,7 @@ export function InsightsBlock({ insights, turns, onJump, onAsk }: {
   const toggle = () => { setCollapsed((c) => { writeCollapsed(!c); return !c; }); };
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
-    <section className="card aurora-wash insights" aria-label="Наблюдения анализа встречи">
+    <section className="card insights" aria-label="Наблюдения анализа встречи">
       <button type="button" className="insights__head" aria-expanded={!collapsed} onClick={toggle}>
         <Chevron size={14} strokeWidth={1.75} aria-hidden="true" />
         <span className="insights__title">Наблюдения</span>

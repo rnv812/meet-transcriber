@@ -194,7 +194,7 @@ test("без анализа — обычная лента: ни значков, 
   expect(turnRows(container)).toHaveLength(7);
 });
 
-test("Atlas Aurora: фильтры — .filter с aria-pressed и счётчиком; «Наблюдения» — карточка aurora-wash со счётчиком", async () => {
+test("Atlas Aurora: фильтры — .filter с aria-pressed и счётчиком; «Наблюдения» — плоская карточка (0.5) со счётчиком", async () => {
   view();
   const chips = screen.getByRole("group", { name: "Показать только реплики этих типов" });
   const questions = within(chips).getByRole("button", { name: /Вопросы/ });
@@ -204,7 +204,8 @@ test("Atlas Aurora: фильтры — .filter с aria-pressed и счётчик
   await userEvent.click(questions);
   expect(questions).toHaveAttribute("aria-pressed", "true");
   const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
-  expect(block).toHaveClass("card", "aurora-wash");
+  expect(block).toHaveClass("card");
+  expect(block).not.toHaveClass("aurora-wash");
   const head = within(block).getByRole("button", { name: /Наблюдения/ });
   expect(within(head).getByText("2")).toHaveClass("badge");
 });

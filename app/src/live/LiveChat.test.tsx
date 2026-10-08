@@ -492,18 +492,19 @@ test("решённая или просроченная карточка — бе
 // --- Atlas Aurora (0.4, этап 5, задача 2): вид ленты; роли, подписи и поведение — прежние ---------
 
 describe("Atlas Aurora", () => {
-  test("сообщение агента — карточка aurora-wash со знаком агента; пишет — знак «пишет»", () => {
+  test("сообщение агента — плоская карточка (0.5) со знаком агента; пишет — знак «пишет»", () => {
     render(<Host />);
     load([agentMsg("m1"), userMsg("m3", { text: "мой вопрос" }), { ...agentMsg("s1"), kind: "system", text: "Сбой" },
       agentMsg("m2", { status: "writing", text: "" })]);
     const done = msgRow("Сообщение m1");
-    expect(done).toHaveClass("chat-msg--agent", "card", "aurora-wash");
+    expect(done).toHaveClass("chat-msg--agent");
+    expect(done).not.toHaveClass("aurora-wash");
     expect(done.querySelector(".chat-msg__head .agent-mark")).toHaveAttribute("data-state", "rest");
     act(() => chat.sink.onChatPartial({ id: "m2", text: "Сроки по встрече" }));
     const writing = within(log()).getByText("Сроки по встрече").closest("li")!;
-    expect(writing).toHaveClass("card", "aurora-wash");
+    expect(writing).not.toHaveClass("aurora-wash");
     expect(writing.querySelector(".chat-msg__head .agent-mark")).toHaveAttribute("data-state", "write");
-    // Ваши сообщения и системные строки — без сияния.
+    // Ваши сообщения и системные строки — тоже без сияния.
     expect(msgRow("мой вопрос")).not.toHaveClass("aurora-wash");
     expect(within(log()).getByText("Сбой")).not.toHaveClass("aurora-wash");
   });

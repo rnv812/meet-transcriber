@@ -66,8 +66,9 @@
 .jtask__ref:hover { background: var(--surface-2); color: var(--ink); }
 .jtask__more { padding-right: 4px; color: var(--ink-3); font-size: var(--text-xs); }
 
-/* «Наблюдения» — карточка Aurora с отсветом сияния (aurora-wash: вывод ИИ). */
+/* «Наблюдения» — вывод ИИ (0.5 — плоско): карточка с тонким акцентом слева, без отсвета и тени. */
 .insights { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding: 10px 14px; }
+.insights.insights { box-shadow: inset 2px 0 0 var(--accent-line); }
 .insights__head {
   display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
   border: 0; background: none; color: var(--ink); font: inherit; cursor: pointer; text-align: left;

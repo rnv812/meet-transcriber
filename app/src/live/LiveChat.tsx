@@ -36,7 +36,7 @@
  * Узкая панель (`compact`): время сообщения — в подсказке, вложения
  * сообщения — счётчиком (скрепка и число; ревью live-chat, M7).
  *
- * Вид — Atlas Aurora (0.4): сообщение агента — карточка `.card.aurora-wash` со
+ * Вид — Atlas Aurora (0.4): сообщение агента — плоская карточка (0.5) со
  * знаком агента, его кнопки — `.filter` (aria-pressed), реакции, источники и
  * действия — кнопки Aurora (`Button`).
  */
@@ -271,10 +271,10 @@ function AgentMessage({ m, tools = [], chat, onTime, onShow, compact, disabled }
   const sources = writing ? [] : chat.sources(m);
   const hasText = !!text.trim();
   return (
-    // Карточка Aurora с отсветом сияния (вывод ИИ) и знаком агента; пока пишет — знак «пишет».
+    // Плоская карточка (0.5) со знаком агента в заголовке; пока пишет — знак «пишет».
     // В узкой ленте время — в подсказке Aurora (ui/Tip).
     <Tip content={compact && time ? time : ""}>
-    <li className={`chat-msg chat-msg--agent card aurora-wash${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
+    <li className={`chat-msg chat-msg--agent${m.pin ? " is-pin" : ""}${writing ? " is-writing" : ""}${reacted ? " has-reaction" : ""}`}
       data-id={m.id} data-key={m.id} aria-busy={writing || undefined}>
       <div className="chat-msg__head">
         <AgentMark state={writing ? "write" : "rest"} size={14} />

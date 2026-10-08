@@ -230,7 +230,7 @@ export function RecordingNow({ endpoint, snapshot, startedAt, autoTranscribe = t
       {error && <p className="rec-now__error" role="alert">{error}</p>}
 
       {!attached && !temporary && (
-        <section className="card aurora-wash rec-now__invite" aria-labelledby={inviteId}>
+        <section className="card rec-now__invite" aria-labelledby={inviteId}>
           <AgentMark size={20} />
           <span className="rec-now__invite-text">
             <b id={inviteId}>Позвать ассистента</b>

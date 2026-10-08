@@ -32,6 +32,7 @@
 .rec-now__error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
 
 /* «Позвать ассистента» — карточка на «акварели» (знак ИИ), не полное сияние. */
+.rec-now__invite.rec-now__invite { box-shadow: none; } /* 0.5 — плоско: без отсвета сияния и тени */
 .rec-now__invite { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; max-width: 640px; padding: 16px 18px; }
 .rec-now__invite-text { flex: 1 1 300px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .rec-now__invite-text b { font-weight: 600; }

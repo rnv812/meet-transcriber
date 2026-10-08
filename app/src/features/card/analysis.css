@@ -26,6 +26,8 @@
   flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2);
   margin: 0 0 var(--s-2); padding: 8px 8px 8px 14px; font-size: var(--text-sm);
 }
+/* Вывод ИИ (0.5 — плоско): тонкий акцент слева, без отсвета и тени. */
+.analysis-offer.analysis-offer { box-shadow: inset 2px 0 0 var(--accent-line); }
 .analysis-offer__text { min-width: 0; color: var(--ink); }
 .analysis-offer__actions { display: flex; gap: 6px; margin-left: auto; }
 /* Модель не дала части разметки (главы, важность): сказано прямо, а не пустой полосой. */
