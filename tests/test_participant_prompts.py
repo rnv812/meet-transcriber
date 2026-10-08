@@ -612,6 +612,17 @@ def test_freedom_prompt_in_auto_mode_acts_on_request_and_asks_only_risky():
     assert "- Папки:\n  - Эта встреча: D:/Встречи/m" in text
 
 
+def test_freedom_prompts_require_an_explicit_result_at_the_end():
+    """0.5: после работы по просьбе — явный итог (что сделано, что нет и почему);
+    в окне его дополняет строка итога под блоком вызовов."""
+    for mode in ("auto", "confirm"):
+        text = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, mode=mode)
+        assert "всегда заверши явным итогом" in text and "что не удалось и почему" in text, mode
+    runner = pp._FREEDOM_RUNNER
+    assert "всегда заверши явным итогом" in runner
+    assert "всегда заверши явным итогом" not in pp._FREEDOM_FILES   # только чтение — итог не нужен
+
+
 def test_freedom_prompt_in_confirm_mode_is_a_card_for_every_action():
     text = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, mode="confirm")
     assert "Meet показывает пользователю карточкой с точным вызовом" in text
