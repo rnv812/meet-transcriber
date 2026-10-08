@@ -210,7 +210,7 @@ test("«Предложить название»: окно «Применить /
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Запуск беты", title_source: "ai" });
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Предложенное название" })).toBeNull());
   expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Запуск беты");
-  expect(screen.getByTitle(/Название предложено ИИ/)).toBeInTheDocument();
+  expect(screen.getByText(/Название предложено ИИ/)).toBeInTheDocument();
   expect(onChanged).toHaveBeenCalled();
 });
 
@@ -236,12 +236,12 @@ test("бейдж «ИИ» у названия от модели; нажатие 
   load({ title: "Запуск беты", title_source: "ai" });
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Начнём с беты");
-  await userEvent.click(screen.getByTitle(/Название предложено ИИ/));
+  await userEvent.click(screen.getByText(/Название предложено ИИ/));
   const input = screen.getByRole("textbox", { name: "Название записи" });
   await userEvent.clear(input);
   await userEvent.type(input, "Моё{Enter}");
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Моё" });
-  await waitFor(() => expect(screen.queryByTitle(/Название предложено ИИ/)).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/Название предложено ИИ/)).toBeNull());
 });
 
 

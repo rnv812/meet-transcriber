@@ -73,9 +73,10 @@ const categoryDim = () => within(screen.getByRole("dialog", { name: "Фильт�
 test("в списке у записи — точка цвета, имя категории — в подсказке и для диктора", () => {
   render(<Harness />);
   const mark = item("Утренний дейлик").querySelector(".cat-mark")!;
-  expect(mark).toHaveAttribute("title", "Дейлик — Короткая встреча команды");
+  expect(mark).not.toHaveAttribute("title");
+  expect(mark).toHaveAccessibleDescription("Дейлик — Короткая встреча команды");
   expect(within(item("Утренний дейлик")).getByText("Категория: Дейлик")).toBeInTheDocument();
-  expect(item("Демо для заказчика").querySelector(".cat-mark")).toHaveAttribute("title", "Встреча с клиентом");
+  expect(item("Демо для заказчика").querySelector(".cat-mark")).toHaveAccessibleDescription("Встреча с клиентом");
   for (const title of ["Без разметки", "Удалённая категория", "Выбрано «без категории»"]) {
     expect(item(title).querySelector(".cat-mark")).toBeNull();
   }

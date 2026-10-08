@@ -14,6 +14,7 @@ import { NO_CATEGORY_NAME } from "../lib/categories";
 import type { Category } from "../lib/types";
 import "./category.css";
 import { Icon } from "./Icon";
+import { Tip } from "./Tip";
 
 /** Цветная точка категории; без цвета — пустой кружок «Без категории». */
 export function CategoryDot({ color }: { color?: string | null }) {
@@ -33,10 +34,12 @@ const hintOf = (category: Category) => category.name + (category.description ? `
  */
 export function CategoryMark({ category }: { category: Category }) {
   return (
-    <span className="cat-mark" title={hintOf(category)}>
-      <CategoryDot color={category.color} />
-      <span className="cat-sr">{`Категория: ${category.name}`}</span>
-    </span>
+    <Tip content={hintOf(category)}>
+      <span className="cat-mark">
+        <CategoryDot color={category.color} />
+        <span className="cat-sr">{`Категория: ${category.name}`}</span>
+      </span>
+    </Tip>
   );
 }
 
@@ -71,14 +74,17 @@ export function CategoryMenu({ list, current, onPick, onSettings, label = "Ка�
     }
   };
 
+  // Описание категории — облачком сбоку, чтобы не закрывать соседние пункты.
   const option = (id: string | null, name: string, color: string | null, hint?: string) => (
-    <button key={id ?? "_none"} type="button" role="menuitemradio" aria-checked={known === id} tabIndex={-1}
-      className={`cat-menu__item${known === id ? " cat-menu__item--current" : ""}`} title={hint || undefined}
-      onClick={() => onPick(id)}>
-      <CategoryDot color={color} />
-      <span className="cat-menu__name">{name}</span>
-      {known === id && <span className="cat-menu__check" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
-    </button>
+    <Tip key={id ?? "_none"} content={hint || undefined} side="right">
+      <button type="button" role="menuitemradio" aria-checked={known === id} tabIndex={-1}
+        className={`cat-menu__item${known === id ? " cat-menu__item--current" : ""}`}
+        onClick={() => onPick(id)}>
+        <CategoryDot color={color} />
+        <span className="cat-menu__name">{name}</span>
+        {known === id && <span className="cat-menu__check" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
+      </button>
+    </Tip>
   );
 
   return (

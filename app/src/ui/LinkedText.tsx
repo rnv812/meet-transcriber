@@ -12,6 +12,7 @@ import { findJira, jiraUrl, type JiraCard, type JiraLinker, type JiraMatch } fro
 import type { Range } from "../lib/search";
 import { openUrl } from "../lib/shell";
 import "./linked-text.css";
+import { Tip } from "./Tip";
 
 /** Кусок текста [from, to) с подсветкой совпадений `ranges`. */
 function marked(text: string, from: number, to: number, ranges: Range[], firstHit: number | undefined, key: string): ReactNode[] {
@@ -52,15 +53,18 @@ export function JiraLink({ linker, keyText, spoken, children }: {
   // Ключ — псевдоэлементом (data-key): текст реплики в DOM тот же, правка слов
   // и разделение реплики считают позиции по нему.
   return spoken ? (
-    <a className="jira-link jira-ref" href={url} data-key={keyText} aria-label={keyText}
-      title={`«${spoken}» → ${keyText} · открыть в Jira`} onClick={open} rel="noreferrer noopener" draggable={false}>
-      {children}
-    </a>
+    <Tip content={`«${spoken}» → ${keyText} · открыть в Jira`}>
+      <a className="jira-link jira-ref" href={url} data-key={keyText} aria-label={keyText}
+        onClick={open} rel="noreferrer noopener" draggable={false}>
+        {children}
+      </a>
+    </Tip>
   ) : (
-    <a className="jira-link" href={url} title={`Открыть ${keyText} в Jira`} onClick={open} rel="noreferrer noopener"
-      draggable={false}>
-      {children}
-    </a>
+    <Tip content={`Открыть ${keyText} в Jira`}>
+      <a className="jira-link" href={url} onClick={open} rel="noreferrer noopener" draggable={false}>
+        {children}
+      </a>
+    </Tip>
   );
 }
 

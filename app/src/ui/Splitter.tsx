@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import { dragWidth, stepWidth } from "../lib/panes";
 import "./splitter.css";
+import { Tip } from "./Tip";
 
 type Snap = { below: number; to: number };
 
@@ -133,25 +134,28 @@ export function Splitter({
     onCommit(next);
   };
 
+  // Подсказка — облачком Aurora: у вертикальной полосы — сбоку (она во всю высоту), у горизонтальной — сверху.
   return (
-    <div
-      ref={el}
-      role="separator"
-      aria-orientation={y ? "horizontal" : "vertical"}
-      aria-label={label}
-      aria-valuenow={value}
-      aria-valuemin={lo}
-      aria-valuemax={max}
-      tabIndex={0}
-      title={`Потяните, чтобы изменить ${y ? "высоту" : "ширину"}. Двойной щелчок или Enter — как было`}
-      className={`splitter splitter--${panel}${y ? " splitter--y" : ""} ${className}`.trim()}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={finish}
-      onPointerCancel={finish}
-      onLostPointerCapture={finish}
-      onKeyDown={onKeyDown}
-      onDoubleClick={(e) => { e.preventDefault(); onReset(); }}
-    />
+    <Tip content={`Потяните, чтобы изменить ${y ? "высоту" : "ширину"}. Двойной щелчок или Enter — как было`}
+      side={y ? "top" : "right"}>
+      <div
+        ref={el}
+        role="separator"
+        aria-orientation={y ? "horizontal" : "vertical"}
+        aria-label={label}
+        aria-valuenow={value}
+        aria-valuemin={lo}
+        aria-valuemax={max}
+        tabIndex={0}
+        className={`splitter splitter--${panel}${y ? " splitter--y" : ""} ${className}`.trim()}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finish}
+        onPointerCancel={finish}
+        onLostPointerCapture={finish}
+        onKeyDown={onKeyDown}
+        onDoubleClick={(e) => { e.preventDefault(); onReset(); }}
+      />
+    </Tip>
   );
 }

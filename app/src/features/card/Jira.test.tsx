@@ -42,7 +42,8 @@ test("ключ задачи в реплике — ссылка; щелчок о�
   transcript();
   const link = screen.getByRole("link", { name: "SPR-131" });
   expect(link).toHaveAttribute("href", "https://jira.example.com/browse/SPR-131");
-  expect(link).toHaveAttribute("title", "Открыть SPR-131 в Jira");
+  expect(link).not.toHaveAttribute("title");
+  expect(link).toHaveAccessibleDescription("Открыть SPR-131 в Jira");
   await userEvent.click(link);
   expect(shell.openUrl).toHaveBeenCalledWith("https://jira.example.com/browse/SPR-131");
   // Текст реплики не изменился: правка слов и разделение считают по нему.
@@ -142,7 +143,7 @@ test("сказанная задача — значок с ключом пове�
   expect(first).toHaveClass("jira-ref");
   expect(first).toHaveAttribute("data-key", "ORION-2122");
   expect(first).toHaveAttribute("href", "https://jira.example.com/browse/ORION-2122");
-  expect(first).toHaveAttribute("title", "«орион двадцать один двадцать два» → ORION-2122 · открыть в Jira");
+  expect(first).toHaveAccessibleDescription("«орион двадцать один двадцать два» → ORION-2122 · открыть в Jira");
   expect(first!.textContent).toBe("орион двадцать один двадцать два");
   expect(again!.textContent).toBe("орион 2122");
   // Ключ, написанный текстом, — обычная ссылка.
@@ -214,5 +215,5 @@ test("итоги: фразы от резидента — ссылки, ключ�
   expect(screen.getByRole("link", { name: "SPR-131" })).toBeInTheDocument();
   const links = screen.getAllByRole("link", { name: "KDEV-44" });
   expect(links).toHaveLength(1);
-  expect(links[0]).toHaveAttribute("title", "«кей дев сорок четыре» → KDEV-44 · открыть в Jira");
+  expect(links[0]).toHaveAccessibleDescription("«кей дев сорок четыре» → KDEV-44 · открыть в Jira");
 });
