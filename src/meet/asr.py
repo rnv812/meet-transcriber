@@ -218,6 +218,16 @@ def torch_cuda_failed(error: BaseException) -> None:
     print(f"torch: видеокарта недоступна ({_torch_failure}) — диаризация и голоса на процессоре")
 
 
+def forget_failures() -> None:
+    """Забыть сбои CUDA и выданные пометки (процесс задач между задачами,
+    meet.job_worker.serve): следующая задача проверяет карту заново, как в
+    новом процессе. Проверка библиотек (`_cuda_runtime`) остаётся."""
+    global _cuda_failure, _torch_failure
+    _announced.clear()
+    _cuda_failure = None
+    _torch_failure = None
+
+
 def _reset_cuda_state() -> None:
     """Забыть проверку библиотек и сбои CUDA (для тестов)."""
     global _cuda_failure, _torch_failure

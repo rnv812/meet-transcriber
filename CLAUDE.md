@@ -13,7 +13,8 @@
 - `src/meet/` — движок на Python: запись (`recorder.py`), расшифровка
   (`transcribe.py`, `asr.py`, `gigaam_asr.py`, `diarize.py`), библиотека
   записей (`library.py`), резидент с треем и автозаписью (`tray.py`,
-  `tray_control.py`, `watch.py`), фоновые задачи (`jobs.py`, `job_worker.py`),
+  `tray_control.py`, `watch.py`), фоновые задачи (`jobs.py`, `job_worker.py`;
+  тяжёлые задачи подряд — в одном процессе `job_worker --serve`, 0.5.1),
   локальный control API (`control.py`), настройки (`settings.py`), CLI
   (`cli.py`, `cli_library.py`).
 - Работа с моделью: анализ встречи (`analysis.py`), названия (`titles.py`),

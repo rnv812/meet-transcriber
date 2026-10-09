@@ -878,5 +878,93 @@ def jobs_hint() -> str:
     return ENGINE_HINT
 
 
+# --- процесс задач очереди (0.5.1) ---------------------------------------------------
+
+# Строка «задача кончилась» процесса задач: {"kind": HOST_EXIT, "code": код}.
+HOST_EXIT = "worker.exit"
+_HF_VARS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
+
+
+def serve(commands=None, run=None) -> int:
+    """Процесс задач очереди (`--serve`): задачи подряд в одном процессе —
+    torch, pyannote и faster-whisper импортируются один раз (8–15 с на задачу).
+
+    Запрос — строка JSON `{"argv": аргументы main, "cwd"?: папка, "env"?:
+    переменные прокси}`; вывод задачи — как у отдельного процесса, в конце
+    `{"kind": HOST_EXIT, "code": …}`. Между задачами: рабочая папка — прежняя,
+    прокси — как в запросе, токен HF задача берёт заново, видеопамять и сбои
+    CUDA забыты. Конец ввода — выход."""
+    import os
+
+    if commands is None:
+        commands = _private_stdin()
+    run = run or main
+    home = os.getcwd()
+    own = {name: os.environ.get(name) for name in _HF_VARS}
+    for line in commands:
+        try:
+            request = json.loads(line)
+            argv = [str(a) for a in request["argv"]]
+        except (ValueError, KeyError, TypeError):
+            continue
+        _sync_env(request.get("env") or {}, own)
+        code = 1
+        try:
+            if request.get("cwd"):
+                os.chdir(request["cwd"])
+            code = run(argv)
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        except Exception as e:
+            _emit({"kind": "error", "text": memory.error_text(e)})
+        finally:
+            try:
+                os.chdir(home)
+            except OSError:
+                pass
+            _between_jobs()
+        _emit({"kind": HOST_EXIT, "code": int(code or 0)})
+    return 0
+
+
+def _private_stdin():
+    """Канал команд — свой, ненаследуемый дескриптор; стандартный ввод —
+    пустой: ffmpeg и pip, порождённые задачей, не прочтут следующую задачу."""
+    import os
+
+    commands = os.fdopen(os.dup(0), "r", encoding="utf-8")
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.close(null)
+    return commands
+
+
+def _sync_env(env: dict, own: dict) -> None:
+    """Прокси — ровно как в запросе (настройки могли смениться), токен HF —
+    как при старте процесса: задача возьмёт его из диспетчера заново."""
+    import os
+
+    from meet import netproxy
+
+    for name in [k for k in os.environ if netproxy._is_proxy_var(k) and k not in env]:
+        os.environ.pop(name, None)
+    os.environ.update({str(k): str(v) for k, v in env.items()})
+    for name, value in own.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+
+def _between_jobs() -> None:
+    """Отдать память задачи и забыть её сбои CUDA: следующая — как в новом процессе."""
+    memory.release(sys.modules.get("torch"))
+    asr = sys.modules.get("meet.asr")
+    if asr is not None:
+        asr.forget_failures()
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--serve"]:
+        sys.exit(serve())
     sys.exit(main())

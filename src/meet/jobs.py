@@ -88,6 +88,16 @@ JOB_PROGRESS = "job.progress"
 JOB_DONE = "job.done"
 JOB_FAILED = "job.failed"
 
+# Процесс задач (0.5.1): тяжёлые задачи очереди видеокарты идут подряд в одном
+# процессе `meet.job_worker --serve` — torch, pyannote и faster-whisper
+# импортируются один раз (8–15 с на задачу). Простой дольше HOST_IDLE_S —
+# процесс закрывается и отдаёт видеопамять; упал или задачу отменили (убит) —
+# следующая задача в новом. Установка движка меняет сам движок, загрузки и
+# задачи модели torch не грузят — им по-прежнему свой процесс на задачу.
+HOST_KINDS = (TRANSCRIBE, IMPORT, MERGE, REDIARIZE, SPEAKER_SPLIT)
+HOST_IDLE_S = 3.0
+HOST_EXIT = "worker.exit"
+
 ENGINE_HINT = (
     "движок расшифровки не установлен (torch, faster-whisper, pyannote) — "
     "на этой машине можно только записывать"
@@ -282,6 +292,21 @@ def worker_argv(job: Job) -> list[str]:
     return argv
 
 
+def host_argv() -> list[str]:
+    """Команда процесса задач (тот же интерпретатор, что у резидента)."""
+    return [sys.executable, "-m", "meet.job_worker", "--serve"]
+
+
+def _host_request(job: Job) -> str:
+    """Задача для процесса задач: аргументы job_worker (без интерпретатора и
+    модуля), рабочая папка и прокси из настроек — как у отдельного процесса."""
+    from meet import netproxy
+
+    proxy = {k: v for k, v in netproxy.settings_env().items() if netproxy._is_proxy_var(k)}
+    return json.dumps({"argv": worker_argv(job)[3:], "cwd": _safe_cwd(job.folder), "env": proxy},
+                      ensure_ascii=False) + "\n"
+
+
 def _kill_tree(process) -> None:
     """Убить подпроцесс вместе с потомками.
 
@@ -363,9 +388,13 @@ class JobQueue:
     движка и минут работы, а проверять надо саму очередь.
     """
 
-    def __init__(self, bus=None, spawn=None) -> None:
+    def __init__(self, bus=None, spawn=None, *, host: bool = False) -> None:
         # Ворота постановки (резидент — `storage.HOLD.gate`); None — без них.
         self.gate = None
+        # Задачи HOST_KINDS — в процессе задач (основная очередь резидента).
+        self._use_host = host
+        self._host = None
+        self._host_idle_since = 0.0
         self.bus = bus if bus is not None else events.EventBus()
         self._spawn = spawn or self._spawn_subprocess
         self._jobs: dict[str, Job] = {}
@@ -508,6 +537,9 @@ class JobQueue:
         process, self._process = self._process, None
         if process is not None:
             _kill_tree(process)
+        host, self._host = self._host, None
+        if host is not None and host is not process:
+            _kill_tree(host)
         thread = self._thread
         if thread is not None:
             thread.join(timeout=5.0)
@@ -533,7 +565,9 @@ class JobQueue:
                     job.state = RUNNING
                     job.started_at = time.time()
             if job is None:
-                self._wake.wait(timeout=1.0)
+                if self._host is not None and time.monotonic() - self._host_idle_since >= HOST_IDLE_S:
+                    self._close_host()
+                self._wake.wait(timeout=min(1.0, HOST_IDLE_S) if self._host is not None else 1.0)
                 self._wake.clear()
                 continue
             try:
@@ -547,6 +581,7 @@ class JobQueue:
                 with self._lock:
                     self._current = None
                     self._process = None
+                self._host_idle_since = time.monotonic()
 
     def _run(self, job: Job) -> None:
         self._emit(JOB_STARTED, job)
@@ -629,6 +664,9 @@ class JobQueue:
         """Запустить задачу подпроцессом и прокачать её вывод построчно."""
         from meet import netproxy
 
+        if self._use_host and job.kind in HOST_KINDS:
+            return self._run_on_host(job, on_line)
+
         creationflags = _creationflags()
         try:
             process = subprocess.Popen(
@@ -662,6 +700,81 @@ class JobQueue:
         # Убитая (отмена) или упавшая задача своих временных папок не дочистила.
         _sweep_after()
         return code
+
+
+    def _run_on_host(self, job: Job, on_line) -> int:
+        """Задача в процессе задач: запрос строкой, вывод — как у отдельного
+        процесса, до строки HOST_EXIT с кодом. Процесс кончился раньше (упал,
+        убит отменой) — его код, а следующая задача начнёт новый."""
+        host = self._host
+        if host is None or host.poll() is not None:
+            try:
+                host = self._start_host()
+            except OSError as e:
+                job.error = f"не удалось запустить задачу: {e}"
+                return 1
+        with self._lock:
+            self._host = host
+            if job.state == CANCELLED:
+                return 1
+            self._process = host
+        try:
+            assert host.stdin is not None and host.stdout is not None
+            host.stdin.write(_host_request(job))
+            host.stdin.flush()
+            for line in host.stdout:
+                if HOST_EXIT in line:
+                    try:
+                        payload = json.loads(line)
+                    except ValueError:
+                        payload = {}
+                    if payload.get("kind") == HOST_EXIT:
+                        return int(payload.get("code") or 0)
+                on_line(line)
+        except (OSError, ValueError):
+            pass  # канал закрыт: процесс задач убит или упал
+        return self._host_gone(host)
+
+    def _start_host(self):
+        from meet import netproxy
+
+        return subprocess.Popen(
+            host_argv(),
+            env=netproxy.settings_env(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            creationflags=_creationflags(),
+        )
+
+    def _host_gone(self, host) -> int:
+        """Процесс задач кончился посреди задачи: забыть его, убрать за ним."""
+        _kill_tree(host)
+        code = host.wait()
+        if self._host is host:
+            self._host = None
+        _sweep_after()
+        return code or 1
+
+    def _close_host(self) -> None:
+        """Простой: закрыть процесс задач (конец ввода — он выходит сам)."""
+        host = self._host
+        if host is None:
+            return
+        try:
+            if host.stdin is not None:
+                host.stdin.close()
+            host.wait(timeout=10)
+        except Exception:
+            _kill_tree(host)
+            with contextlib.suppress(Exception):
+                host.wait(timeout=5)
+        self._host = None
+        _sweep_after()
 
 
 class QueueStopped(RuntimeError):

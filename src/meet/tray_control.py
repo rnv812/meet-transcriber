@@ -672,8 +672,9 @@ class TrayControl:
         self.tray = tray
         self.bus = tray.bus
         # Очередь задач живёт рядом с записью, в том же резиденте: расшифровка
-        # идёт подпроцессом и не мешает ни записи, ни панели.
-        self.queue = queue if queue is not None else jobs.JobQueue(self.bus)
+        # идёт подпроцессом и не мешает ни записи, ни панели; задачи подряд —
+        # в одном процессе задач (0.5.1, jobs.HOST_KINDS).
+        self.queue = queue if queue is not None else jobs.JobQueue(self.bus, host=True)
         # Итоги и вопросы — своя очередь: GPU им не нужен, и ждать за часовой
         # расшифровкой ответ на вопрос было бы странно.
         self.llm_queue = llm_queue if llm_queue is not None else jobs.JobQueue(self.bus)
