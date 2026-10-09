@@ -1,4 +1,11 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// findBy*/waitFor ждут появления до 5 с, а не 1 с по умолчанию: на 4-ядерном
+// CI-раннере асинхронный интерфейс появляется дольше секунды, и тесты падали
+// по очереди то один, то другой. Зелёный тест не ждёт — проверка срабатывает сразу.
+export const ASYNC_TIMEOUT_MS = 5_000;
+configure({ asyncUtilTimeout: ASYNC_TIMEOUT_MS });
 
 // jsdom не знает EventSource: минимальная заглушка, которой тесты могут управлять.
 export class FakeEventSource {

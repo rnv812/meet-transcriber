@@ -1,3 +1,5 @@
+import { availableParallelism } from "node:os";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -17,6 +19,7 @@ export default defineConfig({
     hookTimeout: 20_000,
     // Не больше 8 процессов (0.5): по процессу jsdom на ядро (19 на 20 ядрах) при занятой
     // памяти машины (локальная модель, WSL) падали «JavaScript heap out of memory».
-    maxWorkers: 8,
+    // И не больше ядер: на 4-ядерном CI-раннере 8 процессов вдвое перегружали машину.
+    maxWorkers: Math.max(1, Math.min(8, availableParallelism())),
   },
 });
