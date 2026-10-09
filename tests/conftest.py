@@ -41,6 +41,20 @@ def pytest_xdist_auto_num_workers(config):
     return max(1, min(os.cpu_count() or 1, MAX_WORKERS))
 
 
+def pytest_collection_modifyitems(config, items):
+    """CI делит набор на куски по машинам: MEET_TEST_SHARD="k/n" (`_shard`)."""
+    from _shard import ENV, in_shard, parse_shard
+
+    shard = parse_shard(os.environ.get(ENV, ""))
+    if shard is None:
+        return
+    keep = [item for item in items if in_shard(item.nodeid, shard)]
+    dropped = [item for item in items if not in_shard(item.nodeid, shard)]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = keep
+
+
 def _memory_backend():
     from keyring.backend import KeyringBackend
     from keyring.errors import PasswordDeleteError

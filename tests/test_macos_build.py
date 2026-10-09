@@ -119,11 +119,11 @@ def test_helper_speaks_the_python_protocol():
 def test_workflow_dry_run_skips_windows_and_publishing():
     assert "workflow_dispatch:" in WORKFLOW
     assert re.search(r"macos_only:\n\s+description: .+\n\s+type: boolean\n\s+default: true", WORKFLOW)
-    windows = WORKFLOW[WORKFLOW.index("  release:"):WORKFLOW.index("    runs-on: windows-latest")]
     # Только на теге: и пуш, и ручной запуск без macos_only (ветка с именем
-    # вида v1.2.3 выпуск не создаст).
-    assert ("if: github.ref_type == 'tag' && (github.event_name == 'push' || "
-            "(github.event_name == 'workflow_dispatch' && !inputs.macos_only))") in windows
+    # вида v1.2.3 выпуск не создаст) — у каждой job Windows (0.5: их четыре).
+    for name in WINDOWS_JOBS:
+        assert ("if: github.ref_type == 'tag' && (github.event_name == 'push' || "
+                "(github.event_name == 'workflow_dispatch' && !inputs.macos_only))") in _job(name), name
     # Пуш в ветку пробного прогона собирает только macOS.
     assert 'branches: ["ci/macos-dry-run"]' in WORKFLOW
     assert "runs-on: macos-14" in WORKFLOW
@@ -133,11 +133,14 @@ def test_workflow_dry_run_skips_windows_and_publishing():
     assert "SHA256SUMS.txt" in publish and "--clobber" in publish
 
 
+WINDOWS_JOBS = ("test-python", "test-app", "build", "release")
+JOBS = (*WINDOWS_JOBS, "macos", "publish-macos", "publish-macos-dry-run")
+
+
 def _job(name: str) -> str:
     start = WORKFLOW.index(f"\n  {name}:\n")
     rest = WORKFLOW[start + 1:]
-    nxt = [rest.find(f"\n  {j}:\n") for j in ("release", "macos", "publish-macos",
-                                                "publish-macos-dry-run")]
+    nxt = [rest.find(f"\n  {j}:\n") for j in JOBS]
     ends = [i for i in nxt if i > 0]
     return rest[: min(ends)] if ends else rest
 
@@ -151,7 +154,7 @@ def test_token_is_read_only_except_for_publishing_jobs():
     assert "contents: write" not in top
     for job in ("release", "publish-macos"):
         assert "permissions:\n      contents: write" in _job(job), job
-    for job in ("macos", "publish-macos-dry-run"):
+    for job in ("test-python", "test-app", "build", "macos", "publish-macos-dry-run"):
         assert "permissions:\n      contents: read" in _job(job), job
         assert "contents: write" not in _job(job), job
     # Публикация — только на теге.
@@ -163,7 +166,7 @@ def test_token_is_read_only_except_for_publishing_jobs():
 def test_no_checkout_keeps_the_token_on_disk():
     lines = WORKFLOW.splitlines()
     checkouts = [i for i, line in enumerate(lines) if "uses: actions/checkout@" in line]
-    assert len(checkouts) == 4
+    assert len(checkouts) == 7
     for i in checkouts:
         assert lines[i + 1].strip() == "with:" and lines[i + 2].strip() == "persist-credentials: false"
 
@@ -517,3 +520,19 @@ def test_macos_ci_runs_the_full_python_suite_and_a_smoke_test():
     assert "bash scripts/macos_smoke.sh .venv-ci/bin/python \"$APP\" build/macos-smoke" in flow
     smoke = (ROOT / "scripts" / "macos_smoke.sh").read_text(encoding="utf-8")
     assert "--headless" in smoke and "/state" in smoke and "screencapture" in smoke and "MEET_DATA_DIR" in smoke
+
+
+def test_windows_release_runs_in_parallel_and_publishes_after_everything():
+    """0.5: тесты Python — тремя кусками, окно и оболочка — отдельно, установщик —
+    сразу; публикует `release`, когда все зелёные, из артефакта сборки."""
+    python = _job("test-python")
+    assert "shard: [1, 2, 3]" in python and "MEET_TEST_SHARD: ${{ matrix.shard }}/3" in python
+    assert "-n auto" in python
+    assert "needs:" not in _job("build") and "needs:" not in python and "needs:" not in _job("test-app")
+    release = _job("release")
+    assert "needs: [test-python, test-app, build]" in release
+    assert "name: windows-release" in _job("build") and "name: windows-release" in release
+    assert "npm ci" not in release and "cargo" not in release and "uv " not in release
+    # Секреты подписи — только у сборки.
+    for name in ("test-python", "test-app", "release", "macos"):
+        assert "WINDOWS_SIGN" not in _job(name), name

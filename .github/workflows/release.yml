@@ -41,15 +41,100 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    # По тегу — всегда, как раньше; вручную — только на теге и без
-    # macos_only (ветка с именем вида v1.2.3 выпуск не создаст); пуш в ветку
-    # пробного прогона — никогда.
+  # Windows (0.5): четыре job вместо одной последовательной (было ~60 минут).
+  # Тесты Python — тремя кусками на трёх машинах (MEET_TEST_SHARD, tests/_shard.py),
+  # окно и оболочка — отдельно, установщик собирается сразу, не дожидаясь
+  # тестов. Публикует `release` — только когда всё зелёное; у неё одной право
+  # писать в Releases, и чужого кода (npm, crates, PyPI) она не запускает. Секреты
+  # подписи — только у `build`.
+  # По тегу — всегда, как раньше; вручную — только на теге и без macos_only
+  # (ветка с именем вида v1.2.3 выпуск не создаст); пуш в ветку пробного
+  # прогона — никогда. Условие одно на все четыре job.
+  test-python:
     if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.macos_only))
     permissions:
-      contents: write
+      contents: read
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    name: Python tests ${{ matrix.shard }}/3
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+      MEET_TEST_SHARD: ${{ matrix.shard }}/3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.23"
+
+      # Лёгкое ядро без движка: тесты, которым нужны torch/pyannote, пропускаются сами.
+      - name: Python tests
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv venv --python 3.12 .venv-ci
+          uv pip install --python .venv-ci -e . pytest pytest-xdist
+          $env:PYTHONPATH = "src"
+          ./.venv-ci/Scripts/python -m pytest -q -p no:cacheprovider -n auto
+
+  test-app:
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.macos_only))
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # Закреплён на коммите ветки stable — имя тулчейна тогда не выводится
+      # из ссылки, его надо передать явно.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-10-01
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Window tests
+        working-directory: app
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm ci --no-audit --no-fund
+          npm run check
+          npm test
+          npm run build
+
+      # После npm run build: generate_context! встраивает app/dist.
+      - name: Shell tests
+        working-directory: app/src-tauri
+        run: cargo test
+
+  build:
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.macos_only))
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -97,28 +182,9 @@ jobs:
         with:
           version: "0.11.23"
 
-      # Лёгкое ядро без движка: тесты, которым нужны torch/pyannote, пропускаются сами.
-      - name: Python tests
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          uv venv --python 3.12 .venv-ci
-          uv pip install --python .venv-ci -e . pytest pytest-xdist
-          $env:PYTHONPATH = "src"
-          ./.venv-ci/Scripts/python -m pytest -q -p no:cacheprovider -n auto
-
-      - name: Window tests
+      - name: Window dependencies
         working-directory: app
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          npm ci --no-audit --no-fund
-          npm run check
-          npm test
-          npm run build
-
-      # После npm run build: generate_context! встраивает app/dist.
-      - name: Shell tests
-        working-directory: app/src-tauri
-        run: cargo test
+        run: npm ci --no-audit --no-fund
 
       # Подпись Authenticode (0.5): секреты WINDOWS_SIGN_PFX (.pfx в base64) и
       # WINDOWS_SIGN_PASSWORD заводит владелец репозитория (docs/signing-windows.md).
@@ -131,6 +197,60 @@ jobs:
           WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
         run: ./scripts/build_release.ps1 -Version $env:VERSION
 
+      # Установщик и суммы — в одну папку и в артефакт: публикует их `release`,
+      # когда все тесты зелёные.
+      - name: Collect release files
+        env:
+          INSTALLER: ${{ steps.build.outputs.installer }}
+          SUMS: ${{ steps.build.outputs.sums }}
+        run: |
+          New-Item -ItemType Directory -Force release-out | Out-Null
+          Copy-Item -LiteralPath $env:INSTALLER, $env:SUMS -Destination release-out
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release
+          path: release-out/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [test-python, test-app, build]
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.macos_only))
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Значения из контекста — через env, а не подстановкой ${{ }} в текст
+      # скрипта: имя тега не должно становиться кодом PowerShell.
+      # $PSNativeCommandUseErrorActionPreference в каждом многострочном run:
+      # иначе pwsh роняет шаг только по коду выхода последней команды.
+      - name: Version from tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $tag = $env:TAG
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)(-[0-9A-Za-z.]+)?$') { throw "Тег '$tag' не вида vX.Y.Z[-суффикс]" }
+          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          $notes = "docs/release-notes/$tag.md"
+          if (-not (Test-Path $notes)) { throw "Нет описания релиза $notes" }
+          "notes=$notes" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release
+          path: dist
+
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: meet ${{ github.ref_name }}
@@ -138,8 +258,8 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
           files: |
-            ${{ steps.build.outputs.installer }}
-            ${{ steps.build.outputs.sums }}
+            dist/meet_*_x64-setup.exe
+            dist/SHA256SUMS.txt
 
   # macOS 13+, Apple Silicon. Экспериментально: подписи Apple нет, на
   # реальном Mac не проверено. Подпись — свой постоянный самоподписанный
