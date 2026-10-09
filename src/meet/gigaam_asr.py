@@ -35,6 +35,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 MODEL_NAME = "v3_e2e_rnnt"
 MODELS = ("v3_e2e_rnnt", "v3_e2e_ctc")
@@ -735,6 +736,59 @@ def load(name: str = MODEL_NAME, device: str = "cpu", on_line=None):
         raise Unavailable(f"GigaAM не загрузилась ({type(e).__name__}: {e})") from e
 
 
+# Пачки (0.5.1): у модели GigaAM есть пакетный forward(волна, длины) и
+# _decode(…, word_timestamps), а наружу выведен только transcribe одного файла.
+# Куски идут из памяти (без временного WAV на каждый), отсортированные по длине
+# (меньше дополнения тишиной), пачками не больше BATCH_CHUNKS кусков и
+# BATCH_SECONDS звука (видеопамять). Пачка не прошла — её куски по одному.
+BATCH_CHUNKS = 8
+BATCH_SECONDS = 160.0
+
+
+def _batch_api(model) -> bool:
+    return all(hasattr(model, name) for name in ("forward", "_decode", "_device", "_dtype"))
+
+
+def _batches(lengths: list[int], sr: int) -> list[list[int]]:
+    """Номера кусков пачками: по возрастанию длины, не больше BATCH_CHUNKS кусков
+    и BATCH_SECONDS звука в пачке (длинный кусок — один)."""
+    order = sorted(range(len(lengths)), key=lambda i: lengths[i])
+    out: list[list[int]] = []
+    cur: list[int] = []
+    for i in order:
+        if cur and (len(cur) >= BATCH_CHUNKS or sum(lengths[j] for j in cur + [i]) > BATCH_SECONDS * sr):
+            out.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _tensors(model, wav, lengths):
+    """Пачка (float32, дополнена нулями) и длины → тензоры на устройстве модели;
+    и контекст без градиентов. Тесты без torch подменяют эту функцию."""
+    import torch
+
+    batch = torch.from_numpy(wav).to(model._device).to(model._dtype)
+    return batch, torch.tensor(lengths, device=batch.device), torch.inference_mode()
+
+
+def _run_batch(model, pieces) -> list:
+    """Пачка кусков PCM16 → результаты как у transcribe (text, words)."""
+    import numpy as np
+
+    lengths = [len(p) for p in pieces]
+    wav = np.zeros((len(pieces), max(lengths)), dtype=np.float32)
+    for row, piece in enumerate(pieces):
+        wav[row, :len(piece)] = piece.astype(np.float32) / 32768.0
+    batch, lens, no_grad = _tensors(model, wav, lengths)
+    with no_grad:
+        encoded, encoded_len = model.forward(batch, lens)
+        decoded = model._decode(encoded, encoded_len, lens, True)
+    return [SimpleNamespace(text=text, words=words) for text, words in decoded]
+
+
 def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
                regions=None, model=None, on_chunk=None) -> list:
     """Распознать mono 16 кГц wav (выход to_wav16k) → list[asr.Segment].
@@ -765,22 +819,38 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
     done_s = 0.0
     if on_chunk:
         on_chunk(0.0, total_s)
+    pieces = [samples[int(c.start * sr): int(c.end * sr)] for c in chunks]
+    usable = [i for i, piece in enumerate(pieces) if len(piece) >= int(0.1 * sr)]
+    results: dict[int, object] = {}
     try:
         with tempdirs.temp_dir("gigaam-") as td:
-            for i, chunk in enumerate(chunks):
-                piece = samples[int(chunk.start * sr): int(chunk.end * sr)]
-                done_s += chunk.length
-                if len(piece) < int(0.1 * sr):
-                    continue
+            def one(i):
                 wav = Path(td) / f"c{i:05d}.wav"
-                _write_wav(wav, piece, sr)
+                _write_wav(wav, pieces[i], sr)
                 try:
-                    result = model.transcribe(str(wav), word_timestamps=True)
+                    return model.transcribe(str(wav), word_timestamps=True)
                 finally:
                     wav.unlink(missing_ok=True)
-                words.extend(words_of_chunk(chunk, getattr(result, "words", None)))
+
+            groups = (_batches([len(pieces[i]) for i in usable], sr) if _batch_api(model)
+                      else [[k] for k in range(len(usable))])
+            for group in groups:
+                ids = [usable[k] for k in group]
+                if len(ids) > 1:
+                    try:
+                        for i, result in zip(ids, _run_batch(model, [pieces[i] for i in ids])):
+                            results[i] = result
+                    except RuntimeError:
+                        # Пачка не влезла (видеопамять) — эти куски по одному.
+                        for i in ids:
+                            results[i] = one(i)
+                else:
+                    results[ids[0]] = one(ids[0])
+                done_s += sum(chunks[i].length for i in ids)
                 if on_chunk:
                     on_chunk(done_s, total_s)
+        for i in usable:
+            words.extend(words_of_chunk(chunks[i], getattr(results[i], "words", None)))
     finally:
         if own:
             del model
