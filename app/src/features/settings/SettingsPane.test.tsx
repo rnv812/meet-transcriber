@@ -917,7 +917,7 @@ test.each([
   ["recording", "speaker_name", ["speakers"]], ["recording", "auto_transcribe", ["asr"]], ["recording", "mic_device", ["sound"]],
   ["ui", "notifications", ["app"]], ["ui", "theme", []], ["auto_record", "grace_minutes", ["auto"]],
   ["asr", "device", ["asr"]], ["asr", "align", ["asr"]], ["asr", "language", ["asr"]],
-  ["asr", "voice_threshold", ["speakers"]], ["asr", "overlap", ["speakers"]], ["asr", "replacements", ["dictionary"]],
+  ["asr", "voice_threshold", ["speakers"]], ["asr", "overlap", ["speakers"]], ["asr", "mic_speakers", ["speakers"]], ["asr", "mic_dedupe", ["speakers"]], ["asr", "replacements", ["dictionary"]],
   ["llm", "provider", ["models"]], ["llm", "proxy", ["models"]], ["assist", "participant", ["assistant"]],
   ["assist", "window_seconds", ["assistant"]], ["assistant", "knowledge_dir", ["assistant"]],
   ["assistant", "auto_title", ["analysis"]], ["agent", "launch", ["advanced"]], ["analysis", "auto", ["analysis"]],

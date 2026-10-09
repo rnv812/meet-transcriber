@@ -58,3 +58,15 @@ test("порог узнавания и одновременная речь пи�
   await userEvent.click(screen.getByRole("switch", { name: "Отмечать одновременную речь" }));
   expect(drafts.at(-1)?.asr).toEqual({ voice_threshold: 0.9, overlap: false });
 });
+
+test("«Ваш микрофон»: голоса рядом и повторы — включены по умолчанию, пишутся в asr", async () => {
+  const drafts: Raw[] = [];
+  render(<Harness initial={{ asr: {} }} onDraft={(d) => drafts.push(d)} />);
+  const voices = screen.getByRole("switch", { name: "Различать голоса в микрофоне" });
+  const repeats = screen.getByRole("switch", { name: "Убирать повторы соседа и эхо" });
+  expect(voices).toBeChecked();
+  expect(repeats).toBeChecked();
+  await userEvent.click(voices);
+  await userEvent.click(repeats);
+  expect(drafts.at(-1)?.asr).toEqual({ mic_speakers: false, mic_dedupe: false });
+});

@@ -113,7 +113,7 @@ export function sectionsOf(group: string, key: string): SectionId[] {
       return ["theme", "aurora", "aurora_style", "motion"].includes(key) ? [] : ["app"];
     case "auto_record": return ["auto"];
     case "asr":
-      if (key === "voice_threshold" || key === "overlap") return ["speakers"];
+      if (["voice_threshold", "overlap", "mic_speakers", "mic_dedupe"].includes(key)) return ["speakers"];
       return key === "replacements" ? ["dictionary"] : ["asr"];
     case "export": return ["export"];
     case "llm": return ["models"];
