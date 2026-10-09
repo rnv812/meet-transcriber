@@ -1,6 +1,6 @@
 [package]
 name = "meet-desktop"
-version = "0.5.0"
+version = "0.6.0"
 description = "Оболочка Meet: трей, уведомления, окно приложения"
 authors = ["Andrey Aleynikov", "Nikita Reznikov", "Andrey Sivukha"]
 license = "Apache-2.0"
