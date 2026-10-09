@@ -43,8 +43,8 @@ fn main() {
     // запускает им проверенную копию новой версии): обмен, запуск от имени
     // пользователя, откат. Единственный режим, который работает от root.
     #[cfg(target_os = "macos")]
-    if let Some((pid, uid)) = mac_install::privileged_requested(&args) {
-        std::process::exit(mac_update::run_privileged(pid, uid));
+    if let Some((pid, uid, older)) = mac_install::privileged_requested(&args) {
+        std::process::exit(mac_update::run_privileged(pid, uid, older));
     }
     // Всё остальное от root не запускается никогда — ни приложение, ни
     // помощники: иначе неизвестный будущей версии флаг из шага

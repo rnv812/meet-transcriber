@@ -132,7 +132,20 @@ pub fn bundle_version(info_plist: &[u8]) -> Option<String> {
 
 /// Версия в образе — ровно версия выпуска и новее работающей.
 pub fn version_ok(found: Option<&str>, release: &str, current: &str) -> bool {
-    found.is_some_and(|version| same_version(version, release) && is_newer(version, current))
+    version_fits(found, release, current, false)
+}
+
+/// То же с направлением: `older` — откат (0.5, «Другие версии»): версия в образе —
+/// ровно выбранная и старее работающей; та же — никогда.
+pub fn version_fits(found: Option<&str>, release: &str, current: &str, older: bool) -> bool {
+    found.is_some_and(|version| {
+        same_version(version, release)
+            && if older {
+                is_newer(current, version)
+            } else {
+                is_newer(version, current)
+            }
+    })
 }
 
 pub const WHY_OTHER_APP_IN_APPLICATIONS: &str =
@@ -143,18 +156,19 @@ pub const NEWER_IN_APPLICATIONS: &str =
 /// Что уже лежит на месте, куда встанет новая версия (`target` не работающий
 /// пакет: копия из временной папки или «Переместить в Программы»; зовётся,
 /// только если там что-то есть): не Meet (или идентификатор не прочитался) —
-/// ручная установка, Meet новее ставимого — отказ (не понижаем версию).
-/// `None` — можно ставить.
+/// ручная установка, Meet новее ставимого — отказ (не понижаем версию), кроме
+/// отката, который человек выбрал сам (`older`). `None` — можно ставить.
 pub fn existing_target_problem(
     identifier: Option<&str>,
     version: Option<&str>,
     installing: &str,
     our_identifier: &str,
+    older: bool,
 ) -> Option<Plan> {
     if identifier != Some(our_identifier) {
         return Some(Plan::Manual(WHY_OTHER_APP_IN_APPLICATIONS));
     }
-    if version.is_some_and(|version| is_newer(version, installing)) {
+    if !older && version.is_some_and(|version| is_newer(version, installing)) {
         return Some(Plan::Refuse(NEWER_IN_APPLICATIONS));
     }
     None
@@ -211,12 +225,14 @@ pub const WHY_NEWER_INSTALLED: &str = "в «Программах» уже сто
 
 /// Своя проверка шага от администратора (не полагается на решение,
 /// принятое до окна пароля): копия цела по правам (`stage_secure`), на месте
-/// замены — Meet (не чужое и не без идентификатора) и не новее копии.
+/// замены — Meet (не чужое и не без идентификатора) и не новее копии — кроме
+/// отката (`older`: так назван в окне пароля, которое человек подтвердил).
 pub fn privileged_guard(
     stage_secure: Result<(), String>,
     stage_version: Option<&str>,
     target: &TargetFacts,
     our_identifier: &str,
+    older: bool,
 ) -> Result<(), String> {
     stage_secure?;
     let Some(stage_version) = stage_version else {
@@ -226,10 +242,11 @@ pub fn privileged_guard(
         if target.identifier.as_deref() != Some(our_identifier) {
             return Err(WHY_OTHER_APP_IN_APPLICATIONS.into());
         }
-        if target
-            .version
-            .as_deref()
-            .is_some_and(|version| is_newer(version, stage_version))
+        if !older
+            && target
+                .version
+                .as_deref()
+                .is_some_and(|version| is_newer(version, stage_version))
         {
             return Err(WHY_NEWER_INSTALLED.into());
         }
@@ -367,6 +384,9 @@ pub fn decide(
 pub enum Kind {
     /// Новая версия из образа выпуска.
     Update,
+    /// Более старая версия из образа выпуска (0.5, «Другие версии»): как
+    /// `Update`, но шаг администратора разрешает версию старее установленной.
+    Downgrade,
     /// Та же версия — «Переместить Meet в Программы» (источник — временная
     /// копия работающего пакета).
     Move,
@@ -376,6 +396,7 @@ impl Kind {
     fn as_arg(self) -> &'static str {
         match self {
             Kind::Update => "update",
+            Kind::Downgrade => "downgrade",
             Kind::Move => "move",
         }
     }
@@ -383,6 +404,7 @@ impl Kind {
     fn from_arg(text: &str) -> Option<Kind> {
         match text {
             "update" => Some(Kind::Update),
+            "downgrade" => Some(Kind::Downgrade),
             "move" => Some(Kind::Move),
             _ => None,
         }
@@ -616,14 +638,17 @@ pub fn place_and_launch(ops: &impl Ops, stage: &Path, target: &Path, spare: &Pat
 fn release_source(job: &Apply, ops: &impl Ops) {
     if let Some(mount) = &job.mount {
         match job.kind {
-            Kind::Update => ops.detach(mount),
+            Kind::Update | Kind::Downgrade => ops.detach(mount),
             Kind::Move => ops.remove(mount),
         }
     }
 }
 
 fn give_up(job: &Apply, ops: &impl Ops, stage: &Path, why: &str) -> Finish {
-    let image = job.image.as_deref().filter(|_| job.kind == Kind::Update);
+    let image = job
+        .image
+        .as_deref()
+        .filter(|_| matches!(job.kind, Kind::Update | Kind::Downgrade));
     ops.log(&format!(
         "обновление на месте не удалось: {why}{}",
         if image.is_some() {
@@ -1101,6 +1126,7 @@ mod run {
                 leaf,
                 version: job.version.clone(),
                 uid,
+                older: job.kind == Kind::Downgrade,
             };
             let Some(args) = mac_install::admin_command(&admin) else {
                 return Placed::Failed("шаг администратора не собрался (путь не тот)".into());
@@ -1219,7 +1245,7 @@ mod run {
     /// возвращается, только если он был не root (`owner_to_restore`). Строки
     /// журнала — в
     /// вывод (их пишет в update.log помощник).
-    pub fn run_privileged(pid: u32, uid: u32) -> i32 {
+    pub fn run_privileged(pid: u32, uid: u32, older: bool) -> i32 {
         // SAFETY: geteuid без аргументов, ошибок не бывает.
         if unsafe { libc::geteuid() } != 0 || uid == 0 {
             eprintln!("--privileged-swap: не root или uid 0");
@@ -1245,6 +1271,7 @@ mod run {
             version_of(&stage).as_deref(),
             &facts,
             mac_install::BUNDLE_ID,
+            older,
         );
         // Владелец прежнего пакета — до обмена (после него там новая версия).
         let previous = std::fs::symlink_metadata(&target)
@@ -1393,8 +1420,14 @@ mod run {
         (mac_install::route(target, facts, pin.as_deref()), text)
     }
 
-    /// Поставить скачанный и сверенный образ `image` выпуска `release`.
-    pub fn apply(app: &AppHandle, image: &Path, release: &str) -> Result<Installed, String> {
+    /// Поставить скачанный и сверенный образ `image` выпуска `release`;
+    /// `older` — откат на выбранную в «Другие версии» более старую версию.
+    pub fn apply(
+        app: &AppHandle,
+        image: &Path,
+        release: &str,
+        older: bool,
+    ) -> Result<Installed, String> {
         let Some((bundle, location)) = location() else {
             return manual(app, image, "приложение запущено не из пакета .app");
         };
@@ -1428,7 +1461,7 @@ mod run {
         };
         let (verdict, detail) = signature(&new_app, requirement.as_deref(), &identifier);
         let found = version_of(&new_app);
-        let version_fits = version_ok(found.as_deref(), release, &current);
+        let version_fits = version_fits(found.as_deref(), release, &current, older);
         let (route, facts) = route(&target);
         let mut plan = decide(&running, verdict, version_fits, route);
         let target_exists = std::fs::symlink_metadata(&target).is_ok();
@@ -1438,6 +1471,7 @@ mod run {
                 version_of(&target).as_deref(),
                 release,
                 &identifier,
+                older,
             ) {
                 plan = problem;
             }
@@ -1458,7 +1492,7 @@ mod run {
             }
             Plan::InPlace(access) => {
                 let job = Apply {
-                    kind: Kind::Update,
+                    kind: if older { Kind::Downgrade } else { Kind::Update },
                     access,
                     pid,
                     target: target.clone(),
@@ -1906,6 +1940,13 @@ mod tests {
         assert!(!version_ok(Some("0.3.2"), "0.3.2", "0.3.4"));
         assert!(!version_ok(None, "0.3.5", "0.3.4"));
         assert!(!version_ok(Some("garbage"), "0.3.5", "0.3.4"));
+        // Откат: ровно выбранная и старее работающей; та же и новее — нет.
+        assert!(version_fits(Some("0.4.0"), "0.4.0", "0.5.0", true));
+        assert!(!version_fits(Some("0.5.0"), "0.5.0", "0.5.0", true));
+        assert!(!version_fits(Some("0.5.1"), "0.5.1", "0.5.0", true));
+        assert!(!version_fits(Some("0.3.9"), "0.4.0", "0.5.0", true));
+        assert!(Kind::from_arg("downgrade") == Some(Kind::Downgrade));
+        assert_eq!(Kind::Downgrade.as_arg(), "downgrade");
     }
 
     #[test]
@@ -2014,27 +2055,31 @@ mod tests {
         let ours = Some("com.meet.desktop");
         let id = "com.meet.desktop";
         assert_eq!(
-            existing_target_problem(ours, Some("0.3.5"), "0.3.7", id),
+            existing_target_problem(ours, Some("0.3.5"), "0.3.7", id, false),
             None
         );
         assert_eq!(
-            existing_target_problem(ours, Some("0.3.7"), "0.3.7", id),
+            existing_target_problem(ours, Some("0.3.7"), "0.3.7", id, false),
             None
         );
         // Идентификатор не прочитался (пустая папка «Meet.app», битый
         // Info.plist) — чужое: не заменяем и тем более не удаляем.
         assert_eq!(
-            existing_target_problem(None, None, "0.3.7", id),
+            existing_target_problem(None, None, "0.3.7", id, false),
             Some(Plan::Manual(WHY_OTHER_APP_IN_APPLICATIONS))
         );
-        // Там Meet новее — не понижаем.
+        // Там Meet новее — не понижаем; откат, выбранный человеком, — можно.
         assert_eq!(
-            existing_target_problem(ours, Some("0.3.8"), "0.3.7", id),
+            existing_target_problem(ours, Some("0.3.8"), "0.3.7", id, false),
             Some(Plan::Refuse(NEWER_IN_APPLICATIONS))
+        );
+        assert_eq!(
+            existing_target_problem(ours, Some("0.3.8"), "0.3.7", id, true),
+            None
         );
         // Чужое приложение с тем же именем — не трогаем.
         assert_eq!(
-            existing_target_problem(Some("com.google.meet"), Some("9.0.0"), "0.3.7", id),
+            existing_target_problem(Some("com.google.meet"), Some("9.0.0"), "0.3.7", id, false),
             Some(Plan::Manual(WHY_OTHER_APP_IN_APPLICATIONS))
         );
         let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2618,22 +2663,41 @@ mod tests {
         let id = "com.meet.desktop";
         let ours = |version| facts(true, Some(id), Some(version));
         assert_eq!(
-            privileged_guard(Ok(()), Some("0.3.8"), &ours("0.3.7"), id),
+            privileged_guard(Ok(()), Some("0.3.8"), &ours("0.3.7"), id, false),
             Ok(())
         );
         assert_eq!(
-            privileged_guard(Ok(()), Some("0.3.8"), &facts(false, None, None), id),
+            privileged_guard(Ok(()), Some("0.3.8"), &facts(false, None, None), id, false),
             Ok(())
         );
         // Перемещение той же версии — можно (заменяет такую же).
         assert_eq!(
-            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.7"), id),
+            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.7"), id, false),
             Ok(())
         );
         // Понижение — нет, даже если решение до окна пароля его пропустило.
         assert_eq!(
-            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.8"), id),
+            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.8"), id, false),
             Err(WHY_NEWER_INSTALLED.into())
+        );
+        // Откат, названный в окне пароля, — можно; чужое и без проверки прав — всё равно нет.
+        assert_eq!(
+            privileged_guard(Ok(()), Some("0.3.7"), &ours("0.3.8"), id, true),
+            Ok(())
+        );
+        assert_eq!(
+            privileged_guard(
+                Ok(()),
+                Some("0.3.7"),
+                &facts(true, Some("x.y"), Some("1.0.0")),
+                id,
+                true
+            ),
+            Err(WHY_OTHER_APP_IN_APPLICATIONS.into())
+        );
+        assert_eq!(
+            privileged_guard(Err("ACL".into()), Some("0.3.7"), &ours("0.3.8"), id, true),
+            Err("ACL".into())
         );
         // Чужое или без идентификатора — нет.
         assert_eq!(
@@ -2641,21 +2705,22 @@ mod tests {
                 Ok(()),
                 Some("0.3.8"),
                 &facts(true, Some("x.y"), Some("1.0.0")),
-                id
+                id,
+                false
             ),
             Err(WHY_OTHER_APP_IN_APPLICATIONS.into())
         );
         assert_eq!(
-            privileged_guard(Ok(()), Some("0.3.8"), &facts(true, None, None), id),
+            privileged_guard(Ok(()), Some("0.3.8"), &facts(true, None, None), id, false),
             Err(WHY_OTHER_APP_IN_APPLICATIONS.into())
         );
         // Права копии небезопасны или версия не прочиталась — нет.
         assert_eq!(
-            privileged_guard(Err("ACL".into()), Some("0.3.8"), &ours("0.3.7"), id),
+            privileged_guard(Err("ACL".into()), Some("0.3.8"), &ours("0.3.7"), id, false),
             Err("ACL".into())
         );
         assert_eq!(
-            privileged_guard(Ok(()), None, &ours("0.3.7"), id),
+            privileged_guard(Ok(()), None, &ours("0.3.7"), id, false),
             Err(WHY_STAGE_VERSION_UNKNOWN.into())
         );
     }

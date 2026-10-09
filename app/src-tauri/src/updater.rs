@@ -83,8 +83,6 @@ pub const RECORDING_AFTER_DOWNLOAD: &str =
 pub const SAME_VERSION: &str = "Эта версия уже установлена";
 pub const NO_SUCH_RELEASE: &str = "Такого выпуска на GitHub нет";
 pub const BAD_VERSION: &str = "Непонятный номер версии";
-pub const MAC_DOWNGRADE: &str =
-    "На macOS более старую версию ставят вручную: скачайте образ со страницы выпуска";
 /// Сколько выпусков показывать в «Другие версии».
 pub const RELEASES_SHOWN: usize = 20;
 /// Длина краткого описания выпуска (символов).
@@ -294,8 +292,8 @@ pub struct ReleaseRow {
     pub notes_url: String,
     /// `current`, `newer` или `older` — относительно работающей версии.
     pub relation: &'static str,
-    /// Ставится отсюда: есть установщик с контрольной суммой для этой ОС, и это
-    /// не откат на macOS (там — вручную, `MAC_DOWNGRADE`).
+    /// Ставится отсюда: есть установщик с контрольной суммой для этой ОС
+    /// (откат — на обеих системах; на macOS — с отдельным окном пароля).
     pub installable: bool,
 }
 
@@ -371,12 +369,7 @@ pub fn release_rows(list: &Value, current: &str, os: Os) -> Vec<ReleaseRow> {
                     };
                     let has_files =
                         pick_installer_for(os, &release).is_some() && pick_sums(&release).is_some();
-                    let installable = has_files
-                        && match relation {
-                            "current" => false,
-                            "older" => os == Os::Windows,
-                            _ => true,
-                        };
+                    let installable = has_files && relation != "current";
                     Some(ReleaseRow {
                         date: value
                             .get("published_at")
@@ -399,15 +392,9 @@ pub fn release_rows(list: &Value, current: &str, os: Os) -> Vec<ReleaseRow> {
 }
 
 /// Можно ли поставить выбранный выпуск (`install_update` с версией): та же —
-/// нет; откат на macOS — вручную.
-pub fn pick_refusal(release: &str, current: &str, os: Os) -> Option<&'static str> {
-    if same_version(release, current) {
-        return Some(SAME_VERSION);
-    }
-    if os == Os::MacOs && !is_newer(release, current) {
-        return Some(MAC_DOWNGRADE);
-    }
-    None
+/// нет; старее и новее — да, на обеих системах.
+pub fn pick_refusal(release: &str, current: &str) -> Option<&'static str> {
+    same_version(release, current).then_some(SAME_VERSION)
 }
 
 /// Префикс и суффикс файла выпуска для ОС. Регистр важен: `meet_` — Windows,
@@ -863,7 +850,7 @@ fn install_blocking(
             parse_version(wanted).ok_or(BAD_VERSION)?;
             let wanted = wanted.strip_prefix(['v', 'V']).unwrap_or(wanted);
             let release = fetch_version(&current, wanted)?.ok_or(NO_SUCH_RELEASE)?;
-            if let Some(refusal) = pick_refusal(&release.version, &current, platform::current()) {
+            if let Some(refusal) = pick_refusal(&release.version, &current) {
                 return Err(refusal.to_string());
             }
             release
@@ -951,7 +938,8 @@ fn install_blocking(
         Some(other) => return Err(other.to_string()),
         None => {}
     }
-    launch_and_quit(app, &target, &release.version)
+    let older = is_newer(&current, &release.version);
+    launch_and_quit(app, &target, &release.version, older)
 }
 
 /// Скачать в `path`, считая SHA-256 по пути; события прогресса — окну.
@@ -1017,7 +1005,12 @@ fn download(
 /// приложение (`--quit` в `hooks.nsh`), но выход отсюда быстрее и тот же.
 /// macOS — `mac_update::apply`.
 #[cfg(not(target_os = "macos"))]
-fn launch_and_quit(app: &AppHandle, installer: &Path, _version: &str) -> Result<Installed, String> {
+fn launch_and_quit(
+    app: &AppHandle,
+    installer: &Path,
+    _version: &str,
+    _older: bool,
+) -> Result<Installed, String> {
     update_log!("запускаю {}", installer.display());
     crate::windows::shell_execute(&installer.to_string_lossy())
         .map_err(|code| format!("Не удалось запустить установщик (код {code})"))?;
@@ -1029,10 +1022,15 @@ fn launch_and_quit(app: &AppHandle, installer: &Path, _version: &str) -> Result<
 }
 
 /// macOS: заменить Meet.app на месте или открыть образ (`mac_update.rs`);
-/// `version` — версия выпуска: пакет в образе обязан быть ею.
+/// `version` — версия выпуска: пакет в образе обязан быть ею; `older` — откат.
 #[cfg(target_os = "macos")]
-fn launch_and_quit(app: &AppHandle, image: &Path, version: &str) -> Result<Installed, String> {
-    crate::mac_update::apply(app, image, version)
+fn launch_and_quit(
+    app: &AppHandle,
+    image: &Path,
+    version: &str,
+    older: bool,
+) -> Result<Installed, String> {
+    crate::mac_update::apply(app, image, version, older)
 }
 
 /// Последняя попытка, если она не удалась (иначе `None`).
@@ -1665,23 +1663,16 @@ mod tests {
             Some("Всё окно на Atlas Aurora.")
         );
         assert_eq!(rows[2].date.as_deref(), Some("2026-10-08"));
-        // macOS: откат — только вручную.
+        // macOS: откат ставится так же (окно пароля называет его откатом).
         let mac = json!([listed(
             "0.4.0",
             &["Meet_0.4.0_aarch64.dmg", SUMS],
             json!({})
         )]);
-        assert!(!release_rows(&mac, "0.5.0", Os::MacOs)[0].installable);
-        assert_eq!(
-            pick_refusal("0.4.0", "0.5.0", Os::MacOs),
-            Some(MAC_DOWNGRADE)
-        );
-        assert_eq!(pick_refusal("0.4.0", "0.5.0", Os::Windows), None);
-        assert_eq!(
-            pick_refusal("v0.5.0", "0.5.0", Os::Windows),
-            Some(SAME_VERSION)
-        );
-        assert_eq!(pick_refusal("0.5.1", "0.5.0", Os::MacOs), None);
+        assert!(release_rows(&mac, "0.5.0", Os::MacOs)[0].installable);
+        assert_eq!(pick_refusal("0.4.0", "0.5.0"), None);
+        assert_eq!(pick_refusal("v0.5.0", "0.5.0"), Some(SAME_VERSION));
+        assert_eq!(pick_refusal("0.5.1", "0.5.0"), None);
     }
 
     #[test]

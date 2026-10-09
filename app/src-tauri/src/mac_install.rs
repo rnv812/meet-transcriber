@@ -245,7 +245,9 @@ pub fn admin_spare(pid: u32) -> PathBuf {
 /// сертификата, $4 — точная версия (`CFBundleShortVersionString`, уже
 /// сверенная с выпуском по semver на стороне пользователя), $5 — uid
 /// пользователя (не 0), $6 — `run` или `check` (проверка параметров и вывод
-/// их в hex — для теста кавычек в CI, ничего не делает).
+/// их в hex — для теста кавычек в CI, ничего не делает), $7 — `newer` или
+/// `older`: откат на версию старее установленной (0.5, «Другие версии»;
+/// окно пароля говорит об этом прямо, `--privileged-swap` его разрешает).
 /// Порядок: проверка параметров → «Программы» root и не для всех на запись →
 /// уборка брошенных рабочих папок (их pid не жив) → копия `ditto --noacl` в
 /// закрытую папку от root → root:wheel, без ACL, без set-id/sticky, без
@@ -264,6 +266,7 @@ LEAF=$3
 VERSION=$4
 USER_ID=$5
 MODE=$6
+DIRECTION=${7-}
 case "$PID" in ''|*[!0-9]*) exit 64 ;; esac
 case "$USER_ID" in ''|*[!0-9]*) exit 64 ;; esac
 [ "$USER_ID" -ne 0 ] || exit 64
@@ -272,8 +275,9 @@ case "$LEAF" in ''|*[!0-9a-f]*) exit 64 ;; esac
 case "$VERSION" in ''|*[!0-9A-Za-z.+-]*) exit 64 ;; esac
 case "$SRC" in /*/Meet.app) ;; *) exit 64 ;; esac
 case "$MODE" in run|check) ;; *) exit 64 ;; esac
+case "$DIRECTION" in newer|older) ;; *) exit 64 ;; esac
 if [ "$MODE" = check ]; then
-  for VALUE in "$SRC" "$PID" "$LEAF" "$VERSION" "$USER_ID"; do
+  for VALUE in "$SRC" "$PID" "$LEAF" "$VERSION" "$USER_ID" "$DIRECTION"; do
     printf '%s' "$VALUE" | /usr/bin/od -An -tx1 | /usr/bin/tr -d ' \n'
     printf ' '
   done
@@ -310,7 +314,7 @@ EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$STAGE/Contents/In
 case "$EXE" in ''|.*|*/*) fail 69 ;; esac
 [ -f "$STAGE/Contents/MacOS/$EXE" ] && [ ! -L "$STAGE/Contents/MacOS/$EXE" ] || fail 69
 /usr/bin/xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null
-exec "$STAGE/Contents/MacOS/$EXE" --privileged-swap "$PID" "$USER_ID"
+exec "$STAGE/Contents/MacOS/$EXE" --privileged-swap "$PID" "$USER_ID" "$DIRECTION"
 "#;
 
 /// Начало команды, которую выполняет `do shell script`: пустая среда (только
@@ -355,13 +359,21 @@ pub struct AdminJob {
     /// Точная `CFBundleShortVersionString` новой версии.
     pub version: String,
     pub uid: u32,
+    /// Откат на версию старее установленной (человек выбрал её в «Другие версии»).
+    pub older: bool,
 }
 
-/// Текст окна пароля macOS.
-pub fn admin_prompt(version: &str) -> String {
-    format!(
-        "Meet устанавливает версию {version} в «Программы». Введите пароль администратора, чтобы заменить приложение."
-    )
+/// Текст окна пароля macOS; откат называется откатом.
+pub fn admin_prompt(version: &str, older: bool) -> String {
+    if older {
+        format!(
+            "Meet возвращает более старую версию {version} в «Программы». Введите пароль администратора, чтобы заменить приложение."
+        )
+    } else {
+        format!(
+            "Meet устанавливает версию {version} в «Программы». Введите пароль администратора, чтобы заменить приложение."
+        )
+    }
 }
 
 /// Аргументы `/usr/bin/osascript`: постоянный AppleScript (`-e`), затем
@@ -398,13 +410,14 @@ pub fn admin_command_for(job: &AdminJob, privileged: bool) -> Option<Vec<String>
     }
     args.extend([
         ADMIN_SCRIPT.to_string(),
-        admin_prompt(&job.version),
+        admin_prompt(&job.version, job.older),
         source.to_string(),
         job.helper_pid.to_string(),
         job.leaf.clone(),
         job.version.clone(),
         job.uid.to_string(),
         if privileged { "run" } else { "check" }.to_string(),
+        if job.older { "older" } else { "newer" }.to_string(),
     ]);
     Some(args)
 }
@@ -545,10 +558,17 @@ pub fn admin_outcome(success: bool, stderr: &str) -> Placed {
     }
 }
 
-/// Аргументы `--privileged-swap <pid помощника> <uid>`.
-pub fn privileged_requested(args: &[String]) -> Option<(u32, u32)> {
-    let [_, flag, pid, uid] = args else {
-        return None;
+/// Аргументы `--privileged-swap <pid помощника> <uid> [newer|older]`:
+/// (pid, uid, откат). Без направления — `newer` (скрипт прежней версии).
+pub fn privileged_requested(args: &[String]) -> Option<(u32, u32, bool)> {
+    let (flag, pid, uid, older) = match args {
+        [_, flag, pid, uid] => (flag, pid, uid, false),
+        [_, flag, pid, uid, direction] => match direction.as_str() {
+            "newer" => (flag, pid, uid, false),
+            "older" => (flag, pid, uid, true),
+            _ => return None,
+        },
+        _ => return None,
     };
     if flag != PRIVILEGED_ARG {
         return None;
@@ -556,7 +576,7 @@ pub fn privileged_requested(args: &[String]) -> Option<(u32, u32)> {
     let pid: u32 = pid.parse().ok().filter(|pid| *pid > 0)?;
     // uid 0 — никогда: новая версия запускается от имени пользователя.
     let uid: u32 = uid.parse().ok().filter(|uid| *uid > 0)?;
-    Some((pid, uid))
+    Some((pid, uid, older))
 }
 
 /// Режим `--privileged-swap` запущен ровно из рабочей папки шага
@@ -840,6 +860,7 @@ mod tests {
             leaf: SHA.into(),
             version: "0.3.7".into(),
             uid: 501,
+            older: false,
         }
     }
 
@@ -866,10 +887,10 @@ mod tests {
             }
             let rest = &args[lines.len() * 2..];
             assert_eq!(rest[0], ADMIN_SCRIPT);
-            assert_eq!(rest[1], admin_prompt("0.3.7"));
+            assert_eq!(rest[1], admin_prompt("0.3.7", false));
             // Данные — отдельными аргументами, байт в байт.
             assert_eq!(rest[2], nasty);
-            assert_eq!(&rest[3..], ["4242", SHA, "0.3.7", "501", "run"]);
+            assert_eq!(&rest[3..], ["4242", SHA, "0.3.7", "501", "run", "newer"]);
             // Ни AppleScript, ни скрипт не содержат данных задания.
             for constant in lines.iter().map(String::as_str).chain([ADMIN_SCRIPT]) {
                 assert!(!constant.contains("4242") && !constant.contains(SHA));
@@ -888,7 +909,14 @@ mod tests {
         assert!(ADMIN_SCRIPT.contains("WORK=\"/Applications/.Meet.app.work-$PID\""));
         // Без прав — только проверка, и никакого окна пароля.
         let check = admin_command_for(&admin_job(HOSTILE[0]), false).unwrap();
-        assert_eq!(check.last().unwrap(), "check");
+        assert_eq!(check[check.len() - 2], "check");
+        // Откат (0.5): направление — последним аргументом, окно пароля называет откат.
+        let mut back = admin_job(HOSTILE[1]);
+        back.older = true;
+        let args = admin_command(&back).unwrap();
+        assert_eq!(args.last().unwrap(), "older");
+        assert!(args.contains(&admin_prompt("0.3.7", true)));
+        assert!(admin_prompt("0.3.7", true).contains("более старую версию 0.3.7"));
         assert!(!check
             .iter()
             .any(|arg| arg.contains("administrator privileges")));
@@ -991,7 +1019,10 @@ mod tests {
         assert!(at("/usr/bin/codesign --verify") < at("/usr/bin/xattr -dr com.apple.quarantine"));
         assert!(at("CFBundleShortVersionString") < at("exec "));
         assert!(at("/usr/bin/xattr -dr") < at("exec "));
-        assert!(ADMIN_SCRIPT.contains(&format!("{PRIVILEGED_ARG} \"$PID\" \"$USER_ID\"")));
+        assert!(ADMIN_SCRIPT.contains(&format!(
+            "{PRIVILEGED_ARG} \"$PID\" \"$USER_ID\" \"$DIRECTION\""
+        )));
+        assert!(at("case \"$DIRECTION\"") < at("if [ \"$MODE\" = check ]"));
         assert!(ADMIN_SCRIPT.contains("[ \"$USER_ID\" -ne 0 ] || exit 64"));
         // Проверки параметров — раньше любого действия.
         assert!(at("exit 64") < at("/bin/rm -rf"));
@@ -1020,8 +1051,16 @@ mod tests {
                 .output()
                 .unwrap()
         };
-        let good = ["/tmp/x/Meet.app", "42", SHA, "0.3.7", "501", "check"];
-        let bad: [(usize, &str); 11] = [
+        let good = [
+            "/tmp/x/Meet.app",
+            "42",
+            SHA,
+            "0.3.7",
+            "501",
+            "check",
+            "newer",
+        ];
+        let bad: [(usize, &str); 13] = [
             (0, "Meet.app"),
             (0, "/tmp/x/Other.app"),
             (1, "4;2"),
@@ -1033,6 +1072,8 @@ mod tests {
             (4, "five"),
             (4, "0"),
             (5, "go"),
+            (6, "down"),
+            (6, ""),
         ];
         for (index, value) in bad {
             let mut args = good;
@@ -1085,6 +1126,7 @@ mod tests {
             assert_eq!(values[2], SHA.as_bytes());
             assert_eq!(values[3], b"0.3.7");
             assert_eq!(values[4], b"501");
+            assert_eq!(values[5], b"newer");
             for name in &env {
                 assert!(
                     ["PATH", "PWD", "SHLVL", "_", "OLDPWD"].contains(&name.as_str()),
@@ -1097,7 +1139,7 @@ mod tests {
         // Значение не того вида не проходит дальше проверки (64).
         let mut evil = admin_command_for(&admin_job("/tmp/x/Meet.app"), false).unwrap();
         let n = evil.len();
-        evil[n - 3] = format!("0.3.7$(touch {marker_text})");
+        evil[n - 4] = format!("0.3.7$(touch {marker_text})");
         let out = std::process::Command::new("/usr/bin/osascript")
             .args(&evil)
             .output()
@@ -1199,7 +1241,20 @@ mod tests {
         let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             privileged_requested(&args(&["meet", PRIVILEGED_ARG, "42", "501"])),
-            Some((42, 501))
+            Some((42, 501, false))
+        );
+        assert_eq!(
+            privileged_requested(&args(&["meet", PRIVILEGED_ARG, "42", "501", "newer"])),
+            Some((42, 501, false))
+        );
+        // Откат — только словом `older`; иное — не этот режим.
+        assert_eq!(
+            privileged_requested(&args(&["meet", PRIVILEGED_ARG, "42", "501", "older"])),
+            Some((42, 501, true))
+        );
+        assert_eq!(
+            privileged_requested(&args(&["meet", PRIVILEGED_ARG, "42", "501", "yes"])),
+            None
         );
         assert_eq!(
             privileged_requested(&args(&["meet", PRIVILEGED_ARG, "0", "501"])),
