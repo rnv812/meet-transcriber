@@ -31,11 +31,14 @@ import errno
 import hashlib
 import json
 import os
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+
+from meet import memory
 
 MODEL_NAME = "v3_e2e_rnnt"
 MODELS = ("v3_e2e_rnnt", "v3_e2e_ctc")
@@ -840,8 +843,9 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
                     try:
                         for i, result in zip(ids, _run_batch(model, [pieces[i] for i in ids])):
                             results[i] = result
-                    except RuntimeError:
+                    except (RuntimeError, MemoryError):
                         # Пачка не влезла (видеопамять) — эти куски по одному.
+                        memory.release(sys.modules.get("torch"))
                         for i in ids:
                             results[i] = one(i)
                 else:

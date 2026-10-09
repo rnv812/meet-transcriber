@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from meet import memory
 from meet.asr import Segment, Word
 
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
@@ -211,6 +212,8 @@ STOCK_EMBEDDINGS_SHA256 = {
 # 2,7 ГБ без потери скорости (замер 0.3.3); с проходом на окно это 16 окон,
 # 48 голосов за прогон.
 EMBEDDING_BATCH_SIZE = 16
+# Пачки сегментации и голосов при повторе после нехватки памяти.
+SMALL_BATCH = 4
 FAST_FAILED_NOTE = "голоса за один проход на окно не сработали ({reason}): штатный способ pyannote"
 
 
@@ -526,15 +529,36 @@ def diarize_wav(
         try:
             result = run()
         except Exception as e:
-            if device.type != "mps":
+            if device.type == "mps":
+                # MPS (Apple Silicon) поддерживает не все операции: тогда — процессор.
+                print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
+                pipe.to(torch.device("cpu"))
+                used = "cpu"
+                threads.cap()
+                clock.retry("после сбоя MPS")
+                result = run()
+            elif memory.is_oom(e):
+                # Не хватило памяти: те же окна мелкими пачками (результат тот же,
+                # каждое окно считается отдельно); видеопамяти не хватило и так —
+                # процессор: медленнее, но встреча со спикерами, а не упавшая задача.
+                print("Диаризации не хватило памяти — повторяю мелкими пачками")
+                memory.release(torch)
+                _small_batches(pipe)
+                clock.retry("мелкими пачками после нехватки памяти")
+                try:
+                    result = run()
+                except Exception as again:
+                    if used != "cuda" or not memory.is_oom(again):
+                        raise
+                    print("Диаризации не хватило памяти видеокарты — повторяю на процессоре")
+                    memory.release(torch)
+                    pipe.to(torch.device("cpu"))
+                    used = "cpu"
+                    threads.cap()
+                    clock.retry("на процессоре после нехватки видеопамяти")
+                    result = run()
+            else:
                 raise
-            # MPS (Apple Silicon) поддерживает не все операции: тогда — процессор.
-            print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
-            pipe.to(torch.device("cpu"))
-            used = "cpu"
-            threads.cap()
-            clock.retry("после сбоя MPS")
-            result = run()
     except Exception as e:
         _log_failure(clock, e, used, threads.count)
         raise
@@ -547,6 +571,13 @@ def diarize_wav(
     fast = getattr(pipe, "_meet_fast_embeddings", None)
     _log(clock.line(used, threads.count) + ("; голоса за один проход на окно" if fast and fast["on"] else ""))
     return diar
+
+
+def _small_batches(pipe) -> None:
+    """Пачки сегментации и голосов — не больше SMALL_BATCH окон."""
+    for name in ("segmentation_batch_size", "embedding_batch_size"):
+        if hasattr(pipe, name):
+            setattr(pipe, name, min(getattr(pipe, name), SMALL_BATCH))
 
 
 def _log_failure(clock, error: Exception, device: str, threads: int | None = None) -> None:

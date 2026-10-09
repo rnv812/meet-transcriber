@@ -14,6 +14,8 @@ import json
 import sys
 import threading
 
+from meet import memory
+
 # Строки пишут и основной поток, и опрос размера файлов (ByteWatch): одна
 # строка JSON — одна запись под замком, иначе строки перемешаются.
 _EMIT_LOCK = threading.Lock()
@@ -168,7 +170,7 @@ def _dispatch(args) -> int:
         _emit({"kind": "error", "text": f"{jobs_hint()}: {e}"})
         return 2
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     _emit({"kind": "job.result", "path": str(out)})
     return 0
@@ -258,7 +260,7 @@ def _merge(folder_str: str) -> int:
         _emit({"kind": "error", "text": str(e)})
         return 3
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     _emit({"kind": "job.result", "path": str(out)})
     return 0
@@ -285,7 +287,7 @@ def _speaker_voices(work, reason: str) -> int:
         _emit({"kind": "error", "text": str(e)})
         return 3
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     _emit({"kind": "job.result", "path": str(out)})
     return 0
@@ -347,7 +349,7 @@ def _owner_voice(voices_str: str, wav_str: str, device: str | None) -> int:
         _emit({"kind": "error", "text": f"{jobs_hint()}: {e}"})
         return 2
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     finally:
         try:
@@ -377,7 +379,7 @@ def _owner_derive(voices_str: str, recordings_str: str) -> int:
         _emit({"kind": "error", "text": f"{jobs_hint()}: {e}"})
         return 2
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     _emit({"kind": "job.result", "path": outcome.status})
     return 0
@@ -561,7 +563,7 @@ def _assistant(kind: str, folder_str: str, question: str | None, chosen: str | N
         _emit({"kind": "error", "text": str(e)})
         return 1
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     _emit({"kind": "job.result", "path": str(out)})
     return 0
@@ -671,7 +673,7 @@ def _chat(folder_str: str, message_id: str, chosen: str | None = None, *,
         _emit({"kind": "error", "text": str(e)})
         return 3
     except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        _emit({"kind": "error", "text": memory.error_text(e)})
         return 1
     if error:
         _emit({"kind": "error", "text": error})
@@ -802,7 +804,7 @@ def _analyze(folder_str: str, chosen: str | None = None) -> int:
     except (analysis.AnalysisError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
-        return fail(f"{type(e).__name__}: {e}", 1)
+        return fail(memory.error_text(e), 1)
     modes = ()
     if provider == "openai-compatible":
         from meet.llm import openai_compat
@@ -844,7 +846,7 @@ def _improve(folder_str: str, chosen: str | None = None) -> int:
     except (improve.ImproveError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
-        return fail(f"{type(e).__name__}: {e}", 1)
+        return fail(memory.error_text(e), 1)
     _emit({"kind": "job.result", "path": str(out)})
     return 0
 
