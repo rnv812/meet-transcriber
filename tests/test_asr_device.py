@@ -65,25 +65,3 @@ def test_explicit_model_name_wins_on_cpu(monkeypatch, tmp_path):
     monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
     asr.transcribe_wav(tmp_path / "a.wav", model_name="chosen")
     assert created[0]["name"] == "chosen"
-
-
-def test_file_transcription_decodes_greedily(monkeypatch, tmp_path):
-    """0.5.1: луч 1 вместо 5 — на 20–45% быстрее; по сверке с GigaAM не хуже
-    (луч 5 дважды на одном куске расходится сам с собой на 10% слов: повторы
-    декодирования с температурой при неуверенности)."""
-    calls = []
-
-    class FakeModel:
-        def __init__(self, *a, **kw):
-            pass
-
-        def transcribe(self, *a, **kw):
-            calls.append(kw)
-            return iter(()), None
-
-    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeModel))
-    monkeypatch.setattr(asr, "_add_nvidia_dll_dirs", lambda: None)
-    monkeypatch.setattr(asr, "_apply_hf_token", lambda: None)
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
-    asr.transcribe_wav(tmp_path / "a.wav")
-    assert calls[0]["beam_size"] == asr.BEAM_SIZE == 1

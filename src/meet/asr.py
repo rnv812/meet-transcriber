@@ -24,11 +24,6 @@ DEVICES = ("auto", "cuda", "cpu")
 # Порядок попыток по устройству: на CUDA при нехватке VRAM откатываемся на
 # квантованную, на CPU float16 не бывает — сразу int8.
 COMPUTE_TYPES = {"cuda": ("float16", "int8_float16"), "cpu": ("int8",)}
-# Луч декодера при расшифровке записи (0.5.1): 1 вместо 5 — на 20–45% быстрее,
-# по сверке с GigaAM на двух кусках по 10 минут не хуже (12,8–13,4% против
-# 13,2–16,2%); луч 5 дважды на одном куске расходится сам с собой на 10% слов
-# (повторы декодирования с температурой при неуверенности).
-BEAM_SIZE = 1
 
 
 def cuda_available() -> bool:
@@ -868,7 +863,6 @@ def transcribe_wav(
                 vad_filter=True,
                 word_timestamps=True,
                 hotwords=hotwords,
-                beam_size=BEAM_SIZE,
             )
             result = _segments_from_whisper(_tracked(segments, getattr(info, "duration", 0), on_progress))
             del model
