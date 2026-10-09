@@ -17,7 +17,10 @@
   max-width: min(480px, calc(100vw - 16px)); max-height: min(360px, calc(100vh - 16px)); overflow-y: auto;
 }
 .menu.selectbox__menu li .check { flex: none; }
-.menu.selectbox__menu li small { flex: none; white-space: nowrap; }
+/* В списке название пункта — целиком (на кнопке оно сжимается с многоточием), а
+   длинное пояснение переносится: иначе «Личный» в узкой шапке сжимался до «Л.». */
+.menu.selectbox__menu li .selectbox__label { flex: none; overflow: visible; }
+.menu.selectbox__menu li small { flex: 1 1 auto; min-width: 0; white-space: normal; }
 .menu.selectbox__menu li[aria-disabled="true"] { color: var(--ink-3); cursor: default; }
 .menu.selectbox__menu li[aria-disabled="true"]:hover { background: transparent; }
 .selectbox__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

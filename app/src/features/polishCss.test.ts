@@ -18,6 +18,16 @@ function rule(css: string, sel: string): string {
 }
 const px = (v: string) => Number(/(\d+(?:\.\d+)?)px/.exec(v)?.[1] ?? NaN);
 
+test("пункт списка с пояснением: название целиком, пояснение переносится (0.5.1, «Л.» вместо «Личный»)", () => {
+  const css = read("ui", "select.css");
+  const label = rule(css, ".menu.selectbox__menu li .selectbox__label");
+  expect(label).toMatch(/flex:\s*none/);
+  expect(label).toMatch(/overflow:\s*visible/);
+  const detail = rule(css, ".menu.selectbox__menu li small");
+  expect(detail).toMatch(/min-width:\s*0/);
+  expect(detail).toMatch(/white-space:\s*normal/);
+});
+
 test("счётчик совпадений (aria-live) не прячется display: none, когда пуст", () => {
   const css = read("features", "card", "card.css");
   expect(css).not.toMatch(/\.find__count:empty/);
