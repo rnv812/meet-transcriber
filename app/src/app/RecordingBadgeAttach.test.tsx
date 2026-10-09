@@ -62,7 +62,8 @@ test("0.5: во время записи своя кнопка «Включить
   expect(attach).toHaveBeenCalledWith(ep, "work");
   expect(stop).not.toHaveBeenCalled(); // запись не останавливали
   await waitFor(() => expect(status()).toHaveTextContent("Ассистент запускается…"));
-  expect(status()).toHaveTextContent("Идёт запись · 12:34"); // всё та же запись
+  // Всё та же запись (не с 00:00); секунды могли уйти вперёд — на медленной машине тест идёт дольше.
+  expect(status()).toHaveTextContent(/Идёт запись · 12:3[0-9]/);
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
@@ -102,7 +103,7 @@ test("включён — «· ассистент» в подсказке и «В
     return <RecordingBadge endpoint={ep} snapshot={s} onSnapshot={setS} />;
   }
   render(<Harness />);
-  expect(status()).toHaveTextContent("Идёт запись · 12:34 · ассистент");
+  expect(status()).toHaveTextContent(/Идёт запись · 12:3[0-9] · ассистент/);
   await openAgent();
   const item = await screen.findByRole("menuitem", { name: /Выключить ассистента/ });
   expect(item).toHaveTextContent("запись продолжится");

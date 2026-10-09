@@ -396,6 +396,28 @@ def test_close_pads_tail_and_finalizes_writer(tmp_path):
     assert t.writer.closed
 
 
+def test_close_pads_only_up_to_the_stop_click(tmp_path):
+    """Поток записи добрался до закрытия позже «Стоп» (нагруженная машина) —
+    хвост тишины всё равно до момента нажатия, а не до момента закрытия."""
+    t = _bare_track(tmp_path)
+    t.started = time.monotonic() - 3.0
+    t.close(until=t.started + 1.0)
+    padded_s = len(t.writer.data) / (2 * 16000)
+    assert 0.95 <= padded_s <= 1.05
+    assert t.writer.closed
+
+
+def test_stop_event_remembers_the_click():
+    stop = recorder.StopEvent()
+    assert stop.at is None and not stop.is_set()
+    before = time.monotonic()
+    stop.set()
+    first = stop.at
+    assert first is not None and before <= first <= time.monotonic()
+    stop.set()  # повторное «Стоп» момент не сдвигает
+    assert stop.at == first and stop.is_set()
+
+
 def test_close_finalizes_writer_even_if_padding_fails(tmp_path):
     t = _bare_track(tmp_path)
     t.rate = None  # ломаем арифметику паддинга

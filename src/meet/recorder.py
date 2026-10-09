@@ -647,11 +647,13 @@ class _Track:
         except Exception:
             pass
 
-    def close(self) -> None:
+    def close(self, until: float | None = None) -> None:
+        """`until` — момент «Стоп» (монотонные часы): хвост тишины — до него, даже
+        если поток записи добрался до закрытия позже (нагруженная машина)."""
         self.close_stream()
         if self.writer is not None:
             try:
-                self._pad_silence()  # хвост до момента остановки
+                self._pad_silence(until)  # хвост до момента остановки
             finally:
                 self.writer.close()  # ffmpeg финализируется даже при сбое паддинга
 
@@ -729,15 +731,16 @@ class _Track:
         self.had_audio = True
         self.stream = stream
 
-    def _pad_silence(self) -> None:
-        """Дописать тишину до стенных часов. Кусками ≤1 с и под локом: пауза
-        может быть длинной (сон машины), а callback возобновиться посреди
-        паддинга — дефицит пересчитывается на каждом куске."""
+    def _pad_silence(self, until: float | None = None) -> None:
+        """Дописать тишину до стенных часов (или до `until`, если он раньше). Кусками
+        ≤1 с и под локом: пауза может быть длинной (сон машины), а callback
+        возобновиться посреди паддинга — дефицит пересчитывается на каждом куске."""
         frame = 2 * self.channels
         while True:
             with self._lock:
                 written_s = self.bytes_written / (frame * self.rate)
-                gap = (time.monotonic() - self.started) - written_s
+                now = time.monotonic() if until is None else min(until, time.monotonic())
+                gap = (now - self.started) - written_s
                 if gap <= MIN_GAP_S:
                     return
                 n = min(int(gap * self.rate), self.rate)
@@ -1079,10 +1082,11 @@ class _Session:
             self.bus.emit(events.RECORD_DEVICE, reason=reason, restart=True)
         self._restart(ids, reason)
 
-    def close(self) -> None:
+    def close(self, until: float | None = None) -> None:
+        """`until` — момент «Стоп» (`StopEvent.at`): дорожки кончаются в нём."""
         for t in self.tracks:
             try:
-                t.close()
+                t.close(until)
             except Exception as e:
                 self.log(f"{t.fname}: закрытие: {e!r}")
         if self.pcm_tap is not None:
@@ -1101,7 +1105,7 @@ class _Session:
         self.bus.emit(
             events.RECORD_STOPPED,
             folder=str(self.out_dir),
-            duration_s=round(time.monotonic() - min(started), 1) if started else 0.0,
+            duration_s=round((until or time.monotonic()) - min(started), 1) if started else 0.0,
         )
         self.log.close()
 
@@ -1210,6 +1214,20 @@ class _Session:
 _FROM_SETTINGS = object()
 
 
+class StopEvent(threading.Event):
+    """«Стоп» записи, который помнит момент нажатия (`at`, монотонные часы): звук
+    дорожек кончается в нём, а не когда поток записи до закрытия добрался."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.at: float | None = None
+
+    def set(self) -> None:
+        if self.at is None:
+            self.at = time.monotonic()
+        super().set()
+
+
 def record(out_root: str, stop_event: "threading.Event | None" = None,
            bus=None, mic_device=_FROM_SETTINGS, output_device=_FROM_SETTINGS,
            pcm_tap=None) -> Path:
@@ -1266,7 +1284,7 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
         except KeyboardInterrupt:
             pass
     finally:
-        session.close()
+        session.close(getattr(stop_event, "at", None))
         unsubscribe()
         sink.close()
         lock.unlink(missing_ok=True)

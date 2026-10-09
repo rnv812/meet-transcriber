@@ -25,7 +25,7 @@ from pathlib import Path
 
 from meet import events, paths, pcm_tap, plat, settings, watch
 from meet.output import fmt_ts
-from meet.recorder import LOCK_NAME, _pid_alive, record
+from meet.recorder import LOCK_NAME, StopEvent, _pid_alive, record
 from meet.tray_control import AUTO, MANUAL, TrayControl
 
 # Куда писать по умолчанию: из репозитория — его `recordings/` (ярлык
@@ -460,7 +460,8 @@ class TrayApp:
             self.temporary_kept = False
             self.temp_session = session
             result: dict = {}
-            stop_event = threading.Event()
+            # Помнит момент «Стоп»: звук кончается в нём (recorder.StopEvent).
+            stop_event = StopEvent()
             self.result = result
             self.stop_event = stop_event
             self.source = source
