@@ -134,7 +134,7 @@ def test_workflow_dry_run_skips_windows_and_publishing():
 
 
 WINDOWS_JOBS = ("test-python", "test-app", "build", "release")
-JOBS = (*WINDOWS_JOBS, "macos", "publish-macos", "publish-macos-dry-run")
+JOBS = (*WINDOWS_JOBS, "test-python-macos", "macos", "publish-macos", "publish-macos-dry-run")
 
 
 def _job(name: str) -> str:
@@ -166,7 +166,7 @@ def test_token_is_read_only_except_for_publishing_jobs():
 def test_no_checkout_keeps_the_token_on_disk():
     lines = WORKFLOW.splitlines()
     checkouts = [i for i, line in enumerate(lines) if "uses: actions/checkout@" in line]
-    assert len(checkouts) == 7
+    assert len(checkouts) == 8  # 0.5.1: + test-python-macos
     for i in checkouts:
         assert lines[i + 1].strip() == "with:" and lines[i + 2].strip() == "persist-credentials: false"
 
@@ -515,8 +515,16 @@ def test_macos_ci_runs_the_full_python_suite_and_a_smoke_test():
     """0.5: живого Mac нет — весь набор Python (сведения, отчёт в сводке и артефактах)
     и смоук собранного приложения (резидент отвечает, окно живёт, снимок экрана)."""
     flow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-    assert "Python tests (full suite on macOS, informational)" in flow and "--junitxml=build/macos-report/pytest.xml" in flow
-    assert "GITHUB_STEP_SUMMARY" in flow and "name: macos-python-report" in flow
+    # 0.5.1: весь набор — своей job тремя кусками рядом со сборкой (в 0.5.0 он
+    # шёл в `macos` 90 минут, завис на 99% и снял сборку образа по таймауту);
+    # зависший тест падает по --timeout, медленные — в --durations.
+    full = _job("test-python-macos")
+    assert "continue-on-error: true" in full and "shard: [1, 2, 3]" in full
+    assert "MEET_TEST_SHARD: ${{ matrix.shard }}/3" in full and "-n auto" in full
+    assert "pytest-timeout" in full and "--timeout=" in full and "--durations=" in full
+    assert "--junitxml=build/macos-report/pytest.xml" in full and "GITHUB_STEP_SUMMARY" in full
+    assert "name: macos-python-report-${{ matrix.shard }}" in full
+    assert "full suite" not in _job("macos")
     assert "bash scripts/macos_smoke.sh .venv-ci/bin/python \"$APP\" build/macos-smoke" in flow
     smoke = (ROOT / "scripts" / "macos_smoke.sh").read_text(encoding="utf-8")
     assert "--headless" in smoke and "/state" in smoke and "screencapture" in smoke and "MEET_DATA_DIR" in smoke

@@ -261,6 +261,69 @@ jobs:
             dist/meet_*_x64-setup.exe
             dist/SHA256SUMS.txt
 
+  # Весь Python-набор на macOS: живого Mac нет — это главный способ увидеть,
+  # что ломается. Пока сведения (ни сборку, ни выпуск не останавливает): итог,
+  # упавшие и самые медленные тесты — в сводке прогона, отчёт JUnit — в
+  # артефактах. 0.5.1: своей job тремя кусками рядом со сборкой — в 0.5.0 он
+  # шёл внутри `macos` 90 минут, завис на 99% и снял сборку образа по таймауту.
+  # Зависший тест теперь падает сам (--timeout), медленные — в --durations.
+  test-python-macos:
+    permissions:
+      contents: read
+    runs-on: macos-14
+    timeout-minutes: 30
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    name: Python tests on macOS ${{ matrix.shard }}/3 (informational)
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUTF8: "1"
+      MEET_TEST_SHARD: ${{ matrix.shard }}/3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.23"
+
+      - name: Python tests (full suite on macOS)
+        run: |
+          uv venv --python 3.12 .venv-ci
+          uv pip install --python .venv-ci -e . pytest pytest-xdist pytest-timeout
+          mkdir -p build/macos-report
+          set +e
+          PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider -n auto \
+            --timeout=120 --durations=30 -rfE \
+            --junitxml=build/macos-report/pytest.xml > build/macos-report/pytest.txt 2>&1
+          code=$?
+          set -e
+          tail -n 60 build/macos-report/pytest.txt
+          {
+            echo "### Python на macOS, кусок ${MEET_TEST_SHARD}"
+            echo '```'
+            grep -E "passed|failed|error" build/macos-report/pytest.txt | tail -n 1
+            grep -E "^(FAILED|ERROR) " build/macos-report/pytest.txt | head -n 80
+            echo '```'
+            echo "Самые медленные:"
+            echo '```'
+            sed -n '/slowest .*durations/,/^$/p' build/macos-report/pytest.txt | head -n 32
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-python-report-${{ matrix.shard }}
+          path: build/macos-report/
+
   # macOS 13+, Apple Silicon. Экспериментально: подписи Apple нет, на
   # реальном Mac не проверено. Подпись — свой постоянный самоподписанный
   # сертификат (секреты MACOS_CERT_P12 — base64 .p12, MACOS_CERT_PASSWORD),
@@ -341,34 +404,6 @@ jobs:
             tests/test_watch_mac.py tests/test_engine_mac.py tests/test_app_icons.py \
             tests/test_macos_build.py tests/test_no_network.py \
             tests/test_llm_detect.py tests/test_gigaam_asr.py
-
-      # Весь Python-набор на macOS (0.5): живого Mac нет — это главный способ
-      # увидеть, что ломается. Пока сведения (сборку не останавливает): итог и
-      # список упавших — в сводке прогона, отчёт JUnit — в артефактах.
-      - name: Python tests (full suite on macOS, informational)
-        continue-on-error: true
-        run: |
-          mkdir -p build/macos-report
-          set +e
-          PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider -n auto \
-            --junitxml=build/macos-report/pytest.xml > build/macos-report/pytest.txt 2>&1
-          code=$?
-          set -e
-          tail -n 40 build/macos-report/pytest.txt
-          {
-            echo "### Python на macOS (весь набор)"
-            echo '```'
-            grep -E "passed|failed|error" build/macos-report/pytest.txt | tail -n 1
-            grep -E "^(FAILED|ERROR) " build/macos-report/pytest.txt | head -n 60
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit $code
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: macos-python-report
-          path: build/macos-report/
 
       - name: Window tests
         working-directory: app
