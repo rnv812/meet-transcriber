@@ -59,6 +59,15 @@ test("порог узнавания и одновременная речь пи�
   expect(drafts.at(-1)?.asr).toEqual({ voice_threshold: 0.9, overlap: false });
 });
 
+test("«Быстрее разделять на спикеров» — выключено по умолчанию, пишется в asr.fast_diarization", async () => {
+  const drafts: Raw[] = [];
+  render(<Harness initial={{ asr: {} }} onDraft={(d) => drafts.push(d)} />);
+  const toggle = screen.getByRole("switch", { name: "Быстрее разделять на спикеров" });
+  expect(toggle).not.toBeChecked();
+  await userEvent.click(toggle);
+  expect(drafts.at(-1)?.asr).toEqual({ fast_diarization: true });
+});
+
 test("«Ваш микрофон»: голоса рядом и повторы — включены по умолчанию, пишутся в asr", async () => {
   const drafts: Raw[] = [];
   render(<Harness initial={{ asr: {} }} onDraft={(d) => drafts.push(d)} />);

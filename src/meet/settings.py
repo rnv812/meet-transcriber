@@ -768,6 +768,10 @@ class Asr:
     language: str = "ru"
     align: bool = True
     overlap: bool = True
+    # «Быстрее разделять на спикеров» (0.5.1): окно сегментации шагает на 2 с
+    # вместо 1 с — вдвое быстрее, но участник с парой фраз может раствориться в
+    # другом спикере (meet.diarize.COARSE_STEP). По умолчанию выключено.
+    fast_diarization: bool = False
     device: str = "auto"
     cpu_model: str = DEFAULT_CPU_WHISPER_MODEL
     cpu_backend: str = GIGAAM
@@ -804,6 +808,7 @@ class Asr:
             language=str(raw.get("language") or "ru").strip() or "ru",
             align=as_flag(raw.get("align"), True),
             overlap=as_flag(raw.get("overlap"), True),
+            fast_diarization=as_flag(raw.get("fast_diarization"), False),
             device=as_choice(raw.get("device"), ASR_DEVICES, "auto"),
             cpu_model=cpu_model,
             cpu_backend=_asr_backend(raw.get("cpu_backend"), _legacy_cpu_backend(cpu_model)),
@@ -827,6 +832,7 @@ class Asr:
             "language": self.language,
             "align": self.align,
             "overlap": self.overlap,
+            "fast_diarization": self.fast_diarization,
             "device": self.device,
             "cpu_model": self.cpu_model,
             "cpu_backend": self.cpu_backend,

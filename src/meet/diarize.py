@@ -212,6 +212,11 @@ STOCK_EMBEDDINGS_SHA256 = {
 # 2,7 ГБ без потери скорости (замер 0.3.3); с проходом на окно это 16 окон,
 # 48 голосов за прогон.
 EMBEDDING_BATCH_SIZE = 16
+# «Быстрее разделять на спикеров» (asr.fast_diarization, 0.5.1): шаг окна
+# сегментации — доля его длины (у pyannote 0.1: 1 с из 10 с). 0.2 — вдвое меньше
+# окон и голосов: 66 минут 33 → 17,5 с, расхождение разметки 2,6%, но двое,
+# сказавшие за встречу 12–14 с, растворились в других спикерах.
+COARSE_STEP = 0.2
 # Пачки сегментации и голосов при повторе после нехватки памяти.
 SMALL_BATCH = 4
 FAST_FAILED_NOTE = "голоса за один проход на окно не сработали ({reason}): штатный способ pyannote"
@@ -426,6 +431,7 @@ def diarize_wav(
     exclusive: bool = False,
     clustering_threshold: float | None = None,
     on_progress=None,
+    fast: bool | None = None,
 ) -> Diarization:
     """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
 
@@ -442,6 +448,9 @@ def diarize_wav(
     clustering_threshold — порог кластеризации голосов пайплайна (у
     community-1 по умолчанию 0.6): ниже — людей различается больше, выше —
     меньше («Переразделить на спикеров», чувствительность).
+
+    `fast` — «Быстрее разделять на спикеров» (`_coarse`); None — по настройке
+    `asr.fast_diarization`.
 
     `on_progress(доля)` — ход 0…1 по шагам пайплайна pyannote (сегментация,
     голоса), если пайплайн умеет сообщать его (`hook`); не умеет —
@@ -478,6 +487,8 @@ def diarize_wav(
                 _log(clock.line("-"))
                 return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
         _install_fast_embeddings(pipe)
+        if _fast_setting() if fast is None else fast:
+            _coarse(pipe)
         if hasattr(pipe, "embedding_batch_size"):
             pipe.embedding_batch_size = EMBEDDING_BATCH_SIZE
         import torch
@@ -571,6 +582,24 @@ def diarize_wav(
     fast = getattr(pipe, "_meet_fast_embeddings", None)
     _log(clock.line(used, threads.count) + ("; голоса за один проход на окно" if fast and fast["on"] else ""))
     return diar
+
+
+def _fast_setting() -> bool:
+    from meet import settings
+
+    try:
+        return settings.load().asr.fast_diarization
+    except Exception:
+        return False
+
+
+def _coarse(pipe) -> None:
+    """Шаг окна сегментации — COARSE_STEP его длины (2 с у окна 10 с вместо
+    1 с): голоса считаются вдвое реже."""
+    seg = getattr(pipe, "_segmentation", None)
+    if seg is not None and getattr(seg, "duration", None):
+        seg.step = COARSE_STEP * seg.duration
+        print(f"Диаризация быстрее: шаг окна {seg.step:g} с")
 
 
 def _small_batches(pipe) -> None:

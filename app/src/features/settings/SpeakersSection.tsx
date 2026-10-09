@@ -29,6 +29,9 @@ export function SpeakersSection({ draft, set, endpoint }: { draft: Raw; set: Set
         <HfTokenRow endpoint={endpoint} />
         <Switch label="Отмечать одновременную речь" hint="Реплики, где говорят одновременно, помечаются «нахлёст»: спикер в них может быть определён неточно"
           value={Boolean(v("overlap"))} onChange={(x) => set("asr", "overlap", x)} />
+        <Switch label="Быстрее разделять на спикеров"
+          hint="Примерно вдвое быстрее. Участник, сказавший за встречу всего пару фраз, может попасть к другому спикеру"
+          value={v("fast_diarization") === true} onChange={(x) => set("asr", "fast_diarization", x)} />
       </SettingsCard>
       <SettingsCard title="Узнавание голосов">
         <TextRow id="speaker-name" label="Ваше имя в расшифровке" short
