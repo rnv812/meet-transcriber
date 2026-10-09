@@ -199,6 +199,61 @@ test("прокручено вверх — «↓ N новых»; щелчок —
   expect(box.scrollTop).toBe(1000);
 });
 
+test("сообщения стали выше без новых (шрифт, перенос строк, панель развернули) — следящая лента остаётся внизу", () => {
+  const observers: { cb: () => void; targets: Element[] }[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    targets: Element[] = [];
+    constructor(cb: () => void) { observers.push({ cb, targets: this.targets }); }
+    observe(el: Element) { this.targets.push(el); }
+    disconnect() {}
+  });
+  try {
+    render(<Host />);
+    load([agentMsg("m1"), agentMsg("m2")]);
+    const list = log();
+    const box = list.parentElement!;
+    // Наблюдают и за окошком прокрутки, и за самим списком: его рост окошко не меняет.
+    expect(observers.some((o) => o.targets.includes(list))).toBe(true);
+    scrollTo(box, { top: 800 });
+    Object.defineProperty(box, "scrollHeight", { value: 1300, configurable: true });
+    act(() => observers.forEach((o) => o.cb()));
+    expect(box.scrollTop).toBe(1300);
+    scrollTo(box, { top: 100, height: 1300 });
+    Object.defineProperty(box, "scrollHeight", { value: 1500, configurable: true });
+    act(() => observers.forEach((o) => o.cb()));
+    expect(box.scrollTop).toBe(100);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("отклик на свою прокрутку пришёл, когда ответы уже выросли, — лента остаётся внизу; уход вверх человеком — нет", () => {
+  render(<Host />);
+  const box = log().parentElement!;
+  // Как в браузере: scrollTop не больше scrollHeight − clientHeight.
+  let sh = 1000;
+  let top = 0;
+  Object.defineProperty(box, "clientHeight", { value: 200, configurable: true });
+  Object.defineProperty(box, "scrollHeight", { get: () => sh, configurable: true });
+  Object.defineProperty(box, "scrollTop", {
+    get: () => top, set: (v: number) => { top = Math.max(0, Math.min(v, sh - 200)); }, configurable: true });
+  load([agentMsg("m1"), agentMsg("m2")]);
+  expect(box.scrollTop).toBe(800);
+  // Карточка дорисовала кнопки, а событие прокрутки пришло только теперь — и браузер
+  // ещё сдвинул ленту, держа текст на месте (800 → 824): это не человек.
+  sh = 1070;
+  box.scrollTop = 824;
+  fireEvent.scroll(box);
+  expect(box.scrollTop).toBe(870);
+  act(() => { chat.sink.onChat({ seq: 21, op: "add", message: agentMsg("m3") }); });
+  expect(screen.queryByRole("button", { name: /новых/ })).toBeNull();
+  // Человек прокрутил вверх — следить перестаёт, новое — плашкой.
+  box.scrollTop = 300;
+  fireEvent.scroll(box);
+  act(() => { chat.sink.onChat({ seq: 22, op: "add", message: agentMsg("m4") }); });
+  expect(screen.getByRole("button", { name: "↓ 1 новое" })).toBeInTheDocument();
+});
+
 test("внизу — следит за низом, плашки нет", () => {
   render(<Host />);
   load([agentMsg("m1")]);

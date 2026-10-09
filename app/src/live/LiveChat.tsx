@@ -545,9 +545,17 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   const sig = `${chat.items.length}:${last?.type === "message" ? `${last.message.id}:${last.message.status}:${last.message.text?.length ?? 0}` : "o"}:${
     Object.values(chat.state.partial).reduce((n, t) => n + t.length, 0)}:${tools}`;
 
+  /** Где лента оказалась после своей прокрутки к низу (null — размеров ещё нет или
+   * человек уже прокручивал сам). Отклик на неё — не уход человека вверх. */
+  const ownTop = useRef<number | null>(null);
+  const stick = (el: HTMLElement) => {
+    el.scrollTop = el.scrollHeight;
+    ownTop.current = el.scrollHeight > 0 ? el.scrollTop : null;
+  };
+
   const toBottom = () => {
     const el = box.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) stick(el);
     follow.current = true;
     seen.current = null;
     setAtBottom(true);
@@ -556,6 +564,14 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
   const onScroll = () => {
     const el = box.current;
     if (!el) return;
+    // Отклик на свою прокрутку пришёл, когда ответы уже стали выше (дорисовались кнопки,
+    // итог хода), а браузер ещё и сдвинул ленту, держа текст на месте: вверх она не ушла —
+    // значит, это не человек. Следящая лента — снова к низу. Уходят от низа только вверх.
+    if (follow.current && ownTop.current !== null && el.scrollTop >= ownTop.current - 1) {
+      stick(el);
+      return;
+    }
+    ownTop.current = null;
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK_PX;
     follow.current = bottom;
     if (bottom) seen.current = null;
@@ -565,7 +581,7 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
 
   useLayoutEffect(() => {
     const el = box.current;
-    if (el && follow.current) el.scrollTop = el.scrollHeight;
+    if (el && follow.current) stick(el);
   }, [sig]);
 
   // Своё сообщение — всегда к низу: человек ждёт его увидеть.
@@ -575,12 +591,14 @@ export function LiveChat({ chat, onTime, quiet = false, compact = false, disable
     prevOut.current = outCount;
   }, [outCount]);
 
-  // Ленту сузили или сделали ниже: следящая остаётся внизу.
+  // Ленту сузили или сделали ниже — или сами сообщения стали выше без новых
+  // (догрузился шрифт, перенеслись строки, панель развернули): следящая остаётся внизу.
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const watch = new ResizeObserver(() => { if (follow.current) el.scrollTop = el.scrollHeight; });
+    const watch = new ResizeObserver(() => { if (follow.current) stick(el); });
     watch.observe(el);
+    if (list.current) watch.observe(list.current);
     return () => watch.disconnect();
   }, []);
 
