@@ -581,6 +581,18 @@ def test_numbers_in_commands_are_not_addresses(dirs):
         assert gate.decide("Bash", {"command": cmd}).outcome != DENY, cmd
 
 
+@pytest.mark.parametrize("text", ["-20", "head -20", "tail -20:5", "http://-20/", "+1", "1_0.0.0.1",
+                                  '{"range": {"ts": {"gte": -9007199254740991}}}'])
+def test_signed_numbers_are_not_hosts_and_do_not_break_the_gate(dirs, text):
+    """Отрицательное число («head -20», `-9007199254740991` в теле запроса
+    OpenSearch) — не адрес: раньше int() принимал знак, ip_address(-20)
+    падал, и ворота отказывали в вызове «проверка согласия не удалась»."""
+    assert not consent.is_local_host(text)
+    assert not consent.mentions_local(text)
+    gate = _gate(dirs, CONFIRM)
+    assert gate.decide("Bash", {"command": f"echo {text}"}).why != "local"
+
+
 # --- fix round 3 (UX ближе к автомоду) и ревью round 2 (N1–N5) -------------------------------
 
 

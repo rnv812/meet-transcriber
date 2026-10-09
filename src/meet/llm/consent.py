@@ -177,7 +177,9 @@ def click_level(label: str) -> str:
 def _ipv4_legacy(text: str) -> int | None:
     """IPv4 в формах inet_aton: `127.1`, `2130706433`, `0x7f.1`, `0177.0.0.1`."""
     parts = text.split(".")
-    if not 1 <= len(parts) <= 4 or not all(parts):
+    # Только цифры или 0x-hex: int() принял бы и знак, и пробелы, и «_»
+    # («-20» из `head -20` → ip_address(-20) → ValueError, ворота падали).
+    if not 1 <= len(parts) <= 4 or not all(re.fullmatch(r"0x[0-9a-f]*|[0-9]+", p, re.I) for p in parts):
         return None
     nums = []
     for part in parts:
