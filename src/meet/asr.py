@@ -841,6 +841,11 @@ def transcribe_wav(
     for compute_type in COMPUTE_TYPES[device]:
         try:
             model = _whisper_model(WhisperModel, model_name, device, compute_type)
+            # Спектр блоками (0.5.1): тот же результат, но без 1,5+ ГБ одним куском на
+            # длинной записи — на занятой машине она падала с MemoryError.
+            from meet import whisper_features
+
+            whisper_features.install(model)
             print(f"Распознавание ({device}, {compute_type})...")
             segments, info = model.transcribe(
                 str(path),
