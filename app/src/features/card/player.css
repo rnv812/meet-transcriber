@@ -86,17 +86,19 @@
   background: var(--data-1);
   transform: scaleX(clamp(0, calc((var(--pos) - var(--a)) / (var(--b) - var(--a))), 1));
 }
-/* Дорожка рисок над волной (0.5): важные реплики — вертикальные риски, щелчок — к реплике.
-   Кнопка шире риски (попасть мышью), сама риска — 2 px; поверх волны при наведении. */
+/* Отрезки важного над волной (пока включено «Только важное»): его куски — тонкие жёлтые отрезки,
+   щелчок — к куску. Кнопка выше отрезка (попасть мышью), сам отрезок — 3 px; ярче — при наведении
+   и пока кусок играет. */
 .pticks { position: relative; z-index: 1; height: 10px; margin: 0 0 2px; }
 .pticks__mark {
-  position: absolute; top: 0; width: 10px; height: 10px; margin-left: -5px; padding: 0;
+  position: absolute; top: 0; min-width: 4px; height: 10px; padding: 0;
   border: 0; background: none; cursor: pointer;
 }
 .pticks__mark::before {
-  content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; border-radius: 1px; background: var(--ink-3);
+  content: ""; position: absolute; left: 0; right: 0; bottom: 2px; height: 3px; border-radius: var(--r-full);
+  background: var(--warning); opacity: 0.6; transition: opacity var(--d);
 }
-.pticks__mark:hover::before { background: var(--accent-line); }
+.pticks__mark:hover::before, .pticks__mark[data-on]::before { opacity: 1; }
 
 /* Бегунок: маленький круг, растёт при наведении. */
 .pbar__knob {

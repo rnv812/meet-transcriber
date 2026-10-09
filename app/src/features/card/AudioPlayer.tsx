@@ -35,7 +35,7 @@ import {
   Check, ChevronRight, ListVideo, Maximize2, Minimize2, Pause, Play, Sparkles, Volume1, Volume2, VolumeX, X,
 } from "lucide-react";
 import {
-  BAR_GAP_PX, barLayout, chapterAt, chapterJump, curveLine, curvePath, curveValues, importantSpans, importantTurns,
+  BAR_GAP_PX, barLayout, chapterAt, chapterJump, curveLine, curvePath, curveValues, importantMarks, importantSpans,
   skipTarget, turnAt, turnJump,
   type ChapterView, type Span,
 } from "../../lib/analysisView";
@@ -419,10 +419,10 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const pieces = useMemo(() => barLayout(chapters, total, width), [chapters, total, width]);
   const path = useMemo(() => (curve?.length ? curvePath(curve) : ""), [curve]);
   const line = useMemo(() => (curve?.length ? curveLine(curve) : ""), [curve]);
-  // Риски важных реплик над волной (0.5; вместо жёлтых отметок «Только важного»).
+  // Отрезки важного над волной: куски «Только важного», близкие на экране — одним отрезком.
   const marks = useMemo(
-    () => (importance && total > 0 ? importantTurns(turns, importance).map((i) => turns[i]!) : null),
-    [importance, turns, total]);
+    () => (importance && total > 0 ? importantMarks(turns, importance, total, width) : null),
+    [importance, turns, total, width]);
   const chapter = chapterAt(chapters, current);
 
   // --- указатель на полосе: наведение и перетаскивание без состояния React -------------------------
@@ -609,18 +609,27 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         }}
       />
       <div className="player__bar">
-        {/* Дорожка рисок над волной (0.5): важные реплики, щелчок — к реплике (и расшифровка к ней).
+        {/* Отрезки важного над волной — пока включено «Только важное»: его куски, щелчок — к первой
+            реплике куска (и расшифровка к ней). Место под них отведено всегда: полоса не прыгает.
             Из Tab-порядка вне: перемотка с клавиатуры — полоса (Ctrl+←/→ — по репликам). */}
         {marks && marks.length > 0 && (
-          <div className="pticks" role="group" aria-label="Важные реплики">
-            {marks.map((t) => (
-              <Tip key={t.start} content={`${clock(t.start)} · ${t.speaker}: ${bubbleText(t.texts.join(" "))}`} describe={false}>
-                <button type="button" tabIndex={-1} className="pticks__mark"
-                  style={{ left: `${(t.start / total) * 100}%` }}
-                  aria-label={`Важная реплика ${clock(t.start)}, ${t.speaker}`}
-                  onClick={() => userSeek(t.start)} />
-              </Tip>
-            ))}
+          <div className="pticks" {...(onlyImportant ? { role: "group", "aria-label": "Важные фрагменты" } : {})}>
+            {onlyImportant && marks.map((m) => {
+              const first = turns[m.turns[0]!]!;
+              const span = `${clock(first.start)}–${clock(turns[m.turns.at(-1)!]!.end)}`;
+              const more = m.turns.length > 1
+                ? ` · ${m.turns.length} ${plural(m.turns.length, "реплика", "реплики", "реплик")}` : "";
+              return (
+                <Tip key={m.start} content={`${span}${more} · ${first.speaker}: ${bubbleText(first.texts.join(" "))}`}
+                  describe={false}>
+                  <button type="button" tabIndex={-1} className="pticks__mark"
+                    data-on={(current >= m.start && current < m.end) || undefined}
+                    style={{ left: `${(m.start / total) * 100}%`, width: `${((m.end - m.start) / total) * 100}%` }}
+                    aria-label={`Важный фрагмент ${span}, ${first.speaker}`}
+                    onClick={() => userSeek(first.start)} />
+                </Tip>
+              );
+            })}
           </div>
         )}
         <div

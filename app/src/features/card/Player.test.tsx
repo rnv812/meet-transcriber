@@ -407,34 +407,48 @@ test("перетаскивание полосы в «Только важном»
   expect(audio.currentTime).toBe(30); // отпустили в неважном — доиграет до важного
 });
 
-test("0.5: риски важных реплик над волной — щелчок к реплике; жёлтых отметок «Только важного» нет", async () => {
+test("отрезки важного над полосой — только с «Только важным»: кнопка включает и выключает их", async () => {
+  const { container } = setup();
+  const row = container.querySelector(".pticks");
+  expect(row).not.toBeNull(); // место под отрезки отведено всегда: полоса не прыгает
+  expect(screen.queryByRole("group", { name: "Важные фрагменты" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  expect(within(screen.getByRole("group", { name: "Важные фрагменты" })).getAllByRole("button")).toHaveLength(2);
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  expect(screen.queryByRole("group", { name: "Важные фрагменты" })).toBeNull();
+  expect(container.querySelector(".pticks")).toBe(row);
+});
+
+test("отрезки важного — куски «Только важного»; щелчок — к первой реплике куска", async () => {
   const onSeeked = vi.fn();
   const { audio, container } = setup({ onSeeked });
-  const group = screen.getByRole("group", { name: "Важные реплики" });
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  const group = screen.getByRole("group", { name: "Важные фрагменты" });
   const marks = within(group).getAllByRole("button");
-  // importance: реплики 2, 3, 6 → верхние 30 % из 8 = 2 (бюджет 2:00 и решение 3:20).
+  // importance: реплики 2, 3, 6 → верхние 30 % из 8 = 2 (бюджет 2:00–2:20 и решение 3:20–3:50), запас 1 с.
   expect(marks.map((m) => m.getAttribute("aria-label"))).toEqual([
-    "Важная реплика 02:00, Анна", "Важная реплика 03:20, Борис",
+    "Важный фрагмент 02:00–02:20, Анна", "Важный фрагмент 03:20–03:50, Борис",
   ]);
   expect(marks[0]).toHaveAttribute("tabindex", "-1");
-  expect(marks[1]).toHaveStyle({ left: `${(200 / 600) * 100}%` });
+  expect(marks[1]).toHaveStyle({ left: `${(199 / 600) * 100}%`, width: `${(32 / 600) * 100}%` });
   fireEvent.click(marks[1]!);
   expect(audio.currentTime).toBe(200);
   expect(onSeeked).toHaveBeenCalledWith(200);
-  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
-  expect(container.querySelector(".pbar__span")).toBeNull();
+  // Играет кусок — его отрезок подсвечен, остальные нет.
+  expect(marks[1]).toHaveAttribute("data-on");
+  expect(marks[0]).not.toHaveAttribute("data-on");
+  expect(container.querySelector(".pbar__span")).toBeNull(); // прежних отметок на самой полосе нет
 });
 
-test("0.5: без анализа рисок нет", () => {
-  setup({ importance: null });
-  expect(screen.queryByRole("group", { name: "Важные реплики" })).toBeNull();
+test("без анализа отрезков важного нет", () => {
+  const { container } = setup({ importance: null });
+  expect(container.querySelector(".pticks")).toBeNull();
 });
 
-test("0.5: волна — контур 1,5 px акцента и полупрозрачная заливка; риски — тонкие, акцент при наведении", () => {
+test("0.5: волна — контур 1,5 px акцента и полупрозрачная заливка; отрезки важного — жёлтые, ярче при наведении и на играющем", () => {
   const css = readFileSync(resolve(process.cwd(), "src/features/card/player.css"), "utf8");
   expect(css).toMatch(/\.pbar__curve-fill \{ fill: var\(--accent-line\); fill-opacity: 0\.16; \}/);
   expect(css).toMatch(/\.pbar__curve-line \{[^}]*stroke: var\(--accent-line\); stroke-width: 1\.5px;/);
-  expect(css).toMatch(/\.pticks__mark::before \{[^}]*width: 2px;[^}]*background: var\(--ink-3\)/);
-  expect(css).toMatch(/\.pticks__mark:hover::before \{ background: var\(--accent-line\); \}/);
-  expect(css).not.toMatch(/\.pbar__span|--warning\); \}\s*$/m);
+  expect(css).toMatch(/\.pticks__mark::before \{[^}]*height: 3px;[^}]*background: var\(--warning\);[^}]*opacity: 0\.6/);
+  expect(css).toMatch(/\.pticks__mark:hover::before, \.pticks__mark\[data-on\]::before \{ opacity: 1; \}/);
 });

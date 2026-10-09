@@ -1,5 +1,5 @@
 import {
-  barLayout, buildView, chapterAt, chapterJump, curveLine, curvePath, curveValues, fitLabel, importantSpans, importantTurns, layoutRows,
+  barLayout, buildView, chapterAt, chapterJump, curveLine, curvePath, curveValues, fitLabel, importantMarks, importantSpans, layoutRows,
   LOW_IMPORTANCE, skipTarget, topShare, turnAt, turnImportance, turnJump, turnType, typeCounts, usableAnalysis,
   type ViewParts,
 } from "./analysisView";
@@ -175,9 +175,20 @@ test("кривая важности: точки 0..1, пик — у важног
   expect(curveLine([])).toBe("");
 });
 
-test("важные реплики для рисок — верхние 30 % по важности, по порядку, без пауз", () => {
-  expect(importantTurns(TURNS, [0.9, 0.7, 0, 0.8, LOW_IMPORTANCE])).toEqual([0]) // 4 реплики без перерыва → верхние 30 % = одна;
-  expect(importantTurns(TURNS, [0.1, 0.1, 0.1, 0.1, 0.1])).toEqual([]);
+test("отрезки над полосой — куски «Только важного» с их репликами; на узкой полосе близкие сливаются", () => {
+  const turns: Turn[] = [
+    [0, 10], [11, 20], [30, 40], [50, 55], [57, 60], [62, 70], [80, 90], [100, 110], [120, 130], [140, 150],
+    [160, 170], [180, 190], [200, 210], [220, 230],
+  ].map(([start, end]) => ({ speaker: "А", start: start!, end: end!, texts: ["x"], uncertain: false }));
+  const imp = [0.9, 0.85, LOW_IMPORTANCE, 0.95, 0.2, 0.9, ...Array(8).fill(LOW_IMPORTANCE)];
+  const pieces = [{ start: 0, end: 21, turns: [0, 1] }, { start: 49, end: 56, turns: [3] }, { start: 61, end: 71, turns: [5] }];
+  // Ширина неизвестна (0) или полоса широкая — ровно куски «Только важного».
+  expect(importantMarks(turns, imp, 240, 0)).toEqual(pieces);
+  expect(importantMarks(turns, imp, 240, 2400)).toEqual(pieces);
+  expect(importantMarks(turns, imp, 240, 0).map(({ start, end }) => ({ start, end }))).toEqual(importantSpans(turns, imp, 240));
+  // 100 px на 240 с: зазор 56→61 — 2 px, меньше MARK_GAP_PX → один отрезок; 21→49 — 12 px, отдельно.
+  expect(importantMarks(turns, imp, 240, 100)).toEqual([pieces[0], { start: 49, end: 71, turns: [3, 5] }]);
+  expect(importantMarks(TURNS, [0.1, 0.1, 0.1, 0.1, 0.1], 240, 100)).toEqual([]);
 });
 
 test("подпись главы на полосе: целиком, с многоточием, номер или ничего", () => {
