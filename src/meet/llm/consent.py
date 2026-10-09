@@ -177,7 +177,9 @@ def click_level(label: str) -> str:
 def _ipv4_legacy(text: str) -> int | None:
     """IPv4 в формах inet_aton: `127.1`, `2130706433`, `0x7f.1`, `0177.0.0.1`."""
     parts = text.split(".")
-    if not 1 <= len(parts) <= 4 or not all(parts):
+    # Только цифры или 0x-hex: int() принял бы и знак, и пробелы, и «_»
+    # («-20» из `head -20` → ip_address(-20) → ValueError, ворота падали).
+    if not 1 <= len(parts) <= 4 or not all(re.fullmatch(r"0x[0-9a-f]*|[0-9]+", p, re.I) for p in parts):
         return None
     nums = []
     for part in parts:
@@ -1400,6 +1402,10 @@ def _home() -> Path:
     return Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or Path.home())
 
 
+# После пути в тексте — не продолжение имени и не вложенная папка (`/имя`).
+_NOT_DEEPER = r"(?!/?[^\s\"'`*?\[;|&()<>,={}/])"
+
+
 def _norm_text(text: str) -> str:
     text = text.replace("\\", "/").rstrip("/")
     return text.lower() if sys.platform == "win32" else text
@@ -2270,10 +2276,14 @@ class ConsentGate:
             return out
 
         for d in self._deny:
+            if any(f and f in low for f in forms(d)):
+                return "excluded"
             parent = d.rsplit("/", 1)[0]
-            for f in (*forms(d), *(forms(parent) if parents and "/" in parent.strip("/") else ())):
-                if f and f in low:
-                    return "excluded"
+            # Папка над закрытой — только сама (и её `/`, `/*`, `/**`): файл
+            # рядом с закрытой папкой («<база>/Проект/…») не закрыт.
+            if parents and "/" in parent.strip("/") and any(
+                    f and re.search(re.escape(f) + _NOT_DEEPER, low) for f in forms(parent)):
+                return "excluded"
         for d in self._sensitive:
             for f in forms(d):
                 if f and f in low:

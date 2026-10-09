@@ -305,3 +305,55 @@ def test_whisper_auto_language_means_detect(tmp_path, monkeypatch):
     monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
     asr.transcribe_wav(tmp_path / "a.wav", language="auto")
     assert calls["language"] is None
+
+
+def test_whisper_prompt_leaves_half_the_context_for_the_text(tmp_path, monkeypatch):
+    """faster-whisper режет hotwords и предыдущий текст до 223 токенов
+    КАЖДЫЙ: вместе ~390 из 448, и на 30 с речи декодеру оставалось ~60
+    токенов — окно обрывалось, текст терялся, на тишине декодер срывался в
+    повтор. Подсказка целиком — не больше половины контекста, как в Whisper:
+    термины целиком, предыдущий текст — сколько влезет (последние токены)."""
+    seen = {}
+
+    class Tokenizer:
+        sot_prev, sot_sequence, no_timestamps, timestamp_begin = -1, [-2, -3, -4], -5, -6
+
+        def encode(self, text):  # токен на символ
+            return list(range(len(text)))
+
+    class FakeModel:  # get_prompt — как в faster-whisper 1.2
+        max_length = 448
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def get_prompt(self, tokenizer, previous_tokens, without_timestamps=False, prefix=None, hotwords=None):
+            prompt = []
+            if previous_tokens or (hotwords and not prefix):
+                prompt.append(tokenizer.sot_prev)
+                if hotwords and not prefix:
+                    prompt.extend(tokenizer.encode(" " + hotwords.strip())[: self.max_length // 2 - 1])
+                if previous_tokens:
+                    prompt.extend(previous_tokens[-(self.max_length // 2 - 1):])
+            prompt.extend(tokenizer.sot_sequence)
+            return prompt
+
+        def transcribe(self, *a, **kw):
+            tok, previous = Tokenizer(), list(range(1000, 1300))
+            seen["both"] = self.get_prompt(tok, previous, hotwords=kw["hotwords"])
+            seen["prev_only"] = self.get_prompt(tok, previous, hotwords=None)
+            seen["huge_hot"] = self.get_prompt(tok, previous, hotwords="x" * 500)
+            return iter(()), None
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeModel))
+    monkeypatch.setattr(asr, "_add_nvidia_dll_dirs", lambda: None)
+    monkeypatch.setattr(asr, "_apply_hf_token", lambda: None)
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    asr.transcribe_wav(tmp_path / "a.wav", "Jira, " * 30, language="ru")
+    half = FakeModel.max_length // 2
+    both = seen["both"]
+    assert len(both) <= half + len(Tokenizer.sot_sequence)
+    assert both[1:1 + len(" " + ("Jira, " * 30).strip())] == list(range(len(" " + ("Jira, " * 30).strip())))
+    assert both[-4] == 1299                       # хвост предыдущего текста — свежий
+    assert len(seen["prev_only"]) == 1 + half - 1 + 3   # без терминов — как было
+    assert len(seen["huge_hot"]) <= half + len(Tokenizer.sot_sequence)

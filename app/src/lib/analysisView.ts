@@ -54,6 +54,8 @@ export const ONLY_IMPORTANT_SHARE = 0.3;
 /** «Только важное»: соседние фрагменты ближе этого склеиваются, каждый — с запасом по краям. */
 export const MERGE_GAP_S = 4;
 export const PAD_S = 1;
+/** Отрезки важного над полосой: ближе этого на экране — один отрезок (иначе «штрих-код»). */
+export const MARK_GAP_PX = 6;
 /**
  * Допуск у начала фрагмента: после перемотки на `start` браузер может отдать
  * время на микросекунды раньше — без допуска плеер перематывал бы снова и снова.
@@ -283,21 +285,52 @@ export type Span = { start: number; end: number };
  * ближе MERGE_GAP_S склеиваются, у каждого — PAD_S запаса с обеих сторон.
  */
 export function importantSpans(turns: Turn[], importance: number[], duration: number): Span[] {
+  return importantPieces(turns, importance, duration).map(({ start, end }) => ({ start, end }));
+}
+
+/** Кусок «Только важного» и его важные реплики (индексы по порядку). */
+export type MarkSpan = Span & { turns: number[] };
+
+function importantPieces(turns: Turn[], importance: number[], duration: number): MarkSpan[] {
   const top = topShare(importance, turns, ONLY_IMPORTANT_SHARE);
-  const raw: Span[] = [];
+  const raw: MarkSpan[] = [];
   turns.forEach((t, i) => {
     if (!top[i]) return;
     const last = raw.at(-1);
-    if (last && t.start - last.end < MERGE_GAP_S) last.end = Math.max(last.end, t.end);
-    else raw.push({ start: t.start, end: t.end });
+    if (last && t.start - last.end < MERGE_GAP_S) {
+      last.end = Math.max(last.end, t.end);
+      last.turns.push(i);
+    } else raw.push({ start: t.start, end: t.end, turns: [i] });
   });
   const end = duration > 0 ? duration : Infinity;
-  const out: Span[] = [];
+  const out: MarkSpan[] = [];
   for (const s of raw) {
-    const padded = { start: Math.max(0, s.start - PAD_S), end: Math.min(end, s.end + PAD_S) };
+    const padded = { start: Math.max(0, s.start - PAD_S), end: Math.min(end, s.end + PAD_S), turns: s.turns };
     const last = out.at(-1);
-    if (last && padded.start <= last.end) last.end = Math.max(last.end, padded.end);
-    else out.push(padded);
+    if (last && padded.start <= last.end) {
+      last.end = Math.max(last.end, padded.end);
+      last.turns.push(...padded.turns);
+    } else out.push(padded);
+  }
+  return out;
+}
+
+/**
+ * Отрезки важного над полосой плеера: куски «Только важного» с их репликами;
+ * на полосе `widthPx` куски ближе MARK_GAP_PX сливаются в один (ширина
+ * неизвестна — 0 — не сливаются).
+ */
+export function importantMarks(turns: Turn[], importance: number[], duration: number, widthPx: number): MarkSpan[] {
+  const pieces = importantPieces(turns, importance, duration);
+  if (!(widthPx > 0 && duration > 0)) return pieces;
+  const minGap = (MARK_GAP_PX / widthPx) * duration;
+  const out: MarkSpan[] = [];
+  for (const p of pieces) {
+    const last = out.at(-1);
+    if (last && p.start - last.end < minGap) {
+      last.end = Math.max(last.end, p.end);
+      last.turns.push(...p.turns);
+    } else out.push(p);
   }
   return out;
 }
@@ -359,15 +392,6 @@ export function curveValues(turns: Turn[], importance: number[], duration: numbe
   }
   const peak = Math.max(0.5, ...smooth);
   return smooth.map((v) => v / peak);
-}
-
-/**
- * Важные реплики (верхние 30 % по важности, как у «Только важного») — индексы
- * по порядку: риски над волной (0.5), щелчок — к реплике.
- */
-export function importantTurns(turns: Turn[], importance: number[]): number[] {
-  const top = topShare(importance, turns, ONLY_IMPORTANT_SHARE);
-  return turns.flatMap((_, i) => (top[i] ? [i] : []));
 }
 
 /**

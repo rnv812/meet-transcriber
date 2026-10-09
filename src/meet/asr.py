@@ -417,6 +417,31 @@ def _whisper_model(WhisperModel, model_name: str, device: str, compute_type: str
     return WhisperModel(model_name, **kwargs)
 
 
+def _bounded_prompt(WhisperModel):
+    """WhisperModel, у которого подсказка окна — не больше половины контекста.
+
+    IMPORTANT: faster-whisper режет hotwords и предыдущий текст
+    (condition_on_previous_text) до 223 токенов КАЖДЫЙ, и вместе они занимают
+    ~390 из 448: на 30 с речи декодеру оставалось ~60 токенов. Окно обрывалось
+    на полуслове, хвост речи терялся (замер: 26 окон из 31 в потолок, слов на
+    20% меньше), а на тишине декодер с такой подсказкой срывался в повтор и
+    перебор температур. Как в исходном Whisper, подсказке — половина
+    контекста: термины целиком, предыдущий текст — последние токены, сколько
+    влезет."""
+
+    class BoundedPrompt(WhisperModel):
+        def get_prompt(self, tokenizer, previous_tokens, without_timestamps=False, prefix=None,
+                       hotwords=None):
+            if previous_tokens and hotwords and not prefix:
+                half = self.max_length // 2 - 1
+                room = max(0, half - min(half, len(tokenizer.encode(" " + hotwords.strip()))))
+                previous_tokens = previous_tokens[-room:] if room else []
+            return super().get_prompt(tokenizer, previous_tokens, without_timestamps=without_timestamps,
+                                      prefix=prefix, hotwords=hotwords)
+
+    return BoundedPrompt
+
+
 def _whisper_cached(model_name: str) -> bool:
     """Скачана ли модель Whisper (имя репозитория или размер: «medium»)."""
     from pathlib import Path
@@ -850,7 +875,7 @@ def transcribe_wav(
     last_error: Exception | None = None
     for compute_type in COMPUTE_TYPES[device]:
         try:
-            model = _whisper_model(WhisperModel, model_name, device, compute_type)
+            model = _whisper_model(_bounded_prompt(WhisperModel), model_name, device, compute_type)
             # Спектр блоками (0.5.1): тот же результат, но без 1,5+ ГБ одним куском на
             # длинной записи — на занятой машине она падала с MemoryError.
             from meet import whisper_features

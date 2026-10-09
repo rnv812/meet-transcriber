@@ -581,6 +581,18 @@ def test_numbers_in_commands_are_not_addresses(dirs):
         assert gate.decide("Bash", {"command": cmd}).outcome != DENY, cmd
 
 
+@pytest.mark.parametrize("text", ["-20", "head -20", "tail -20:5", "http://-20/", "+1", "1_0.0.0.1",
+                                  '{"range": {"ts": {"gte": -9007199254740991}}}'])
+def test_signed_numbers_are_not_hosts_and_do_not_break_the_gate(dirs, text):
+    """Отрицательное число («head -20», `-9007199254740991` в теле запроса
+    OpenSearch) — не адрес: раньше int() принимал знак, ip_address(-20)
+    падал, и ворота отказывали в вызове «проверка согласия не удалась»."""
+    assert not consent.is_local_host(text)
+    assert not consent.mentions_local(text)
+    gate = _gate(dirs, CONFIRM)
+    assert gate.decide("Bash", {"command": f"echo {text}"}).why != "local"
+
+
 # --- fix round 3 (UX ближе к автомоду) и ревью round 2 (N1–N5) -------------------------------
 
 
@@ -653,6 +665,21 @@ def test_safe_commands_still_respect_closed_and_sensitive_paths(dirs):
     # Рекурсивный поиск выше закрытой папки — карточка, а не тихий проход.
     assert gate.decide("Bash", {"command": f"rg TOPSECRET {p(root)}"}).outcome == ASK
     assert gate.decide("Bash", {"command": f"find {p(root)} -name secret.txt"}).outcome == ASK
+
+
+def test_a_file_next_to_a_closed_folder_is_not_closed(dirs):
+    """Над «Личное/» — корень базы: закрыт он сам (рекурсивный поиск по нему
+    заденет «Личное»), а не всё под ним. Раньше путь сравнивался вхождением
+    текста, и любой файл базы в команде с переменной («f=…; sed … "$f"»)
+    отказывался «закрытая папка»."""
+    gate = _gate(dirs, CONFIRM)
+    kb = str(dirs["kb"]).replace("\\", "/")
+    cmd = (f'f="{kb}/Проект/Модули/Оценка/11-scoring-rules.html"; sed -e \'s/<[^>]*>/ /g\' "$f" '
+           "| tr -s ' \\t' ' ' | grep -iE 'балл|вес' | head -60")
+    assert gate.decide("Bash", {"command": cmd}).why != "excluded"
+    assert gate.decide("Bash", {"command": f'f="{kb}/Личное/x.md"; cat "$f"'}).why == "excluded"
+    assert gate.decide("mcp__srv__read", {"path": f"{kb}/Проект/a.md"}).why != "excluded"
+    assert gate.decide("mcp__srv__read", {"path": kb}).why == "excluded"
 
 
 def test_sandbox_off_and_odd_bash_flags_are_shown_and_never_granted(dirs):
