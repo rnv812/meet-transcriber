@@ -1,0 +1,15 @@
+{
+  "profiles": {
+    "rtx3070ti": {
+      "gpu": "RTX 3070 Ti",
+      "note": "0.5.1, 88 минут встречи: секунд на час звука и пик частной памяти процесса (на Windows с видеопамятью) — замер с запасом; качество — против прошлого прогона (--ref), не хуже 5%. Whisper невоспроизводим (два прогона расходятся на 24–28% слов) — у него расхождение с текстом GigaAM того же прогона (замер 16,7%)",
+      "steps": {
+        "gigaam": {"max_s_per_hour": 40, "max_private_gb": 6.5, "max_changed": 0.01},
+        "whisper": {"max_s_per_hour": 450, "max_private_gb": 9.0, "max_gigaam_diff": 0.22},
+        "align": {"max_s_per_hour": 45, "max_private_gb": 10.5, "max_changed": 0.01, "max_shifted": 0.02},
+        "diarize": {"max_s_per_hour": 45, "max_private_gb": 7.5, "max_der": 0.02},
+        "diarize-fast": {"max_s_per_hour": 22, "max_private_gb": 7.5, "max_der": 0.05}
+      }
+    }
+  }
+}
