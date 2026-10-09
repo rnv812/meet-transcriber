@@ -799,91 +799,6 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     return Choice("gigaam", device, cfg.gigaam_model, cpu_reason=reason)
 
 
-# Длинная запись — окнами (0.5.1): faster-whisper строит спектр сразу всей
-# записи (88 минут — 1,55 ГБ одним куском), и при занятой памяти машины
-# распознавание падало с MemoryError. Окно — до WINDOW_S, разрез — в самой
-# длинной паузе между WINDOW_MIN_S и WINDOW_S от начала окна (нет пауз — ровно на
-# WINDOW_S); связь окон — хвост текста (PROMPT_CHARS) подсказкой следующему.
-WINDOW_S = 300.0
-WINDOW_MIN_S = 180.0
-PROMPT_CHARS = 200
-SAMPLE_RATE = 16000
-
-
-def plan_windows(regions, total_s: float, *, window_s: float | None = None,
-                 min_s: float | None = None) -> list[tuple[float, float]]:
-    """Окна распознавания [(начало, конец)] подряд от 0 до `total_s`. `regions` —
-    участки речи (детектор речи): разрез — в середине самой длинной паузы между
-    ними, попавшей в [начало + min_s, начало + window_s]."""
-    window_s = WINDOW_S if window_s is None else window_s
-    min_s = WINDOW_MIN_S if min_s is None else min_s
-    pauses = [(float(a_end), float(b_start)) for (_, a_end), (b_start, _) in zip(regions, regions[1:])
-              if b_start > a_end]
-    windows: list[tuple[float, float]] = []
-    cur = 0.0
-    while total_s - cur > window_s:
-        lo, hi = cur + min_s, cur + window_s
-        inside = [(end - start, (start + end) / 2) for start, end in pauses if lo <= (start + end) / 2 <= hi]
-        cut = max(inside)[1] if inside else hi
-        windows.append((cur, cut))
-        cur = cut
-    windows.append((cur, float(total_s)))
-    return windows
-
-
-def _speech_regions(audio) -> list[tuple[float, float]]:
-    """Участки речи для разрезов окон — тот же детектор, что у GigaAM и `vad_filter`."""
-    from meet import gigaam_asr
-
-    return gigaam_asr.speech_regions(audio, SAMPLE_RATE)
-
-
-def _read_audio(path: Path):
-    """mono 16 кГц PCM16 WAV → float32; не WAV этого вида (или нет файла) — None:
-    тогда файл целиком отдаётся faster-whisper, как раньше."""
-    import wave
-
-    import numpy as np
-
-    try:
-        with wave.open(str(path), "rb") as wf:
-            if wf.getframerate() != SAMPLE_RATE or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
-                return None
-            data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-    except (OSError, EOFError, wave.Error):
-        return None
-    return data.astype(np.float32) / 32768.0
-
-
-def _transcribe_windows(model, path: Path, *, language, hotwords, on_progress) -> list[Segment]:
-    """Распознать запись окнами (см. WINDOW_S); короткую — одним вызовом."""
-    audio = _read_audio(path)
-    if audio is None:
-        segments, info = model.transcribe(str(path), language=language, vad_filter=True,
-                                          word_timestamps=True, hotwords=hotwords)
-        return _segments_from_whisper(_tracked(segments, getattr(info, "duration", 0), on_progress))
-    total = len(audio) / SAMPLE_RATE
-    windows = [(0.0, total)] if total <= WINDOW_S else plan_windows(_speech_regions(audio), total)
-    result: list[Segment] = []
-    prompt = None
-    for start, end in windows:
-        chunk = audio[int(start * SAMPLE_RATE):int(end * SAMPLE_RATE)]
-        options = dict(language=language, vad_filter=True, word_timestamps=True, hotwords=hotwords)
-        if prompt:
-            options["initial_prompt"] = prompt
-        segments, _ = model.transcribe(chunk, **options)
-        part = _segments_from_whisper(
-            _tracked(segments, total, (lambda share, s=start: on_progress(min(1.0, share + s / total)))
-                     if on_progress else None),
-            offset_s=start)
-        result += part
-        text = " ".join(s.text for s in part).strip()
-        prompt = text[-PROMPT_CHARS:] if text else prompt
-    if on_progress:
-        on_progress(1.0)
-    return result
-
-
 def transcribe_wav(
     path: Path,
     hotwords: str | None = None,
@@ -927,8 +842,14 @@ def transcribe_wav(
         try:
             model = _whisper_model(WhisperModel, model_name, device, compute_type)
             print(f"Распознавание ({device}, {compute_type})...")
-            result = _transcribe_windows(model, path, language=language, hotwords=hotwords,
-                                         on_progress=on_progress)
+            segments, info = model.transcribe(
+                str(path),
+                language=language,
+                vad_filter=True,
+                word_timestamps=True,
+                hotwords=hotwords,
+            )
+            result = _segments_from_whisper(_tracked(segments, getattr(info, "duration", 0), on_progress))
             del model
             return result
         except RuntimeError as e:
