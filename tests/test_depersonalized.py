@@ -2,23 +2,27 @@
 названий компании, её продуктов и внутренних систем. Примеры — нейтральные
 («team-jira», «CTO Acme», «ABC-12»). Репозиторий публичный.
 
-Слова стоп-листа — в нижнем регистре; совпадение без учёта регистра. Этот
-файл сам стоп-лист содержит — он не проверяется.
+Слова стоп-листа — в нижнем регистре; совпадение без учёта регистра. Хранятся
+в base64: открытым текстом их нет ни здесь, ни в истории git (история
+вычищена заменой этих слов, и открытый список в страже она испортила бы).
 """
 
 from __future__ import annotations
 
+import base64
 import re
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-STOP = (
-    "Acme", "Acme", "Acme", "Acme", "Acme",
-    "team-jira", "team-gitlab", "ABC-", "meet.example.com", "tasks.example.com", "atlas.example.com", "gitlab.example.com",
-    "support.example.com", "партнёр",
+_ENCODED = (
+    "dm9sZ2FibG9i", "0LLQvtC70LPQsNCx0LvQvtCx", "c21hcnQgbW9uaXRvcg==", "c21hcnRtb25pdG9y",
+    "c21hcnQtbW9uaXRvcg==", "dmItamlyYQ==", "dmItZ2l0bGFi", "c21kZXYt", "ZGlvbi52Yw==",
+    "dGFza3Mudm9sZ2E=", "YXRsYXMudm9sZ2E=", "Z2l0bGFiLnZvbGdh", "c3VwcG9ydC52b2xnYQ==",
+    "0LPRgNGD0L/Qv9CwINC90L0y",
 )
+STOP = tuple(base64.b64decode(w).decode("utf-8") for w in _ENCODED)
 BINARY = {".png", ".ico", ".icns", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2", ".ttf", ".otf",
           ".ogg", ".opus", ".wav", ".mp3", ".mp4", ".pdf", ".zip", ".exe", ".dll", ".dmg", ".lock"}
 
@@ -37,8 +41,9 @@ def _hits(text: str) -> list[str]:
 
 
 def test_stop_list_matcher():
-    assert _hits("Отчёт для Acme") == ["Acme"]
-    assert _hits("CTO Acme") == ["Acme"]
+    company, product = STOP[0], STOP[2]
+    assert _hits(f"Отчёт для {company.title()}") == [company]
+    assert _hits(f"CTO {product.title()}") == [product]
     assert _hits("MCP team-jira, CTO Acme, ABC-12") == []
 
 
