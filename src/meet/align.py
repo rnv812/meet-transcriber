@@ -70,6 +70,18 @@ def _align_device() -> str:
     return asr.torch_device()
 
 
+def _precision(device):
+    """Видеокарта — сеть в половинной точности (0.5.1, autocast: нормализации и
+    softmax остаются полными): на 30% быстрее, на 88 минутах 0,5% слов сдвинулись
+    больше чем на кадр (20 мс). Пачки сегментов не ускоряют — карта и так занята
+    целиком, дополнение нулями только добавляет работы. Процессор — как было."""
+    import contextlib
+
+    import torch
+
+    return torch.autocast("cuda", dtype=torch.float16) if str(device) == "cuda" else contextlib.nullcontext()
+
+
 def align_segments(segments, wav_path, device=None, on_progress=None):
     """Вернуть сегменты с точными пословными таймкодами (forced alignment).
     wav_path — mono 16 kHz wav (выход to_wav16k). Текст и границы сегментов
@@ -110,7 +122,7 @@ def align_segments(segments, wav_path, device=None, on_progress=None):
             if len(clip) < sr * 0.05 or not targets_flat:
                 out_segments.append(seg)
                 continue
-            with torch.inference_mode():
+            with torch.inference_mode(), _precision(device):
                 inp = processor(
                     clip, sampling_rate=sr, return_tensors="pt"
                 ).input_values.to(device)

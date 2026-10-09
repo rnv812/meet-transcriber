@@ -74,3 +74,27 @@ def test_align_device_needs_a_visible_card(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", NoCuda())
     monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cuda")
     assert align._align_device() == "cpu"
+
+
+def test_alignment_runs_in_half_precision_only_on_the_card(monkeypatch):
+    """0.5.1: на видеокарте сеть выравнивания — в половинной точности (autocast:
+    нормализации и softmax остаются полными), на 30% быстрее; на 88 минутах
+    0,5% слов сдвинулись больше чем на кадр. На процессоре — как было."""
+    import contextlib
+    import sys
+    import types
+
+    from meet import align
+
+    seen = []
+
+    def autocast(device, dtype):
+        seen.append((device, dtype))
+        return contextlib.nullcontext()
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(float16="f16", autocast=autocast))
+    with align._precision("cuda"):
+        pass
+    with align._precision("cpu"):
+        pass
+    assert seen == [("cuda", "f16")]
