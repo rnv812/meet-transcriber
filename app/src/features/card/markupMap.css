@@ -25,3 +25,7 @@
   width: max-content; max-width: 280px; padding: 6px 10px; border-radius: var(--r-sm);
   background: var(--ink); color: var(--canvas); font-size: var(--text-xs); pointer-events: none;
 }
+/* Узкая лента: полосе не хватает места рядом с текстом. */
+@container (max-width: 700px) {
+  .markup-map { display: none; }
+}

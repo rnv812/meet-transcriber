@@ -107,6 +107,8 @@ button.card__people-names:hover { background: var(--surface-2); color: var(--ink
 }
 .card__textfirst-text { flex: 0 1 auto; }
 .card__textfirst-note { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Лента «Расшифровки» — контейнер своей ширины (0.6.1): с панелью «Спикеры» она уже окна. */
+.transcript { container-type: inline-size; }
 /* Лента «Расшифровки» и справа — карта разметки (0.6.1, MarkupMap); без анализа — одна лента. */
 .transcript__feed { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; align-items: start; }
 /* Реплика (0.6.1, «сценарий») — сетка [левое поле --gutter: имя и время] [текст и пометки].
@@ -157,6 +159,17 @@ button.turn__speaker:hover { text-decoration: underline; }
 .turn__text { display: inline; margin: 0; color: var(--ink); line-height: 1.7; }
 /* Пометки после текста: «в комнате», «(голос под вопросом)», бейдж типа, «важное», ✦. */
 .turn__marks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-left: 8px; vertical-align: 1px; }
+/* Узкая лента (0.6.1): левое поле уходит строкой над текстом — имя и время, текст во всю ширину.
+   У продолжения серии время первым, тихое имя — после него. */
+@container (max-width: 900px) {
+  .turn { grid-template-columns: minmax(0, 1fr); }
+  .turn__gutter { flex-direction: row; align-items: baseline; gap: 10px; }
+  .turn--cont .turn__gutter { flex-direction: row-reverse; justify-content: flex-end; }
+}
+/* Карта разметки скрыта (markupMap.css) — без пустого зазора под неё. */
+@container (max-width: 700px) {
+  .transcript__feed { column-gap: 0; }
+}
 .turn__flag { color: var(--warning); font-size: var(--text-xs); }
 /* Человек рядом с владельцем в комнате: голос с микрофона (meet.mic_split). */
 .turn__room {

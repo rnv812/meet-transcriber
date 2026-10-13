@@ -48,6 +48,10 @@
   border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); font: inherit; font-size: var(--text-xs); cursor: pointer;
 }
 .turns-more:hover { background: var(--surface-2); color: var(--ink-2); }
+/* Узкая лента: левого поля нет (card.css) — и отступа под него. */
+@container (max-width: 900px) {
+  .turns-more { padding-left: 0; }
+}
 
 /* Строка фильтров: типы реплик (Aurora .filter) и «Задачи Jira:» — одной строкой. */
 .feed-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
