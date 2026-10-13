@@ -30,6 +30,8 @@ export function osTexts(os: Os) {
     trayArea: mac ? "строке меню" : "области уведомлений",
     /** Системный микрофон: «микрофон … по умолчанию». */
     systemName: mac ? "macOS" : "Windows",
+    /** Где открывается папка: «Открыть … в …». */
+    fileManager: mac ? "Finder" : "проводнике",
   };
 }
 

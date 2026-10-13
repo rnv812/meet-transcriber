@@ -25,9 +25,12 @@ test("тексты с названием ОС", () => {
     autostart: "Запускать вместе с Windows",
     trayArea: "области уведомлений",
     systemName: "Windows",
+    fileManager: "проводнике",
   });
   const mac = osTexts("macos");
   expect(mac.keyring).toBe("связке ключей macOS");
   expect(mac.autostart).toBe("Запускать при входе в macOS");
   expect(mac.trayArea).toBe("строке меню");
+  // «Открыть папку записи в …» (0.6.1): на Mac — Finder.
+  expect(mac.fileManager).toBe("Finder");
 });

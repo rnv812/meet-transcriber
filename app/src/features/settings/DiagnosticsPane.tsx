@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, FolderOpen, RefreshCw } from "lucide-react";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
+import { OS_TEXT } from "../../lib/platform";
 import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
@@ -63,7 +64,7 @@ export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
                 <PathText path={path} />
                 <CopyPath path={path} label={label} />
                 {inTauri() && FOLDERS.has(name) && (
-                  <IconButton icon={FolderOpen} label={`Открыть: ${label}`} tooltip="Открыть в проводнике"
+                  <IconButton icon={FolderOpen} label={`Открыть: ${label}`} tooltip={`Открыть в ${OS_TEXT.fileManager}`}
                     onClick={() => openFolder(path)} />
                 )}
               </span>

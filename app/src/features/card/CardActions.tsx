@@ -29,6 +29,7 @@ import { IconButton } from "../../ui/IconButton";
 import { Tip } from "../../ui/Tip";
 import { ConfirmDialog, type ConfirmOptions } from "../../ui/ConfirmDialog";
 import type { ModelChoice } from "../../lib/types";
+import { OS_TEXT } from "../../lib/platform";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
 import { modelMenuItems, pickLabel } from "./modelPick";
 
@@ -229,7 +230,7 @@ export function CardActions({
       </div>
       <div className="card__act-group" role="group" aria-label="Другие действия">
         {inTauri() && (
-          <IconButton icon={FolderOpen} label="Открыть папку" tooltip="Открыть папку записи в проводнике"
+          <IconButton icon={FolderOpen} label="Открыть папку" tooltip={`Открыть папку записи в ${OS_TEXT.fileManager}`}
             onClick={onOpenFolder} />
         )}
         <IconButton ref={moreBtn} icon={Ellipsis} label="Ещё действия"
