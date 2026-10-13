@@ -1,5 +1,5 @@
 import {
-  barLayout, buildView, chapterAt, chapterJump, curveLine, curvePath, curveValues, fitLabel, importantMarks, importantSpans, layoutRows,
+  barLayout, buildView, chapterAt, seriesStarts, chapterJump, curveLine, curvePath, curveValues, fitLabel, importantMarks, importantSpans, layoutRows,
   LOW_IMPORTANCE, skipTarget, topShare, turnAt, turnImportance, turnJump, turnType, typeCounts, usableAnalysis,
   type ViewParts,
 } from "./analysisView";
@@ -97,6 +97,20 @@ test("верхняя доля по важности: неоценённые и �
   expect(topShare(imp, turns, 0.15).flatMap((x, k) => (x ? [k] : []))).toEqual([0, 5]);
   expect(topShare(imp, turns, 0.3).flatMap((x, k) => (x ? [k] : []))).toEqual([0, 2, 5]);
   expect(topShare(turns.map(() => LOW_IMPORTANCE), turns, 0.3).some(Boolean)).toBe(false);
+});
+
+test("серии (0.6.1): новая — со сменой говорящего, главы, «… N реплик» и перерыва", () => {
+  const t = (speaker: string, kind?: "break") => ({ start: 0, end: 1, speaker, texts: ["x"], uncertain: false, kind });
+  const turns = [t("Анна"), t("Анна"), t("Борис"), t("Борис"), t("Борис"), t("Борис"), t("—", "break"), t("Борис")];
+  // Без строк ленты — все реплики подряд.
+  expect([...seriesStarts(turns, null)].sort()).toEqual([0, 2, 6, 7]);
+  const rows = [
+    { kind: "turn" as const, i: 0 }, { kind: "turn" as const, i: 1 }, { kind: "turn" as const, i: 2 },
+    { kind: "chapter" as const, c: 1 }, { kind: "turn" as const, i: 3 },
+    { kind: "more" as const, from: 4, to: 4, count: 1 }, { kind: "turn" as const, i: 5 },
+    { kind: "turn" as const, i: 6 }, { kind: "turn" as const, i: 7 },
+  ];
+  expect([...seriesStarts(turns, rows)].sort()).toEqual([0, 2, 3, 5, 6, 7]);
 });
 
 test("строки ленты (0.6.1): `keep` — реплики наблюдений; вместе с фильтром типов — объединение", () => {

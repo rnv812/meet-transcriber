@@ -160,33 +160,32 @@ test("поиск находит и свёрнутые фильтром репл�
   expect(container.querySelectorAll("mark.hit")).toHaveLength(2);
 });
 
-test("«Наблюдения»: вид, текст, «Почему», ссылки на реплики, ✦; блок сворачивается", async () => {
+test("наблюдение (0.6.1) — заметка под первой репликой из своих ссылок: вид, текст, «Почему», другие реплики, ✦", async () => {
   const onAskInsight = vi.fn();
   const scrolled: string[] = [];
   const original = Element.prototype.scrollIntoView;
   Element.prototype.scrollIntoView = vi.fn(function (this: Element) { scrolled.push(this.getAttribute("data-turn") ?? ""); });
   try {
     const { container } = view({ onAskInsight });
-    const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
-    const items = within(block).getAllByRole("listitem");
-    expect(items).toHaveLength(2);
-    expect(within(items[0]!).getByRole("img", { name: "Обратить внимание" })).toBeInTheDocument();
-    expect(items[0]).toHaveTextContent("Расчёт нужен до роста цен.");
-    expect(items[0]).not.toHaveTextContent("Срок и риск названы рядом.");
-    await userEvent.click(within(items[0]!).getByRole("button", { name: "Почему" }));
-    expect(items[0]).toHaveTextContent("Срок и риск названы рядом.");
-    expect(within(items[1]!).queryByRole("button", { name: "Почему" })).toBeNull();
-    // Ссылка на реплику, свёрнутую фильтром: она раскрывается, к ней прокрутка и подсветка.
-    await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
-    await userEvent.click(within(items[0]!).getByRole("button", { name: "00:40 · Анна" }));
+    const notes = screen.getAllByRole("note", { name: "Наблюдение анализа встречи" });
+    expect(notes).toHaveLength(2);
+    // i1 (ссылки 3 и 4) — под репликой 3, i2 — под репликой 6.
+    expect(notes[0]!.closest("[data-turn]")).toHaveAttribute("data-turn", "3");
+    expect(notes[1]!.closest("[data-turn]")).toHaveAttribute("data-turn", "6");
+    expect(within(notes[0]!).getByRole("img", { name: "Обратить внимание" })).toBeInTheDocument();
+    expect(notes[0]).toHaveTextContent("Расчёт нужен до роста цен.");
+    expect(notes[0]).not.toHaveTextContent("Срок и риск названы рядом.");
+    await userEvent.click(within(notes[0]!).getByRole("button", { name: "Почему" }));
+    expect(notes[0]).toHaveTextContent("Срок и риск названы рядом.");
+    expect(within(notes[1]!).queryByRole("button", { name: "Почему" })).toBeNull();
+    // Ссылка — только на другие реплики (своя — та, под которой заметка): переход и подсветка.
+    expect(within(notes[0]!).queryByRole("button", { name: "00:30 · Борис" })).toBeNull();
+    await userEvent.click(within(notes[0]!).getByRole("button", { name: "00:40 · Анна" }));
     const target = container.querySelector<HTMLElement>('[data-turn="4"]')!;
-    expect(target).toBeInTheDocument();
     expect(target).toHaveClass("turn--flash");
     expect(scrolled).toContain("4");
-    await userEvent.click(within(items[1]!).getByRole("button", { name: "Обсудить с агентом" }));
+    await userEvent.click(within(notes[1]!).getByRole("button", { name: "Обсудить с агентом" }));
     expect(onAskInsight).toHaveBeenCalledWith(expect.objectContaining({ id: "i2", refs: [6] }));
-    await userEvent.click(within(block).getByRole("button", { name: /Наблюдения/ }));
-    expect(within(block).queryByRole("list")).toBeNull();
   } finally {
     Element.prototype.scrollIntoView = original;
   }
@@ -194,7 +193,7 @@ test("«Наблюдения»: вид, текст, «Почему», ссылк
 
 test("без анализа — обычная лента: ни значков, ни фильтров, ни глав, ни наблюдений", () => {
   const { container } = view({ view: null });
-  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insights, .turn--key")).toBeNull();
+  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insight, .turn--key")).toBeNull();
   expect(turnRows(container)).toHaveLength(7);
 });
 
@@ -232,15 +231,15 @@ test("заголовок главы: «Глава N», название, вре�
   expect(within(head).getByText("Бюджет на квартал")).toBeInTheDocument();
   expect(head).toHaveTextContent("00:00–00:44");
   const rows = turnRows(container);
-  // Имя — первым в строке, точка цвета спикера — его же (переменная --person).
-  const anna = rows[0]!.querySelector<HTMLElement>(".turn__head > .turn__speaker")!;
+  // Имя — в левом поле, точка цвета спикера — его же (переменная --person).
+  const anna = rows[0]!.querySelector<HTMLElement>(".turn__gutter > .turn__speaker")!;
   expect(anna).toHaveTextContent("Анна");
   expect(anna.style.getPropertyValue("--person")).toBe("var(--data-2)");
-  // Бейдж типа — после имени, в строке имени; подпись видна.
+  // Бейдж типа — после текста реплики; подпись видна.
   const type = within(rows[2]!).getByRole("img", { name: "Решение" });
   expect(type).toHaveClass("badge");
   expect(type).toHaveTextContent("Решение");
-  expect(type.parentElement).toHaveClass("turn__head");
+  expect(type.parentElement).toHaveClass("turn__marks"); // 0.6.1: после текста
   // Важная реплика — отметка «важное» словом, у остальных её нет.
   expect(within(rows[2]!).getByText("важное")).toBeInTheDocument();
   expect(rows.filter((r) => within(r).queryByText("важное")).map((r) => r.dataset.turn)).toEqual(["2"]);
@@ -279,7 +278,7 @@ test("карточка: свежий анализ — значки, главы, 
   const { container } = await card();
   await waitFor(() => expect(container.querySelectorAll(".chapter-head")).toHaveLength(2));
   expect(container.querySelector(".turn__type")).not.toBeNull();
-  expect(screen.getByRole("region", { name: "Наблюдения анализа встречи" })).toBeInTheDocument();
+  expect(screen.getAllByRole("note", { name: "Наблюдение анализа встречи" })[0]!).toBeInTheDocument();
 });
 
 test("карточка: выключенное в «Подсветке и разметке» не показывается", async () => {
@@ -288,21 +287,21 @@ test("карточка: выключенное в «Подсветке и раз
   await act(async () => {});
   await waitFor(() => expect(api.getAnalysis).toHaveBeenCalled());
   await act(async () => {});
-  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insights, .turn--key")).toBeNull();
+  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insight, .turn--key")).toBeNull();
 });
 
 test("карточка: часть, выключенная в «Анализе встречи», не показывается", async () => {
   mocks({ analysis: { chapters: false, insights: false } });
   const { container } = await card();
   await waitFor(() => expect(container.querySelector(".turn__type")).not.toBeNull());
-  expect(container.querySelector(".chapter-head, .insights")).toBeNull();
+  expect(container.querySelector(".chapter-head, .insight")).toBeNull();
 });
 
 test("карточка: устаревший анализ с другим числом сегментов не показывается", async () => {
   mocks({}, { state: "stale", analysis: { ...ANALYSIS, segments: 9 } });
   const { container } = await card();
   await waitFor(() => expect(screen.getByText(/Анализ устарел/)).toBeInTheDocument());
-  expect(container.querySelector(".turn__type, .chapter-head, .insights")).toBeNull();
+  expect(container.querySelector(".turn__type, .chapter-head, .insight")).toBeNull();
   // 0.6.1: строка — над лентой, в конце легенды, а не под шапкой карточки.
   expect(screen.getByText(/Анализ устарел/).closest(".feed-filters")).not.toBeNull();
   expect(screen.getByText(/Анализ устарел/).closest(".card__notices")).toBeNull();
@@ -326,7 +325,7 @@ test("карточка: ✦ у главы — на «Агент» со ссыл�
 test("карточка: ✦ у наблюдения — текст, «почему» и реплики", async () => {
   mocks();
   await card();
-  const block = await screen.findByRole("region", { name: "Наблюдения анализа встречи" });
+  const block = (await screen.findAllByRole("note", { name: "Наблюдение анализа встречи" }))[0]!;
   await userEvent.click(within(block).getAllByRole("button", { name: "Обсудить с агентом" })[0]!);
   const note = await screen.findByRole("status", { name: "Ссылка не вставлена" });
   expect(note.querySelector("pre")!.textContent).toBe([
@@ -346,7 +345,7 @@ test("карточка: адрес Jira в настройках — ключи �
   mocks({ integrations: { jira_base_url: "https://jira.example.com" }, transcript_view: { jira: false } },
     { state: "ready", analysis: withKey });
   await card();
-  await screen.findByRole("region", { name: "Наблюдения анализа встречи" });
+  (await screen.findAllByRole("note", { name: "Наблюдение анализа встречи" }))[0]!;
   expect(screen.queryByRole("link", { name: "SPR-42" })).toBeNull();
 });
 

@@ -1,6 +1,6 @@
-import { memo, useContext, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useContext, useMemo, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { Sparkle } from "lucide-react";
-import type { ChapterView, TurnRow } from "../../lib/analysisView";
+import { seriesStarts, type ChapterView, type InsightView, type TurnRow } from "../../lib/analysisView";
 import { clock, plural } from "../../lib/format";
 import { JiraLinks, type JiraMatch } from "../../lib/jira";
 import { nfc, type Range } from "../../lib/search";
@@ -10,7 +10,7 @@ import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
 import { Tip } from "../../ui/Tip";
 import { LinkedText } from "../../ui/LinkedText";
-import { TypeIcon } from "./markup";
+import { InsightNote, TypeIcon } from "./markup";
 
 /** Человек базы голосов для карточки: цвет, фото и «Кто это» (подсказка у чипа в шапке). */
 export type PersonColor = { name: string; color: string; has_avatar: boolean; role?: string };
@@ -32,8 +32,14 @@ export type TurnAnnotations = {
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
 export const Turns = memo(function Turns({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
-  rows, annotations, onAskChapter, onExpand, textPhase = false,
+  rows, annotations, onAskChapter, onExpand, textPhase = false, insights, onJump, onAskInsight,
 }: {
+  /** Наблюдения анализа (0.6.1): заметка — под первой репликой из ссылок наблюдения. */
+  insights?: InsightView[];
+  /** Переход к реплике (ссылка в заметке наблюдения). */
+  onJump?: (turn: number) => void;
+  /** ✦ «Обсудить с агентом» у наблюдения. */
+  onAskInsight?: (insight: InsightView) => void;
   turns: Turn[];
   colors: Map<string, string>;
   playable: boolean;
@@ -105,6 +111,17 @@ export const Turns = memo(function Turns({
   const jira = useContext(JiraLinks);
   const types = annotations?.types;
   const key = annotations?.key;
+  // «Сценарий» (0.6.1): имя — у первой реплики серии, у продолжения — тихое (видно при наведении).
+  const starts = useMemo(() => seriesStarts(turns, rows), [turns, rows]);
+  const notes = useMemo(() => {
+    const out = new Map<number, InsightView[]>();
+    for (const x of insights ?? []) {
+      const at = x.refs[0];
+      if (at === undefined) continue;
+      out.set(at, [...(out.get(at) ?? []), x]);
+    }
+    return out;
+  }, [insights]);
   const renderTurn = (i: number) => {
         const t = turns[i]!;
         if (t.kind === "break") {
@@ -122,8 +139,43 @@ export const Turns = memo(function Turns({
         const on = selected?.has(i) ?? false;
         const headless = textPhase && t.speaker === NO_SPEAKER;
         const person = !unnamed && color ? ({ "--person": color } as CSSProperties) : undefined;
+        const cont = !starts.has(i);
+        const time = playable ? (
+          <button type="button" className="turn__time num" aria-label={`Слушать с ${clock(t.start)}`}
+            onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onPlay(t); }}>
+            {clock(t.start)}
+          </button>
+        ) : (
+          <span className="turn__time num">{clock(t.start)}</span>
+        );
+        const speakerCls = `turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}${cont ? " turn__speaker--cont" : ""}`;
+        const tags = [
+          t.room && !textPhase ? (
+            <Tip key="room" content="Голос с вашего микрофона: человек рядом с вами">
+              <span className="turn__room">в комнате</span>
+            </Tip>
+          ) : null,
+          t.uncertain ? <span key="unc" className="turn__flag">(нахлёст)</span> : null,
+          t.unsure ? (
+            <Tip key="unsure" content="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
+              <span className="turn__flag">(голос под вопросом)</span>
+            </Tip>
+          ) : null,
+          // Тип реплики — бейдж после текста (у утверждения бейджа нет).
+          types?.[i] ? <TypeIcon key="type" type={types[i]!} /> : null,
+          key?.[i] ? (
+            <span key="key" className="turn__key">
+              <Sparkle size={12} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />важное
+            </span>
+          ) : null,
+          onAskAgent && !headless ? (
+            <AskAgentButton key="ask" className="turn__ask" label="Спросить агента об этой реплике"
+              title="Спросить агента об этой реплике (A)" aria-keyshortcuts="A"
+              onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onAskAgent([i]); }} />
+          ) : null,
+        ].filter(Boolean);
         return (
-          <div className={`turn${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}${key?.[i] ? " turn--key" : ""}`}
+          <div className={`turn${cont ? " turn--cont" : ""}${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}${key?.[i] ? " turn--key" : ""}`}
             key={`t${i}`}
             data-selected={on || undefined} data-turn={i}
             tabIndex={onSelect ? (i === roving ? 0 : -1) : undefined}
@@ -135,66 +187,41 @@ export const Turns = memo(function Turns({
             onMouseDown={onSelect ? (e) => { if (e.shiftKey) e.preventDefault(); } : undefined}
             onClick={onSelect ? (e) => { if (pick(e, i)) e.preventDefault(); } : undefined}>
             {on && <span className="sr-only">Выбрано.</span>}
-            {playable ? (
-              <button type="button" className="turn__time num" aria-label={`Слушать с ${clock(t.start)}`}
-                onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onPlay(t); }}>
-                {clock(t.start)}
-              </button>
-            ) : (
-              <span className="turn__time num">{clock(t.start)}</span>
-            )}
-            {/* Строки имени нет: текст встаёт на одну строку со временем. */}
-            {headless && <span className="sr-only">Спикер ещё не определён</span>}
-            {!headless && (
-              <div className="turn__head">
-                {/* Точка перед именем — цвет спикера (--person); имя — цветом текста. */}
-                {textPhase ? (
-                  <span className="turn__speaker" style={person}>{t.speaker}</span>
-                ) : t.speaker === NO_SPEAKER ? (
-                  <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
-                ) : (
-                  <Tip content={onSpeaker ? "Исправить спикера реплики" : null} describe={false}>
-                    <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}
-                      style={person} aria-haspopup={onSpeaker ? "dialog" : undefined}
-                      onClick={(e) => {
-                        if (onSelect && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
-                        if (onSpeaker) onSpeaker(i, e.currentTarget);
-                        else onNameSpeaker?.(t.speaker);
-                      }}>{t.speaker}</button>
-                  </Tip>
-                )}
-                {t.room && !textPhase && (
-                  <Tip content="Голос с вашего микрофона: человек рядом с вами">
-                    <span className="turn__room">в комнате</span>
-                  </Tip>
-                )}
-                {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
-                {t.unsure && (
-                  <Tip content="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
-                    <span className="turn__flag">(голос под вопросом)</span>
-                  </Tip>
-                )}
-                {/* Тип реплики — бейдж после имени (у утверждения бейджа нет). */}
-                {types?.[i] && <TypeIcon type={types[i]!} />}
-                {key?.[i] && (
-                  <span className="turn__key">
-                    <Sparkle size={12} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />важное
-                  </span>
-                )}
-                {onAskAgent && (
-                  <AskAgentButton className="turn__ask" label="Спросить агента об этой реплике"
-                    title="Спросить агента об этой реплике (A)" aria-keyshortcuts="A"
-                    onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onAskAgent([i]); }} />
-                )}
-              </div>
-            )}
-            {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
-            <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
-              onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
-              {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
-                links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} />
-                : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
-            </p>
+            {/* Левое поле: имя (у продолжения серии — тихое) и время под ним. */}
+            <div className="turn__gutter">
+              {headless ? (
+                <span className="sr-only">Спикер ещё не определён</span>
+              ) : textPhase ? (
+                // Точка перед именем — цвет спикера (--person); имя — цветом текста.
+                <span className={`turn__speaker${cont ? " turn__speaker--cont" : ""}`} style={person}>{t.speaker}</span>
+              ) : t.speaker === NO_SPEAKER ? (
+                <span className={`turn__speaker turn__speaker--unnamed${cont ? " turn__speaker--cont" : ""}`}>{t.speaker}</span>
+              ) : (
+                <Tip content={onSpeaker ? "Исправить спикера реплики" : null} describe={false}>
+                  <button type="button" className={speakerCls}
+                    style={person} aria-haspopup={onSpeaker ? "dialog" : undefined}
+                    onClick={(e) => {
+                      if (onSelect && (e.ctrlKey || e.metaKey || e.shiftKey)) return;
+                      if (onSpeaker) onSpeaker(i, e.currentTarget);
+                      else onNameSpeaker?.(t.speaker);
+                    }}>{t.speaker}</button>
+                </Tip>
+              )}
+              {time}
+            </div>
+            <div className="turn__body">
+              {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
+              <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
+                onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
+                {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
+                  links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} />
+                  : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
+              </p>
+              {tags.length > 0 && <span className="turn__marks">{tags}</span>}
+              {(notes.get(i) ?? []).map((x) => (
+                <InsightNote key={x.id} insight={x} turns={turns} own={i} onJump={(r) => onJump?.(r)} onAsk={onAskInsight} />
+              ))}
+            </div>
           </div>
         );
   };

@@ -545,6 +545,27 @@ export function layoutRows(
   return rows;
 }
 
+/**
+ * С каких реплик начинаются серии (0.6.1, «сценарий»): серия — подряд один
+ * говорящий. Новая серия — со сменой говорящего, после заголовка главы, после
+ * «… N реплик» и после перерыва (сам перерыв — тоже начало). `rows` — строки
+ * ленты; нет — все реплики подряд.
+ */
+export function seriesStarts(turns: Turn[], rows: TurnRow[] | null | undefined): Set<number> {
+  const out = new Set<number>();
+  const order: TurnRow[] = rows ?? turns.map((_, i) => ({ kind: "turn", i }));
+  let prev: string | null = null;
+  for (const row of order) {
+    if (row.kind !== "turn") { prev = null; continue; }
+    const t = turns[row.i];
+    if (!t) continue;
+    if (t.kind === "break") { out.add(row.i); prev = null; continue; }
+    if (t.speaker !== prev) out.add(row.i);
+    prev = t.speaker;
+  }
+  return out;
+}
+
 /** Сколько реплик каждого типа (для чипов фильтра). */
 export function typeCounts(types: (PhraseType | null)[] | null): Map<PhraseType, number> {
   const out = new Map<PhraseType, number>();

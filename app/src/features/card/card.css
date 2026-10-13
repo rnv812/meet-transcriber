@@ -107,40 +107,54 @@ button.card__people-names:hover { background: var(--surface-2); color: var(--ink
 }
 .card__textfirst-text { flex: 0 1 auto; }
 .card__textfirst-note { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Реплика (макет Atlas Aurora) — сетка [время 64 px] [имя и пометки / текст]. Первая строка
-   (время, имя) одной высоты --turn-line: время всегда на строке имени, имя и текст у всех реплик
-   начинаются ровно. Строка выходит в поля карточки на 8 px: подложка (важная, выбранная,
-   «сейчас играет») — со скруглением, текст на месте. */
+/* Реплика (0.6.1, «сценарий») — сетка [левое поле --gutter: имя и время] [текст и пометки].
+   Имя — у первой реплики серии (подряд один говорящий), у продолжения — тихое: проявляется при
+   наведении и фокусе (смена говорящего у каждой реплики остаётся). Время — у каждой, под именем.
+   Строка выходит в поля карточки на 8 px: подложка (важная, выбранная, «сейчас играет») — со
+   скруглением, текст на месте. */
 .turn {
-  --turn-line: 24px;
-  position: relative; display: grid; grid-template-columns: 64px minmax(0, 1fr); column-gap: 6px;
-  align-items: start; margin: 0 -8px; padding: 6px 8px; border-radius: var(--r-md);
+  --turn-line: 24px; --gutter: 168px;
+  position: relative; display: grid; grid-template-columns: var(--gutter) minmax(0, 1fr); column-gap: 20px;
+  align-items: start; margin: 0 -8px; padding: 4px 8px; border-radius: var(--r-md);
 }
+/* Новая серия — с воздухом сверху; продолжение — вплотную. */
+.turn:not(.turn--cont) { margin-top: 12px; }
+.turns > .turn:first-child, .chapter-head + .turn { margin-top: 0; }
 /* Перерыв между частями объединённой встречи: разделитель, а не реплика. */
 .turn-break { display: flex; align-items: center; gap: 12px; padding: 10px 0; color: var(--ink-3); font-size: var(--text-xs); }
 .turn-break::before, .turn-break::after { content: ""; flex: 1; border-top: 1px dashed var(--hairline-strong); }
 .turn-break__text { flex: none; }
-/* Время — тихая кнопка Geist Mono (щелчок — слушать с этого места). Текст времени — вровень с левым
-   краем колонки карточки («Глава 1», поиск, вкладки): поле кнопки уходит в поле реплики. */
+.turn__gutter { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+/* Время — тихая кнопка Geist Mono (щелчок — слушать с этого места); поле кнопки — в поле реплики. */
 .turn__time {
-  grid-column: 1; justify-self: start; max-width: 100%; height: var(--turn-line); margin-left: -6px; padding: 0 6px; text-align: left;
+  max-width: 100%; height: var(--turn-line); margin-left: -6px; padding: 0 6px; text-align: left;
   border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-3); font: inherit;
   font-family: var(--font-code); font-size: var(--text-xs); line-height: var(--turn-line); white-space: nowrap; cursor: pointer;
 }
 button.turn__time:hover { background: var(--surface-3); color: var(--ink); }
 span.turn__time { cursor: default; }
-/* Имя (с точкой цвета спикера) и пометки («в комнате», «(голос под вопросом)», бейдж типа,
-   «важное», ✦): в узкой карточке пометки переносятся целиком. */
-.turn__head {
-  grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px;
-  min-width: 0; min-height: var(--turn-line); line-height: var(--turn-line);
+/* Имя с точкой цвета спикера; длинное — переносится в своём поле. */
+.turn__speaker {
+  display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-height: var(--turn-line);
+  font-weight: 600; font-size: var(--text-sm); line-height: var(--turn-line); color: var(--ink); text-align: left; overflow-wrap: anywhere;
 }
-.turn__speaker { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--text-sm); color: var(--ink); }
-.turn__speaker::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: var(--r-full); background: var(--person, var(--ink-3)); }
-button.turn__speaker { padding: 0; border: 0; background: none; font-family: inherit; line-height: inherit; cursor: pointer; }
+.turn__speaker::before {
+  content: ""; flex: none; align-self: center; width: 6px; height: 6px; border-radius: var(--r-full);
+  background: var(--person, var(--ink-3));
+}
+button.turn__speaker { padding: 0; border: 0; background: none; font-family: inherit; cursor: pointer; }
 .turn__speaker--unnamed { color: var(--ink-2); }
 button.turn__speaker:hover { text-decoration: underline; }
 .turn__speaker--unnamed:hover { color: var(--accent-line); }
+/* Продолжение серии: имя не повторяется — тихое до наведения или фокуса. */
+.turn__speaker--cont { opacity: 0; }
+.turn:hover .turn__speaker--cont, .turn:focus-within .turn__speaker--cont, .turn__speaker--cont:focus-visible { opacity: 0.7; }
+@media (hover: none) { .turn__speaker--cont { opacity: 0.45; } }
+.turn--cont .turn__gutter { flex-direction: column-reverse; }
+.turn__body { min-width: 0; }
+.turn__text { display: inline; margin: 0; color: var(--ink); line-height: 1.7; }
+/* Пометки после текста: «в комнате», «(голос под вопросом)», бейдж типа, «важное», ✦. */
+.turn__marks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-left: 8px; vertical-align: 1px; }
 .turn__flag { color: var(--warning); font-size: var(--text-xs); }
 /* Человек рядом с владельцем в комнате: голос с микрофона (meet.mic_split). */
 .turn__room {
@@ -150,12 +164,9 @@ button.turn__speaker:hover { text-decoration: underline; }
 .mic-note { display: flex; flex-direction: column; gap: 2px; }
 .mic-note__line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 /* ✦ «Спросить агента» у реплики: видна при наведении и фокусе (и с клавиатуры — A). */
-.turn__ask { align-self: center; margin: -3px 0; opacity: 0; }
+.turn__ask { opacity: 0; }
 .turn:hover .turn__ask, .turn:focus-within .turn__ask, .turn:focus .turn__ask, .turn__ask:focus-visible { opacity: 1; }
 @media (hover: none) { .turn__ask { opacity: 0.7; } }
-/* Без строки имени (текст до спикеров) текст встаёт на строку времени: ячейка не занята. */
-.turn__text { grid-column: 2; margin: 0; color: var(--ink); line-height: 1.6; }
-.turn__head + .turn__text { margin-top: 2px; }
 
 /* Правка спикера в расшифровке: выбранные реплики, полоса выбора, меню «Кому отдать». */
 .turn--selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }

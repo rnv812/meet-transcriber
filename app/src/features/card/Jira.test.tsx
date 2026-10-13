@@ -93,7 +93,7 @@ test("наблюдения: ключи задач — ссылки", () => {
   };
   const view = buildView(TURNS, analysis, 2, { types: false, importance: false, chapters: false, insights: true });
   transcript(linker, { view });
-  const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
+  const block = screen.getAllByRole("note", { name: "Наблюдение анализа встречи" })[0]!;
   expect(within(block).getByRole("link", { name: "OPS-7" })).toHaveAttribute("href", "https://jira.example.com/browse/OPS-7");
 });
 
@@ -203,7 +203,7 @@ test("«Задачи Jira» — в строке фильтров, не в бло
   };
   const view = buildView(SPOKEN_TURNS, analysis, 3, { types: false, importance: false, chapters: false, insights: true });
   spoken({ view });
-  const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
+  const block = screen.getAllByRole("note", { name: "Наблюдение анализа встречи" })[0]!;
   expect(within(block).queryByRole("group", { name: "Задачи Jira, названные во встрече" })).toBeNull();
   expect(screen.getByRole("group", { name: "Задачи Jira, названные во встрече" })).toBeInTheDocument();
   // Наблюдение: фраза от резидента — значок с ключом.

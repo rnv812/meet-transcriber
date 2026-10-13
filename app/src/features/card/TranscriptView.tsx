@@ -25,7 +25,7 @@ import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
-import { InsightsBlock, JiraTasks, Legend, hasTypeFilters } from "./markup";
+import { JiraTasks, Legend, hasTypeFilters } from "./markup";
 import { FindAsk, TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
@@ -444,9 +444,6 @@ export function TranscriptView({
         </div>
       )}
       {notice}
-      {view && view.insights.length > 0 && (
-        <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
-      )}
       {/* Фильтры по типам и «Задачи Jira» — одной строкой. */}
       {/* Легенда-фильтр, «Задачи Jira» и в конце — «Анализ устарел» (0.6.1) — одной строкой. */}
       {(filters || jiraRow || legendEnd) && (
@@ -469,7 +466,8 @@ export function TranscriptView({
         <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
           onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
           marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
-          onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase} />
+          onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase}
+          insights={view?.insights} onJump={jumpTo} onAskInsight={onAskInsight} />
       )}
     </div>
   );

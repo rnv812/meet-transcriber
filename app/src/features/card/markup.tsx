@@ -1,12 +1,12 @@
 /**
  * Разметка встречи в «Расшифровке» (M3, Atlas Aurora; 0.6.1): бейдж типа реплики,
- * легенда-фильтр и «Задачи Jira» в одной строке, карточка «Наблюдения» под
- * поиском. Сама разметка — lib/analysisView.ts.
+ * легенда-фильтр и «Задачи Jira» в одной строке, наблюдения — заметками под
+ * своими репликами. Сама разметка — lib/analysisView.ts.
  */
 
 import { useContext, useState } from "react";
 import {
-  ChevronDown, ChevronRight, CircleAlert, CircleArrowRight, CircleQuestionMark, Eye, Gavel, Hand, Lightbulb, ListTodo,
+  CircleAlert, CircleArrowRight, CircleQuestionMark, Eye, Gavel, Hand, Lightbulb, ListTodo,
   Split, ThumbsUp, TriangleAlert, type LucideIcon,
 } from "lucide-react";
 import { INSIGHT_LABEL, TYPE_FILTERS, TYPE_LABEL, type InsightView } from "../../lib/analysisView";
@@ -101,18 +101,6 @@ export function Legend({ counts, value, onChange, insights = 0, insightsOn = fal
   );
 }
 
-const COLLAPSED_KEY = "meet.insights.collapsed";
-/** Свёрнуто ли «Наблюдения»: как человек оставил; не выбирал — свёрнуто в узком окне (до 1000 px). */
-function readCollapsed(): boolean {
-  let stored: string | null = null;
-  try { stored = window.localStorage?.getItem(COLLAPSED_KEY) ?? null; } catch { /* хранилище недоступно */ }
-  if (stored === "1" || stored === "0") return stored === "1";
-  return typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth <= 1000;
-}
-function writeCollapsed(v: boolean) {
-  try { window.localStorage?.setItem(COLLAPSED_KEY, v ? "1" : "0"); } catch { /* хранилище недоступно */ }
-}
-
 /** Сколько реплик показывать у задачи в «Задачах» (остальные — «ещё N»). */
 const TASK_TURNS = 4;
 
@@ -152,76 +140,51 @@ export function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: 
   );
 }
 
-/** Карточка «Наблюдения» под поиском (вывод ИИ: плоско, тонкий акцент слева — 0.5): вид, текст, «почему», ссылки на реплики, ✦. */
-export function InsightsBlock({ insights, turns, onJump, onAsk }: {
-  insights: InsightView[];
+/**
+ * Наблюдение анализа встречи (0.6.1) — заметка под первой репликой из своих ссылок:
+ * линия акцента слева, вид (значок), текст, «Почему», ссылки на другие реплики и ✦.
+ */
+export function InsightNote({ insight: x, turns, own, onJump, onAsk }: {
+  insight: InsightView;
   turns: Turn[];
-  /** Перейти к реплике (номер реплики карточки). */
+  /** Реплика, под которой заметка: на неё ссылки не нужно. */
+  own: number;
   onJump: (turn: number) => void;
   onAsk?: (insight: InsightView) => void;
 }) {
   const jira = useContext(JiraLinks);
-  const [collapsed, setCollapsed] = useState(readCollapsed);
-  const [why, setWhy] = useState<ReadonlySet<string>>(() => new Set());
-  if (!insights.length) return null;
-  const toggle = () => { setCollapsed((c) => { writeCollapsed(!c); return !c; }); };
-  const Chevron = collapsed ? ChevronRight : ChevronDown;
+  const [why, setWhy] = useState(false);
+  const Icon = INSIGHT_ICON[x.kind] ?? Eye;
   return (
-    <section className="card insights" aria-label="Наблюдения анализа встречи">
-      <button type="button" className="insights__head" aria-expanded={!collapsed} onClick={toggle}>
-        <Chevron size={14} strokeWidth={1.75} aria-hidden="true" />
-        <span className="insights__title">Наблюдения</span>
-        <span className="badge badge--plain insights__n num">{insights.length}</span>
-      </button>
-      {!collapsed && (
-        <ul className="insights__list">
-          {insights.map((x) => {
-            const Icon = INSIGHT_ICON[x.kind] ?? Eye;
-            const open = why.has(x.id);
+    <div className={`insight insight--${x.kind}`} role="note" aria-label="Наблюдение анализа встречи">
+      <Tip content={INSIGHT_LABEL[x.kind]} describe={false}>
+        <span className="insight__icon" role="img" aria-label={INSIGHT_LABEL[x.kind]}>
+          <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+        </span>
+      </Tip>
+      <div className="insight__body">
+        <p className="insight__text"><LinkedText text={x.text} linker={jira} /></p>
+        {why && x.why && <p className="insight__why muted"><LinkedText text={x.why} linker={jira} /></p>}
+        <div className="insight__row">
+          {x.why && (
+            <button type="button" className="link-btn insight__why-btn" aria-expanded={why} onClick={() => setWhy((v) => !v)}>
+              {why ? "Скрыть" : "Почему"}
+            </button>
+          )}
+          {x.refs.filter((r) => r !== own).map((r) => {
+            const t = turns[r];
+            if (!t) return null;
             return (
-              <li key={x.id} className={`insight insight--${x.kind}`}>
-                <Tip content={INSIGHT_LABEL[x.kind]} describe={false}>
-                  <span className="insight__icon" role="img" aria-label={INSIGHT_LABEL[x.kind]}>
-                    <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
-                  </span>
-                </Tip>
-                <div className="insight__body">
-                  <p className="insight__text"><LinkedText text={x.text} linker={jira} /></p>
-                  {open && x.why && <p className="insight__why muted"><LinkedText text={x.why} linker={jira} /></p>}
-                  <div className="insight__row">
-                    {x.why && (
-                      <button type="button" className="link-btn insight__why-btn" aria-expanded={open}
-                        onClick={() => setWhy((cur) => {
-                          const next = new Set(cur);
-                          if (next.has(x.id)) next.delete(x.id);
-                          else next.add(x.id);
-                          return next;
-                        })}>
-                        {open ? "Скрыть" : "Почему"}
-                      </button>
-                    )}
-                    {x.refs.map((r) => {
-                      const t = turns[r];
-                      if (!t) return null;
-                      return (
-                        <Tip key={r} content="Перейти к реплике">
-                          <button type="button" className="insight__ref num" onClick={() => onJump(r)}>
-                            {clock(t.start)} · {t.speaker}
-                          </button>
-                        </Tip>
-                      );
-                    })}
-                    {onAsk && (
-                      <AskAgentButton className="insight__ask" label="Обсудить с агентом"
-                        onClick={() => onAsk(x)} />
-                    )}
-                  </div>
-                </div>
-              </li>
+              <Tip key={r} content="Перейти к реплике">
+                <button type="button" className="insight__ref num" onClick={() => onJump(r)}>
+                  {clock(t.start)} · {t.speaker}
+                </button>
+              </Tip>
             );
           })}
-        </ul>
-      )}
-    </section>
+          {onAsk && <AskAgentButton className="insight__ask" label="Обсудить с агентом" onClick={() => onAsk(x)} />}
+        </div>
+      </div>
+    </div>
   );
 }
