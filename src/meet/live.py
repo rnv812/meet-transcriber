@@ -1031,7 +1031,7 @@ class LiveEngine:
         # (`_watch_devices`): сменилось системное или стрим умер — дорожки
         # переоткрываются.
         tracks = (
-            (_CaptureTrack("sys.wav", recorder._Picker("output", self.output_device), 0),
+            (_CaptureTrack("sys.wav", recorder._Picker("output", self.output_device, mic=self.mic_device), 0),
              True, True),
             (_CaptureTrack("mic.wav", recorder._Picker("mic", self.mic_device), 1),
              False, True),
@@ -1041,10 +1041,13 @@ class LiveEngine:
             dev = track.pick(self._p)
             if track.pick.fallback:
                 track.in_fallback = True
-                print(recorder.fallback_text(track.pick.kind, track.pick.wanted))
-                self.devices_fallback.append(
-                    {"kind": track.pick.kind, "name": track.pick.wanted,
-                     "device": dev["name"].removesuffix(" [Loopback]")})
+                reason = track.pick.reason or recorder.FALLBACK_MISSING
+                print(recorder.fallback_text(track.pick.kind, track.pick.wanted, reason))
+                item = {"kind": track.pick.kind, "name": track.pick.wanted,
+                        "device": dev["name"].removesuffix(" [Loopback]")}
+                if reason == recorder.FALLBACK_SAME_AS_MIC:
+                    item["reason"] = reason
+                self.devices_fallback.append(item)
             picked.append(dev)
         self._retry_wait = recorder.RETRY_S
         # Начало координат ленты — старт захвата, как и у дорожек на диске.
@@ -1556,8 +1559,11 @@ class LiveEngine:
         fallback = bool(track.pick.fallback)
         if fallback != track.in_fallback:
             track.in_fallback = fallback
-            text = recorder.fallback_text if fallback else recorder.restored_text
-            self._say(text(track.pick.kind, track.pick.wanted))
+            if fallback:
+                self._say(recorder.fallback_text(track.pick.kind, track.pick.wanted,
+                                                 track.pick.reason or recorder.FALLBACK_MISSING))
+            else:
+                self._say(recorder.restored_text(track.pick.kind, track.pick.wanted))
         self._say(f"{track.fname}: запись возобновлена: {track.device} "
                   f"({src_rate} Hz, {src_ch} ch)")
         return True

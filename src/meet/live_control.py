@@ -207,10 +207,17 @@ def _fallback_of(info: dict) -> list[dict]:
     items = info.get("devices_fallback")
     if not isinstance(items, list):
         return []
-    return [{"kind": item.get("kind"), "name": str(item.get("name") or ""),
-             "device": item.get("device")}
-            for item in items
-            if isinstance(item, dict) and item.get("kind") in ("mic", "output")]
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("kind") not in ("mic", "output"):
+            continue
+        entry = {"kind": item.get("kind"), "name": str(item.get("name") or ""),
+                 "device": item.get("device")}
+        # 0.6.1: причина — только понятная окну («совпадает с микрофоном»).
+        if item.get("reason") == "same_as_mic":
+            entry["reason"] = "same_as_mic"
+        out.append(entry)
+    return out
 
 
 def _read_endpoint(path: Path, pid: int) -> dict | None:

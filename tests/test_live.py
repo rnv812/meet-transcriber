@@ -933,6 +933,25 @@ def test_live_capture_uses_pinned_devices(tmp_path, monkeypatch, capsys):
         {"kind": "output", "name": "Наушники", "device": "system-output"}]
 
 
+def test_live_capture_does_not_take_the_microphone_for_the_other_side(tmp_path, monkeypatch, capsys):
+    """0.6.1: «звук собеседников» — тот же микрофон, что у дорожки голоса (AirPods на Mac),
+    — пишем системный звук; в снимке — причина, чтобы окно сказало, в чём дело."""
+    _fake_audio(monkeypatch)
+    _spy_resolve(monkeypatch, missing=set())
+    monkeypatch.setattr(recorder, "_mic_in_use", lambda p, wanted: {"name": "AirPods"})
+    monkeypatch.setitem(recorder._SYSTEM, "output", lambda p: {
+        "index": 0, "name": "system-output", "maxInputChannels": 1, "defaultSampleRate": 16000})
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=3600,
+                        speaker_name="Вы", mic_device=None, output_device="AirPods")
+    engine.start()
+    engine.stop()
+    out = capsys.readouterr().out
+    assert ("Выбранный источник звука собеседников AirPods — тот же микрофон, "
+            "что пишет ваш голос; записываю системный звук") in out
+    assert engine.devices_fallback == [
+        {"kind": "output", "name": "AirPods", "device": "system-output", "reason": "same_as_mic"}]
+
+
 def test_live_capture_reads_devices_from_settings(tmp_path, monkeypatch):
     from meet import settings
 

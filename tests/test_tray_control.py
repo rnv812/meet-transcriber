@@ -1649,6 +1649,15 @@ def test_snapshot_reports_device_fallback_while_recording(control_state, app):
     assert control_state.snapshot()["devices_fallback"] == []
 
 
+def test_snapshot_fallback_keeps_the_same_as_mic_reason(control_state, app):
+    """0.6.1: «звук собеседников» совпал с микрофоном — окну нужна причина, а не «не найдено»."""
+    app.recording = True
+    control_state.bus.emit(events.RECORD_DEVICE_FALLBACK, track="sys.opus", role="output",
+                           wanted="AirPods", device="Системный звук", reason="same_as_mic")
+    assert control_state.snapshot()["devices_fallback"] == [
+        {"kind": "output", "name": "AirPods", "device": "Системный звук", "reason": "same_as_mic"}]
+
+
 def test_snapshot_fallback_clears_when_device_returns(control_state, app):
     app.recording = True
     for role, wanted in (("mic", "USB-микрофон"), ("output", "Наушники")):

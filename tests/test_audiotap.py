@@ -328,6 +328,57 @@ def test_mac_session_records_both_tracks(mac_recorder, monkeypatch, tmp_path):
     assert "COM" not in log  # на macOS про COM не пишем
 
 
+def _same_mic_session(monkeypatch, tmp_path, **devices):
+    popen, _ = _popen_factory(HANDSHAKE + _pcm(48000))
+    monkeypatch.setattr(mac_audio, "_popen", popen)
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    s = recorder._Session(tmp_path, bus, **devices)
+    s.start()
+    return s, seen
+
+
+@pytest.mark.parametrize("devices", [
+    # Микрофон системный (AirPods стали им при подключении), «звук собеседников» — они же.
+    {"mic_device": None, "output_device": "Микрофон MacBook Pro"},
+    # Оба выбраны вручную — одно устройство.
+    {"mic_device": "BlackHole 2ch", "output_device": "BlackHole 2ch"},
+])
+def test_mac_output_that_is_the_microphone_records_system_audio(mac_recorder, monkeypatch, tmp_path, devices):
+    """0.6.1: на Mac в «Звук собеседников» есть все устройства ввода (ради BlackHole), и
+    выбирают свои наушники с микрофоном. Тогда обе дорожки — один микрофон: собеседников
+    нет, свой голос дважды (и дедупликация считает его эхом). Тот же микрофон, что у
+    дорожки голоса, — не источник звука собеседников: пишем системный звук и говорим почему."""
+    s, seen = _same_mic_session(monkeypatch, tmp_path, **devices)
+    sys_track, mic_track = s.tracks
+    assert sys_track.device_name == mac_audio.SYSTEM_AUDIO_NAME
+    assert mic_track.device_name == (devices["mic_device"] or "Микрофон MacBook Pro")
+    fallbacks = [e for e in seen if e.kind == events.RECORD_DEVICE_FALLBACK]
+    assert len(fallbacks) == 1
+    assert fallbacks[0].data["role"] == "output"
+    assert fallbacks[0].data["reason"] == recorder.FALLBACK_SAME_AS_MIC
+    assert fallbacks[0].data["wanted"] == devices["output_device"]
+    s.close()
+    log = (tmp_path / "record.log").read_text(encoding="utf-8")
+    assert (f"Выбранный источник звука собеседников {devices['output_device']} — тот же микрофон, "
+            "что пишет ваш голос; записываю системный звук") in log
+
+
+def test_mac_blackhole_next_to_a_real_microphone_stays(mac_recorder, monkeypatch, tmp_path):
+    s, seen = _same_mic_session(monkeypatch, tmp_path, mic_device=None, output_device="BlackHole 2ch")
+    assert s.tracks[0].device_name == "BlackHole 2ch"
+    assert not [e for e in seen if e.kind == events.RECORD_DEVICE_FALLBACK]
+    s.close()
+
+
+def test_missing_output_fallback_carries_its_reason(mac_recorder, monkeypatch, tmp_path):
+    s, seen = _same_mic_session(monkeypatch, tmp_path, mic_device=None, output_device="Нет такого")
+    fallbacks = [e for e in seen if e.kind == events.RECORD_DEVICE_FALLBACK]
+    assert [e.data["reason"] for e in fallbacks] == [recorder.FALLBACK_MISSING]
+    s.close()
+
+
 def test_mac_session_without_screen_recording_permission_records_the_mic_only(
         mac_recorder, monkeypatch, tmp_path):
     """Нет разрешения «Запись экрана»: запись не отменяется — микрофон пишется,

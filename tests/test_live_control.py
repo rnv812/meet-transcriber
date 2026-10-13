@@ -1269,6 +1269,18 @@ def test_no_fallback_from_ordinary_child(make_live, tmp_path):
     _wait_for(lambda: _idle(live))
 
 
+def test_fallback_reason_from_the_endpoint_file_is_kept():
+    from meet.live_control import _fallback_of
+
+    assert _fallback_of({"devices_fallback": [
+        {"kind": "output", "name": "AirPods", "device": "Системный звук", "reason": "same_as_mic"},
+        {"kind": "mic", "name": "USB", "device": "Микрофон", "reason": "что-то своё"},
+    ]}) == [
+        {"kind": "output", "name": "AirPods", "device": "Системный звук", "reason": "same_as_mic"},
+        {"kind": "mic", "name": "USB", "device": "Микрофон"},
+    ]
+
+
 # --- «Запись с ассистентом» целиком (обычная запись + подключённый ассистент) ---
 
 

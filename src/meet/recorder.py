@@ -586,14 +586,15 @@ class _Track:
             return
         self._in_fallback = fallback
         kind, wanted = self.pick.kind, self.pick.wanted
+        reason = getattr(self.pick, "reason", None) or FALLBACK_MISSING
         if fallback:
-            self.log(fallback_text(kind, wanted))
-            kind_event = events.RECORD_DEVICE_FALLBACK
+            self.log(fallback_text(kind, wanted, reason))
+            self.bus.emit(events.RECORD_DEVICE_FALLBACK, track=self.fname, role=kind, wanted=wanted,
+                          device=self.device_name, reason=reason)
         else:
             self.log(restored_text(kind, wanted))
-            kind_event = events.RECORD_DEVICE_PINNED
-        self.bus.emit(kind_event, track=self.fname, role=kind, wanted=wanted,
-                      device=self.device_name)
+            self.bus.emit(events.RECORD_DEVICE_PINNED, track=self.fname, role=kind, wanted=wanted,
+                          device=self.device_name)
 
     def alive(self) -> bool:
         if self.stream is None:
@@ -920,17 +921,44 @@ def resolve_device(p: "pyaudio.PyAudio", kind: str, wanted: "str | None") -> tup
     return _SYSTEM[kind](p), False
 
 
+# Почему дорожка пишет не с выбранного устройства (`record.device_fallback`, `reason`).
+FALLBACK_MISSING = "missing"
+# 0.6.1: «звук собеседников» — тот же микрофон, что у дорожки голоса (на Mac в списке
+# есть все устройства ввода ради BlackHole, и выбирают свои наушники с микрофоном).
+FALLBACK_SAME_AS_MIC = "same_as_mic"
+
+
+def _mic_in_use(p: "pyaudio.PyAudio", wanted: "str | None") -> "dict | None":
+    """Микрофон, с которого пишет дорожка голоса: выбранный, а нет его — системный."""
+    try:
+        return (_find_mic(p, wanted) if wanted else None) or _default_mic(p)
+    except Exception:
+        return None
+
+
+def _is_mic(dev: dict, mic: "dict | None") -> bool:
+    """Устройство — тот самый микрофон (loopback'и Windows — никогда)."""
+    return (mic is not None and not dev.get("isLoopbackDevice")
+            and _same_device(dev["name"]) == _same_device(mic["name"]))
+
+
 def restored_text(kind: str, wanted: str) -> str:
     if kind == "mic":
         return f"Выбранный микрофон {wanted} снова доступен — запись идёт с него"
     return f"Выбранное устройство вывода {wanted} снова доступно — запись идёт с него"
 
 
-def fallback_text(kind: str, wanted: str) -> str:
+def fallback_text(kind: str, wanted: str, reason: str = FALLBACK_MISSING) -> str:
+    if reason == FALLBACK_SAME_AS_MIC:
+        return (f"Выбранный источник звука собеседников {wanted} — тот же микрофон, "
+                "что пишет ваш голос; записываю системный звук")
     if kind == "mic":
         return f"Выбранный микрофон {wanted} не найден — запись идёт с системного"
     return (f"Выбранное устройство вывода {wanted} не найдено — "
             "запись идёт с системного")
+
+
+_NO_MIC = object()  # _Picker не дорожки собеседников: про микрофон не знает
 
 
 class _Picker:
@@ -938,10 +966,13 @@ class _Picker:
     None — системное (дорожка следует за дефолтом Windows и переживает его
     смену); имя — выбранное, а если его нет — системное с пометкой fallback."""
 
-    def __init__(self, kind: str, wanted: "str | None") -> None:
+    def __init__(self, kind: str, wanted: "str | None", mic: "str | None | object" = _NO_MIC) -> None:
         self.kind = kind
         self.wanted = wanted or None
+        # Дорожка собеседников: какой микрофон у дорожки голоса (None — системный).
+        self.mic = mic
         self.fallback = False
+        self.reason: "str | None" = None
 
     @property
     def pinned(self) -> bool:
@@ -949,6 +980,10 @@ class _Picker:
 
     def __call__(self, p) -> dict:
         dev, self.fallback = resolve_device(p, self.kind, self.wanted)
+        self.reason = FALLBACK_MISSING if self.fallback else None
+        if (self.kind == "output" and self.wanted and not self.fallback and self.mic is not _NO_MIC
+                and _is_mic(dev, _mic_in_use(p, self.mic))):
+            dev, self.fallback, self.reason = _SYSTEM["output"](p), True, FALLBACK_SAME_AS_MIC
         return dev
 
 
@@ -977,7 +1012,7 @@ class _Session:
         self.tap_since = 0.0
         self.preflight_next = 0.0
         self.tracks = (
-            _Track("sys.opus", _Picker("output", output_device), 0, out_dir,
+            _Track("sys.opus", _Picker("output", output_device, mic=mic_device), 0, out_dir,
                    self.log, self.bus, pcm_tap),
             _Track("mic.opus", _Picker("mic", mic_device), 1, out_dir,
                    self.log, self.bus, pcm_tap),

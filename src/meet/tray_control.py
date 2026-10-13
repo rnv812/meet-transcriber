@@ -1264,9 +1264,12 @@ class TrayControl:
         elif event.kind == events.RECORD_DEVICE_FALLBACK:
             role = event.data.get("role")
             rest = {k: v for k, v in self._fallbacks.items() if k != role}
-            self._fallbacks = {**rest, role: {
-                "kind": role, "name": event.data.get("wanted"),
-                "device": event.data.get("device")}}
+            entry = {"kind": role, "name": event.data.get("wanted"),
+                     "device": event.data.get("device")}
+            # 0.6.1: «звук собеседников» совпал с микрофоном — окно говорит именно это.
+            if event.data.get("reason") == "same_as_mic":
+                entry["reason"] = "same_as_mic"
+            self._fallbacks = {**rest, role: entry}
         elif event.kind == events.RECORD_DEVICE_PINNED:
             role = event.data.get("role")
             self._fallbacks = {k: v for k, v in self._fallbacks.items() if k != role}
