@@ -99,6 +99,18 @@ test("верхняя доля по важности: неоценённые и �
   expect(topShare(turns.map(() => LOW_IMPORTANCE), turns, 0.3).some(Boolean)).toBe(false);
 });
 
+test("строки ленты (0.6.1): `keep` — реплики наблюдений; вместе с фильтром типов — объединение", () => {
+  const v = buildView(TURNS, analysis(), SEGMENTS.length, ALL)!;
+  // Только наблюдения (без типов): остаются реплики `keep`, прочее свёрнуто.
+  expect(layoutRows(TURNS, { types: v.types, chapterStart: v.chapterStart, keep: (i) => i === 4 })).toEqual([
+    { kind: "chapter", c: 1 }, { kind: "more", from: 3, to: 3, count: 1 }, { kind: "turn", i: 4 },
+  ]);
+  // Наблюдения и «Риски» — и то и другое.
+  expect(layoutRows(TURNS, {
+    types: v.types, chapterStart: v.chapterStart, filter: new Set(["risk"]), keep: (i) => i === 4,
+  })).toEqual([{ kind: "chapter", c: 1 }, { kind: "turn", i: 3 }, { kind: "turn", i: 4 }]);
+});
+
 test("строки ленты: заголовки глав, фильтр сворачивает остальное в «… N реплик»", () => {
   const v = buildView(TURNS, analysis(), SEGMENTS.length, ALL)!;
   expect(layoutRows(TURNS, { types: v.types, chapterStart: v.chapterStart })).toEqual([

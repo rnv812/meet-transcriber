@@ -32,3 +32,6 @@
 .analysis-offer__actions { display: flex; gap: 6px; margin-left: auto; }
 /* Модель не дала части разметки (главы, важность): сказано прямо, а не пустой полосой. */
 .analysis-status__missing { color: var(--warning); }
+/* «Анализ устарел» (0.6.1, в конце легенды): точка предупреждения и коротко; причина — в подсказке. */
+.analysis-status__stale { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.analysis-status__stale::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: var(--r-full); background: var(--warning); }

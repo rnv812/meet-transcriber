@@ -71,6 +71,8 @@ test("AnalysisStatus: идёт, устарел, не удался", async () => 
   expect(screen.getByRole("status")).toHaveTextContent("Анализ в очереди…");
   rerender(<AnalysisStatus state={{ state: "stale" }} busy={false} onRun={onRun} />);
   expect(screen.getByRole("status")).toHaveTextContent("Анализ устарел");
+  // Коротко (в конце легенды, 0.6.1): причина — в подсказке.
+  expect(screen.getByText("Анализ устарел")).toHaveAccessibleDescription(/Расшифровку изменили после него/);
   await userEvent.click(screen.getByRole("button", { name: "Переанализировать…" }));
   await userEvent.click(within(screen.getByRole("alertdialog", { name: "Разметить встречу заново?" }))
     .getByRole("button", { name: "Переанализировать" }));

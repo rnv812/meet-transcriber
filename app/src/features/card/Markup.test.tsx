@@ -194,24 +194,35 @@ test("«Наблюдения»: вид, текст, «Почему», ссылк
 
 test("без анализа — обычная лента: ни значков, ни фильтров, ни глав, ни наблюдений", () => {
   const { container } = view({ view: null });
-  expect(container.querySelector(".turn__type, .chapter-head, .tfilters, .insights, .turn--key")).toBeNull();
+  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insights, .turn--key")).toBeNull();
   expect(turnRows(container)).toHaveLength(7);
 });
 
-test("Atlas Aurora: фильтры — .filter с aria-pressed и счётчиком; «Наблюдения» — плоская карточка (0.5) со счётчиком", async () => {
-  view();
-  const chips = screen.getByRole("group", { name: "Показать только реплики этих типов" });
-  const questions = within(chips).getByRole("button", { name: /Вопросы/ });
-  expect(questions).toHaveClass("filter");
+test("легенда-фильтр (0.6.1): пункты без рамки, «Наблюдения N» первым, aria-pressed, счётчик", async () => {
+  const { container } = view();
+  const legend = screen.getByRole("group", { name: "Показать только реплики этих типов" });
+  expect(legend).toHaveClass("legend");
+  const items = within(legend).getAllByRole("button").map((b) => b.textContent);
+  expect(items).toEqual(["Наблюдения2", "Вопросы1", "Решения1", "Задачи1", "Риски1", "Идеи1"]);
+  const questions = within(legend).getByRole("button", { name: /Вопросы/ });
+  expect(questions).toHaveClass("legend__item");
+  expect(questions).not.toHaveClass("filter");
   expect(questions).toHaveAttribute("aria-pressed", "false");
-  expect(questions).toHaveTextContent(/^Вопросы1$/);
   await userEvent.click(questions);
   expect(questions).toHaveAttribute("aria-pressed", "true");
-  const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
-  expect(block).toHaveClass("card");
-  expect(block).not.toHaveClass("aurora-wash");
-  const head = within(block).getByRole("button", { name: /Наблюдения/ });
-  expect(within(head).getByText("2")).toHaveClass("badge");
+  // «Наблюдения» — тот же фильтр: реплики из ссылок наблюдений; с «Вопросами» — объединение.
+  await userEvent.click(within(legend).getByRole("button", { name: /Наблюдения/ }));
+  expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["1", "3", "4", "6"]);
+  await userEvent.click(questions);
+  expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["3", "4", "6"]);
+  await userEvent.click(within(legend).getByRole("button", { name: "Показать все" }));
+  expect(turnRows(container)).toHaveLength(7);
+});
+
+test("легенда: в конце строки — то, что передали (устаревший анализ)", () => {
+  view({ legendEnd: <span>Анализ устарел</span> });
+  const row = screen.getByRole("group", { name: "Показать только реплики этих типов" }).closest(".feed-filters")!;
+  expect(row.lastElementChild).toHaveTextContent("Анализ устарел");
 });
 
 test("заголовок главы: «Глава N», название, время, ✦; строка реплики: точка цвета спикера, бейдж типа, «важное»", () => {
@@ -277,7 +288,7 @@ test("карточка: выключенное в «Подсветке и раз
   await act(async () => {});
   await waitFor(() => expect(api.getAnalysis).toHaveBeenCalled());
   await act(async () => {});
-  expect(container.querySelector(".turn__type, .chapter-head, .tfilters, .insights, .turn--key")).toBeNull();
+  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insights, .turn--key")).toBeNull();
 });
 
 test("карточка: часть, выключенная в «Анализе встречи», не показывается", async () => {
@@ -292,6 +303,9 @@ test("карточка: устаревший анализ с другим чис
   const { container } = await card();
   await waitFor(() => expect(screen.getByText(/Анализ устарел/)).toBeInTheDocument());
   expect(container.querySelector(".turn__type, .chapter-head, .insights")).toBeNull();
+  // 0.6.1: строка — над лентой, в конце легенды, а не под шапкой карточки.
+  expect(screen.getByText(/Анализ устарел/).closest(".feed-filters")).not.toBeNull();
+  expect(screen.getByText(/Анализ устарел/).closest(".card__notices")).toBeNull();
 });
 
 test("карточка: ✦ у главы — на «Агент» со ссылкой: глава, время и первые реплики", async () => {
@@ -339,7 +353,7 @@ test("карточка: адрес Jira в настройках — ключи �
 test("карточка: с фильтром Shift-диапазон выбирает только видимые реплики; включённый фильтр убирает скрытые из выбора", async () => {
   mocks();
   const { container } = await card();
-  await waitFor(() => expect(container.querySelector(".tfilters")).not.toBeNull());
+  await waitFor(() => expect(container.querySelector(".legend")).not.toBeNull());
   await userEvent.click(screen.getByRole("button", { name: /Вопросы/ }));
   await userEvent.click(screen.getByRole("button", { name: /Риски/ }));
   // Видны реплики 1 (вопрос) и 4 (риск), между ними свёрнуты 2 и 3.
@@ -364,7 +378,7 @@ test("карточка: Shift+Пробел на реплике при фильт
   HTMLMediaElement.prototype.play = vi.fn(async () => {});
   mocks();
   const { container } = await card();
-  await waitFor(() => expect(container.querySelector(".tfilters")).not.toBeNull());
+  await waitFor(() => expect(container.querySelector(".legend")).not.toBeNull());
   await userEvent.click(screen.getByRole("button", { name: /Решения/ }));
   await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
   const row = (i: number) => container.querySelector<HTMLElement>(`.turn[data-turn="${i}"]`)!;

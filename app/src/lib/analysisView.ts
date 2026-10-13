@@ -500,10 +500,12 @@ export function layoutRows(
     filter?: ReadonlySet<PhraseType>;
     shown?: (i: number) => boolean;
     chapterStart?: Int32Array | null;
+    /** Фильтр «Наблюдения» (0.6.1): эти реплики — подходящие; с фильтром типов — объединение. */
+    keep?: (i: number) => boolean;
   },
 ): TurnRow[] {
   const rows: TurnRow[] = [];
-  const filtering = !!opts.filter?.size && !!opts.types;
+  const filtering = (!!opts.filter?.size && !!opts.types) || !!opts.keep;
   let run: { from: number; to: number; count: number } | null = null;
   const flush = () => {
     if (run && run.count > 0) rows.push({ kind: "more", ...run });
@@ -527,7 +529,8 @@ export function layoutRows(
     }
     const t = turns[i]!;
     const type = opts.types?.[i] ?? null;
-    const visible = !filtering || (type !== null && opts.filter!.has(type)) || (opts.shown?.(i) ?? false);
+    const visible = !filtering || (type !== null && !!opts.filter?.has(type)) || (opts.keep?.(i) ?? false)
+      || (opts.shown?.(i) ?? false);
     if (visible) {
       flush();
       rows.push({ kind: "turn", i });

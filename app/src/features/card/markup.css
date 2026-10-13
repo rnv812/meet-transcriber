@@ -47,11 +47,22 @@
 /* Строка фильтров: типы реплик (Aurora .filter) и «Задачи Jira:» — одной строкой. */
 .feed-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; }
 .feed-filters__sep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--hairline); }
-.tfilters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.filter.tfilter { display: inline-flex; align-items: center; gap: 6px; }
-.filter.tfilter:disabled { opacity: 0.45; cursor: default; }
-.tfilter__n { color: var(--ink-3); }
-.tfilters__reset { font-size: var(--text-sm); }
+/* Легенда-фильтр (0.6.1): тихие пункты без рамки; отметка — как на карте разметки:
+   нейтральная, у наблюдений и выбранного — цвет акцента. Выбранный пункт — с подложкой. */
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.legend__item {
+  display: inline-flex; align-items: center; gap: 6px; height: var(--control-sm); padding: 0 8px;
+  border: 0; border-radius: var(--r-control-sm); background: none; color: var(--ink-2);
+  font: 400 var(--text-sm)/1 var(--font-body); cursor: pointer; transition: background var(--d), color var(--d);
+}
+.legend__item:hover { background: var(--surface-2); color: var(--ink); }
+.legend__item[aria-pressed='true'] { background: var(--surface-2); color: var(--ink); font-weight: 500; }
+.legend__mark { flex: none; width: 10px; height: 4px; border-radius: 2px; background: var(--hairline-strong); }
+.legend__item--insights .legend__mark { height: 8px; background: var(--accent-line); }
+.legend__item[aria-pressed='true'] .legend__mark { background: var(--accent-line); }
+.legend__n { color: var(--ink-3); }
+.legend__reset { margin-left: 6px; font-size: var(--text-sm); }
+.feed-filters__end { margin-left: auto; }
 
 /* «Задачи Jira:» — ключ задачи (ссылка) и время реплик, где о ней говорили. */
 .jtasks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

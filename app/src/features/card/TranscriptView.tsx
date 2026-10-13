@@ -25,7 +25,7 @@ import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
-import { InsightsBlock, JiraTasks, TypeFilters, hasTypeFilters } from "./markup";
+import { InsightsBlock, JiraTasks, Legend, hasTypeFilters } from "./markup";
 import { FindAsk, TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
@@ -63,8 +63,10 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, seekTo = null, nowTurn = null,
-  textPhase = false, notice = null,
+  textPhase = false, notice = null, legendEnd = null,
 }: {
+  /** В конце строки легенды (0.6.1): «Анализ устарел · Переанализировать…». */
+  legendEnd?: ReactNode;
   /** Строка над лентой, на месте «Наблюдений» (разовое предложение анализа). */
   notice?: ReactNode;
   turns: Turn[];
@@ -160,15 +162,19 @@ export function TranscriptView({
 
   // Фильтр по типам реплик: остальные сворачиваются в «… N реплик».
   const [filter, setFilter] = useState<ReadonlySet<PhraseType>>(NO_FILTER);
+  // Фильтр «Наблюдения» (0.6.1): реплики, на которые ссылаются наблюдения.
+  const [insightsOn, setInsightsOn] = useState(false);
+  const insightTurns = useMemo(() => new Set((view?.insights ?? []).flatMap((x) => x.refs)), [view]);
   /** Реплики, которые показаны несмотря на фильтр (развёрнуты, открыты по ссылке). */
   const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
   const types = view?.types ?? null;
   // Сбрасываются со сменой фильтра или числа реплик; правка слова или спикера
   // (перечитанная запись, новые `turns`) развёрнутое не сворачивает.
   const turnCount = turns.length;
-  useEffect(() => { setOpened(new Set()); }, [filter, turnCount]);
+  useEffect(() => { setOpened(new Set()); }, [filter, insightsOn, turnCount]);
   // Типов в анализе больше нет (выключили, анализ устарел) — фильтр снимается.
   useEffect(() => { if (!types) setFilter(NO_FILTER); }, [types]);
+  useEffect(() => { if (!insightTurns.size) setInsightsOn(false); }, [insightTurns]);
   const counts = useMemo(() => typeCounts(types), [types]);
   const active = query.trim() !== "";
   const rows = useMemo(() => {
@@ -176,8 +182,9 @@ export function TranscriptView({
     return layoutRows(turns, {
       types, filter, chapterStart: view.chapters.length ? view.chapterStart : null,
       shown: (i) => opened.has(i) || (active && marks.has(i)),
+      keep: insightsOn ? (i) => insightTurns.has(i) : undefined,
     });
-  }, [view, turns, types, filter, opened, active, marks]);
+  }, [view, turns, types, filter, opened, active, marks, insightsOn, insightTurns]);
   const expand = useCallback((from: number) => {
     const row = rows?.find((r) => r.kind === "more" && r.from === from);
     if (!row || row.kind !== "more") return;
@@ -189,8 +196,8 @@ export function TranscriptView({
   }, [rows]);
   // С фильтром выбор (и действия над выбранным) — только среди видимых реплик.
   const visible = useMemo(
-    () => (filter.size && rows ? new Set(rows.flatMap((r) => (r.kind === "turn" ? [r.i] : []))) : null),
-    [filter, rows]);
+    () => ((filter.size || insightsOn) && rows ? new Set(rows.flatMap((r) => (r.kind === "turn" ? [r.i] : []))) : null),
+    [filter, insightsOn, rows]);
   const select = useCallback((t: number, how: "toggle" | "range") => {
     if (visible) onSelect?.(t, how, (i) => visible.has(i));
     else onSelect?.(t, how);
@@ -202,7 +209,7 @@ export function TranscriptView({
     }
   }, [visible, selected, onRestrictSelection]);
   // Фильтр скрыл все главы целиком — вместо пустой ленты подсказка со сбросом.
-  const noMatches = !!view?.chapters.length && filter.size > 0 && !!rows && !rows.some((r) => r.kind === "turn");
+  const noMatches = !!view?.chapters.length && (filter.size > 0 || insightsOn) && !!rows && !rows.some((r) => r.kind === "turn");
   const annotations = useMemo(
     () => (view ? { types: view.types, key: view.key, chapters: view.chapters } : null), [view]);
 
@@ -387,8 +394,10 @@ export function TranscriptView({
   };
 
   const counter = !active ? "" : hits.length ? `${current + 1} из ${hits.length}` : "Ничего не найдено";
-  const filters = types && hasTypeFilters(counts)
-    ? <TypeFilters counts={counts} value={filter} onChange={setFilter} /> : null;
+  const filters = view && ((types && hasTypeFilters(counts)) || view.insights.length > 0) ? (
+    <Legend counts={types ? counts : new Map()} value={filter} onChange={setFilter}
+      insights={view.insights.length} insightsOn={insightsOn} onInsights={setInsightsOn} />
+  ) : null;
   const jiraRow = tasks.length > 0 ? <JiraTasks tasks={tasks} turns={turns} onJump={jumpTo} /> : null;
 
   return (
@@ -439,18 +448,22 @@ export function TranscriptView({
         <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
       )}
       {/* Фильтры по типам и «Задачи Jira» — одной строкой. */}
-      {(filters || jiraRow) && (
+      {/* Легенда-фильтр, «Задачи Jira» и в конце — «Анализ устарел» (0.6.1) — одной строкой. */}
+      {(filters || jiraRow || legendEnd) && (
         <div className="feed-filters">
           {filters}
           {filters && jiraRow && <span className="feed-filters__sep" aria-hidden="true" />}
           {jiraRow}
+          {legendEnd && <span className="feed-filters__end">{legendEnd}</span>}
         </div>
       )}
       {toolbar}
       {noMatches ? (
         <div className="turns-empty" role="status">
           <p className="turns-empty__text">Нет реплик по выбранным фильтрам</p>
-          <button type="button" className="link-btn" onClick={() => setFilter(NO_FILTER)}>Сбросить фильтр</button>
+          <button type="button" className="link-btn" onClick={() => { setFilter(NO_FILTER); setInsightsOn(false); }}>
+            Сбросить фильтр
+          </button>
         </div>
       ) : (
         <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}

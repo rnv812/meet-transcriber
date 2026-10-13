@@ -495,6 +495,12 @@ export function RecordingCard({
   const live = status.kind === "recording" && !!snapshot?.live && isLiveRecording(rec, snapshot);
   const stage: CardStage = status.kind === "ready" ? "ready" : status.kind === "text" ? "text" : live ? "live"
     : status.kind === "recording" ? "recording" : "pending";
+  const analysisStatus = (
+    <AnalysisStatus state={analysis.state} busy={busy} durationS={rec.duration_s ?? spokenUntil}
+      onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
+        ? (p) => void doReanalyze(p) : undefined} />
+  );
+  const staleInLegend = analysis.state?.state === "stale" && turns.length > 0;
   let first;
   switch (status.kind) {
     case "ready":
@@ -507,6 +513,7 @@ export function RecordingCard({
             ? <div className="tbars">{turnEdit.bar}{textFix.bar}{improve.bar && <div className="tfix-bar">{improve.bar}</div>}</div>
             : null}
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn}
+          legendEnd={staleInLegend ? analysisStatus : null}
           // Разовое предложение анализа — только на «Расшифровке», над лентой: вкладки не сдвигаются.
           notice={offerAnalysis ? (
             <AnalysisOffer busy={busy} onAnswer={answerOffer}
@@ -628,11 +635,8 @@ export function RecordingCard({
       )}
       <div className="card__notices">
         {error && <div className="card__error" role="alert">{error}</div>}
-        {status.kind === "ready" && (
-          <AnalysisStatus state={analysis.state} busy={busy} durationS={rec.duration_s ?? spokenUntil}
-            onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
-              ? (p) => void doReanalyze(p) : undefined} />
-        )}
+        {/* Устаревший анализ — в конце легенды над лентой (0.6.1), остальное — здесь. */}
+        {status.kind === "ready" && !staleInLegend && analysisStatus}
         {status.kind === "ready" && improve.status}
         {kbDone && (
           <Callout tone="ok" label="Выгрузка в базу знаний"

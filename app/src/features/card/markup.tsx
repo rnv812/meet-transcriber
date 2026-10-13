@@ -1,6 +1,6 @@
 /**
- * Разметка встречи в «Расшифровке» (M3, Atlas Aurora): бейдж типа реплики,
- * фильтры по типам и «Задачи Jira» в одной строке, карточка «Наблюдения» под
+ * Разметка встречи в «Расшифровке» (M3, Atlas Aurora; 0.6.1): бейдж типа реплики,
+ * легенда-фильтр и «Задачи Jira» в одной строке, карточка «Наблюдения» под
  * поиском. Сама разметка — lib/analysisView.ts.
  */
 
@@ -53,34 +53,47 @@ export function TypeIcon({ type }: { type: PhraseType }) {
 export const hasTypeFilters = (counts: Map<PhraseType, number>) =>
   TYPE_FILTERS.some((f) => (counts.get(f.type) ?? 0) > 0);
 
-/** Фильтры «Вопросы · Решения · Задачи · Риски · Идеи» (Aurora .filter): можно выбрать несколько. */
-export function TypeFilters({ counts, value, onChange }: {
+/**
+ * Легенда-фильтр над лентой (0.6.1): «Наблюдения N · Вопросы N · Решения N · …» —
+ * тихие пункты без рамки с отметкой цвета, как на карте разметки; можно выбрать
+ * несколько (объединение). Только пункты с N > 0.
+ */
+export function Legend({ counts, value, onChange, insights = 0, insightsOn = false, onInsights }: {
   counts: Map<PhraseType, number>;
   value: ReadonlySet<PhraseType>;
   onChange: (next: Set<PhraseType>) => void;
+  /** Сколько наблюдений; 0 — пункта нет. */
+  insights?: number;
+  insightsOn?: boolean;
+  onInsights?: (on: boolean) => void;
 }) {
-  if (!hasTypeFilters(counts)) return null;
+  const types = TYPE_FILTERS.filter((f) => (counts.get(f.type) ?? 0) > 0);
+  if (!types.length && !insights) return null;
   const toggle = (type: PhraseType) => {
     const next = new Set(value);
     if (next.has(type)) next.delete(type);
     else next.add(type);
     onChange(next);
   };
+  const any = value.size > 0 || insightsOn;
   return (
-    <div className="tfilters" role="group" aria-label="Показать только реплики этих типов">
-      {TYPE_FILTERS.map((f) => {
-        const n = counts.get(f.type) ?? 0;
-        const on = value.has(f.type);
-        return (
-          <button key={f.type} type="button" className="filter tfilter" aria-pressed={on} disabled={!n && !on}
-            onClick={() => toggle(f.type)}>
-            {f.label}
-            <span className="tfilter__n num">{n}</span>
-          </button>
-        );
-      })}
-      {value.size > 0 && (
-        <button type="button" className="link-btn tfilters__reset" onClick={() => onChange(new Set())}>
+    <div className="legend" role="group" aria-label="Показать только реплики этих типов">
+      {insights > 0 && onInsights && (
+        <button type="button" className="legend__item legend__item--insights" aria-pressed={insightsOn}
+          onClick={() => onInsights(!insightsOn)}>
+          <span className="legend__mark" aria-hidden="true" />Наблюдения<span className="legend__n num">{insights}</span>
+        </button>
+      )}
+      {types.map((f) => (
+        <button key={f.type} type="button" className="legend__item" aria-pressed={value.has(f.type)}
+          onClick={() => toggle(f.type)}>
+          <span className="legend__mark" aria-hidden="true" />{f.label}
+          <span className="legend__n num">{counts.get(f.type) ?? 0}</span>
+        </button>
+      ))}
+      {any && (
+        <button type="button" className="link-btn legend__reset"
+          onClick={() => { onChange(new Set()); onInsights?.(false); }}>
           Показать все
         </button>
       )}

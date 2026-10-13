@@ -271,7 +271,10 @@ function StaleAnalysis({ busy, onRun, origin, missing }: {
   const [asking, setAsking] = useState(false);
   return (
     <div className="analysis-status" role="status">
-      <Tip content={origin}><span className="muted">Анализ устарел: расшифровку изменили после него</span></Tip>
+      {/* Коротко (0.6.1: в конце легенды над лентой); причина и чья разметка — в подсказке. */}
+      <Tip content={["Расшифровку изменили после него", origin].filter(Boolean).join(" · ")}>
+        <span className="analysis-status__stale">Анализ устарел</span>
+      </Tip>
       {onRun && <button type="button" className="link-btn" onClick={() => setAsking(true)} disabled={busy}>Переанализировать…</button>}
       {missing}
       {asking && onRun && (
