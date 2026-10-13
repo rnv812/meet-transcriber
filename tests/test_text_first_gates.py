@@ -6,6 +6,7 @@
 
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,9 @@ from meet import analysis, assistant, control, improve, jobs, kb_export, library
 from meet import tray_control
 
 RID = "2026-10-05_10-00"
+# «Сейчас» для восстановления — час после начала встречи: записи старше RECOVER_DAYS не
+# восстанавливаются, и с настоящими часами тест перестал бы проверять что-либо через неделю.
+NOW = datetime(2026, 10, 5, 11, 0).timestamp()
 SEGMENTS = [
     {"start": 0.0, "end": 2.0, "speaker": None, "text": "Добрый день, коллеги."},
     {"start": 2.5, "end": 4.0, "speaker": "Вы", "text": "Да, начнём.", "track": "mic"},
@@ -229,7 +233,7 @@ def test_recover_requeues_transcription_interrupted_after_the_text(folder, monke
     queue = FakeQueue()
     st = tray_control.TrayControl(tray.TrayApp(), queue=queue, llm_queue=FakeQueue())
     st._background = lambda fn, name="": fn()
-    done = st.recover()
+    done = st.recover(now=NOW)
     assert done["queued"] == [RID]
     assert [j.kind for j in queue.submitted] == [jobs.TRANSCRIBE]
 
@@ -240,7 +244,7 @@ def test_recover_does_not_finish_merge_on_text_phase(folder, monkeypatch):
     st = tray_control.TrayControl(tray.TrayApp(), queue=FakeQueue(), llm_queue=FakeQueue())
     st._background = lambda fn, name="": fn()
     monkeypatch.setattr(st, "_finish_merge", lambda f: finished.append(f))
-    st.recover()
+    st.recover(now=NOW)
     assert finished == []
 
 
