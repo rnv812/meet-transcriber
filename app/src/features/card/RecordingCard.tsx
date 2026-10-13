@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { PenLine } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
   buildView, INSIGHT_LABEL, turnAt, usableAnalysis, type InsightView,
@@ -21,6 +22,7 @@ import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
+import { IconButton } from "../../ui/IconButton";
 import { Loading } from "../../ui/Loading";
 import { Tip } from "../../ui/Tip";
 import type { AgentInsert } from "./AgentTab";
@@ -504,18 +506,6 @@ export function RecordingCard({
           toolbar={turnEdit.bar || textFix.bar || improve.bar
             ? <div className="tbars">{turnEdit.bar}{textFix.bar}{improve.bar && <div className="tfix-bar">{improve.bar}</div>}</div>
             : null}
-          onFix={textFix.openFromBar} fixHint={textFix.hintId}
-          tools={
-            // Причина недоступности — подсказкой на самой кнопке: недоступная .btn наведение
-            // получает (ui/button.css).
-            <Tip content={improve.blocked
-              ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}>
-              <Button variant="aurora" size="md" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
-                onClick={() => void improve.start()}>
-                <AgentMark size={16} />Улучшить
-              </Button>
-            </Tip>
-          }
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn}
           // Разовое предложение анализа — только на «Расшифровке», над лентой: вкладки не сдвигаются.
           notice={offerAnalysis ? (
@@ -571,8 +561,26 @@ export function RecordingCard({
         ) : <EmptyState title="Идёт запись…" />;
       break;
   }
+  // Инструменты «Расшифровки» в строке вкладок (0.6.1): «Исправить…» — значок (Ctrl+E), ✦ «Улучшить» —
+  // единственная кнопка с подписью; «Найти» CardTabs рисует сам.
+  const tools = status.kind === "ready" && turns.length ? (
+    <>
+      {/* Нажатие не снимает выделение в реплике: по нему и откроется окно. */}
+      <IconButton icon={PenLine} label="Исправить распознанное" tooltip="Исправить выделенное в реплике (Ctrl+E)"
+        aria-keyshortcuts="Control+E" aria-expanded={textFix.hintId !== null} aria-controls={textFix.hintId ?? undefined}
+        onMouseDown={(e) => e.preventDefault()} onClick={(e) => textFix.openFromBar(e.currentTarget)} />
+      {/* Причина недоступности — подсказкой на самой кнопке: недоступная .btn наведение получает (ui/button.css). */}
+      <Tip content={improve.blocked
+        ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}>
+        <Button variant="aurora" size="sm" flat aria-label="Улучшить расшифровку" disabled={!!improve.blocked}
+          onClick={() => void improve.start()}>
+          <AgentMark size={16} />Улучшить
+        </Button>
+      </Tip>
+    </>
+  ) : null;
   const body = (
-    <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
+    <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings} tools={tools}
       agentContext={`${rec.transcript_phase ?? "final"}:${rec.transcript_at ?? ""}`}
       showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk} chatEvent={chatEvent}
       onAskAgent={askAgent} onAgentTaken={agentTaken} meetingEnd={meetingEndOf(rec.started_at, rec.duration_s)}

@@ -170,11 +170,14 @@ test("Ctrl+E при выделении открывает окно сразу; �
   expect(api.previewTextFix).toHaveBeenCalledWith(ep, "r1", { find: "Кубер", segment: 2, offset: 0 });
 });
 
-test("«Исправить…» над лентой: с выделением — то же окно, что Ctrl+E; без выделения — подсказка", async () => {
+test("«Исправить…» в строке вкладок: с выделением — то же окно, что Ctrl+E; без выделения — подсказка", async () => {
   render(<RecordingCard id="r1" endpoint={ep} />);
   const p = await turnText(/Поднимем кубер/);
-  const bar = screen.getByRole("search", { name: "Поиск по расшифровке" });
+  // 0.6.1: «Исправить…» — значок в строке вкладок (Ctrl+E), рядом с «Найти» и «Улучшить».
+  const bar = document.querySelector<HTMLElement>(".card-tabs__bar")!;
   const fix = within(bar).getByRole("button", { name: "Исправить распознанное" });
+  expect(fix).toHaveAttribute("aria-keyshortcuts", "Control+E");
+  expect(fireEvent.mouseDown(fix)).toBe(false); // нажатие не снимает выделение в реплике
   window.getSelection()!.removeAllRanges();
   await userEvent.click(fix);
   const hint = screen.getByRole("dialog", { name: "Как исправить распознанное" });
@@ -191,8 +194,11 @@ test("«Исправить…» над лентой: с выделением —
 test("подсказка «Исправить…» без выделения: раскрытие, фокус в подсказку, Esc и уход фокуса закрывают", async () => {
   render(<RecordingCard id="r1" endpoint={ep} />);
   await turnText(/Поднимем кубер/);
-  const bar = screen.getByRole("search", { name: "Поиск по расшифровке" });
+  // 0.6.1: «Исправить…» — значок в строке вкладок (Ctrl+E), рядом с «Найти» и «Улучшить».
+  const bar = document.querySelector<HTMLElement>(".card-tabs__bar")!;
   const fix = within(bar).getByRole("button", { name: "Исправить распознанное" });
+  expect(fix).toHaveAttribute("aria-keyshortcuts", "Control+E");
+  expect(fireEvent.mouseDown(fix)).toBe(false); // нажатие не снимает выделение в реплике
   window.getSelection()!.removeAllRanges();
   expect(fix).toHaveAttribute("aria-expanded", "false");
   expect(fix).not.toHaveAttribute("aria-controls");
@@ -216,8 +222,8 @@ test("подсказка «Исправить…» без выделения: р
   await userEvent.click(fix);
   const again = screen.getByRole("dialog", { name: "Как исправить распознанное" });
   expect(again).toHaveFocus();
-  const search = within(bar).getByRole("searchbox", { name: "Найти в расшифровке" });
-  fireEvent.focusOut(again, { relatedTarget: search });
+  const find = within(bar).getByRole("button", { name: "Найти в расшифровке" });
+  fireEvent.focusOut(again, { relatedTarget: find });
   expect(screen.queryByRole("dialog", { name: "Как исправить распознанное" })).toBeNull();
 
   // Повторное нажатие на кнопку закрывает подсказку и оставляет фокус на кнопке.

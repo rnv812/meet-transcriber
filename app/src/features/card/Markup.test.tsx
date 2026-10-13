@@ -12,6 +12,7 @@ import { mergeTurns } from "../../lib/speakers";
 import type { Analysis, Recording, Segment, Transcript } from "../../lib/types";
 import { RecordingCard } from "./RecordingCard";
 import { TranscriptView } from "./TranscriptView";
+import { FindAsk } from "./transcriptShown";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -62,7 +63,10 @@ const ALL = { types: true, importance: true, chapters: true, insights: true };
 const VIEW = buildView(TURNS, ANALYSIS, SEGMENTS.length, ALL);
 
 function view(props: Partial<Parameters<typeof TranscriptView>[0]> = {}) {
-  return render(<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={VIEW} {...props} />);
+  return render(
+    <FindAsk.Provider value={1}>
+      <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={VIEW} {...props} />
+    </FindAsk.Provider>);
 }
 const turnRows = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>(".turn")];
 
@@ -138,7 +142,7 @@ test("все главы пусты по фильтру: одно «Нет реп
   await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
   // Анализ обновился: идей в нём больше нет, а фильтр остался включённым.
   const noIdeas = buildView(TURNS, { ...ANALYSIS, phrase_types: { 1: "question" } }, SEGMENTS.length, ALL);
-  rerender(<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={noIdeas} />);
+  rerender(<FindAsk.Provider value={1}><TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={noIdeas} /></FindAsk.Provider>);
   expect(screen.getByText("Нет реплик по выбранным фильтрам")).toBeInTheDocument();
   expect(container.querySelectorAll(".chapter-head, .turns-more, .turn")).toHaveLength(0);
   await userEvent.click(screen.getByRole("button", { name: "Сбросить фильтр" }));
@@ -378,7 +382,7 @@ test("развёрнутые фильтром реплики не сворачи
   await userEvent.click(container.querySelectorAll<HTMLElement>(".turns-more")[0]!);
   expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["0", "1", "2", "3", "4"]);
   const reloaded = mergeTurns(SEGMENTS.map((s) => ({ ...s })));
-  rerender(<TranscriptView turns={reloaded} colors={new Map()} playable onPlay={() => {}} view={VIEW} />);
+  rerender(<FindAsk.Provider value={1}><TranscriptView turns={reloaded} colors={new Map()} playable onPlay={() => {}} view={VIEW} /></FindAsk.Provider>);
   expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["0", "1", "2", "3", "4"]);
 });
 

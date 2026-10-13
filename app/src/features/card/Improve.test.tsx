@@ -209,7 +209,7 @@ test("карточка: подсказка после GigaAM запускает 
   await waitFor(() => expect(within(box).getByRole("status")).toHaveTextContent("Улучшение в очереди…"));
 });
 
-test("карточка: «Ещё действия» и кнопка в строке поиска; без модели — недоступно", async () => {
+test("карточка: «Ещё действия» и кнопка в строке вкладок; без модели — недоступно", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue({
     provider: null, setting: "auto", available: {}, knowledge_dir: null, checking: false,
   });
@@ -219,7 +219,7 @@ test("карточка: «Ещё действия» и кнопка в стро�
   // Причина — подсказкой на самой кнопке (у недоступной .btn наведение есть: ui/button.css).
   const inBar = screen.getByRole("button", { name: "Улучшить расшифровку" });
   expect(inBar).toHaveAccessibleDescription("Подключите Claude Code, Codex или OpenCode в настройках");
-  expect(inBar.parentElement).toHaveAttribute("role", "search");
+  expect(inBar.closest(".card-tabs__tools")).not.toBeNull(); // 0.6.1: в строке вкладок
   await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
   const menu = screen.getByRole("menu", { name: "Ещё действия с записью" });
   const item = within(menu).getByRole("menuitem", { name: "Улучшить расшифровку" });

@@ -3,7 +3,9 @@
 /* Вкладки — Aurora `.tabs` под шапкой, вне прокрутки; под ними — тело карточки
    (.card__body в card.css: граница сверху, прокрутка). */
 .card-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.card-tabs__bar { flex: none; padding: 10px 24px 0; }
+.card-tabs__bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 24px 0; }
+/* Инструменты «Расшифровки» в строке вкладок (0.6.1): «Найти», «Исправить…» — значки, ✦ «Улучшить» — с подписью. */
+.card-tabs__tools { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 /* В узкой карточке вкладки не вылезают за край — прокручиваются вбок. */
 .card-tabs__list { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 /* Агент записи работает (agentSessions): точка 6 px цвета акцента на вкладке «Агент». */

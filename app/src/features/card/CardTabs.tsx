@@ -18,16 +18,18 @@
  */
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Search } from "lucide-react";
 import type { AgentRequest } from "../../lib/agentRef";
 import type { Endpoint } from "../../lib/api";
 import type { ChatUpdatedEvent, Job } from "../../lib/types";
+import { IconButton } from "../../ui/IconButton";
 import { Tip } from "../../ui/Tip";
 import { AgentTab, type AgentInsert } from "./AgentTab";
 import { AssistantTab } from "./AssistantTab";
 import { useAgentLive } from "./agentSessions";
 import { useAssistant } from "./assistant";
 import { SummaryTab } from "./SummaryTab";
-import { TranscriptShown } from "./transcriptShown";
+import { FindAsk, TranscriptShown } from "./transcriptShown";
 import "./assistant.css";
 
 type Tab = "transcript" | "summary" | "assistant" | "agent";
@@ -69,8 +71,13 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
 
 export function CardTabs({
   endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript, stage = "ready", agentRequest = null,
-  onAskAgent, onAgentTaken, agentContext, chatEvent = null, meetingEnd = null, onTime,
+  onAskAgent, onAgentTaken, agentContext, chatEvent = null, meetingEnd = null, onTime, tools,
 }: {
+  /**
+   * Инструменты «Расшифровки» в строке вкладок справа (0.6.1): «Исправить…», ✦ «Улучшить».
+   * «Найти» CardTabs рисует сам. Видны только на «Расшифровке».
+   */
+  tools?: ReactNode;
   /** Время «[мм:сс]» в итогах: перейти к этому месту записи. */
   onTime?: (seconds: number) => void;
   endpoint: Endpoint;
@@ -135,6 +142,7 @@ export function CardTabs({
     setTab("transcript");
   }, [showTranscript]);
 
+  // «Найти» и Ctrl+F — просьба открыть строку поиска (FindAsk): откроет и поставит фокус TranscriptView.
   // Ctrl+F — поиск по расшифровке с любой вкладки (по коду клавиши: и в русской раскладке).
   // Не из поля переименования в списке, диалога или всплывающего окна: там у Ctrl+F своё место.
   const transcriptPanel = useRef<HTMLDivElement>(null);
@@ -152,12 +160,6 @@ export function CardTabs({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [stage]);
-  useEffect(() => {
-    if (!findTick) return;
-    const field = transcriptPanel.current?.querySelector<HTMLInputElement>("[data-transcript-search]");
-    field?.focus();
-    field?.select();
-  }, [findTick]);
   // Стрелки по списку вкладок — как у обычного tablist.
   const onKeyDown = (e: KeyboardEvent) => {
     const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
@@ -171,7 +173,11 @@ export function CardTabs({
 
   const shared = { endpoint, id, folder, jobs, assistant, onOpenSettings };
   const panels: Record<Tab, () => ReactNode> = {
-    transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
+    transcript: () => (
+      <TranscriptShown.Provider value={shown}>
+        <FindAsk.Provider value={findTick}>{transcript}</FindAsk.Provider>
+      </TranscriptShown.Provider>
+    ),
     // Время в итогах — к этой реплике: на «Расшифровку», лента прокручивается к ней.
     summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent}
       onTime={onTime ? (t) => { onTime(t); open("transcript"); } : undefined} />,
@@ -208,6 +214,13 @@ export function CardTabs({
             </button>
           ))}
         </div>
+        {tab === "transcript" && (stage === "ready" || stage === "text") && (
+          <div className="card-tabs__tools">
+            <IconButton icon={Search} label="Найти в расшифровке" tooltip="Найти в расшифровке (Ctrl+F)"
+              aria-keyshortcuts="Control+F" onClick={() => setFindTick((n) => n + 1)} />
+            {tools}
+          </div>
+        )}
       </div>
       <div className="card__body">
         {tabs.map((t) => (

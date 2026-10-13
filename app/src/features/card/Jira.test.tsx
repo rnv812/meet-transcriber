@@ -13,6 +13,7 @@ import { mergeTurns } from "../../lib/speakers";
 import type { Analysis, JiraRefs, Segment } from "../../lib/types";
 import { LinkedText } from "../../ui/LinkedText";
 import { TranscriptView } from "./TranscriptView";
+import { FindAsk } from "./transcriptShown";
 
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
@@ -31,7 +32,9 @@ const TURNS = mergeTurns(SEGMENTS);
 function transcript(jira = linker, props: Partial<Parameters<typeof TranscriptView>[0]> = {}) {
   return render(
     <JiraLinks.Provider value={jira}>
-      <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} {...props} />
+      <FindAsk.Provider value={1}>
+        <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} {...props} />
+      </FindAsk.Provider>
     </JiraLinks.Provider>,
   );
 }

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { Turn } from "../../lib/speakers";
 import { CardTabs } from "./CardTabs";
 import { TranscriptView } from "./TranscriptView";
+import { FindAsk } from "./transcriptShown";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -20,10 +21,13 @@ const TURNS = [
   turn(60, "Анна", "Вопросов нет."),
 ];
 
+/** Лента с открытой строкой поиска (0.6.1: строку открывает «Найти» или Ctrl+F — просьба `FindAsk`). */
 function setup(props: Partial<Parameters<typeof TranscriptView>[0]> = {}) {
   const onPlay = vi.fn();
   const view = render(
-    <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={onPlay} {...props} />);
+    <FindAsk.Provider value={1}>
+      <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={onPlay} {...props} />
+    </FindAsk.Provider>);
   return { onPlay, ...view };
 }
 
@@ -40,9 +44,8 @@ test("находит слова в любой форме, считает сов�
   expect(current(container)).toHaveTextContent("бюджета");
 });
 
-test("панель над лентой: поиск — поле Aurora с подсказкой «Ctrl F», видимые «Исправить…» и инструменты справа", async () => {
-  const onFix = vi.fn();
-  setup({ onFix, tools: <button type="button">Улучшить расшифровку</button> });
+test("строка поиска (0.6.1): поле Aurora с подсказкой «Ctrl F», ↑/↓ при запросе, «Закрыть поиск»", async () => {
+  setup();
   const bar = screen.getByRole("search", { name: "Поиск по расшифровке" });
   expect(field()).toHaveClass("field", "field--md");
   expect(field().closest(".search")).not.toBeNull();
@@ -52,19 +55,18 @@ test("панель над лентой: поиск — поле Aurora с под
   await userEvent.type(field(), "бюджет");
   expect(within(bar).queryByText("Ctrl F")).toBeNull();
   expect(await within(bar).findByRole("button", { name: "Следующее совпадение" })).toBeInTheDocument();
-  // «Исправить…» — то же окно, что Ctrl+E (выделение не сбрасывается нажатием).
-  const fix = within(bar).getByRole("button", { name: "Исправить распознанное" });
-  expect(fix).toHaveTextContent("Исправить…");
-  expect(fix).toHaveAttribute("aria-keyshortcuts", "Control+E");
-  expect(fireEvent.mouseDown(fix)).toBe(false);
-  await userEvent.click(fix);
-  expect(onFix).toHaveBeenCalledWith(fix);
-  expect(within(bar).getByRole("button", { name: "Улучшить расшифровку" })).toBeInTheDocument();
+  // «Исправить…» и «Улучшить» — в строке вкладок, не в строке поиска.
+  expect(within(bar).queryByRole("button", { name: "Исправить распознанное" })).toBeNull();
+  await userEvent.click(within(bar).getByRole("button", { name: "Закрыть поиск" }));
+  expect(screen.queryByRole("searchbox", { name: "Найти в расшифровке" })).toBeNull();
 });
 
-test("без правки текста (текст до спикеров) «Исправить…» нет", () => {
-  setup();
-  expect(screen.queryByRole("button", { name: "Исправить распознанное" })).toBeNull();
+test("строки поиска нет, пока её не попросили; просьба открывает её и ставит фокус в поле", () => {
+  const props = { turns: TURNS, colors: new Map<string, string>(), playable: true, onPlay: () => {} };
+  const { rerender } = render(<FindAsk.Provider value={0}><TranscriptView {...props} /></FindAsk.Provider>);
+  expect(screen.queryByRole("search", { name: "Поиск по расшифровке" })).toBeNull();
+  rerender(<FindAsk.Provider value={1}><TranscriptView {...props} /></FindAsk.Provider>);
+  expect(field()).toHaveFocus();
 });
 
 test("Enter и Shift+Enter, кнопки ↑/↓ — по кругу", async () => {
@@ -92,15 +94,14 @@ test("ничего не нашлось — так и сказано; фраза 
   await vi.waitFor(() => expect(counter()).toHaveTextContent("1 из 1"));
 });
 
-test("Esc очищает поиск и возвращает фокус туда, где он был", async () => {
+test("Esc очищает поиск, закрывает строку и возвращает фокус туда, где он был", async () => {
   const { container } = setup();
   const before = screen.getAllByRole("button", { name: /^(Слушать|Прослушать) с / })[0]!;
   before.focus();
   await userEvent.type(field(), "бюджет");
   await vi.waitFor(() => expect(counter()).toHaveTextContent("1 из 3"));
   await userEvent.keyboard("{Escape}");
-  expect(field()).toHaveValue("");
-  expect(counter()).toHaveTextContent("");
+  expect(screen.queryByRole("searchbox", { name: "Найти в расшифровке" })).toBeNull();
   expect(container.querySelector("mark")).toBeNull();
   expect(before).toHaveFocus();
 });
@@ -162,6 +163,22 @@ test("просьба из списка, пока открыты «Итоги», 
   expect(screen.getByRole("tab", { name: "Итоги" })).toHaveAttribute("aria-selected", "true");
   rerender(tabs(2));
   expect(screen.getByRole("tab", { name: "Расшифровка" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("инструменты «Расшифровки» (0.6.1) — в строке вкладок и только на ней; «Найти» открывает строку поиска", async () => {
+  render(
+    <CardTabs endpoint={{ base: "/api", token: null }} id="r" folder="C:/r" jobs={[]}
+      tools={<button type="button">Улучшить расшифровку</button>}
+      transcript={<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} />} />);
+  const bar = document.querySelector<HTMLElement>(".card-tabs__bar")!;
+  expect(within(bar).getByRole("button", { name: "Улучшить расшифровку" })).toBeInTheDocument();
+  const find = within(bar).getByRole("button", { name: "Найти в расшифровке" });
+  expect(find).toHaveAttribute("aria-keyshortcuts", "Control+F");
+  await userEvent.click(find);
+  expect(field()).toHaveFocus();
+  await userEvent.click(screen.getByRole("tab", { name: "Итоги" }));
+  expect(within(bar).queryByRole("button", { name: "Улучшить расшифровку" })).toBeNull();
+  expect(within(bar).queryByRole("button", { name: "Найти в расшифровке" })).toBeNull();
 });
 
 test("Ctrl+F в диалоге, всплывающем окне или поле переименования не уводит к поиску", async () => {

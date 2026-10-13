@@ -128,12 +128,12 @@ test("текст до спикеров: виден сразу, спокойна�
   expect(container.querySelectorAll("button.turn__speaker")).toHaveLength(0);
   expect(container.querySelector(".turn__speaker")).toHaveTextContent("Вы");
   // Ни чипов спикеров в шапке, ни «Улучшить», ни «Спросить агента» у реплик.
-  expect(screen.queryByRole("button", { name: /^Спикеры \(/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Спикеры: / })).toBeNull();
   expect(screen.queryByRole("button", { name: "Улучшить расшифровку" })).toBeNull();
   expect(container.querySelector(".turn__ask")).toBeNull();
   expect(screen.queryByRole("tab", { name: "Итоги" })).toBeNull();
-  // Поиск по тексту работает.
-  expect(screen.getByRole("searchbox", { name: "Найти в расшифровке" })).toBeInTheDocument();
+  // Поиск по тексту работает: «Найти» в строке вкладок.
+  expect(screen.getByRole("button", { name: "Найти в расшифровке" })).toBeInTheDocument();
   // Отмена — из строки хода.
   expect(within(screen.getByRole("status", { name: "Ход расшифровки" }))
     .getByRole("button", { name: "Отменить расшифровку…" })).toBeInTheDocument();
@@ -151,6 +151,7 @@ test("карточка перечитывается, когда задача с�
 test("спикеры приходят на тот же список: поиск и элемент расшифровки остаются, появляются подписи", async () => {
   const { container, rerender } = await card([job("running")]);
   const view = container.querySelector(".transcript");
+  await userEvent.click(screen.getByRole("button", { name: "Найти в расшифровке" }));
   const find = screen.getByRole("searchbox", { name: "Найти в расшифровке" });
   await userEvent.type(find, "бюджет");
   served = { rec: finalRec, transcript: FINAL };

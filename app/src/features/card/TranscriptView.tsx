@@ -1,6 +1,7 @@
 /**
- * Вкладка «Расшифровка»: панель над лентой (поиск, «Исправить…», ✦ «Улучшить»),
- * «Наблюдения», фильтры по типам с «Задачами Jira», реплики.
+ * Вкладка «Расшифровка»: строка поиска (0.6.1: открывается по «Найти» или Ctrl+F —
+ * просьба `FindAsk`; «Исправить…» и ✦ «Улучшить» — в строке вкладок), «Наблюдения»,
+ * фильтры по типам с «Задачами Jira», реплики.
  *
  * Правила поиска — lib/search.ts (те же у поиска по всем записям). Текст
  * разбирается один раз на транскрипт, запрос — с задержкой 150 мс. Текущее
@@ -15,19 +16,17 @@ import {
   useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent,
   type ReactNode,
 } from "react";
-import { ChevronDown, ChevronUp, PenLine, Search } from "lucide-react";
+import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { layoutRows, turnAt, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
 import { JiraLinks, jiraTasks } from "../../lib/jira";
 import { placeOf, restorePlace, scrollParent, type Place } from "../../lib/keepPlace";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
-import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
-import { Tip } from "../../ui/Tip";
 import { InsightsBlock, JiraTasks, TypeFilters, hasTypeFilters } from "./markup";
-import { TranscriptShown } from "./transcriptShown";
+import { FindAsk, TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
 export const FIND_DELAY_MS = 150;
@@ -63,8 +62,8 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
-  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools, seekTo = null, nowTurn = null,
-  textPhase = false, onFix, fixHint = null, notice = null,
+  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, seekTo = null, nowTurn = null,
+  textPhase = false, notice = null,
 }: {
   /** Строка над лентой, на месте «Наблюдений» (разовое предложение анализа). */
   notice?: ReactNode;
@@ -83,12 +82,6 @@ export function TranscriptView({
   onSplitAt?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   /** Полоса над репликами (выбранные, итог назначения). */
   toolbar?: ReactNode;
-  /** Кнопки в строке поиска справа (✦ «Улучшить расшифровку»). */
-  tools?: ReactNode;
-  /** «Исправить…» на панели: то же окно, что Ctrl+E (по выделению в реплике); `anchor` — кнопка. */
-  onFix?: (anchor: HTMLElement) => void;
-  /** id раскрытой подсказки «Как исправить» (нажали «Исправить…» без выделения); закрыта — null. */
-  fixHint?: string | null;
   find?: FindRequest | null;
   /** ✦ «Спросить агента» у реплик (номера реплик). */
   onAskAgent?: (turns: number[]) => void;
@@ -117,12 +110,31 @@ export function TranscriptView({
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
+  // Строка поиска (0.6.1): открыта по просьбе (FindAsk), по просьбе из списка или пока есть запрос.
+  const ask = useContext(FindAsk);
+  const [findOpen, setFindOpen] = useState(ask > 0 || !!find?.q);
+  const focusFind = useRef(false);
+  const lastAsk = useRef(ask);
+  useEffect(() => {
+    if (ask === lastAsk.current) return;
+    lastAsk.current = ask;
+    if (!ask) return;
+    setFindOpen(true);
+    focusFind.current = true;
+  }, [ask]);
+  useLayoutEffect(() => {
+    if (!focusFind.current || !findOpen) return;
+    focusFind.current = false;
+    input.current?.focus();
+    input.current?.select();
+  });
 
   // Новая просьба из списка (та же карточка, другой фрагмент) — запрос и переход сразу.
   const lastFind = useRef(find?.n);
   useEffect(() => {
     if (!find || find.n === lastFind.current) return;
     lastFind.current = find.n;
+    setFindOpen(true);
     setText(find.q);
     setQuery(find.q);
     setJump({ t: find.t, n: find.n });
@@ -359,13 +371,19 @@ export function TranscriptView({
       else step(e.shiftKey ? -1 : 1);
     } else if (e.key === "Escape") {
       e.preventDefault();
-      setText("");
-      setQuery("");
-      const back = returnTo.current;
-      returnTo.current = null;
-      if (back?.isConnected && back !== input.current) back.focus();
-      else input.current?.blur();
+      closeFind();
     }
+  };
+
+  /** Очистить запрос, закрыть строку и вернуть фокус туда, откуда пришли. */
+  const closeFind = () => {
+    setText("");
+    setQuery("");
+    setFindOpen(false);
+    const back = returnTo.current;
+    returnTo.current = null;
+    if (back?.isConnected && back !== input.current) back.focus();
+    else input.current?.blur();
   };
 
   const counter = !active ? "" : hits.length ? `${current + 1} из ${hits.length}` : "Ничего не найдено";
@@ -375,55 +393,47 @@ export function TranscriptView({
 
   return (
     <div className="transcript" ref={box}>
-      {/* Панель над лентой (макет Atlas Aurora): поиск слева, «Исправить…» и ✦ «Улучшить» — справа. */}
-      <div className="find" role="search" aria-label="Поиск по расшифровке">
-        <div className="search find__search">
-          <Search size={18} strokeWidth={1.75} aria-hidden="true" />
-          <input
-            ref={input}
-            type="search"
-            className="field field--md find__input"
-            data-transcript-search=""
-            placeholder="Найти в расшифровке"
-            aria-label="Найти в расшифровке"
-            aria-keyshortcuts="Control+F"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onFocus={(e) => { returnTo.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null; }}
-            onKeyDown={onKeyDown}
-          />
-          {/* Подсказка клавиши — пока поле пустое: не наезжает на текст и крестик очистки. */}
-          {!text && <span className="kbd" aria-hidden="true">Ctrl F</span>}
+      {/* Строка поиска (0.6.1): открывается по «Найти» в строке вкладок или Ctrl+F; Esc — закрыть. */}
+      {(findOpen || active) && (
+        <div className="find" role="search" aria-label="Поиск по расшифровке">
+          <div className="search find__search">
+            <Search size={18} strokeWidth={1.75} aria-hidden="true" />
+            <input
+              ref={input}
+              type="search"
+              className="field field--md find__input"
+              data-transcript-search=""
+              placeholder="Найти в расшифровке"
+              aria-label="Найти в расшифровке"
+              aria-keyshortcuts="Control+F"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onFocus={(e) => { returnTo.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null; }}
+              onKeyDown={onKeyDown}
+            />
+            {/* Подсказка клавиши — пока поле пустое: не наезжает на текст и крестик очистки. */}
+            {!text && <span className="kbd" aria-hidden="true">Ctrl F</span>}
+          </div>
+          <span className={`find__count num${active && !hits.length ? " find__count--none" : ""}`}
+            aria-live="polite" aria-atomic="true">{counter}</span>
+          {active && (
+            <>
+              <IconButton icon={ChevronUp} label="Предыдущее совпадение" tooltip="Предыдущее (Shift+Enter)"
+                disabled={hits.length < 2} onClick={() => step(-1)} />
+              <IconButton icon={ChevronDown} label="Следующее совпадение" tooltip="Следующее (Enter)"
+                disabled={hits.length < 2} onClick={() => step(1)} />
+            </>
+          )}
+          <HelpTip label="Как искать в расшифровке" title="Поиск по расшифровке">
+            <TipLine>Слова без кавычек находят реплики, где есть все эти слова в любой форме: «задача» найдёт и «задачи».</TipLine>
+            <TipLine>Фраза в кавычках, например <code>"план работ"</code>, ищется точно, слово в слово.</TipLine>
+            <TipLine><code>спикер:Анна</code> — только реплики этого спикера.</TipLine>
+            <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить и закрыть.</TipLine>
+          </HelpTip>
+          <span className="find__gap" />
+          <IconButton icon={X} label="Закрыть поиск" tooltip="Закрыть поиск (Esc)" onClick={closeFind} />
         </div>
-        <span className={`find__count num${active && !hits.length ? " find__count--none" : ""}`}
-          aria-live="polite" aria-atomic="true">{counter}</span>
-        {active && (
-          <>
-            <IconButton icon={ChevronUp} label="Предыдущее совпадение" tooltip="Предыдущее (Shift+Enter)"
-              disabled={hits.length < 2} onClick={() => step(-1)} />
-            <IconButton icon={ChevronDown} label="Следующее совпадение" tooltip="Следующее (Enter)"
-              disabled={hits.length < 2} onClick={() => step(1)} />
-          </>
-        )}
-        <HelpTip label="Как искать в расшифровке" title="Поиск по расшифровке">
-          <TipLine>Слова без кавычек находят реплики, где есть все эти слова в любой форме: «задача» найдёт и «задачи».</TipLine>
-          <TipLine>Фраза в кавычках, например <code>"план работ"</code>, ищется точно, слово в слово.</TipLine>
-          <TipLine><code>спикер:Анна</code> — только реплики этого спикера.</TipLine>
-          <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить.</TipLine>
-        </HelpTip>
-        <span className="find__gap" />
-        {onFix && (
-          // Нажатие не снимает выделение в реплике: по нему и откроется окно.
-          <Tip content="Исправить выделенное в реплике (Ctrl+E)">
-            <Button variant="ghost" size="md" icon={PenLine} aria-label="Исправить распознанное" aria-keyshortcuts="Control+E"
-              aria-expanded={fixHint !== null} aria-controls={fixHint ?? undefined}
-              onMouseDown={(e) => e.preventDefault()} onClick={(e) => onFix(e.currentTarget)}>
-              Исправить…
-            </Button>
-          </Tip>
-        )}
-        {tools}
-      </div>
+      )}
       {notice}
       {view && view.insights.length > 0 && (
         <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
