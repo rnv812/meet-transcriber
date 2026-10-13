@@ -42,9 +42,13 @@ function resultText(kind: DeviceKind, check: DeviceCheck): string {
   return `Звук есть: ${check.device}`;
 }
 
-function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoint }: {
+/** Строка под списком: что на самом деле выбрано (0.6.1, «Звук собеседников» на Mac). */
+type DeviceNote = { warn: boolean; text: string };
+
+function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoint, note }: {
   id: string; kind: DeviceKind; label: string; hint: string; help?: ReactNode;
   items: DeviceItem[]; value: string | null; onChange: (name: string | null) => void; endpoint: Endpoint;
+  note?: DeviceNote | null;
 }) {
   const [checking, setChecking] = useState(false);
   const [check, setCheck] = useState<DeviceCheck | null>(null);
@@ -87,6 +91,7 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
           {check && <span className={check.peak < SILENCE || check.fallback ? "muted" : "notice"}>{resultText(kind, check)}</span>}
           {error && <span className="error">{error}</span>}
         </span>
+        {note && <span className={`sound__note${note.warn ? " sound__note--warn" : ""}`}>{note.text}</span>}
       </Row>
     </div>
   );
@@ -120,6 +125,22 @@ function LevelBars({ label, percent, kind, quiet }: {
   );
 }
 
+/**
+ * macOS: в «Звук собеседников» есть все устройства ввода (ради BlackHole), и выбирают свои
+ * наушники с микрофоном — тогда записался бы микрофон вместо собеседников. Тот же микрофон,
+ * что у голоса, запись заменит «Системным звуком» (recorder, `same_as_mic`); другое
+ * устройство ввода — тихая подсказка, для чего оно. На Windows здесь устройства вывода.
+ */
+function otherSideNote(output: string | null, mic: string | null, system: string | undefined): DeviceNote | null {
+  if (!IS_MAC || !output || output === system) return null;
+  if (output === mic) {
+    return { warn: true, text: `«${output}» — ваш микрофон: запишется ваш голос, а не собеседники. `
+      + `Во время записи Meet возьмёт «${system ?? "Системный звук"}».` };
+  }
+  return { warn: false, text: "Это устройство ввода: сюда должен приходить звук звонка (BlackHole и т. п.). "
+    + `Микрофон наушников не подойдёт — выберите «${system ?? "Системный звук"}».` };
+}
+
 export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: {
   draft: Raw; set: SetFn; devices: Devices | null; endpoint: Endpoint;
   /** Перейти в «Спикеры» (образец голоса); без него ссылки нет. */
@@ -127,6 +148,8 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
 }) {
   const v = (k: string) => pickedName(draft.recording?.[k]);
   const choose = (key: string) => (name: string | null) => set("recording", key, name ? { name } : null);
+  const micInUse = v("mic_device") ?? devices?.inputs?.find((d) => d.default)?.name ?? null;
+  const note = otherSideNote(v("output_device"), micInUse, devices?.outputs?.find((d) => d.default)?.name);
   return (
     <>
       {onOpenSpeakers && (
@@ -145,7 +168,7 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
         <DeviceRow id="sound-mic" kind="mic" label="Микрофон" endpoint={endpoint}
           hint={`Ваш голос. «Как в системе» — микрофон ${OS_TEXT.systemName} по умолчанию`}
           items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} />
-        <DeviceRow id="sound-output" kind="output" label="Звук собеседников (вывод)" endpoint={endpoint}
+        <DeviceRow id="sound-output" kind="output" label={OS_TEXT.otherSide} endpoint={endpoint} note={note}
           hint={IS_MAC
             ? "Системный звук (ScreenCaptureKit) или виртуальное устройство, например BlackHole"
             : "Устройство, через которое вы слышите собеседников: наушники или колонки"}

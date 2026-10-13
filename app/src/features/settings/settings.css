@@ -253,6 +253,9 @@
 .sound__pick .btn { flex: none; }
 .sound__result { flex-basis: 100%; min-height: 20px; display: flex; align-items: center; gap: var(--s-2); font-size: var(--text-sm); }
 .sound__result:empty { min-height: 0; margin-top: calc(-1 * var(--s-2)); }
+/* Что на самом деле выбрано в «Звук собеседников» на Mac (0.6.1): тихо или предупреждением. */
+.sound__note { flex-basis: 100%; font-size: var(--text-sm); color: var(--ink-2); }
+.sound__note--warn { color: var(--warning); }
 /* Уровень — полоски высотой до 32 px, как уровни дорожек «Идёт запись» (rec-now__bars). */
 .sound__bars { flex: none; display: flex; align-items: center; gap: 3px; width: 88px; height: 32px; }
 .sound__bars i { display: block; flex: 1; min-width: 2px; border-radius: 1px; background: var(--data-empty); }

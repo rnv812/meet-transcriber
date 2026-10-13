@@ -32,6 +32,8 @@ export function osTexts(os: Os) {
     systemName: mac ? "macOS" : "Windows",
     /** Где открывается папка: «Открыть … в …». */
     fileManager: mac ? "Finder" : "проводнике",
+    /** Настройка «Звук собеседников»: на Mac это не устройство вывода, а системный звук или BlackHole. */
+    otherSide: mac ? "Звук собеседников" : "Звук собеседников (вывод)",
   };
 }
 

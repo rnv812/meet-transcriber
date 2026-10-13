@@ -73,7 +73,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "advanced", label: "Пройти мастер первого запуска заново", keywords: ["мастер", "первая настройка", "заново"] },
   // Запись
   { section: "sound", label: "Микрофон", hint: "Устройство и проверка уровня", keywords: ["mic", "устройство"] },
-  { section: "sound", label: "Звук собеседников (вывод)", hint: "Откуда записывается звук звонка", keywords: ["динамики", "наушники", "loopback"] },
+  { section: "sound", label: OS_TEXT.otherSide, hint: "Откуда записывается звук звонка", keywords: ["динамики", "наушники", "loopback"] },
   { section: "auto", label: "Записывать звонки автоматически", keywords: ["автозапись"] },
   { section: "auto", label: "Программы звонков", hint: "Zoom, Teams, Telegram и свои", keywords: ["zoom", "teams", "telegram", "мессенджеры"] },
   { section: "auto", label: "Звонки в браузере", hint: "Браузеры, в которых вы созваниваетесь", keywords: ["chrome", "edge", "firefox", "яндекс"] },

@@ -26,6 +26,7 @@ test("тексты с названием ОС", () => {
     trayArea: "области уведомлений",
     systemName: "Windows",
     fileManager: "проводнике",
+    otherSide: "Звук собеседников (вывод)",
   });
   const mac = osTexts("macos");
   expect(mac.keyring).toBe("связке ключей macOS");
@@ -33,4 +34,5 @@ test("тексты с названием ОС", () => {
   expect(mac.trayArea).toBe("строке меню");
   // «Открыть папку записи в …» (0.6.1): на Mac — Finder.
   expect(mac.fileManager).toBe("Finder");
+  expect(mac.otherSide).toBe("Звук собеседников");
 });
