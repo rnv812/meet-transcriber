@@ -173,7 +173,7 @@ export function SpeakersPanel({
   useUndoKeys(open, cardRef, undo, redo);
 
   // Открыли — фокус на заголовок панели (Esc сразу закрывает её); закрыли —
-  // фокус туда, откуда открывали (участник, «Спикеры (N)», подпись реплики).
+  // фокус туда, откуда открывали (участник, имена участников в шапке, подпись реплики).
   const aside = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<HTMLElement | null>(null);

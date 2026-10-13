@@ -30,7 +30,7 @@ test("метка категории под названием; от ИИ — п�
   expect(chip).not.toHaveAttribute("title");
   expect(chip).toHaveAccessibleDescription("Категорию определил ИИ — нажмите, чтобы выбрать другую");
   // Метка — малая контурная кнопка Aurora с точкой цвета и именем.
-  expect(chip).toHaveClass("btn", "btn--outline", "btn--sm");
+  expect(chip).toHaveClass("btn", "btn--ghost", "btn--sm"); // 0.6.1: тихая кнопка без рамки
   expect(chip).toHaveTextContent("Дейлик");
 });
 

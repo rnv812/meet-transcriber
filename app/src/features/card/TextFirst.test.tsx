@@ -159,7 +159,7 @@ test("спикеры приходят на тот же список: поиск 
   expect(container.querySelector(".transcript")).toBe(view);
   expect(screen.getByRole("searchbox", { name: "Найти в расшифровке" })).toHaveValue("бюджет");
   expect(screen.queryByRole("status", { name: "Ход расшифровки" })).toBeNull();
-  expect(screen.getByRole("button", { name: /^Спикеры \(/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Спикеры: / })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Итоги" })).toBeInTheDocument();
 });
 

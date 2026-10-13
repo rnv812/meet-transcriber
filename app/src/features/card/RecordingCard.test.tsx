@@ -101,11 +101,11 @@ test("клик по безымянному спикеру открывает п�
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-test("панель закрылась по Esc — фокус возвращается на «Спикеры (N)»", async () => {
+test("панель закрылась по Esc — фокус возвращается на имена участников", async () => {
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  const opener = screen.getByRole("button", { name: "Спикеры (2)" });
+  const opener = screen.getByRole("button", { name: /^Спикеры: / });
   await userEvent.click(opener);
   const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
   expect(within(panel).getByRole("heading", { name: "Спикеры встречи" })).toHaveFocus();
@@ -114,11 +114,11 @@ test("панель закрылась по Esc — фокус возвращае
   expect(opener).toHaveFocus();
 });
 
-test("«Спикеры (N)»: фраза играет в плеере карточки, «Показать все реплики» — поиск по спикеру", async () => {
+test("«Спикеры»: фраза играет в плеере карточки, «Показать все реплики» — поиск по спикеру", async () => {
   load();
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  await userEvent.click(screen.getByRole("button", { name: "Спикеры (2)" }));
+  await userEvent.click(screen.getByRole("button", { name: /^Спикеры: / }));
   const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
   const row = await within(panel).findByRole("region", { name: /^Спикер 2/ });
   await userEvent.click(within(row).getByRole("button", { name: "Прослушать фразу с 00:06" }));
@@ -543,7 +543,7 @@ test("названный спикер тоже кликабелен: в шапк
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  const named = screen.getAllByRole("button", { name: /Демьян Петров/ });
+  const named = screen.getAllByRole("button", { name: "Демьян Петров" });
   expect(named.length).toBe(2); // участник в шапке и подпись реплики
   await userEvent.click(named[1]!);
   const menu = await screen.findByRole("dialog", { name: "Кому отдать реплики" });
@@ -599,20 +599,24 @@ test("шапка: название — h1 встречи, в одной стро
   expect(within(row).getByRole("button", { name: "Ещё действия" })).toHaveClass("btn", "btn--ghost", "btn--icon");
 });
 
-test("строка под названием: дата · длительность, категория, участники и «Спикеры (N)»", async () => {
+test("строка под названием (0.6.1): дата · длительность, категория и участники — одной строкой текста", async () => {
   load();
   render(<RecordingCard id="r1" endpoint={ep} categories={[]}
     people={[{ name: "Демьян Петров", color: "#4c8bf5", has_avatar: false }]} />);
   await screen.findByText("Привет всем");
-  const row = screen.getByRole("button", { name: "Спикеры (2)" }).parentElement!;
+  // Имена текстом — одна кнопка: открывает «Спикеры» (вместо прежней «Спикеры (N)»).
+  const names = screen.getByRole("button", { name: "Спикеры: Демьян Петров, Спикер 2" });
+  expect(names).toHaveTextContent("Демьян Петров, Спикер 2");
+  expect(names).toHaveAttribute("aria-expanded", "false");
+  const row = names.closest<HTMLElement>(".card__meta-row")!;
   expect(row).toHaveTextContent(/30 сен 10:00 · 30 мин/);
-  expect(within(row).getByRole("button", { name: "Категория: Без категории. Изменить" })).toBeInTheDocument();
-  // Участник — бейдж с инициалом в кольце цвета спикера; имя для диктора — без инициала.
+  // Категория — тихая кнопка без рамки.
+  expect(within(row).getByRole("button", { name: "Категория: Без категории. Изменить" })).toHaveClass("btn--ghost");
+  // Участник — знак в кольце цвета спикера (стопкой), без рамки-бейджа; щелчок — «Спикеры» на нём.
   const person = within(row).getByRole("button", { name: "Демьян Петров" });
-  expect(person).toHaveClass("badge", "badge--plain");
+  expect(person).not.toHaveClass("badge");
   expect(person.querySelector<HTMLElement>("[aria-hidden=true]")!.style.getPropertyValue("--person")).toBe("#4c8bf5");
   expect(within(row).getByRole("button", { name: "Спикер 2" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Спикеры (2)" })).toHaveAttribute("aria-expanded", "false");
 });
 
 test("вкладки — Aurora .tabs над областью прокрутки; выбранная — aria-selected, стрелки переключают", async () => {

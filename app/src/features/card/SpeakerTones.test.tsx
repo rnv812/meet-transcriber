@@ -55,6 +55,18 @@ test("цвет спикера один: кольцо в шапке, точка �
   expect((await region("Анна")).querySelector(".person-mark")).not.toBeNull();
 });
 
+test("участники в шапке (0.6.1): до трёх имён текстом, дальше «и ещё N»; знаков — не больше пяти", () => {
+  const many = ["Анна", "Борис", "Вика", "Гриша", "Дина", "Егор"];
+  const onOpen = vi.fn();
+  render(<CardHeader rec={rec} speakers={many} people={people} tones={speakerTones(many, people)} endpoint={ep}
+    onRename={() => {}} onOpenSpeakers={onOpen} />);
+  const names = screen.getByRole("button", { name: `Спикеры: ${many.join(", ")}` });
+  expect(names).toHaveTextContent(/^Анна, Борис, Вика и ещё 3$/);
+  fireEvent.click(names);
+  expect(onOpen).toHaveBeenCalled();
+  expect(document.querySelectorAll(".card__people-stack .person-mark")).toHaveLength(5);
+});
+
 test("чип человека в шапке: «Кто это» из базы голосов — в подсказке; без роли — прежняя «Кто это?»", () => {
   vi.useFakeTimers();
   try {

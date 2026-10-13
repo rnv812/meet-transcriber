@@ -8,7 +8,7 @@
 }
 
 /* Шапка карточки (макет «карточка готовой встречи»): название и действия в одной строке,
-   под ними — дата · длительность, категория, участники и «Спикеры (N)». */
+   под ними — одна строка «дата · длительность · категория · участники» (0.6.1). */
 .card__header { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 16px 24px 0; }
 .card__title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .card__title {
@@ -35,21 +35,32 @@
   border-top-left-radius: 0; border-bottom-left-radius: 0;
 }
 
-.card__meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: var(--control-sm); }
-.card__meta { margin-right: 4px; color: var(--ink-3); font-size: var(--text-sm); }
-.card__meta-sep { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--hairline); }
-.card__cat { max-width: 240px; }
+/* Строка под названием (0.6.1): одна строка текста без рамок — «дата · длительность · ● Категория ·
+   знаки участников стопкой и имена». Кнопки — тихие, подложка только при наведении. */
+.card__meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: var(--control-sm); color: var(--ink-2); font-size: var(--text-sm); }
+.card__meta { color: var(--ink-2); }
+.card__meta-dot { flex: none; color: var(--ink-3); }
+.btn.card__cat { max-width: 240px; padding: 0 6px; margin: 0 -6px; color: var(--ink-2); font-weight: 400; }
+.btn.card__cat:hover { color: var(--ink); }
 .card__cat .cat-dot { width: 6px; height: 6px; }
 .card__cat-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card__cat--none { color: var(--ink-3); }
+.btn.card__cat--none { color: var(--ink-3); }
 .card__cat-skel { border-radius: var(--r-control-sm); }
-/* Участник: бейдж 32 px, инициал (или фото) в кольце цвета спикера; неназванный — приглушён. */
-.badge.card__person {
-  height: var(--control-sm); padding: 0 12px 0 4px; gap: 8px; border: 0;
-  color: var(--ink); font-size: var(--text-sm); cursor: pointer; transition: background var(--d);
+.card__people { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.card__people-stack { display: inline-flex; align-items: center; }
+/* Знак участника: без рамки-бейджа; знаки стопкой — внахлёст, кольцо фона отделяет соседей. */
+.card__person {
+  flex: none; display: inline-grid; padding: 0; border: 0; border-radius: var(--r-full); background: none;
+  box-shadow: 0 0 0 2px var(--canvas); cursor: pointer;
 }
-.badge.card__person:hover { background: var(--surface-2); }
-.badge.card__person--unnamed { color: var(--ink-2); }
+.card__person + .card__person { margin-left: -6px; }
+.card__person:hover { position: relative; z-index: 1; }
+.card__people-names {
+  min-width: 0; padding: 2px 4px; margin: 0 -4px; border: 0; border-radius: var(--r-xs); background: none;
+  color: var(--ink-2); font: inherit; text-align: left; overflow-wrap: anywhere;
+}
+button.card__people-names { cursor: pointer; transition: background var(--d), color var(--d); }
+button.card__people-names:hover { background: var(--surface-2); color: var(--ink); }
 /* Знак участника (PersonMark.tsx): инициал или фото в кольце цвета спикера (lib/tones) на --surface-2 —
    в шапке, в панели «Спикеры»; размер задаёт компонент. Без цвета — кольцо цвета контура. */
 .person-mark {

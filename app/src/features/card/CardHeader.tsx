@@ -53,7 +53,7 @@ function CategoryButton({ rec, list, onPick, onSettings }: {
   return (
     <>
       <Tip content={hint}>
-        <Button ref={button} variant="secondary" className={`card__cat${category ? "" : " card__cat--none"}`}
+        <Button ref={button} variant="ghost" size="sm" className={`card__cat${category ? "" : " card__cat--none"}`}
           aria-haspopup="menu" aria-expanded={open}
           aria-label={`Категория: ${category?.name ?? NO_CATEGORY_NAME}. Изменить`}
           onClick={() => setOpen((v) => !v)}>
@@ -72,32 +72,56 @@ function CategoryButton({ rec, list, onPick, onSettings }: {
   );
 }
 
+/** Сколько имён участников писать текстом (дальше — «и ещё N») и сколько знаков в стопке. */
+const SHOWN_NAMES = 3;
+const STACK = 5;
+
 /**
- * Участник в шапке: бейдж с инициалом в кольце цвета спикера (lib/tones — тот
- * же цвет, что у точки в ленте и в панели «Спикеры»; фото — внутри кольца).
- * Неназванный — кольцо без цвета. В подсказке — «Кто это» человека из базы
- * голосов (роль), без неё — «Кто это?». Для диктора имя — название кнопки,
- * подсказка — её описание.
+ * Участники в строке под названием (0.6.1): знаки стопкой и имена текстом, без
+ * рамки у каждого. Знак — инициал или фото в кольце цвета спикера (lib/tones —
+ * тот же цвет, что у точки в ленте и в панели «Спикеры»); щелчок — «Спикеры»
+ * на этом человеке, в подсказке — «Кто это» из базы голосов (роль), без неё —
+ * «Кто это?». Имена — одна кнопка: панель «Спикеры» целиком.
  */
-function PersonChip({ name, person, tone, endpoint, avatarVersion, onClick }: {
-  name: string;
-  person?: PersonColor;
-  tone?: string;
+function PeopleLine({ speakers, people, tones, endpoint, avatarVersion, onNameSpeaker, onOpenSpeakers, speakersOpen }: {
+  speakers: string[];
+  people: PersonColor[];
+  tones?: ReadonlyMap<string, string>;
   endpoint: Endpoint;
-  avatarVersion?: number;
-  onClick: () => void;
+  avatarVersion?: Record<string, number>;
+  onNameSpeaker?: (label: string) => void;
+  onOpenSpeakers?: () => void;
+  speakersOpen: boolean;
 }) {
-  const unnamed = isUnnamed(name);
+  const rest = speakers.length - SHOWN_NAMES;
+  const text = speakers.slice(0, SHOWN_NAMES).join(", ") + (rest > 0 ? ` и ещё ${rest}` : "");
   return (
-    // Узнанное автоматически имя тоже бывает ошибочным: исправить можно любое.
-    <Tip content={(!unnamed && person?.role) || "Кто это?"}>
-      <button type="button" className={`badge badge--plain card__person${unnamed ? " card__person--unnamed" : ""}`}
-        onClick={onClick}>
-        <PersonMark name={name} tone={tone} hasAvatar={!!person?.has_avatar} version={avatarVersion}
-          endpoint={endpoint} />
-        <span>{name}</span>
-      </button>
-    </Tip>
+    <span className="card__people">
+      <span className="card__people-stack">
+        {speakers.slice(0, STACK).map((name, i) => {
+          const person = people.find((x) => x.name === name);
+          return (
+            // Узнанное автоматически имя тоже бывает ошибочным: исправить можно любое.
+            <Tip key={name} content={(!isUnnamed(name) && person?.role) || "Кто это?"}>
+              <button type="button" className="card__person" aria-label={name} onClick={() => onNameSpeaker?.(name)}>
+                <PersonMark name={name} tone={tones ? tones.get(name) : speakerTone(name, i, person)}
+                  hasAvatar={!!person?.has_avatar} version={avatarVersion?.[name]} endpoint={endpoint} />
+              </button>
+            </Tip>
+          );
+        })}
+      </span>
+      {onOpenSpeakers ? (
+        <Tip content="Имена, голоса и история изменений">
+          <button type="button" className="card__people-names" aria-expanded={speakersOpen}
+            aria-label={`Спикеры: ${speakers.join(", ")}`} onClick={onOpenSpeakers}>
+            {text}
+          </button>
+        </Tip>
+      ) : (
+        <span className="card__people-names">{text}</span>
+      )}
+    </span>
   );
 }
 
@@ -178,24 +202,15 @@ export function CardHeader({
         {actions}
       </div>
       {(meta || category || speakers.length > 0) && (
+        // Одна строка текста (0.6.1): «дата · длительность · ● Категория · участники».
         <div className="card__meta-row">
           {meta && <span className="card__meta num">{meta}</span>}
+          {meta && category && <span className="card__meta-dot" aria-hidden="true">·</span>}
           {category}
-          {speakers.length > 0 && (meta || category) && <span className="card__meta-sep" aria-hidden="true" />}
-          {speakers.map((name, i) => {
-            const person = people.find((x) => x.name === name);
-            return (
-              <PersonChip key={name} name={name} person={person}
-                tone={tones ? tones.get(name) : speakerTone(name, i, person)}
-                endpoint={endpoint} avatarVersion={avatarVersion?.[name]} onClick={() => onNameSpeaker?.(name)} />
-            );
-          })}
-          {speakers.length > 0 && onOpenSpeakers && (
-            <Tip content="Имена, голоса и история изменений">
-              <Button variant="ghost" aria-expanded={speakersOpen} onClick={onOpenSpeakers}>
-                {`Спикеры (${speakers.length})`}
-              </Button>
-            </Tip>
+          {speakers.length > 0 && (meta || category) && <span className="card__meta-dot" aria-hidden="true">·</span>}
+          {speakers.length > 0 && (
+            <PeopleLine speakers={speakers} people={people} tones={tones} endpoint={endpoint} avatarVersion={avatarVersion}
+              onNameSpeaker={onNameSpeaker} onOpenSpeakers={onOpenSpeakers} speakersOpen={speakersOpen} />
           )}
         </div>
       )}
