@@ -502,6 +502,15 @@ test("выбранный микрофон не найден — предупре
     .toHaveAccessibleDescription(/Запись идёт с «Колонки»/);
 });
 
+test("«звук собеседников» совпал с микрофоном (0.6.1, Mac) — так и сказано, а не «не найдено»", () => {
+  render(<RecordingWarnings endpoint={ep} snapshot={snap({
+    status: "recording", source: "manual", elapsed_s: 5,
+    devices_fallback: [{ kind: "output", name: "AirPods Анны", device: "Системный звук", reason: "same_as_mic" }],
+  })} />);
+  expect(screen.getByRole("button", { name: "«AirPods Анны» — это ваш микрофон: собеседники пишутся с системного звука" }))
+    .toHaveAccessibleDescription(/Запись идёт с «Системный звук»/);
+});
+
 test("подмена устройства у ассистента тоже видна; вне записи — нет", () => {
   const fallback = [{ kind: "mic" as const, name: "USB-микрофон", device: "Микрофон" }];
   const live: LiveStatus = { active: true, starting: false, stopping: false, folder: "f", error: null, started_at: null };

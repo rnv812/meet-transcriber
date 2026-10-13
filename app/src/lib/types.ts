@@ -54,7 +54,8 @@ export type Snapshot = {
   /** Папка для встреч в базе знаний (`export.meetings_dir`); не задана — null. */
   meetings_dir?: string | null;
   /** Выбранный в настройках микрофон или вывод не найден — запись идёт с системного. */
-  devices_fallback?: { kind: "mic" | "output"; name: string; device: string | null }[];
+  /** Пишем не с выбранного: не нашлось или (0.6.1, `same_as_mic`) «звук собеседников» — тот же микрофон. */
+  devices_fallback?: { kind: "mic" | "output"; name: string; device: string | null; reason?: "same_as_mic" }[];
   /**
    * macOS: звук собеседников идущей записи не пишется (нет разрешения «Запись экрана»
    * или помощника) — запись идёт только с микрофона. `permission` — дело в разрешении.

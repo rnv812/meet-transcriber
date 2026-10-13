@@ -171,6 +171,8 @@ pub struct DeviceFallback {
     /// Микрофон (`"mic"`); иначе устройство вывода (`"output"`).
     pub mic: bool,
     pub name: String,
+    /// 0.6.1: «звук собеседников» — тот же микрофон, что пишет голос (`reason: "same_as_mic"`).
+    pub same_as_mic: bool,
 }
 
 impl DeviceFallback {
@@ -187,7 +189,12 @@ impl DeviceFallback {
                     _ => return None,
                 };
                 let name = str_at(item, "name").unwrap_or_default().to_string();
-                Some(DeviceFallback { mic, name })
+                let same_as_mic = str_at(item, "reason") == Some("same_as_mic");
+                Some(DeviceFallback {
+                    mic,
+                    name,
+                    same_as_mic,
+                })
             })
             .collect()
     }
@@ -195,7 +202,9 @@ impl DeviceFallback {
     /// Та же строка, что у кнопки записи в окне (RecordingBadge).
     pub fn text(&self) -> String {
         let name = shorten(&self.name, FALLBACK_NAME_MAX);
-        if self.mic {
+        if self.same_as_mic {
+            format!("«{name}» — это ваш микрофон: собеседники пишутся с системного звука")
+        } else if self.mic {
             format!("Микрофон «{name}» не найден — запись с системного")
         } else {
             format!("Устройство вывода «{name}» не найдено — запись с системного")
@@ -3156,11 +3165,13 @@ mod tests {
             vec![
                 DeviceFallback {
                     mic: true,
-                    name: "USB-микрофон".into()
+                    name: "USB-микрофон".into(),
+                    same_as_mic: false
                 },
                 DeviceFallback {
                     mic: false,
-                    name: "Наушники".into()
+                    name: "Наушники".into(),
+                    same_as_mic: false
                 },
             ]
         );
@@ -3177,6 +3188,7 @@ mod tests {
         rec.devices_fallback = vec![DeviceFallback {
             mic: true,
             name: "USB-микрофон".into(),
+            same_as_mic: false,
         }];
         assert_eq!(
             tooltip(Some(&rec), &running),
@@ -3186,6 +3198,7 @@ mod tests {
         live.devices_fallback = vec![DeviceFallback {
             mic: false,
             name: "Наушники".into(),
+            same_as_mic: false,
         }];
         assert_eq!(
             tooltip(Some(&live), &running),
@@ -3201,6 +3214,26 @@ mod tests {
     }
 
     #[test]
+    fn same_as_mic_fallback_says_what_happened() {
+        let state = json!({"status": "recording", "devices_fallback": [
+            {"kind": "output", "name": "AirPods", "device": "Системный звук", "reason": "same_as_mic"},
+        ]});
+        let v = View::from_json(&state, &json!({"items": []}));
+        assert_eq!(
+            v.devices_fallback,
+            vec![DeviceFallback {
+                mic: false,
+                name: "AirPods".into(),
+                same_as_mic: true,
+            }]
+        );
+        assert_eq!(
+            v.devices_fallback[0].text(),
+            "«AirPods» — это ваш микрофон: собеседники пишутся с системного звука"
+        );
+    }
+
+    #[test]
     fn tooltip_fits_the_windows_limit() {
         let running = ResidentStatus::Running;
         let mut rec = idle();
@@ -3210,10 +3243,12 @@ mod tests {
             DeviceFallback {
                 mic: true,
                 name: long.into(),
+                same_as_mic: false,
             },
             DeviceFallback {
                 mic: false,
                 name: long.into(),
+                same_as_mic: false,
             },
         ];
         let tip = tooltip(Some(&rec), &running);

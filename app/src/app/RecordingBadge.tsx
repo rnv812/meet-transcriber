@@ -47,7 +47,8 @@ export const AGENT_ON_LABEL = "Включить ассистента";
 export const AGENT_LABEL = "Ассистент";
 
 /** Выбранное в настройках устройство не нашлось — с какого пишем вместо него. */
-export function fallbackText(f: { kind: "mic" | "output"; name: string }): string {
+export function fallbackText(f: { kind: "mic" | "output"; name: string; reason?: "same_as_mic" }): string {
+  if (f.reason === "same_as_mic") return `«${f.name}» — это ваш микрофон: собеседники пишутся с системного звука`;
   return f.kind === "mic"
     ? `Микрофон «${f.name}» не найден — запись с системного`
     : `Устройство вывода «${f.name}» не найдено — запись с системного`;
