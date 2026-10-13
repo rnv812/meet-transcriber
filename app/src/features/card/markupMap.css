@@ -1,0 +1,27 @@
+/* Карта разметки (0.6.1): узкая полоса справа от ленты, липкая, высотой с видимую часть
+   прокрутки. Отметки нейтральные; цвет акцента — у наблюдений и выбранного фильтра. */
+.markup-map {
+  position: sticky; top: 8px; align-self: start; width: 14px; min-height: 120px;
+  border-radius: var(--r-full); background: var(--surface-1); cursor: pointer; touch-action: none;
+}
+.markup-map__frame {
+  position: absolute; left: 0; right: 0; min-height: 12px; border-radius: var(--r-xs);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong); background: var(--surface-2); pointer-events: none;
+}
+.markup-map__mark {
+  position: absolute; left: 3px; right: 3px; height: 3px; margin: -1px 0 0; padding: 0;
+  border: 0; border-radius: var(--r-full); background: var(--ink-3); cursor: pointer;
+}
+/* Мишень щелчка шире самой отметки — по 4 px сверху и снизу. */
+.markup-map__mark::before { content: ""; position: absolute; inset: -4px -3px; }
+.markup-map__mark--wide { left: 0; right: 0; }
+.markup-map__mark--on { background: var(--accent-line); }
+/* Выбран фильтр — остальные отметки тише. */
+.markup-map--filtered .markup-map__mark:not(.markup-map__mark--on) { opacity: 0.45; }
+.markup-map__mark:hover { background: var(--ink-2); }
+.markup-map__mark--on:hover { background: var(--accent-line); }
+.markup-map__hint {
+  position: absolute; z-index: var(--z-popover); right: calc(100% + 8px); transform: translateY(-50%);
+  width: max-content; max-width: 280px; padding: 6px 10px; border-radius: var(--r-sm);
+  background: var(--ink); color: var(--canvas); font-size: var(--text-xs); pointer-events: none;
+}

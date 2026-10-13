@@ -26,6 +26,7 @@ import type { PhraseType } from "../../lib/types";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
 import { JiraTasks, Legend, hasTypeFilters } from "./markup";
+import { MarkupMap } from "./MarkupMap";
 import { FindAsk, TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
@@ -58,6 +59,8 @@ function hitAt(turns: Turn[], hits: { turn: number }[], t: number): number {
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 /** Куда ставить реплику при перемотке: примерно 30 % высоты от верха. */
 const SEEK_TOP = "30vh";
+/** Прокрутка с карты разметки: реплика — чуть ниже верхней кромки. */
+const MAP_TOP = "16px";
 const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
 export function TranscriptView({
@@ -248,6 +251,30 @@ export function TranscriptView({
     setTimeout(() => el.classList.remove("turn--flash"), FLASH_MS);
   });
 
+  /** Строка реплики в ленте; свёрнутая фильтром — строка «… N реплик», иначе ближайшая видимая. */
+  const rowOf = useCallback((root: HTMLElement, idx: number) => {
+    let el = root.querySelector<HTMLElement>(`[data-turn="${idx}"]`);
+    if (!el) {
+      const row = rows?.find((r) => r.kind === "more" && r.from <= idx && idx <= r.to);
+      if (row && row.kind === "more") el = root.querySelector<HTMLElement>(`[data-more="${row.from}"]`);
+    }
+    if (!el) {
+      let best = Infinity;
+      for (const c of root.querySelectorAll<HTMLElement>("[data-turn]")) {
+        const d = Math.abs(Number(c.dataset.turn) - idx);
+        if (d < best) { best = d; el = c; }
+      }
+    }
+    return el;
+  }, [rows]);
+  // Карта разметки: щелчок мимо отметок и протяжка — сразу к месту, без подсветки.
+  const scrollToTurn = useCallback((idx: number) => {
+    const el = box.current && rowOf(box.current, idx);
+    if (!el) return;
+    el.style.scrollMarginTop = MAP_TOP;
+    el.scrollIntoView?.({ block: "start", behavior: "auto" });
+  }, [rowOf]);
+
   // Перемотка из плеера: прокрутить к реплике, звучащей в этот момент. Свёрнутую фильтром не
   // разворачиваем — к строке «… N реплик», где она спряталась (иначе к ближайшей видимой).
   const [pendingSeek, setPendingSeek] = useState<SeekRequest | null>(null);
@@ -264,18 +291,7 @@ export function TranscriptView({
     if (!root) return;
     const idx = turnAt(turns, pendingSeek.t);
     if (idx < 0) { setPendingSeek(null); return; }
-    let el = root.querySelector<HTMLElement>(`[data-turn="${idx}"]`);
-    if (!el) {
-      const row = rows?.find((r) => r.kind === "more" && r.from <= idx && idx <= r.to);
-      if (row && row.kind === "more") el = root.querySelector<HTMLElement>(`[data-more="${row.from}"]`);
-    }
-    if (!el) {
-      let best = Infinity;
-      for (const c of root.querySelectorAll<HTMLElement>("[data-turn]")) {
-        const d = Math.abs(Number(c.dataset.turn) - idx);
-        if (d < best) { best = d; el = c; }
-      }
-    }
+    const el = rowOf(root, idx);
     if (!el) { setPendingSeek(null); return; }
     // «Расшифровка» скрыта (открыты «Итоги» или «Агент») — прокрутим, когда её покажут.
     if (el.closest("[hidden]")) return;
@@ -463,11 +479,17 @@ export function TranscriptView({
           </button>
         </div>
       ) : (
-        <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
-          onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
-          marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
-          onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase}
-          insights={view?.insights} onJump={jumpTo} onAskInsight={onAskInsight} />
+        <div className="transcript__feed">
+          <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
+            onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
+            marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
+            onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase}
+            insights={view?.insights} onJump={jumpTo} onAskInsight={onAskInsight} />
+          {view && (
+            <MarkupMap turns={turns} types={view.types} insights={view.insights} filter={filter} insightsOn={insightsOn}
+              onJump={jumpTo} onScrollTo={scrollToTurn} />
+          )}
+        </div>
       )}
     </div>
   );

@@ -193,8 +193,26 @@ test("наблюдение (0.6.1) — заметка под первой реп
 
 test("без анализа — обычная лента: ни значков, ни фильтров, ни глав, ни наблюдений", () => {
   const { container } = view({ view: null });
-  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insight, .turn--key")).toBeNull();
+  expect(container.querySelector(".turn__type, .chapter-head, .legend, .insight, .turn--key, .markup-map")).toBeNull();
   expect(turnRows(container)).toHaveLength(7);
+});
+
+test("карта разметки (0.6.1) рядом с лентой: отметка — переход к реплике с подсветкой; фильтр красит свои отметки", async () => {
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = vi.fn();
+  try {
+    const { container } = view();
+    const map = screen.getByRole("group", { name: "Карта разметки" });
+    expect(map.closest(".transcript__feed")).not.toBeNull();
+    await userEvent.click(within(map).getByRole("button", { name: /^Риск, 00:40/ }));
+    expect(container.querySelector('[data-turn="4"]')).toHaveClass("turn--flash");
+    const question = within(map).getByRole("button", { name: /^Вопрос/ });
+    expect(question).not.toHaveClass("markup-map__mark--on");
+    await userEvent.click(screen.getByRole("button", { name: /Вопросы/ }));
+    expect(question).toHaveClass("markup-map__mark--on");
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
 });
 
 test("легенда-фильтр (0.6.1): пункты без рамки, «Наблюдения N» первым, aria-pressed, счётчик", async () => {
