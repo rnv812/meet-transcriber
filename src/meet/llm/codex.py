@@ -44,7 +44,7 @@ V4 (0.3.6, v4-design §5.1, §12):
 
 * любой ход (`none` — без просьбы, `read` — по просьбе): `--sandbox
   read-only`; MCP-серверы пользователя выключены (`-c
-  mcp_servers.<имя>.enabled=false` по списку `codex mcp list --json`);
+  mcp_servers.<имя>={enabled=false,command="__meet_disabled_mcp__"}` по списку `codex mcp list --json`);
   список не прочитался или есть имя, которое так не выключить, — весь
   `config.toml` пользователя не загружается (`--ignore-user-config`, вход
   остаётся); выключены приложения, браузер, управление компьютером (`--disable
@@ -58,7 +58,7 @@ V4 (0.3.6, v4-design §5.1, §12):
   сеансов.
 
 0.4 — ход по просьбе пользователя (`user`, спец. «ассистент как CLI» §4):
-`--sandbox workspace-write` и `--approve-for-me` (запросы разрешения уходят
+`--approve-for-me` (запросы разрешения уходят
 автопроверке Codex — его ближайший аналог автомода [не проверено с
 моделью]), рабочие папки (`work_dirs`: запись, база знаний) — `--add-dir`,
 веб-поиск не выключается. MCP пользователя по-прежнему выключены:
@@ -109,7 +109,7 @@ def _kill_tree(proc) -> None:
     kill_tree(proc)
 
 
-# Имя MCP-сервера, которое можно выключить ключом `-c mcp_servers.<имя>.enabled=false`:
+# Имя MCP-сервера, которое можно выключить ключом `-c mcp_servers.<имя>={enabled=false,command="__meet_disabled_mcp__"}`:
 # точки и кавычки ключ разбирает по-своему (проверено: `"имя"` — новый сервер).
 _MCP_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 # Что выключить в ходе без согласия (`codex features list`, 0.159.0: stable).
@@ -163,7 +163,7 @@ def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
     if access is None:
         return ["--sandbox", "read-only"]
     if access == "user":
-        out = ["--sandbox", "workspace-write", "--approve-for-me"]
+        out = ["--approve-for-me"]
         for d in work_dirs or ():
             if d and Path(d).is_dir():
                 out += ["--add-dir", str(d)]
@@ -176,7 +176,8 @@ def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
         out.append("--ignore-user-config")     # в закрытую сторону: без config.toml — без MCP
     else:
         for name in names:
-            out += ["-c", f"mcp_servers.{name}.enabled=false"]
+            # Полная запись: транспорт обязателен и для отключённых MCP из плагинов.
+            out += ["-c", f'mcp_servers.{name}={{enabled=false,command="__meet_disabled_mcp__"}}']
     for feature in _NONE_FEATURES:
         out += ["--disable", feature]
     if access != "user":
