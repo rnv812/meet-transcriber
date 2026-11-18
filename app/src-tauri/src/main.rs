@@ -16,6 +16,7 @@ mod app_menu;
 mod appearance;
 mod autostart;
 mod close_guard;
+mod dock;
 mod engine;
 mod hf_token;
 mod install_wait;
@@ -88,7 +89,7 @@ fn main() {
     let builder = builder
         .menu(app_menu::build)
         .on_menu_event(|app, event| app_menu::on_event(app, event.id().as_ref()));
-    builder
+    let mut app = builder
         // Первым: второй экземпляр должен выйти до того, как другие плагины и
         // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк
         // приходит в первый экземпляр внутри WM_COPYDATA, пока второй ждёт
@@ -222,6 +223,13 @@ fn main() {
             if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
                 pty::kill_all();
             }
+            // macOS: закрылось главное окно — Meet снова только в строке меню.
+            if matches!(event, WindowEvent::Destroyed) {
+                dock::sync(
+                    window.app_handle(),
+                    dock::WindowChange::Destroyed(window.label()),
+                );
+            }
             // Крестик главного окна при несохранённых настройках (решает оболочка).
             close_guard::on_window_event(window, event);
             // Панель ассистента запоминает, где и какого размера её оставили.
@@ -282,44 +290,46 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("оболочка meet не запустилась")
-        .run(|app, event| match event {
-            // Закрытие последнего окна не завершает приложение: оно живёт в
-            // трее. Выход — «Выход» и «Завершить Meet» (app.exit(0), у него
-            // code = Some); начатый выход закрытие окон не держит.
-            RunEvent::ExitRequested { api, code, .. }
-                if tray::keeps_running(
-                    code,
-                    app.try_state::<Supervisor>()
-                        .is_some_and(|supervisor| supervisor.is_quitting()),
-                ) =>
-            {
-                api.prevent_exit()
+        .expect("оболочка meet не запустилась");
+    // macOS: без главного окна — без значка в Dock (`dock.rs`).
+    dock::at_startup(&mut app);
+    app.run(|app, event| match event {
+        // Закрытие последнего окна не завершает приложение: оно живёт в
+        // трее. Выход — «Выход» и «Завершить Meet» (app.exit(0), у него
+        // code = Some); начатый выход закрытие окон не держит.
+        RunEvent::ExitRequested { api, code, .. }
+            if tray::keeps_running(
+                code,
+                app.try_state::<Supervisor>()
+                    .is_some_and(|supervisor| supervisor.is_quitting()),
+            ) =>
+        {
+            api.prevent_exit()
+        }
+        // Сюда приходит и выход, начатый системой, мимо `ExitRequested`:
+        // macOS — выход из сеанса, выключение, перезагрузка, «Завершить»
+        // из Dock (`applicationWillTerminate`); Windows — конец сеанса
+        // (`WM_ENDSESSION`). После обработчика процесс завершается, поэтому
+        // резидент гасится здесь, со сроком: запись сохраняется, а выход
+        // системы не задерживается дольше `SYSTEM_EXIT_LIMIT`. После
+        // «Выхода» резидент уже погашен, и это мгновенно. Отдельная
+        // подписка на уведомление о выключении (NSWorkspace) не нужна:
+        // выключение приходит этим же путём.
+        // Job object агентов и так закроет Windows; гасим явно и раньше.
+        // Геометрию панели ассистента, ждущую отложенной записи, — в файл.
+        RunEvent::Exit => {
+            if let Some(supervisor) = app.try_state::<Supervisor>() {
+                supervisor.shutdown_within(SYSTEM_EXIT_LIMIT);
             }
-            // Сюда приходит и выход, начатый системой, мимо `ExitRequested`:
-            // macOS — выход из сеанса, выключение, перезагрузка, «Завершить»
-            // из Dock (`applicationWillTerminate`); Windows — конец сеанса
-            // (`WM_ENDSESSION`). После обработчика процесс завершается, поэтому
-            // резидент гасится здесь, со сроком: запись сохраняется, а выход
-            // системы не задерживается дольше `SYSTEM_EXIT_LIMIT`. После
-            // «Выхода» резидент уже погашен, и это мгновенно. Отдельная
-            // подписка на уведомление о выключении (NSWorkspace) не нужна:
-            // выключение приходит этим же путём.
-            // Job object агентов и так закроет Windows; гасим явно и раньше.
-            // Геометрию панели ассистента, ждущую отложенной записи, — в файл.
-            RunEvent::Exit => {
-                if let Some(supervisor) = app.try_state::<Supervisor>() {
-                    supervisor.shutdown_within(SYSTEM_EXIT_LIMIT);
-                }
-                live_panel::flush(app);
-                pty::kill_all();
-                // macOS: job object нет — установку движка гасим сами.
-                engine::kill_installs();
-            }
-            // macOS: щелчок по значку в Dock, когда окно закрыто или спрятано,
-            // открывает его снова (без этого Dock молчал — окно только из трея).
-            #[cfg(target_os = "macos")]
-            RunEvent::Reopen { .. } => tray::reopen_from_dock(app),
-            _ => {}
-        });
+            live_panel::flush(app);
+            pty::kill_all();
+            // macOS: job object нет — установку движка гасим сами.
+            engine::kill_installs();
+        }
+        // macOS: щелчок по значку в Dock, когда окно закрыто или спрятано,
+        // открывает его снова (без этого Dock молчал — окно только из трея).
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => tray::reopen_from_dock(app),
+        _ => {}
+    });
 }

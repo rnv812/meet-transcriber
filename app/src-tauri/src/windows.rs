@@ -79,6 +79,9 @@ pub fn recording_arg(args: &[String]) -> Option<String> {
 /// `section` новому окну уходит в адрес (`?section=…`), открытому — событием
 /// `open-section` (как запись — `open-recording`).
 pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&str>) {
+    // macOS: с главным окном Meet — обычная программа (Dock, меню). До
+    // показа окна: иначе меню приложения не появится до повторной активации.
+    crate::dock::sync(app, crate::dock::WindowChange::Opening("main"));
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();

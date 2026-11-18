@@ -570,6 +570,12 @@ pub fn open_live(app: &AppHandle) {
             // всем четырём краям.
             .shadow(false)
             .always_on_top(geometry.pinned)
+            // macOS: на каждом рабочем столе (Space), в том числе у звонка на
+            // весь экран, — щелчок по панели не перебрасывает на рабочий стол
+            // Meet. Поверх чужого полноэкранного окна — пока Meet без главного
+            // окна (`dock.rs`, Accessory) и закреплена (плавающий уровень).
+            // На Windows tao флаг не читает.
+            .visible_on_all_workspaces(cfg!(target_os = "macos"))
             // Откреплённую панель другие окна могут закрыть — тогда её
             // находят на панели задач.
             .skip_taskbar(geometry.pinned)

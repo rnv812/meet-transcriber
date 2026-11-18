@@ -227,7 +227,8 @@ def test_mac_bundle_config_and_permission_strings():
     assert macos["signingIdentity"] == "-"
     assert macos["hardenedRuntime"] is False
     plist = plistlib.loads((TAURI / macos["infoPlist"]).read_bytes())
-    assert plist["LSUIElement"] is False
+    # Без главного окна — только строка меню (оболочка, `dock.rs`).
+    assert plist["LSUIElement"] is True
     assert set(plist["CFBundleLocalizations"]) == {"ru", "en"}
     keys = ("NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription",
             "NSScreenCaptureUsageDescription")

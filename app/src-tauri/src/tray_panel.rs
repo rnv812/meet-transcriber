@@ -453,7 +453,9 @@ fn build(app: &AppHandle) -> Option<WebviewWindow> {
     .skip_taskbar(true)
     .always_on_top(true)
     // Панель открывается на том рабочем столе (Space), где щёлкнули, а не
-    // перебрасывает туда, где её создали.
+    // перебрасывает туда, где её создали. Поверх чужого полноэкранного окна
+    // (плавающий уровень `always_on_top`) — пока Meet без главного окна живёт
+    // только в строке меню (`dock.rs`, Accessory).
     .visible_on_all_workspaces(true)
     .visible(false)
     .focused(true)
