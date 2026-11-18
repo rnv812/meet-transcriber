@@ -385,3 +385,90 @@ def test_real_ffmpeg_mixes_a_delayed_mic(tmp_path):
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                             "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, check=True)
     assert 2.8 < float(probe.stdout.strip()) < 3.3
+
+
+# --- дорожка «Вы» для плеера: микрофон на шкале текста ---------------------------------
+
+
+def test_mic_path_without_applied_offset_is_the_raw_mic(tmp_path):
+    """Расшифровано без сдвига — микрофон играется как есть, без ffmpeg."""
+    _call(tmp_path, {"segments": []})
+    run = FakeRun()
+    assert playback.mic_path(tmp_path, run=run) == tmp_path / "mic.opus"
+    assert run.calls == []
+
+
+def test_mic_path_ignores_an_estimated_but_not_applied_offset(tmp_path):
+    from meet import track_sync
+
+    _call(tmp_path, {"segments": []}, meta={track_sync.META_KEY: {"mic_s": 0.4, "method": "durations"}})
+    run = FakeRun()
+    assert playback.mic_path(tmp_path, run=run) == tmp_path / "mic.opus"
+    assert run.calls == []
+
+
+def test_mic_path_without_mic_is_none(tmp_path):
+    _touch(tmp_path / "sys.opus")
+    assert playback.mic_path(tmp_path, run=FakeRun()) is None
+
+
+def test_mic_path_with_applied_offset_is_shifted_once_and_cached(tmp_path):
+    """Применённый сдвиг — микрофон сдвигается тем же фильтром, что у сведения,
+    пишется рядом и отдаётся из кэша, пока дорожка и сдвиг те же."""
+    from meet import library, track_sync
+
+    _call(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    run = FakeRun()
+    path = playback.mic_path(tmp_path, run=run)
+    assert path == tmp_path / playback.MIC_NAME
+    assert path.read_bytes() == b"OggS-mixed"
+    assert len(run.calls) == 1
+    cmd = run.calls[0]
+    assert cmd[cmd.index("-i") + 1] == str(tmp_path / "mic.opus")
+    assert "adelay=delays=400" in cmd[cmd.index("-af") + 1]
+    assert cmd[-1] != str(path), "пишется во временный файл, затем подменяется"
+    assert not list(tmp_path.glob("*.tmp"))
+    # Сведение обеих сторон не тронуто.
+    assert not (tmp_path / playback.PLAYBACK_NAME).exists()
+    assert playback.mic_path(tmp_path, run=run) == path
+    assert len(run.calls) == 1
+    # Перерасшифровка сменила сдвиг — дорожка «Вы» строится заново.
+    library.write_transcript(tmp_path, {"segments": [], track_sync.APPLIED_KEY: -0.25})
+    playback.mic_path(tmp_path, run=run)
+    assert len(run.calls) == 2
+    assert "atrim=start=0.250000" in run.calls[1][run.calls[1].index("-af") + 1]
+
+
+def test_mic_path_is_rebuilt_when_the_mic_changes(tmp_path):
+    from meet import track_sync
+
+    _call(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    run = FakeRun()
+    playback.mic_path(tmp_path, run=run)
+    os.utime(tmp_path / "mic.opus", (1_000_200, 1_000_200))
+    playback.mic_path(tmp_path, run=run)
+    assert len(run.calls) == 2
+
+
+def test_mic_path_failure_is_a_runtime_error(tmp_path):
+    from meet import track_sync
+
+    _call(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        playback.mic_path(tmp_path, run=FakeRun(returncode=1, stderr="плохой файл"))
+    assert not (tmp_path / playback.MIC_NAME).exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg не установлен")
+def test_real_ffmpeg_shifts_the_mic(tmp_path):
+    """Настоящий ffmpeg: дорожка «Вы» длиннее сырой на применённый сдвиг."""
+    from meet import library, track_sync
+
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=f=220:d=2", "-c:a", "libopus", str(tmp_path / "mic.opus")], check=True)
+    library.write_transcript(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 1.0})
+    path = playback.mic_path(tmp_path)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, check=True)
+    assert 2.8 < float(probe.stdout.strip()) < 3.3

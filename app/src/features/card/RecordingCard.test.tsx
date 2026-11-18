@@ -817,3 +817,93 @@ test("«Переразделить на спикеров…» открывает
   await userEvent.click(within(dialog).getByRole("button", { name: "Закрыть" }));
   expect(screen.queryByRole("dialog", { name: "Переразделить на спикеров" })).toBeNull();
 });
+
+// --- дорожки в плеере и плашка сдвига дорожек ---------------------------------------------------
+
+test("дорожки: у записи звонка — «Обе · Собеседники · Вы»; «Вы» играет микрофон на шкале текста", async () => {
+  load({ tracks: { sys: "s.opus", mic: "m.opus" } });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await userEvent.click(screen.getByRole("radio", { name: "Вы" }));
+  expect(container.querySelector("audio")!.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "you"));
+});
+
+test("дорожки: импорт (одна дорожка) — переключателя нет; нет микрофона — «Вы» недоступно", async () => {
+  load({ tracks: { source: "x.mp3" }, source: "import" });
+  const { unmount } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByRole("radiogroup", { name: "Дорожка" })).not.toBeInTheDocument();
+  unmount();
+  load({ tracks: { sys: "s.opus" } });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.getByRole("radio", { name: "Вы" })).toBeDisabled();
+  expect(screen.getByRole("radio", { name: "Собеседники" })).toBeEnabled();
+});
+
+const SHIFT = /Дорожки этой записи были сдвинуты на 0,4 с — расшифруйте заново, чтобы текст и звук совпали/;
+const shifted = (extra: Partial<Recording> = {}, applied?: number) => load(
+  { tracks: { sys: "s.opus", mic: "m.opus" }, track_offset: { mic_s: 0.4, method: "durations" }, ...extra },
+  applied === undefined ? transcript : { ...transcript, track_offset_applied_s: applied });
+
+test("плашка сдвига: оценён 0,4 с, применён 0 — плашка; после перерасшифровки (применён 0,4) — нет", async () => {
+  shifted();
+  const { unmount } = render(<RecordingCard id="r1" endpoint={ep} />);
+  expect(await screen.findByText(SHIFT)).toBeInTheDocument();
+  unmount();
+  shifted({}, 0.4);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByText(SHIFT)).not.toBeInTheDocument();
+});
+
+test("плашка сдвига: нет её у отказа оценки и у сдвига 0", async () => {
+  load({ tracks: { sys: "s.opus", mic: "m.opus" }, track_offset: { reason: "no_journal" } });
+  const { unmount } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByText(/были сдвинуты/)).not.toBeInTheDocument();
+  unmount();
+  load({ tracks: { sys: "s.opus", mic: "m.opus" }, track_offset: { mic_s: 0, method: "recording" } });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByText(/были сдвинуты/)).not.toBeInTheDocument();
+});
+
+test("плашка сдвига: «Скрыть» убирает её до следующего открытия карточки", async () => {
+  shifted();
+  const { unmount } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText(SHIFT);
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть" }));
+  expect(screen.queryByText(SHIFT)).not.toBeInTheDocument();
+  unmount();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  expect(await screen.findByText(SHIFT)).toBeInTheDocument();
+});
+
+test("плашка сдвига: без ручных правок — перерасшифровка запускается сразу", async () => {
+  shifted({ manual_edits: false });
+  vi.mocked(api.transcribe).mockResolvedValue({} as Job);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText(SHIFT);
+  await userEvent.click(within(screen.getByRole("region", { name: "Сдвиг дорожек" }))
+    .getByRole("button", { name: "Расшифровать заново" }));
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
+});
+
+test("плашка сдвига: при ручных правках — сначала подтверждение; «Отмена» задачу не запускает", async () => {
+  shifted({ manual_edits: true });
+  vi.mocked(api.transcribe).mockResolvedValue({} as Job);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText(SHIFT);
+  const again = () => within(screen.getByRole("region", { name: "Сдвиг дорожек" }))
+    .getByRole("button", { name: "Расшифровать заново" });
+  await userEvent.click(again());
+  expect(within(screen.getByRole("alertdialog")).getByText(/Ручные исправления текста и спикеров будут заменены/))
+    .toBeInTheDocument();
+  await answer("Отмена");
+  expect(api.transcribe).not.toHaveBeenCalled();
+  await userEvent.click(again());
+  await answer("Расшифровать заново");
+  await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
+});

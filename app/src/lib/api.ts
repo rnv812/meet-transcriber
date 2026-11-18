@@ -771,10 +771,13 @@ export const getKbDocs = (ep: Endpoint) => json<KbDocs>(ep, "/assistant/kb-docs"
 
 /**
  * Адрес дорожки для <audio>. `playback` — то, что играет карточка: обе стороны
- * звонка, сведённые резидентом (импорт — как есть); `sys`/`mic`/`source` —
- * отдельные дорожки (образцы голосов, диагностика).
+ * звонка, сведённые резидентом (импорт — как есть); `them`/`you` — одна
+ * сторона для переключателя плеера (собеседники; «Вы» — микрофон на шкале
+ * текста, с применённым сдвигом); `sys`/`mic`/`source` — сырые дорожки
+ * (образцы голосов, диагностика).
  */
-export function audioUrl(ep: Endpoint, id: string, track: "playback" | "sys" | "mic" | "source"): string {
+export function audioUrl(ep: Endpoint, id: string,
+  track: "playback" | "them" | "you" | "sys" | "mic" | "source"): string {
   const q = new URLSearchParams({ track });
   if (ep.token) q.set("token", ep.token);
   return `${ep.base}/recordings/${enc(id)}/audio?${q}`;

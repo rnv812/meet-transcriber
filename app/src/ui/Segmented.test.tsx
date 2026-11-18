@@ -100,3 +100,21 @@ test("стили — только токены Aurora; выбранный по a
   expect(css).not.toMatch(/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(/i);
   expect(css).toMatch(/\.segmented button\[aria-checked='true'\]\s*\{[^}]*background: var\(--deep\)/);
 });
+
+test("недоступный вариант: disabled с подсказкой, стрелки его перескакивают, щелчок ничего не меняет", async () => {
+  const onChange = vi.fn();
+  const options: SegmentedOption<Theme>[] = [
+    { value: "system", label: "Системная" }, { value: "dark", label: "Тёмная", disabled: true, tip: "Нет тёмной" },
+    { value: "light", label: "Светлая" },
+  ];
+  render(<Segmented label="Тема" value="system" options={options} onChange={onChange} />);
+  const dark = screen.getByRole("radio", { name: "Тёмная" });
+  expect(dark).toBeDisabled();
+  expect(dark).toHaveAccessibleDescription("Нет тёмной");
+  screen.getByRole("radio", { name: "Системная" }).focus();
+  await userEvent.keyboard("{ArrowRight}");
+  expect(onChange).toHaveBeenLastCalledWith("light");
+  expect(screen.getByRole("radio", { name: "Светлая" })).toHaveFocus();
+  fireEvent.click(dark);
+  expect(onChange).toHaveBeenCalledTimes(1);
+});

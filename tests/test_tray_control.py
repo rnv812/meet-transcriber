@@ -2557,3 +2557,86 @@ def test_card_whose_tracks_are_being_trimmed_is_not_estimated(with_recordings, a
     state.recording(with_recordings.name)
     assert track_sync.META_KEY not in library.read_meta(with_recordings)
     assert probe == []
+
+
+# --- дорожки в плеере и признак ручных правок ----------------------------------------
+
+
+def test_track_path_by_role_them_is_the_system_track(with_recordings, app):
+    """«Собеседники» — дорожка sys как есть: её время и есть время текста."""
+    state = tray_control.TrayControl(app)
+    assert state.track_path(with_recordings.name, "them") == with_recordings.resolve() / "sys.opus"
+
+
+def test_track_path_by_role_you_is_the_mic_on_the_text_timeline(with_recordings, app, monkeypatch):
+    """«Вы» — микрофон, сдвинутый на применённый сдвиг (playback.mic_path); сырой
+    `mic` остаётся сырым: по нему играют образцы голосов."""
+    from meet import playback
+
+    made = []
+
+    def fake_mic(folder):
+        made.append(folder)
+        return folder / playback.MIC_NAME
+
+    monkeypatch.setattr(playback, "mic_path", fake_mic)
+    state = tray_control.TrayControl(app)
+    got = state.track_path(with_recordings.name, "you")
+    assert got == with_recordings.resolve() / playback.MIC_NAME
+    assert made == [with_recordings.resolve()]
+    assert state.track_path(with_recordings.name, "mic") == with_recordings.resolve() / "mic.opus"
+    assert state.track_path("../../windows", "you") is None
+
+
+def test_track_path_by_role_you_without_mic_is_none(with_recordings, app):
+    (with_recordings / "mic.opus").unlink()
+    assert tray_control.TrayControl(app).track_path(with_recordings.name, "you") is None
+
+
+def test_track_path_by_role_you_failure_is_unavailable(with_recordings, app, monkeypatch):
+    from meet import playback
+    from meet.control import Unavailable
+
+    def broken(folder):
+        raise RuntimeError("ffmpeg не сдвинул дорожку")
+
+    monkeypatch.setattr(playback, "mic_path", broken)
+    with pytest.raises(Unavailable, match="ffmpeg"):
+        tray_control.TrayControl(app).track_path(with_recordings.name, "you")
+
+
+def _with_history(folder, pos, steps=2, base=None, trimmed=False):
+    from meet import speakers
+
+    data = library.read_transcript(folder)
+    meta = {speakers.HISTORY: [{"id": f"s{i}", "kind": "rename"} for i in range(steps)],
+            speakers.POS: pos, speakers.BASE: base or data.get("created_at")}
+    if trimmed:
+        meta[speakers.TRIMMED] = True
+    library.update_meta(folder, lambda m: {**m, **meta})
+
+
+def test_card_tells_whether_the_transcript_has_manual_edits(with_recordings, app):
+    """Перерасшифровка заменяет текст целиком: карточка знает, есть ли что терять —
+    применённые шаги общей истории правок (текст, спикеры) этой расшифровки."""
+    library.write_transcript(with_recordings, {
+        "segments": [{"start": 0, "end": 1, "speaker": "Спикер 1", "text": "привет"}],
+        "created_at": "2026-08-18T12:00:00",
+    })
+    state = tray_control.TrayControl(app)
+    assert state.recording(with_recordings.name)["manual_edits"] is False
+    _with_history(with_recordings, pos=1)
+    assert state.recording(with_recordings.name)["manual_edits"] is True
+    # Все шаги отменены — заменять нечего.
+    _with_history(with_recordings, pos=0)
+    assert state.recording(with_recordings.name)["manual_edits"] is False
+    # Старые шаги отброшены, но их правки в тексте остались.
+    _with_history(with_recordings, pos=0, trimmed=True)
+    assert state.recording(with_recordings.name)["manual_edits"] is True
+    # История прежней расшифровки к нынешней не относится.
+    _with_history(with_recordings, pos=2, base="2026-01-01T00:00:00")
+    assert state.recording(with_recordings.name)["manual_edits"] is False
+
+
+def test_card_without_transcript_has_no_manual_edits(with_recordings, app):
+    assert tray_control.TrayControl(app).recording(with_recordings.name)["manual_edits"] is False

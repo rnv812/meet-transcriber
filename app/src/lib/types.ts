@@ -118,6 +118,15 @@ export type Job = {
   provider?: string;
 };
 
+/** Сдвиг дорожек записи (`meta.json` → `track_offset`): оценка, отметка записи с общим нолём или отказ. */
+export type TrackOffset = {
+  mic_s?: number;
+  /** "durations" — по длительностям дорожек и журналу, "recording" — общий ноль при записи. */
+  method?: string;
+  /** Почему не оценён (нет журнала, запись закрыта нештатно…). */
+  reason?: string;
+};
+
 export type Recording = {
   id: string;
   path: string;
@@ -160,6 +169,13 @@ export type Recording = {
   rediarize_ready?: boolean;
   /** Последний применённый шаг истории правок встречи (нет правок — null): «Отменить» у итога правки — только пока он последний. */
   edit_head?: string | null;
+  /** В расшифровке есть ручные правки текста или спикеров: перерасшифровка их заменит. */
+  manual_edits?: boolean;
+  /**
+   * Сдвиг дорожек старой записи (только в карточке): принятая оценка — `mic_s` (на сколько секунд
+   * микрофон начался позже звука собеседников), отказ — `reason`. Нет — ещё не оценивали.
+   */
+  track_offset?: TrackOffset | null;
   /**
    * Категория встречи: `source` "ai" — из анализа, "user" — выбрал человек (модель её не меняет);
    * `id: null` — человек выбрал «Без категории». Не задана — null. Id, которого нет в настройках
@@ -344,6 +360,8 @@ export type Transcript = {
   phase?: "text";
   segments: Segment[];
   names?: Record<string, string>;
+  /** Сдвиг микрофона (с), с которым расшифрована запись; нет — расшифрована без сдвига. */
+  track_offset_applied_s?: number;
 };
 
 export type Person = {

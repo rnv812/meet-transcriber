@@ -311,3 +311,96 @@ test("release() отпускает файл: src снят, load(), без «Ау
   fireEvent.error(audio); // пустой src браузер считает ошибкой — это не сбой дорожки
   expect(screen.queryByText("Аудио недоступно")).toBeNull();
 });
+
+// --- дорожки: «Обе · Собеседники · Вы» ---------------------------------------------------------
+
+const BOTH = { them: true, you: true };
+
+test("дорожки: без сторон звонка (импорт, одна дорожка) переключателя нет", () => {
+  setup();
+  expect(screen.queryByRole("radiogroup", { name: "Дорожка" })).not.toBeInTheDocument();
+});
+
+test("дорожки: «Обе · Собеседники · Вы», по умолчанию — обе (сведение)", () => {
+  const { audio } = setup({ sides: BOTH });
+  const group = screen.getByRole("radiogroup", { name: "Дорожка" });
+  expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Обе", "Собеседники", "Вы"]);
+  expect(within(group).getByRole("radio", { name: "Обе" })).toHaveAttribute("aria-checked", "true");
+  expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "playback"));
+});
+
+test("дорожки: «Вы» на 1:20 — играет микрофон с 1:20, скорость прежняя; пока грузится — «загрузка»", async () => {
+  const { audio } = setup({ sides: BOTH });
+  loaded(audio, 600);
+  await userEvent.click(screen.getByRole("button", { name: /Скорость воспроизведения/ }));
+  await userEvent.click(screen.getByRole("menuitemradio", { name: "1,5×" }));
+  audio.currentTime = 80;
+  fireEvent.play(audio);
+  vi.mocked(HTMLMediaElement.prototype.play).mockClear();
+  await userEvent.click(screen.getByRole("radio", { name: "Вы" }));
+  expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "you"));
+  expect(screen.getByRole("radio", { name: "Вы" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("status")).toHaveTextContent("Загружаю дорожку…");
+  // Браузер начал загрузку новой дорожки: она с нуля и с исходной скоростью.
+  audio.currentTime = 0;
+  audio.playbackRate = 1;
+  fireEvent.pause(audio);
+  loaded(audio, 600);
+  expect(audio.currentTime).toBe(80);
+  expect(audio.playbackRate).toBe(1.5);
+  expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  fireEvent.playing(audio);
+  expect(screen.queryByText("Загружаю дорожку…")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Скорость воспроизведения: 1,5×/ })).toBeInTheDocument();
+});
+
+test("дорожки: на паузе смена не запускает воспроизведение; перемотка до загрузки — с нового места", async () => {
+  const { audio, ref } = setup({ sides: BOTH });
+  loaded(audio, 600);
+  audio.currentTime = 30;
+  await userEvent.click(screen.getByRole("radio", { name: "Собеседники" }));
+  expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "them"));
+  act(() => ref.current!.seek(45));
+  audio.currentTime = 0;
+  loaded(audio, 600);
+  expect(audio.currentTime).toBe(45);
+  expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  expect(screen.queryByText("Загружаю дорожку…")).not.toBeInTheDocument();
+});
+
+test("дорожки: нет микрофона — «Вы» недоступно с подсказкой", () => {
+  setup({ sides: { them: true, you: false } });
+  const you = screen.getByRole("radio", { name: "Вы" });
+  expect(you).toBeDisabled();
+  expect(you).toHaveAccessibleDescription("Микрофон в этой записи не записан");
+  expect(screen.getByRole("radio", { name: "Собеседники" })).toBeEnabled();
+});
+
+test("дорожки: стрелки выбирают дорожку и не перематывают", async () => {
+  const { audio } = setup({ sides: BOTH });
+  loaded(audio, 600);
+  audio.currentTime = 50;
+  screen.getByRole("radio", { name: "Обе" }).focus();
+  await userEvent.keyboard("{ArrowRight}");
+  expect(screen.getByRole("radio", { name: "Собеседники" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("radio", { name: "Собеседники" })).toHaveFocus();
+  expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "them"));
+  expect(audio.currentTime).toBe(50);
+});
+
+test("дорожки: одна сторона не загрузилась — назад к обеим, пункт недоступен, плеер работает", async () => {
+  const onAvailable = vi.fn();
+  const { audio } = setup({ sides: BOTH, onAvailable });
+  loaded(audio, 600);
+  audio.currentTime = 20;
+  await userEvent.click(screen.getByRole("radio", { name: "Вы" }));
+  fireEvent.error(audio);
+  expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "playback"));
+  expect(screen.getByRole("radio", { name: "Обе" })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("radio", { name: "Вы" })).toBeDisabled();
+  expect(screen.getByRole("radio", { name: "Вы" })).toHaveAccessibleDescription("Дорожка не загрузилась");
+  expect(onAvailable).not.toHaveBeenCalledWith(false);
+  audio.currentTime = 0;
+  loaded(audio, 600);
+  expect(audio.currentTime).toBe(20);
+});

@@ -2265,6 +2265,7 @@ class TrayControl:
         raw = card.to_raw()
         raw["transcript"] = _window_transcript(library.read_transcript_full(folder), folder)
         raw["edit_head"] = self._edit_head(folder)
+        raw["manual_edits"] = self._manual_edits(folder)
         jira = self._jira_refs(folder, raw["transcript"])
         if jira is not None:
             raw["jira"] = jira
@@ -2352,6 +2353,16 @@ class TrayControl:
             return speakers.head(folder)
         except (OSError, ValueError):
             return None
+
+    def _manual_edits(self, folder: Path) -> bool:
+        """В расшифровке есть ручные правки текста или спикеров: перерасшифровка
+        их заменит (окно сначала предупреждает)."""
+        from meet import speakers
+
+        try:
+            return speakers.edited(folder)
+        except (OSError, ValueError):
+            return False
 
     def update_recording(self, recording_id: str, body: dict) -> dict:
         """Переименовать запись. Название живёт в meta.json, а не в транскрипте:
@@ -4740,7 +4751,10 @@ class TrayControl:
     def track_path(self, recording_id: str, track: str) -> Path | None:
         """Файл для плеера. `playback` — то, что играет карточка: обе стороны
         звонка, сведённые в одну дорожку (или импортированный файл как есть);
-        `sys`/`mic`/`source` — отдельные дорожки, для диагностики."""
+        `them`/`you` — одна сторона по роли для переключателя плеера:
+        собеседники (`sys` как есть) и «Вы» — микрофон на шкале текста, с
+        применённым сдвигом (playback.mic_path); `sys`/`mic`/`source` — сырые
+        дорожки (образцы голосов, диагностика)."""
         folder = self._folder(recording_id)
         if folder is None:
             return None
@@ -4748,15 +4762,17 @@ class TrayControl:
             from meet.control import Unavailable
 
             raise Unavailable(PROCESSING)
-        if track == "playback":
+        if track in ("playback", "you"):
             from meet import playback
 
             try:
-                return playback.playback_path(folder)
+                return playback.playback_path(folder) if track == "playback" else playback.mic_path(folder)
             except RuntimeError as e:
                 from meet.control import Unavailable
 
                 raise Unavailable(str(e)) from e
+        if track == "them":
+            track = "sys"
         if track not in library.TRACK_STEMS:
             return None
         return library.find_track(folder, track)

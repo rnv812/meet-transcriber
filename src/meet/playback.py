@@ -14,6 +14,13 @@
 
 Импорт (`source.*`) и запись с одной дорожкой играются как есть, без сведения.
 
+Плеер может играть и одну сторону (переключатель «Обе · Собеседники · Вы»):
+собеседники — `sys` как есть, «Вы» — микрофон на шкале текста (`mic_path`):
+без применённого сдвига — сам `mic.*`, со сдвигом — `playback-mic.opus`,
+сдвинутый тем же фильтром и закэшированный так же, как сведение (своя отметка
+`playback-mic.json`). Сырой `mic` по-прежнему отдаётся как есть — по нему
+играют образцы голосов, их время уже переведено в шкалу сырой дорожки.
+
 Старая запись, расшифрованная со сдвигом микрофона (meet.track_sync), сводится
 с тем же сдвигом: микрофон задерживается (или его начало срезается), чтобы
 реплика «Вы» звучала там, где стоит в тексте. Берётся только применённый сдвиг
@@ -51,6 +58,9 @@ from meet.audio import shift_filter
 
 PLAYBACK_NAME = "playback.opus"
 STAMP_NAME = "playback.json"
+# Дорожка «Вы» со сдвигом микрофона (без сдвига играется сам mic.*).
+MIC_NAME = "playback-mic.opus"
+MIC_STAMP_NAME = "playback-mic.json"
 MIX_TIMEOUT_S = 1800
 # Подмена кэша, пока старый файл отдаётся плееру: Windows не даёт заменить
 # открытый файл — ждём столько, затем отдаём старый.
@@ -132,23 +142,40 @@ def mix_command(sys_track: Path, mic: Path, out: Path, mic_offset: float = 0.0) 
     ]
 
 
-def mix(sys_track: Path, mic: Path, out: Path, run=subprocess.run, mic_offset: float = 0.0) -> None:
-    """Свести две дорожки в `out` (Ogg/Opus). Ошибка — RuntimeError с текстом."""
+def shift_command(mic: Path, out: Path, mic_offset: float) -> list[str]:
+    """ffmpeg: микрофон на шкале текста — сдвинут на применённый сдвиг тем же
+    фильтром, что в сведении и расшифровке; громкость как есть."""
+    chain = ",".join(f for f in ("aformat=channel_layouts=mono", shift_filter(mic_offset)) if f)
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(mic), "-af", chain,
+        "-ac", "1", "-c:a", "libopus", "-b:a", "24k", "-application", "voip",
+        "-f", "ogg", str(out),
+    ]
+
+
+def _ffmpeg(cmd: list[str], run, done: str, failed: str) -> None:
+    """ffmpeg под общим ограничением (не больше двух сразу). Сбой — RuntimeError:
+    `done` — чем дорожки не стали («сведены»), `failed` — что ffmpeg не сделал."""
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg не найден — дорожки записи не сведены")
+        raise RuntimeError(f"ffmpeg не найден — дорожки записи не {done}")
     try:
         with _slots:
             proc = run(
-                mix_command(sys_track, mic, out, mic_offset),
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=MIX_TIMEOUT_S, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError("ffmpeg не успел свести дорожки") from e
+        raise RuntimeError(f"ffmpeg не успел: дорожки записи не {done}") from e
     except OSError as e:
         raise RuntimeError(f"ffmpeg не запустился: {e}") from e
     if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg не свёл дорожки: {(proc.stderr or '').strip()[-300:]}")
+        raise RuntimeError(f"ffmpeg не {failed}: {(proc.stderr or '').strip()[-300:]}")
+
+
+def mix(sys_track: Path, mic: Path, out: Path, run=subprocess.run, mic_offset: float = 0.0) -> None:
+    """Свести две дорожки в `out` (Ogg/Opus). Ошибка — RuntimeError с текстом."""
+    _ffmpeg(mix_command(sys_track, mic, out, mic_offset), run, "сведены", "свёл дорожки")
 
 
 def _stats(srcs: list[Path]) -> list[dict]:
@@ -159,13 +186,14 @@ def _stats(srcs: list[Path]) -> list[dict]:
     return out
 
 
-def fresh(folder: Path, srcs: list[Path], mic_offset: float = 0.0) -> bool:
-    """Кэш сведён из тех же дорожек, что лежат сейчас, с тем же сдвигом
-    микрофона, и не пуст."""
+def fresh(folder: Path, srcs: list[Path], mic_offset: float = 0.0,
+          name: str = PLAYBACK_NAME, stamp_name: str = STAMP_NAME) -> bool:
+    """Кэш `name` построен из тех же дорожек, что лежат сейчас, с тем же
+    сдвигом микрофона, и не пуст."""
     try:
-        if (folder / PLAYBACK_NAME).stat().st_size <= 0:
+        if (folder / name).stat().st_size <= 0:
             return False
-        stamp = json.loads((folder / STAMP_NAME).read_text(encoding="utf-8"))
+        stamp = json.loads((folder / stamp_name).read_text(encoding="utf-8"))
         return (stamp.get("sources") == _stats(srcs)
                 and float(stamp.get("mic_offset_s", 0.0)) == float(mic_offset))
     except (OSError, ValueError, TypeError, AttributeError):
@@ -189,23 +217,15 @@ def _replace(tmp: Path, out: Path) -> bool:
     return False
 
 
-def playback_path(folder: Path, run=subprocess.run) -> Path | None:
-    """Файл для плеера записи `folder`; нет дорожек — None. Сбой — RuntimeError.
-
-    Сведение — одно на папку одновременно (плеер шлёт несколько запросов
-    с Range подряд: второй ждёт первый, а не сводит заново). Пишется во
-    временный файл и подменяется целиком: плеер не увидит недописанный."""
-    folder = Path(folder)
-    srcs = sources(folder)
-    if not srcs:
-        return None
-    if len(srcs) == 1:
-        return srcs[0]
-    out = folder / PLAYBACK_NAME
-    with _lock_for(folder), using(folder):
-        # Сдвиг, с которым расшифрован текст: сведение должно с ним совпасть.
-        offset = round(track_sync.folder_applied_s(folder), 3)
-        if fresh(folder, srcs, offset):
+def _cached(folder: Path, srcs: list[Path], offset: float, name: str, stamp_name: str, build) -> Path:
+    """Кэш `name` из дорожек `srcs` со сдвигом микрофона `offset`: свежий — как
+    есть, иначе `build(tmp)` пишет его во временный файл, и он подменяется
+    целиком (плеер не увидит недописанный). Одна сборка файла одновременно:
+    плеер шлёт несколько запросов с Range подряд — второй ждёт первый, а не
+    собирает заново."""
+    out = folder / name
+    with _lock_for(out), using(folder):
+        if fresh(folder, srcs, offset, name, stamp_name):
             return out
         try:
             before = _stats(srcs)
@@ -213,19 +233,50 @@ def playback_path(folder: Path, run=subprocess.run) -> Path | None:
             raise RuntimeError(f"дорожки записи недоступны: {e}") from e
         tmp = out.with_name(out.name + ".tmp")
         try:
-            mix(srcs[0], srcs[1], tmp, run=run, mic_offset=offset)
+            build(tmp)
             if not _replace(tmp, out):
                 if out.is_file() and out.stat().st_size > 0:
-                    return out  # прежнее сведение; новое — при следующем запросе
-                raise RuntimeError("не удалось сохранить сведённую дорожку: файл занят")
-            stamp = folder / (STAMP_NAME + ".tmp")
+                    return out  # прежняя сборка; новая — при следующем запросе
+                raise RuntimeError("не удалось сохранить дорожку для плеера: файл занят")
+            stamp = folder / (stamp_name + ".tmp")
             stamp.write_text(json.dumps({"sources": before, "mic_offset_s": offset}), encoding="utf-8")
-            os.replace(stamp, folder / STAMP_NAME)
+            os.replace(stamp, folder / stamp_name)
         except OSError as e:
-            raise RuntimeError(f"не удалось свести дорожки для плеера: {e}") from e
+            raise RuntimeError(f"не удалось подготовить дорожку для плеера: {e}") from e
         finally:
             tmp.unlink(missing_ok=True)
     return out
+
+
+def playback_path(folder: Path, run=subprocess.run) -> Path | None:
+    """Файл для плеера записи `folder`; нет дорожек — None. Сбой — RuntimeError."""
+    folder = Path(folder)
+    srcs = sources(folder)
+    if not srcs:
+        return None
+    if len(srcs) == 1:
+        return srcs[0]
+    # Сдвиг, с которым расшифрован текст: сведение должно с ним совпасть.
+    offset = round(track_sync.folder_applied_s(folder), 3)
+    return _cached(folder, srcs, offset, PLAYBACK_NAME, STAMP_NAME,
+                   lambda tmp: mix(srcs[0], srcs[1], tmp, run=run, mic_offset=offset))
+
+
+def mic_path(folder: Path, run=subprocess.run) -> Path | None:
+    """Дорожка «Вы» для плеера: микрофон на шкале текста; нет микрофона — None.
+
+    Берётся только применённый сдвиг (из транскрипта): оценённый, но не
+    применённый в тексте не участвует. Без сдвига — сам `mic.*`, со сдвигом —
+    `MIC_NAME`, собранный ffmpeg и закэшированный. Сбой — RuntimeError."""
+    folder = Path(folder)
+    mic = library.find_track(folder, "mic")
+    if mic is None:
+        return None
+    offset = round(track_sync.folder_applied_s(folder), 3)
+    if not offset:
+        return mic
+    return _cached(folder, [mic], offset, MIC_NAME, MIC_STAMP_NAME,
+                   lambda tmp: _ffmpeg(shift_command(mic, tmp, offset), run, "сдвинуты", "сдвинул микрофон"))
 
 
 # --- фоновое сведение после расшифровки ---------------------------------------

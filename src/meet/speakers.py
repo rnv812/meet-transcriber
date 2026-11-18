@@ -1344,6 +1344,19 @@ def head(folder: Path) -> str | None:
     return steps[pos - 1].get("id") if pos else None
 
 
+def edited(folder: Path) -> bool:
+    """В нынешней расшифровке есть ручные правки — текста («Исправить…»,
+    «Улучшить расшифровку») или спикеров: применённые шаги общей истории или
+    уже отброшенные старые (их правки в тексте остались). Отменённые шаги и
+    история прежней расшифровки не в счёт."""
+    data = library.read_transcript(folder)
+    if not data:
+        return False
+    meta = library.read_meta(folder)
+    _, pos = _history_of(meta, data)
+    return pos > 0 or _trimmed(meta, data)
+
+
 def _shift(folder: Path, voices_dir: Path, forward: bool, expect_step: str | None = None) -> dict:
     data = _transcript(folder)
     meta = library.read_meta(folder)

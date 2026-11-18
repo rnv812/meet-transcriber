@@ -7,14 +7,16 @@
  *
  * Размеры: `sm` — `.tabs--sm` (строки настроек, шапка сессии ассистента),
  * `md` — обычные `.tabs`. `disabled` — все варианты недоступны, клавиши не
- * работают.
+ * работают; `disabled` у варианта — недоступен он один (стрелки его
+ * перескакивают, причина — в его `tip`).
  *
  * Имя группы — `label` (`aria-label`) или `labelledBy` (id видимой подписи).
  * У варианта: `description` — пояснение диктору (`aria-description`), `tip` —
  * всплывающая подсказка Aurora (`Tip`; она же описание диктору).
  *
  * Используется в настройках (`features/settings/Section` → `Segmented` в
- * строке) и в шапке сессии ассистента (`live/SessionBar`: частота, профиль).
+ * строке), в шапке сессии ассистента (`live/SessionBar`: частота, профиль) и
+ * в подвале плеера карточки (`features/card/AudioPlayer`: дорожка).
  */
 
 import type { KeyboardEvent, ReactNode } from "react";
@@ -29,6 +31,8 @@ export type SegmentedOption<T extends string> = {
   description?: string;
   /** Всплывающая подсказка (Tip). */
   tip?: ReactNode;
+  /** Вариант недоступен (причина — в `tip`): стрелки его перескакивают. */
+  disabled?: boolean;
 };
 
 export type SegmentedSize = "sm" | "md";
@@ -36,20 +40,24 @@ export type SegmentedSize = "sm" | "md";
 /**
  * Стрелки в группе радио-кнопок (сегменты, образцы палитры): ←/↑ и →/↓ —
  * соседний вариант, Home/End — крайние; выбор сразу и фокус на нём. Кнопки
- * группы (`[role=radio]`) — по порядку `values`.
+ * группы (`[role=radio]`) — по порядку `values`; недоступные (`off`)
+ * стрелки перескакивают.
  */
-export function radioKeys<T extends string>(values: readonly T[], value: T, onChange: (v: T) => void) {
+export function radioKeys<T extends string>(values: readonly T[], value: T, onChange: (v: T) => void,
+  off: readonly T[] = []) {
   return (e: KeyboardEvent<HTMLElement>) => {
-    const at = values.indexOf(value);
-    const last = values.length - 1;
+    const open = values.filter((v) => !off.includes(v));
+    const at = open.indexOf(value);
+    const last = open.length - 1;
     const next = e.key === "ArrowRight" || e.key === "ArrowDown" ? Math.min(last, at + 1)
       : e.key === "ArrowLeft" || e.key === "ArrowUp" ? Math.max(0, at - 1)
         : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
-    if (next < 0) return;
+    if (next < 0 || last < 0) return;
     e.preventDefault();
     if (next === at) return;
-    onChange(values[next]!);
-    e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[next]?.focus();
+    const to = open[next]!;
+    onChange(to);
+    e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[values.indexOf(to)]?.focus();
   };
 }
 
@@ -74,11 +82,12 @@ export function Segmented<T extends string>({
   return (
     <div role="radiogroup" aria-label={labelledBy ? undefined : label} aria-labelledby={labelledBy}
       aria-disabled={disabled || undefined} className={classes}
-      onKeyDown={disabled ? undefined : radioKeys(values, value, onChange)}>
+      onKeyDown={disabled ? undefined
+        : radioKeys(values, value, onChange, options.filter((o) => o.disabled).map((o) => o.value))}>
       {options.map((o) => {
         const button = (
           <button key={o.value} type="button" role="radio" aria-checked={value === o.value}
-            tabIndex={o.value === focusable ? 0 : -1} disabled={disabled} aria-description={o.description}
+            tabIndex={o.value === focusable ? 0 : -1} disabled={disabled || o.disabled} aria-description={o.description}
             onClick={() => { if (o.value !== value) onChange(o.value); }}>
             {o.label}
           </button>

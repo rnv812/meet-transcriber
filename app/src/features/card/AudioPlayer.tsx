@@ -10,6 +10,13 @@
  * одну дорожку и кэширует её; импорт играется как есть. Реплика лишь
  * перематывает общий плеер (`seek`).
  *
+ * Дорожка (`sides` — у записи звонка): «Обе · Собеседники · Вы» в подвале —
+ * `playback`, `them` (sys) или `you` (микрофон на шкале текста, резидент
+ * сдвигает его на применённый сдвиг). Смена сохраняет место и скорость: до
+ * метаданных новой дорожки — «Загружаю дорожку…», затем то же место, та же
+ * скорость и, если играло, — дальше играет. Стороны нет — пункт недоступен с
+ * подсказкой; одна сторона не загрузилась — назад к «Обе», пункт недоступен.
+ *
  * Фрагмент (образец спикера, нахлёст: `seek(at, true, until)`) останавливается
  * точно на `until` — таймером (lib/phraseStop), а не по `timeupdate`. Любая
  * перемотка, пауза или новый фрагмент его снимают; `onPhrase` сообщает, какой
@@ -53,6 +60,7 @@ import { Avatar } from "../../ui/Avatar";
 import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
 import { Popover } from "../../ui/Popover";
+import { Segmented, type SegmentedOption } from "../../ui/Segmented";
 import { Slider } from "../../ui/Slider";
 import { Tip } from "../../ui/Tip";
 import type { PersonColor } from "./Turns";
@@ -70,6 +78,19 @@ export type AudioPlayerHandle = {
   /** Остановить и отпустить файл (перед удалением записи). */
   release: () => void;
 };
+
+/** Что играет плеер: обе стороны звонка, только собеседники или только вы. */
+export type PlayerSide = "both" | "them" | "you";
+/** Какие стороны звонка есть у записи (переключатель дорожки). */
+export type PlayerSides = { them: boolean; you: boolean };
+
+const SIDE_TRACK = { both: "playback", them: "them", you: "you" } as const;
+const SIDE_LABEL: Record<PlayerSide, string> = { both: "Обе", them: "Собеседники", you: "Вы" };
+const SIDE_MISSING: Record<Exclude<PlayerSide, "both">, string> = {
+  them: "Звук собеседников в этой записи не записан",
+  you: "Микрофон в этой записи не записан",
+};
+const SIDE_BROKEN = "Дорожка не загрузилась";
 
 /** Скорости — меню с отметкой текущей (0.5). */
 export const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
@@ -230,10 +251,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   onPlayhead?: (at: number) => void;
   /** Начался фрагмент (`seek` с `until`) или закончился (null): дошёл до конца, пауза, перемотка, новый. */
   onPhrase?: (phrase: Phrase | null) => void;
+  /** Стороны звонка записи — переключатель «Обе · Собеседники · Вы»; нет (импорт) — переключателя нет. */
+  sides?: PlayerSides | null;
 }>(function AudioPlayer({
   endpoint, id, durationHint, onAvailable, turns = NO_TURNS, chapters = NO_CHAPTERS, importance = null,
   curveMode = "hover", barLabels = true, people = NO_PEOPLE, avatarVersion, onChapter,
-  onSeeked, onPlayhead, onPhrase,
+  onSeeked, onPlayhead, onPhrase, sides = null,
 }, ref) {
   const el = useRef<HTMLAudioElement>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -248,6 +271,13 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   /** Запросили воспроизведение, а данных ещё нет: резидент сводит дорожки или файл грузится. */
   const [loading, setLoading] = useState(false);
   const [released, setReleased] = useState(false);
+  /** Какая дорожка играет; `switching` — новая выбрана, её метаданных ещё нет. */
+  const [side, setSide] = useState<PlayerSide>("both");
+  const [switching, setSwitching] = useState(false);
+  /** Стороны, чья дорожка не загрузилась: их пункты недоступны. */
+  const [broken, setBroken] = useState<PlayerSide[]>([]);
+  /** Куда встать и играть ли, когда новая дорожка прочитает метаданные. */
+  const resume = useRef<{ t: number; play: boolean } | null>(null);
   const [onlyImportant, setOnlyImportant] = useState(false);
   const [compact, setCompact] = useState(readCompact);
   /** Список глав открыт: у какой кнопки (название главы или «Главы»). */
@@ -335,6 +365,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     const end = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : totalRef.current || Infinity;
     const t = Math.max(0, Math.min(at, end));
     a.currentTime = t;
+    // Новая дорожка ещё грузится: встать надо туда, куда перемотали сейчас.
+    if (resume.current) resume.current.t = t;
     // Перемотали сами в неважное — не перескакивать, пока не дойдём до важного.
     free.current = only.current !== null && skipTarget(only.current, t) !== null;
     setCurrent(t);
@@ -393,10 +425,37 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
 
   /** Меню скорости открыто: у кнопки «1×». */
   const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
+  const rateRef = useRef(rate);
+  rateRef.current = rate;
   const pickSpeed = (next: number) => {
-    if (el.current) el.current.playbackRate = next;
+    // `defaultPlaybackRate` — чтобы загрузка другой дорожки не вернула 1×.
+    if (el.current) { el.current.playbackRate = next; el.current.defaultPlaybackRate = next; }
     setRate(next);
     setSpeedAnchor(null);
+  };
+
+  /** Сменить дорожку: место и «играло ли» — запомнить до её метаданных. */
+  const chooseSide = (next: PlayerSide) => {
+    const a = el.current;
+    if (next === side || !a) return;
+    endPhrase();
+    // Смена посреди смены: место — то, что запомнили первым (новая дорожка ещё с нуля).
+    resume.current ??= { t: a.currentTime, play: playingRef.current };
+    setSide(next);
+    setSwitching(true);
+  };
+  /** Метаданные новой дорожки пришли: то же место, та же скорость, играть — если играло. */
+  const resumed = (a: HTMLAudioElement) => {
+    const r = resume.current;
+    if (!r) return;
+    resume.current = null;
+    setSwitching(false);
+    a.currentTime = r.t;
+    a.playbackRate = rateRef.current;
+    setCurrent(r.t);
+    paint(r.t);
+    playhead.current?.(r.t);
+    if (r.play) start();
   };
 
   const mutedRef = useRef(muted);
@@ -599,17 +658,27 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const labels = barLabels && hasChapters && !compact && pieces.some((p) => p.label);
   const fragments = onlySpans?.length ?? 0;
   const here = hasChapters ? chapters[chapter] : undefined;
+  const sideOptions: SegmentedOption<PlayerSide>[] | null = sides && (["both", "them", "you"] as const).map((s) => {
+    const missing = s !== "both" && !sides[s];
+    const off = missing || broken.includes(s);
+    return {
+      value: s, label: SIDE_LABEL[s], disabled: off,
+      tip: missing ? SIDE_MISSING[s as Exclude<PlayerSide, "both">] : off ? SIDE_BROKEN : undefined,
+    };
+  });
   return (
     <div className={`player player--yt${compact ? " player--compact" : ""}${curveOn ? ` player--curve-${curveMode}` : ""}`}
       role="group" aria-label="Проигрыватель записи">
       <audio
         ref={el}
-        src={released ? undefined : audioUrl(endpoint, id, "playback")}
-        preload="none"
+        src={released ? undefined : audioUrl(endpoint, id, SIDE_TRACK[side])}
+        // Сменили дорожку на паузе — загрузить хотя бы метаданные: место встанет сразу.
+        preload={switching ? "metadata" : "none"}
         onLoadedMetadata={(e) => {
           const d = e.currentTarget.duration;
           if (Number.isFinite(d) && d > 0) setDuration(d);
           available.current?.(true);
+          resumed(e.currentTarget);
         }}
         onDurationChange={(e) => {
           const d = e.currentTarget.duration;
@@ -632,8 +701,16 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         onCanPlay={() => setLoading(false)}
         onPlaying={() => setLoading(false)}
         onEnded={() => { setPlaying(false); endPhrase(); }}
-        onError={() => {
+        onError={(e) => {
           if (released) return; // src убрали сами перед удалением
+          if (side !== "both") {
+            // Одна сторона не загрузилась — назад к обеим, на то же место; её пункт недоступен.
+            resume.current ??= { t: e.currentTarget.currentTime, play: playingRef.current };
+            setBroken((b) => (b.includes(side) ? b : [...b, side]));
+            setSide("both");
+            setSwitching(true);
+            return;
+          }
           setFailed(true); setPlaying(false); setLoading(false); available.current?.(false); endPhrase();
         }}
       />
@@ -731,9 +808,10 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
             value={muted ? 0 : volume} showValue={false} format={(v) => `${Math.round(v * 100)}%`}
             onChange={changeVolume} />
         </span>
-        {loading ? (
+        {switching || loading ? (
           <span className="player__status" role="status">
-            <span className="player__spinner" aria-hidden="true" />Подготовка аудио…
+            <span className="player__spinner" aria-hidden="true" />
+            {switching ? "Загружаю дорожку…" : "Подготовка аудио…"}
           </span>
         ) : (
           <span className="player__clock">
@@ -768,6 +846,9 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         )}
       </div>
       <div className="player__right">
+        {sideOptions && (
+          <Segmented label="Дорожка" value={side} options={sideOptions} onChange={chooseSide} />
+        )}
         <button type="button" className="btn btn--ghost btn--sm player__speed" aria-haspopup="menu"
           aria-expanded={!!speedAnchor} aria-label={`Скорость воспроизведения: ${speedText(rate)}`}
           onClick={(e) => { const b = e.currentTarget; setSpeedAnchor((cur) => (cur === b ? null : b)); }}>

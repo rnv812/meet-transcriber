@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { PenLine } from "lucide-react";
+import { PenLine, X } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
   buildView, INSIGHT_LABEL, turnAt, usableAnalysis, type InsightView,
@@ -79,6 +79,20 @@ function logsDir(dataDir: string): string {
   return `${dataDir.replace(/[\\/]+$/, "")}${sep}logs`;
 }
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
+
+/**
+ * Сдвиг дорожек старой записи, которого нет в тексте (с): оценка принята (`mic_s` больше нуля), а
+ * расшифровка построена с другим сдвигом — звук «Вы» и текст расходятся. Нет такого — null.
+ */
+function unappliedShift(rec: Recording & { transcript: Transcript | null }): number | null {
+  const offset = rec.track_offset;
+  const mic = offset && !offset.reason && typeof offset.mic_s === "number" ? offset.mic_s : 0;
+  if (!rec.transcript || !(mic > 0)) return null;
+  const applied = rec.transcript.track_offset_applied_s ?? 0;
+  return Math.abs(mic - applied) >= 0.001 ? mic : null;
+}
+/** Секунды сдвига: «0,4», «1,25». */
+const shiftText = (s: number) => String(Math.round(s * 100) / 100).replace(".", ",");
 /** Сколько первых реплик главы уходит агенту со ссылкой на главу. */
 const CHAPTER_REFS = 6;
 
@@ -154,6 +168,8 @@ export function RecordingCard({
   const [seekTo, setSeekTo] = useState<SeekRequest | null>(null);
   /** Реплика, звучащая сейчас (отметка «сейчас играет»); обновляется только при её смене. */
   const [nowTurn, setNowTurn] = useState<number | null>(null);
+  /** Плашку сдвига дорожек скрыли — до следующего открытия карточки. */
+  const [shiftHidden, setShiftHidden] = useState(false);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
   /** Состояние задач записи (`jobSig`) сейчас — и то, при котором началось последнее удачное перечитывание:
@@ -225,7 +241,7 @@ export function RecordingCard({
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
     setPanel({ open: false, mounted: false, focus: null }); setOwnFind(null); setRediarizeOpen(false);
-    setAgentAsk(null); setNowTurn(null);
+    setAgentAsk(null); setNowTurn(null); setShiftHidden(false);
     void load();
   }, [load]);
   // Просьба из поиска по записям важнее прежней своей.
@@ -405,6 +421,9 @@ export function RecordingCard({
   };
 
   const hasAudio = Object.keys(rec.tracks).length > 0;
+  // Переключатель дорожки — у записи звонка (sys и mic); импорт играется одним файлом.
+  const call = !("source" in rec.tracks) && ("sys" in rec.tracks || "mic" in rec.tracks);
+  const sides = call ? { them: "sys" in rec.tracks, you: "mic" in rec.tracks } : null;
   const rediarizing = rediarizeJobOf(rec.path, jobs) !== null;
   const playable = hasAudio && !audioFailed;
 
@@ -419,6 +438,27 @@ export function RecordingCard({
     onChanged?.();
   });
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
+  // Перерасшифровка с плашки сдвига: ручные правки она заменит — тогда сначала спросить.
+  const transcribeShifted = async () => {
+    if (rec.manual_edits) {
+      const ok = await confirm({
+        title: "Расшифровать заново?", confirmLabel: "Расшифровать заново",
+        message: "Ручные исправления текста и спикеров будут заменены.",
+      });
+      if (!ok) return;
+    }
+    await doTranscribe();
+  };
+  const shift = status.kind === "ready" && !shiftHidden ? unappliedShift(rec) : null;
+  const shiftNote = shift !== null ? (
+    <Callout tone="warn" role="region" label="Сдвиг дорожек"
+      actions={<>
+        <Button onClick={() => void transcribeShifted()} disabled={busy}>Расшифровать заново</Button>
+        <IconButton icon={X} label="Скрыть" onClick={() => setShiftHidden(true)} />
+      </>}>
+      Дорожки этой записи были сдвинуты на {shiftText(shift)} с — расшифруйте заново, чтобы текст и звук совпали
+    </Callout>
+  ) : null;
   const noModel = noProvider(assistantInfo);
   /** Повтор возможен: выбранной модели — если она доступна, иначе — модели по умолчанию. */
   const canRerun = (provider?: string) => (provider ? modelReady(modelChoices(assistantInfo), provider) : !noModel);
@@ -542,9 +582,14 @@ export function RecordingCard({
           words={segWords} onPlayAt={playAt} editingTurn={textFix.editing}
           legendEnd={staleInLegend ? analysisStatus : null}
           // Разовое предложение анализа — только на «Расшифровке», над лентой: вкладки не сдвигаются.
-          notice={offerAnalysis ? (
-            <AnalysisOffer busy={busy} onAnswer={answerOffer}
-              onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
+          notice={offerAnalysis || shiftNote ? (
+            <>
+              {shiftNote}
+              {offerAnalysis && (
+                <AnalysisOffer busy={busy} onAnswer={answerOffer}
+                  onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
+              )}
+            </>
           ) : null} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
@@ -733,7 +778,7 @@ export function RecordingCard({
             <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}
               onAvailable={audioAvailable} turns={turns} chapters={view?.chapters} importance={view?.importance}
               curveMode={prefs.curve} barLabels={prefs.barLabels} people={people} avatarVersion={avatarVersion}
-              onSeeked={seeked} onPlayhead={playhead} onPhrase={setPhrase} />
+              onSeeked={seeked} onPlayhead={playhead} onPhrase={setPhrase} sides={sides} />
           ) : (
             <div className="player player--off" role="status"><span className="muted">Аудио недоступно</span></div>
           ))}
