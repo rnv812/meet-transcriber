@@ -242,6 +242,38 @@ def test_mac_bundle_config_and_permission_strings():
         assert (TAURI / icon).is_file()
 
 
+FOLDER_KEYS = ("NSDocumentsFolderUsageDescription", "NSDesktopFolderUsageDescription",
+               "NSDownloadsFolderUsageDescription", "NSRemovableVolumesUsageDescription",
+               "NSNetworkVolumesUsageDescription")
+
+
+def _strings(path: Path) -> dict[str, str]:
+    """Пары «ключ = значение» из InfoPlist.strings (формат, который пишем сами)."""
+    text = path.read_text(encoding="utf-8")
+    return dict(re.findall(r'^"(\w+)" = "((?:[^"\\]|\\.)*)";\s*$', text, re.MULTILINE))
+
+
+def test_folder_and_volume_requests_explain_themselves():
+    """Запросы к папкам и дискам (выгрузка в базу знаний, чтение базы агентом,
+    движок на внешнем диске) приходят от Meet — у каждого свой текст на обоих языках."""
+    mac = json.loads((TAURI / "tauri.macos.conf.json").read_text(encoding="utf-8"))
+    macos = mac["bundle"]["macOS"]
+    plist = plistlib.loads((TAURI / macos["infoPlist"]).read_bytes())
+    sources = {Path(target).parent.name: TAURI / source for target, source in macos["files"].items()}
+    assert set(sources) == {"ru.lproj", "en.lproj"}
+    ru, en = _strings(sources["ru.lproj"]), _strings(sources["en.lproj"])
+    for key in FOLDER_KEYS:
+        assert plist[key].startswith("Meet "), key
+        # Русский текст — тот же, что в Info.plist (язык разработки — ru).
+        assert ru.get(key) == plist[key], key
+        assert en.get(key, "").startswith("Meet "), key
+        assert re.search("[а-яё]", ru[key], re.IGNORECASE), key
+        assert not re.search("[а-яё]", en[key], re.IGNORECASE), key
+    # Тексты разные: каждый объясняет свой запрос.
+    assert len({plist[key] for key in FOLDER_KEYS}) == len(FOLDER_KEYS)
+    assert len({en[key] for key in FOLDER_KEYS}) == len(FOLDER_KEYS)
+
+
 # --- подпись своим сертификатом ------------------------------------------------------
 #
 # Сценарии подписи прогоняются настоящим bash с заглушками программ Apple

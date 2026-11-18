@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, FolderOpen, RefreshCw } from "lucide-react";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
 import { IS_MAC, OS_TEXT } from "../../lib/platform";
-import { inTauri, openFolder } from "../../lib/shell";
+import { inTauri, openFolder, openPrivacyPane } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { Loading } from "../../ui/Loading";
@@ -81,6 +81,19 @@ export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
       </div>
       {/* macOS: те же строки, что в шаге мастера «Разрешения». */}
       {IS_MAC && <PermissionRows endpoint={endpoint} />}
+      {IS_MAC && inTauri() && (
+        // Разрешены ли уведомления, оболочка не знает: плагин уведомлений на
+        // компьютере всегда отвечает «разрешены». Ведём туда, где это видно.
+        <div className="srow">
+          <div className="srow__text">
+            <span className="srow__label">Уведомления</span>
+            <span className="srow__hint">Начало и конец записи, готовая расшифровка; разрешены ли они, видно в «Системных настройках»</span>
+          </div>
+          <div className="srow__control">
+            <Button onClick={() => void openPrivacyPane("notifications")}>Открыть настройки уведомлений</Button>
+          </div>
+        </div>
+      )}
       <div className="diag__logs-head">
         <h3 className="shead">Журнал автозаписи</h3>
         <Button variant="ghost" icon={RefreshCw} onClick={load}>Обновить журналы</Button>

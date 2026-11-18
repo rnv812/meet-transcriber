@@ -804,9 +804,11 @@ pub const PRIVACY_PANES: &[(&str, [&str; 2])] = &[
         ],
     ),
     (
+        // Новые настройки — сразу строка Meet (по идентификатору пакета из
+        // tauri.conf.json); старые знают только общий раздел.
         "notifications",
         [
-            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.meet.desktop",
             "x-apple.systempreferences:com.apple.preference.notifications",
         ],
     ),
@@ -1435,10 +1437,21 @@ mod tests {
             );
         }
         let notifications = privacy_pane_urls("notifications").unwrap();
+        // Новые настройки открываются сразу на строке Meet («Диагностика»
+        // ведёт сюда проверить, разрешены ли уведомления).
         assert_eq!(
             notifications[0],
-            "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.meet.desktop"
         );
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let mac: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
+        let id = mac["identifier"]
+            .as_str()
+            .or(conf["identifier"].as_str())
+            .unwrap();
+        assert!(notifications[0].ends_with(&format!("?id={id}")), "{id}");
         assert_eq!(
             notifications[1],
             "x-apple.systempreferences:com.apple.preference.notifications"

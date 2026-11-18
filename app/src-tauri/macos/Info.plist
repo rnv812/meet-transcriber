@@ -11,6 +11,10 @@
   NSScreenCaptureUsageDescription и NSAudioCaptureUsageDescription (API
   Core Audio taps, macOS 14.4+, помощник им не пользуется) — справочные,
   на случай будущих версий macOS и для тех, кто читает Info.plist.
+  Папки «Документы», «Рабочий стол», «Загрузки», внешние и сетевые диски:
+  выгрузка в базу знаний, чтение базы агентом, импорт и вложения, движок
+  на внешнем диске — запрос приходит от фонового процесса, и без текста
+  человек не поймёт, зачем Meet эта папка.
 -->
 <plist version="1.0">
 <dict>
@@ -29,5 +33,15 @@
   <string>Meet записывает звук собеседников во время встречи и расшифровывает запись на этом компьютере.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>Meet записывает только системный звук (голоса собеседников); изображение экрана не сохраняется.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Meet сохраняет записи и итоги встреч в папку в «Документах», если вы её выбрали, и читает оттуда базу знаний по вашей просьбе.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Meet сохраняет записи и итоги встреч на Рабочий стол, если вы выбрали папку там, и открывает файлы, которые вы прикладываете к встрече.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Meet открывает файлы из «Загрузок», которые вы импортируете или прикладываете к встрече, и сохраняет туда записи, если вы выбрали эту папку.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>Meet работает с записями, базой знаний и движком расшифровки на внешнем диске, если вы выбрали папку на нём.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>Meet работает с записями и базой знаний на сетевом диске, если вы выбрали папку на нём.</string>
 </dict>
 </plist>

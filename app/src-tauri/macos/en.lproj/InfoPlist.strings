@@ -2,3 +2,8 @@
 "NSMicrophoneUsageDescription" = "Meet records your voice during a meeting and transcribes the recording on this computer.";
 "NSAudioCaptureUsageDescription" = "Meet records the other participants during a meeting and transcribes the recording on this computer.";
 "NSScreenCaptureUsageDescription" = "Meet captures system audio only (the other participants); the screen image is never saved.";
+"NSDocumentsFolderUsageDescription" = "Meet saves recordings and meeting notes to a folder in Documents if you chose one, and reads your knowledge base there when you ask.";
+"NSDesktopFolderUsageDescription" = "Meet saves recordings and meeting notes to the Desktop if you chose a folder there, and opens files you attach to a meeting.";
+"NSDownloadsFolderUsageDescription" = "Meet opens files from Downloads that you import or attach to a meeting, and saves recordings there if you chose that folder.";
+"NSRemovableVolumesUsageDescription" = "Meet works with recordings, the knowledge base and the transcription engine on an external drive if you chose a folder on it.";
+"NSNetworkVolumesUsageDescription" = "Meet works with recordings and the knowledge base on a network drive if you chose a folder on it.";
