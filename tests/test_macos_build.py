@@ -125,6 +125,33 @@ def test_helper_speaks_the_python_protocol():
     assert "private let errorEvery = 5.0" in swift
 
 
+def test_capture_follows_the_main_display_without_a_new_handshake():
+    """Смена мониторов и закрытие крышки: фильтр — по основному дисплею, при смене
+    конфигурации или остановке потока захват пересобирается внутри процесса.
+    Рукопожатие печатается один раз (резидент второго не ждёт), выход с кодом —
+    только при отозванном разрешении."""
+    swift = (ROOT / "mac" / "audiotap" / "main.swift").read_text(encoding="utf-8")
+    assert "CGMainDisplayID()" in swift
+    assert "$0.displayID == main" in swift
+    assert re.search(r"CGDisplayRegisterReconfigurationCallback\(\s*displayReconfigured,", swift)
+    assert ".beginConfigurationFlag" in swift
+    assert swift.count('"meet_audiotap": protocolVersion, "rate": rate') == 1
+    start = swift[swift.index("    func start() async {"):]
+    start = start[:start.index("\n    }\n")]
+    assert '"meet_audiotap": protocolVersion, "rate": rate' in start
+    rebuild = swift[swift.index("    private func rebuild() async {"):]
+    rebuild = rebuild[:rebuild.index("\n    }\n")]
+    assert "makeStream()" in rebuild and "meet_audiotap" not in rebuild
+    stopped = swift[swift.index("didStopWithError error: Error) {"):]
+    stopped = stopped[:stopped.index("\n    }\n")]
+    assert "scheduleRebuild()" in stopped
+    assert "userDeclinedCode || !CGPreflightScreenCaptureAccess()" in stopped
+    # Обратные вызовы смены дисплеев приходят через главный цикл событий.
+    run = swift[swift.index("func runStream("):]
+    run = run[:run.index("\n}\n")]
+    assert "RunLoop.main.run()" in run and "dispatchMain()" not in run
+
+
 def test_device_watch_speaks_the_python_protocol():
     """`--watch-devices`: те же ключи, поводы и типы подключения, что разбирает
     `audiotap.parse_devices`; подписка — на смену устройства по умолчанию, списка

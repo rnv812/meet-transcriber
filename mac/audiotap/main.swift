@@ -14,7 +14,12 @@
 //       пустеет: если ScreenCaptureKit молчит дольше 0,5 с, помощник сам
 //       дописывает тишину по часам — резидент считает помощника зависшим,
 //       только когда байтов нет совсем. Ошибки буферов — в stderr не чаще
-//       раза в 5 с (со счётчиком пропущенных).
+//       раза в 5 с (со счётчиком пропущенных). Фильтр захвата — по основному
+//       дисплею (CGMainDisplayID); сменился основной дисплей (внешний монитор
+//       отключили, закрыли крышку) или ScreenCaptureKit остановил поток —
+//       захват пересобирается внутри процесса, без нового рукопожатия (пока его
+//       нет, дописывается тишина). Выход с кодом 77 — только если отозвали
+//       разрешение.
 //   meet-audiotap --mic-users
 //       Одна строка JSON: процессы, которые сейчас слушают микрофон или
 //       играют звук (CoreAudio, macOS 14+; раньше — "supported": false), у
@@ -72,6 +77,10 @@ let exitPermission: Int32 = 77
 
 /// SCStreamError.userDeclined: человек не дал разрешение «Запись экрана».
 let userDeclinedCode = -3801
+
+struct NoDisplayError: LocalizedError {
+    var errorDescription: String? { "нет дисплея для захвата" }
+}
 
 func printError(_ text: String) {
     FileHandle.standardError.write((text + "\n").data(using: .utf8)!)
@@ -439,6 +448,18 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Процесс приложения, чей звук не писать (0 — писать всё).
     let excludePid: Int
     var stream: SCStream?
+    /// Дисплей, по которому построен фильтр захвата.
+    private var displayID: CGDirectDisplayID = 0
+    /// Пересборка захвата идёт / после неё нужна ещё одна; остановка начата.
+    /// Всё это — на главной очереди.
+    private var rebuilding = false
+    private var rebuildAgain = false
+    private var stopping = false
+    private var displayGeneration = 0
+    /// Пауза перед повтором неудавшейся пересборки: 0,5 → 1 → 2 … 15 с.
+    private var retryDelay = 0.5
+    private let retryMax = 15.0
+    private let screenQueue = DispatchQueue(label: "meet-audiotap.screen")
     private var samples: [Int16] = []
     /// Очередь звука: последовательная, на ней же печатается рукопожатие —
     /// PCM не обгонит первую строку.
@@ -465,18 +486,50 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func start() async {
-        let content: SCShareableContent
+        let made: (SCStream, CGDirectDisplayID)
         do {
-            // Все приложения, а не только с окнами на экране: окно Meet может быть
-            // свёрнуто в трей, а плеер — звучать.
-            content = try await SCShareableContent.excludingDesktopWindows(
-                false, onScreenWindowsOnly: false)
+            made = try await makeStream()
         } catch {
             AudioTap.fail(error)
         }
-        guard let display = content.displays.first else {
-            printError("нет дисплея для захвата")
-            exit(exitFailed)
+        let (stream, display) = made
+        await MainActor.run {
+            self.stream = stream
+            self.displayID = display
+        }
+        audioQueue.sync {
+            printJSON(["meet_audiotap": protocolVersion, "rate": rate, "channels": channels,
+                       "format": "s16le"])
+            ready = true
+            lastWrite = DispatchTime.now()
+        }
+        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
+        timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+        timer.setEventHandler { [weak self] in self?.fillSilence() }
+        timer.resume()
+        heartbeat = timer
+        // Смена мониторов: фильтр привязан к дисплею — проверить, не пора ли
+        // пересобрать его на новом основном.
+        let status = CGDisplayRegisterReconfigurationCallback(
+            displayReconfigured, Unmanaged.passUnretained(self).toOpaque())
+        if status != .success {
+            printError("смена дисплеев не отслеживается (\(status.rawValue))")
+        }
+    }
+
+    /// Фильтр по основному дисплею (CGMainDisplayID; его нет в списке — первый
+    /// дисплей), поток и запуск захвата. Сбой — исключение: на старте это выход
+    /// с кодом, при пересборке — повтор.
+    func makeStream() async throws -> (SCStream, CGDirectDisplayID) {
+        // Все приложения, а не только с окнами на экране: окно Meet может быть
+        // свёрнуто в трей, а плеер — звучать.
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: false)
+        let main = CGMainDisplayID()
+        guard let display = content.displays.first(where: { $0.displayID == main })
+            ?? content.displays.first
+        else {
+            throw NoDisplayError()
         }
         let excluded = excludePid > 0
             ? content.applications.filter { Int($0.processID) == excludePid } : []
@@ -496,26 +549,80 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
         config.height = 2
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        do {
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
-            try stream.addStreamOutput(self, type: .screen,
-                                       sampleHandlerQueue: DispatchQueue(label: "meet-audiotap.screen"))
-            try await stream.startCapture()
-        } catch {
-            AudioTap.fail(error)
+        try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+        try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: screenQueue)
+        try await stream.startCapture()
+        return (stream, display.displayID)
+    }
+
+    /// Пересобрать захват внутри процесса: старый поток остановить, новый — на
+    /// основном дисплее. Рукопожатие не повторяется; пока захвата нет, тишину
+    /// дописывает fillSilence, и резидент видит живой поток. Главная очередь.
+    func scheduleRebuild() {
+        guard !stopping else { return }
+        if rebuilding {
+            rebuildAgain = true
+            return
         }
-        self.stream = stream
-        audioQueue.sync {
-            printJSON(["meet_audiotap": protocolVersion, "rate": rate, "channels": channels,
-                       "format": "s16le"])
-            ready = true
-            lastWrite = DispatchTime.now()
+        rebuilding = true
+        let old = stream
+        stream = nil
+        Task {
+            if let old = old {
+                try? await old.stopCapture()
+            }
+            await self.rebuild()
         }
-        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
-        timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
-        timer.setEventHandler { [weak self] in self?.fillSilence() }
-        timer.resume()
-        heartbeat = timer
+    }
+
+    private func rebuild() async {
+        while true {
+            do {
+                let (stream, display) = try await makeStream()
+                await MainActor.run {
+                    self.stream = stream
+                    self.displayID = display
+                    self.retryDelay = 0.5
+                    self.rebuilding = false
+                    if self.rebuildAgain {
+                        self.rebuildAgain = false
+                        self.scheduleRebuild()
+                    }
+                }
+                return
+            } catch {
+                let nsError = error as NSError
+                if nsError.code == userDeclinedCode || !CGPreflightScreenCaptureAccess() {
+                    AudioTap.fail(error)
+                }
+                let delay = await MainActor.run { () -> Double in
+                    let current = self.retryDelay
+                    self.retryDelay = min(self.retryDelay * 2, self.retryMax)
+                    return current
+                }
+                printError("захват не пересобран: \(nsError.domain) \(nsError.code) — повтор через \(delay) с")
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1e9))
+            }
+        }
+    }
+
+    /// Конфигурация дисплеев сменилась (главная очередь). Уведомления идут
+    /// пачкой — решаем через секунду после последнего: основной дисплей уже не
+    /// тот, по которому построен фильтр, или тот отключён — пересобрать.
+    func displaysChanged() {
+        displayGeneration += 1
+        let generation = displayGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            guard generation == self.displayGeneration, !self.stopping else { return }
+            if self.rebuilding {
+                self.scheduleRebuild()
+                return
+            }
+            if CGMainDisplayID() != self.displayID || CGDisplayIsOnline(self.displayID) == 0 {
+                printError("сменился основной дисплей — пересобираю захват")
+                self.scheduleRebuild()
+            }
+        }
     }
 
     /// ScreenCaptureKit молчит дольше silenceAfter — дописать тишину за
@@ -613,14 +720,33 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        AudioTap.fail(error)
+        let nsError = error as NSError
+        // Отозвали разрешение — пересборка не поможет: выход с кодом 77,
+        // резидент скажет человеку, что делать.
+        if nsError.code == userDeclinedCode || !CGPreflightScreenCaptureAccess() {
+            AudioTap.fail(error)
+        }
+        printError("ScreenCaptureKit остановил захват: \(nsError.domain) \(nsError.code) — пересобираю")
+        DispatchQueue.main.async { self.scheduleRebuild() }
     }
 
     func stop() {
+        stopping = true
         guard let stream = stream else { exit(exitOK) }
         stream.stopCapture { _ in exit(exitOK) }
         // stopCapture не ответил — выходим всё равно.
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { exit(exitOK) }
+    }
+}
+
+/// Обратный вызов CGDisplayRegisterReconfigurationCallback (функция C): контекст —
+/// AudioTap; конец смены конфигурации — на его главную очередь.
+func displayReconfigured(_ display: CGDirectDisplayID, _ flags: CGDisplayChangeSummaryFlags,
+                         _ context: UnsafeMutableRawPointer?) {
+    guard !flags.contains(.beginConfigurationFlag), let context = context else { return }
+    if #available(macOS 13.0, *) {
+        let tap = Unmanaged<AudioTap>.fromOpaque(context).takeUnretainedValue()
+        DispatchQueue.main.async { tap.displaysChanged() }
     }
 }
 
@@ -672,7 +798,13 @@ func runStream(_ args: [String]) -> Never {
         DispatchQueue.main.async { tap.stop() }
     }
     Task { await tap.start() }
-    dispatchMain()
+    // Главный цикл событий, а не dispatchMain: через него приходят обратные
+    // вызовы смены дисплеев, им же крутится главная очередь (сигналы, конец
+    // stdin, пересборка). Порт держит цикл, пока не выйдем сами.
+    RunLoop.main.add(Port(), forMode: .default)
+    while true {
+        RunLoop.main.run()
+    }
 }
 
 // MARK: - main
