@@ -810,6 +810,15 @@ pub const PRIVACY_PANES: &[(&str, [&str; 2])] = &[
             "x-apple.systempreferences:com.apple.preference.notifications",
         ],
     ),
+    (
+        // Автозапуск выключен в системе (`autostart::autostart_blocked`):
+        // «Объекты входа» macOS 13+, до неё — «Пользователи и группы».
+        "login_items",
+        [
+            "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+            "x-apple.systempreferences:com.apple.preferences.users",
+        ],
+    ),
 ];
 
 /// Адреса раздела по виду; вида нет в `PRIVACY_PANES` — ошибка.
@@ -1433,6 +1442,17 @@ mod tests {
         assert_eq!(
             notifications[1],
             "x-apple.systempreferences:com.apple.preference.notifications"
+        );
+        // «Объекты входа» (автозапуск выключен в системе): macOS 13+, а до
+        // неё — «Пользователи и группы».
+        let login = privacy_pane_urls("login_items").unwrap();
+        assert_eq!(
+            login[0],
+            "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+        );
+        assert_eq!(
+            login[1],
+            "x-apple.systempreferences:com.apple.preferences.users"
         );
         // Только разделы из списка: ни неизвестный вид, ни ссылка не проходят.
         for kind in [

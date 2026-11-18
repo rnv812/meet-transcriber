@@ -126,7 +126,9 @@ fn main() {
         // Автозапуск при входе в Windows (переключатель мастера,
         // `autostart::set_autostart`): `--autostart` — признак такого запуска.
         // macOS — LaunchAgent в ~/Library/LaunchAgents (умолчание плагина,
-        // задано явно).
+        // задано явно): SMAppService без привязки к Objective-C недоступен.
+        // Путь в нём переписывается при старте (`restore_at_startup`),
+        // выключение в «Объектах входа» видно окну (`autostart_blocked`).
         .plugin({
             let builder = tauri_plugin_autostart::Builder::new().arg(autostart::AUTOSTART_ARG);
             #[cfg(target_os = "macos")]
@@ -192,6 +194,7 @@ fn main() {
             windows::open_privacy_pane,
             autostart::set_autostart,
             autostart::get_autostart,
+            autostart::autostart_blocked,
             // «О программе»: обновление по кнопке с GitHub.
             updater::check_update,
             updater::install_update,
@@ -254,7 +257,8 @@ fn main() {
             let upkeep = engine::plan_upkeep(app.handle());
             let engine_upkeep = upkeep.holds_resident();
             Supervisor::start(app.handle(), engine_upkeep);
-            // Автозапуск, снятый деинсталлятором прежней версии, — вернуть.
+            // Автозапуск, снятый деинсталлятором прежней версии, — вернуть;
+            // ведущий в другую папку (Windows и macOS) — переписать.
             autostart::restore_at_startup(app.handle());
             tray::build(app)?;
             // macOS: запущен не из «Программ» (App Translocation, образ,

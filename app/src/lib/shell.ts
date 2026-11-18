@@ -466,6 +466,15 @@ export async function getAutostart(): Promise<boolean | null> {
   return invoke<boolean | null>("get_autostart").catch(() => null);
 }
 
+/**
+ * macOS: автозапуск включён, но Meet выключен в «Системные настройки → Объекты
+ * входа». false — не выключен, не macOS, старая оболочка или вне приложения.
+ */
+export async function autostartBlocked(): Promise<boolean> {
+  if (!inTauri()) return false;
+  return invoke<boolean>("autostart_blocked").then(Boolean).catch(() => false);
+}
+
 /** Открыть папку журналов (сервис не запустился). */
 export async function openLogs(): Promise<void> {
   if (!inTauri()) return;
@@ -473,9 +482,9 @@ export async function openLogs(): Promise<void> {
 }
 
 /** Разделы «Системных настроек» macOS, которые открывает оболочка (список зашит в ней). */
-export type PrivacyPane = "microphone" | "screen_recording" | "system_audio" | "notifications";
+export type PrivacyPane = "microphone" | "screen_recording" | "system_audio" | "notifications" | "login_items";
 
-/** macOS: раздел «Конфиденциальность и безопасность» (или «Уведомления») в «Системных настройках». */
+/** macOS: раздел «Конфиденциальность и безопасность» («Уведомления», «Объекты входа») в «Системных настройках». */
 export async function openPrivacyPane(kind: PrivacyPane): Promise<void> {
   if (!inTauri()) return;
   await invoke<void>("open_privacy_pane", { kind });
