@@ -1,3 +1,4 @@
+import bisect
 import os
 import time
 from dataclasses import dataclass
@@ -802,22 +803,65 @@ def _overlap_regions(annotation) -> list[tuple[float, float]] | None:
     ]
 
 
+class _TurnIndex:
+    """Ходы, отсортированные по началу (при равном начале — по исходному
+    порядку), и префиксный максимум концов: слову нужны только ходы левее
+    его конца, а назад можно идти, пока какой-то из них ещё достаёт до его
+    начала (вложенные и нахлёстные ходы не теряются)."""
+
+    __slots__ = ("turns", "size", "starts", "order", "reach")
+
+    def __init__(self, turns: list[tuple[float, float, str]]) -> None:
+        self.turns = turns
+        self.size = len(turns)
+        self.order = sorted(range(len(turns)), key=lambda i: (turns[i][0], i))
+        self.starts = [turns[i][0] for i in self.order]
+        self.reach: list[float] = []
+        top = float("-inf")
+        for i in self.order:
+            top = max(top, turns[i][1])
+            self.reach.append(top)
+
+
+_index_cache: _TurnIndex | None = None
+
+
+def _turn_index(turns: list[tuple[float, float, str]]) -> _TurnIndex:
+    """Индекс для списка ходов; последний построенный хранится, чтобы цикл
+    по словам одной встречи не пересобирал его на каждом слове."""
+    global _index_cache
+    cached = _index_cache
+    if cached is None or cached.turns is not turns or cached.size != len(turns):
+        cached = _index_cache = _TurnIndex(turns)
+    return cached
+
+
 def _word_speaker(word: Word, turns: list[tuple[float, float, str]]) -> str | None:
     """Спикер с максимальным перекрытием; без перекрытия — ближайший интервал.
 
     При равном перекрытии (overlap-aware turns: слово целиком накрыто двумя
-    спикерами) строгий `>` оставляет более ранний turn — обычно это длинная
-    фраза, поверх которой легло перебивание; first-wins здесь осознанный."""
-    best, best_overlap = None, 0.0
-    for start, end, label in turns:
-        overlap = min(word.end, end) - max(word.start, start)
-        if overlap > best_overlap:
-            best, best_overlap = label, overlap
-    if best is not None:
-        return best
+    спикерами) побеждает более ранний turn списка — обычно это длинная
+    фраза, поверх которой легло перебивание; first-wins здесь осознанный.
+    Поиск — бинарный по началам ходов и обратный проход, пока префиксный
+    максимум концов достаёт до начала слова."""
+    if not turns:
+        return None
+    index = _turn_index(turns)
+    best_label, best_overlap, best_pos = None, 0.0, -1
+    word_start, word_end = word.start, word.end
+    reach, order = index.reach, index.order
+    i = bisect.bisect_left(index.starts, word_end) - 1
+    while i >= 0 and reach[i] > word_start:
+        start, end, label = turns[order[i]]
+        overlap = min(word_end, end) - max(word_start, start)
+        if overlap > best_overlap or (overlap == best_overlap and overlap > 0 and order[i] < best_pos):
+            best_label, best_overlap, best_pos = label, overlap, order[i]
+        i -= 1
+    if best_label is not None:
+        return best_label
     nearest = min(
         turns,
-        key=lambda t: max(t[0] - word.end, word.start - t[1], 0.0),
+        key=lambda t: max(t[0] - word_end, word_start - t[1], 0.0),
         default=None,
     )
     return nearest[2] if nearest else None

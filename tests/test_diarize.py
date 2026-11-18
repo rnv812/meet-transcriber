@@ -200,3 +200,60 @@ def test_segment_without_words_gets_uncertain():
     turns = [(0.0, 10.0, "SPEAKER_00"), (4.0, 5.0, "SPEAKER_01")]
     result = split_by_speaker([seg], turns, overlaps=[(4.0, 5.0)])
     assert result[0].uncertain is True
+
+
+def _reference_word_speaker(word, turns):
+    """Прежний алгоритм «слово → спикер»: полный перебор ходов."""
+    best, best_overlap = None, 0.0
+    for start, end, label in turns:
+        overlap = min(word.end, end) - max(word.start, start)
+        if overlap > best_overlap:
+            best, best_overlap = label, overlap
+    if best is not None:
+        return best
+    nearest = min(
+        turns,
+        key=lambda t: max(t[0] - word.end, word.start - t[1], 0.0),
+        default=None,
+    )
+    return nearest[2] if nearest else None
+
+
+def test_word_speaker_equal_overlap_goes_to_earlier_turn():
+    from meet.diarize import _word_speaker
+
+    turns = [(0.0, 2.0, "SPEAKER_00"), (0.0, 2.0, "SPEAKER_01")]
+    assert _word_speaker(Word(0.5, 1.5, " да"), turns) == "SPEAKER_00"
+    assert _word_speaker(Word(0.5, 1.5, " да"), turns[::-1]) == "SPEAKER_01"
+
+
+def test_word_speaker_long_early_turn_with_short_inside():
+    from meet.diarize import _word_speaker
+
+    turns = [(0.0, 100.0, "SPEAKER_00"), (10.0, 10.4, "SPEAKER_01"), (50.0, 51.0, "SPEAKER_02")]
+    # слово целиком в длинном ходе, короткий вложенный перекрывает меньше
+    assert _word_speaker(Word(10.0, 11.0, " так"), turns) == "SPEAKER_00"
+    # слово почти целиком во вложенном: у него перекрытие не меньше
+    assert _word_speaker(Word(50.0, 51.0, " ага"), turns) == "SPEAKER_00"
+    assert _word_speaker(Word(99.9, 100.5, " всё"), turns) == "SPEAKER_00"
+
+
+def test_word_speaker_matches_reference_on_random_turns():
+    import random
+
+    from meet.diarize import _word_speaker
+
+    rng = random.Random(20261118)
+    turns = []
+    for _ in range(5000):
+        start = round(rng.uniform(0, 7200), 2)
+        turns.append((start, round(start + rng.choice([0.0, 0.3, 1.0, 4.0, 30.0, 600.0]) * rng.random(), 2),
+                      f"SPEAKER_{rng.randrange(6):02d}"))
+    # ходы приходят не по порядку начала и с повторами границ
+    turns += [(10.0, 20.0, "SPEAKER_07"), (10.0, 20.0, "SPEAKER_08")]
+    words = []
+    for _ in range(20000):
+        start = round(rng.uniform(-1, 7201), 2)
+        words.append(Word(start, round(start + rng.choice([0.0, 0.2, 0.5, 1.2]), 2), " х"))
+    for word in words:
+        assert _word_speaker(word, turns) == _reference_word_speaker(word, turns), word
