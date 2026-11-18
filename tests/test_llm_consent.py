@@ -1429,6 +1429,46 @@ def test_delete_commands_ask_every_time_and_are_never_granted(dirs, tool, comman
 
 
 @pytest.mark.parametrize("tool,command", [
+    ("Bash", "bash -lc 'rm -rf /tmp/x'"), ("Bash", "/bin/bash -lc 'rm -rf /tmp/x'"), ("Bash", "sh -lc 'rm x'"),
+    ("Bash", "bash -l -c 'rm x'"), ("Bash", "zsh --login -c 'rm x'"), ("Bash", "zsh -lc 'rm x'"),
+    ("Bash", "bash -ec 'rm x'"), ("Bash", "bash -xec 'rm x'"), ("Bash", "bash -c -l 'rm x'"),
+    ("Bash", "bash -o pipefail -c 'rm x'"), ("Bash", "bash --noprofile --norc -c 'rm x'"),
+    ("Bash", "ksh -lc 'rm x'"), ("Bash", "dash -ec 'rm x'"), ("Bash", "fish --login --command 'rm x'"),
+    ("Bash", "fish --command='rm x'"), ("Bash", "ls | xargs bash -lc 'rm x'"),
+    ("Bash", "find . -exec sh -lc 'rm \"$1\"' _ {} ;"),
+    # Код из позиционных аргументов оболочки (`"$@"`, `$0`).
+    ("Bash", "bash -lc '\"$@\"' _ rm -rf x"), ("Bash", "sh -c '$0 -rf x' rm"),
+    # PowerShell: сокращения `-Command`, `-CommandWithArgs`, `/Command`, кодированный код, позиционный код 5.1.
+    ("PowerShell", "pwsh -co 'Remove-Item x'"), ("PowerShell", "pwsh -NoProfile -cwa 'Remove-Item $args[0]' x"),
+    ("PowerShell", "pwsh -CommandWithArgs 'Remove-Item x'"), ("PowerShell", "powershell /Command \"Remove-Item x\""),
+    ("PowerShell", "powershell -ec ZQBjAGgAbwA="), ("PowerShell", "powershell -e ZQBjAGgAbwA="),
+    ("PowerShell", "powershell -NoProfile Remove-Item x"),
+    ("PowerShell", "powershell -ExecutionPolicy Bypass Remove-Item x"),
+    ("PowerShell", "powershell.exe -NoLogo -NoProfile -Command \"Remove-Item C:/x\""),
+    ("Bash", "cmd /s /c \"del x\""), ("Bash", "cmd.exe /q /C del x"),
+])
+def test_login_and_combined_shell_flags_are_unwrapped_like_bash_c(dirs, tool, command):
+    """`bash -lc '<код>'` и подобные: ворота судят по коду внутри, как у `bash -c`."""
+    assert consent.shell_risk(tool, command) == consent.DELETE, command
+    shown = []
+    gate = _auto(dirs, confirmer=lambda card: shown.append(card) or "deny")
+    d = gate.decide(tool, {"command": command})
+    assert d.outcome == ASK and d.why == consent.DELETE and d.card["grant"] is None, (command, d)
+    assert gate.check(tool, {"command": command}, tool_use_id="t1").why == "declined"
+    assert len(shown) == 1 and shown[0]["grant"] is None and shown[0]["tool_use_id"] == "t1"
+
+
+@pytest.mark.parametrize("tool,command", [
+    ("Bash", "bash -lc 'ls'"), ("Bash", "sh -lc 'git status'"), ("Bash", "zsh --login -c 'cat a.md'"),
+    ("Bash", "bash -lc 'echo \"$1\"' _ notes.md"), ("PowerShell", "pwsh -NoProfile -Command Get-ChildItem"),
+    ("PowerShell", "pwsh -File build.ps1"), ("Bash", "cmd /c dir"), ("Bash", "bash script.sh"),
+])
+def test_harmless_code_in_a_shell_wrapper_is_not_a_delete(dirs, tool, command):
+    assert consent.shell_risk(tool, command) == "", command
+    assert _auto(dirs).decide(tool, {"command": command}).why not in (consent.DELETE, consent.SEND), command
+
+
+@pytest.mark.parametrize("tool,command", [
     ("Bash", "git push"), ("Bash", "git push --force origin main"), ("Bash", "scp a.txt host:/tmp/"),
     ("Bash", "sftp host"), ("Bash", "ftp host"), ("Bash", "rsync -a ./ host:/srv/"), ("Bash", "ssh host ls"),
     ("Bash", "curl -d a=1 https://api.example.com"), ("Bash", "curl --data-binary @f https://api.example.com"),
@@ -1583,6 +1623,15 @@ def _cards_answer(gate, answers):
     ("bash -lc 'cat x' 'rm -rf y'", "Bash", "bash -lc 'cat x' 'rm -rf y'"),     # лишний аргумент — не обёртка
     ("bash -lc 'cat x' ; rm -rf y", "Bash", "bash -lc 'cat x' ; rm -rf y"),
     ("npm test", "Bash", "npm test"),
+    ("sh -lc 'rm x'", "Bash", "rm x"), ("bash -l -c 'rm x'", "Bash", "rm x"), ("zsh --login -c 'rm x'", "Bash", "rm x"),
+    ("bash -c -l 'rm x'", "Bash", "rm x"), ("bash --noprofile --norc -ec 'ls'", "Bash", "ls"),
+    ("pwsh -NoLogo -c 'Get-ChildItem'", "PowerShell", "Get-ChildItem"),
+    ("cmd.exe /d /c dir", "Bash", "dir"),        # код cmd — инструментом по системе
+    # Что меняет смысл кода (опции со значением, рабочая папка, позиционные аргументы) — команда как есть.
+    ("bash -o pipefail -c 'rm x'", "Bash", "bash -o pipefail -c 'rm x'"),
+    ("bash -lc '\"$@\"' _ rm x", "Bash", "bash -lc '\"$@\"' _ rm x"),
+    ("pwsh -wd /tmp -c 'Remove-Item x'", "Bash", "pwsh -wd /tmp -c 'Remove-Item x'"),
+    ("powershell -ec ZQBj", "Bash", "powershell -ec ZQBj"),
 ])
 def test_codex_command_unwraps_only_a_whole_shell_wrapper(command, tool, code):
     assert consent.codex_command(command, windows=False) == (tool, code)

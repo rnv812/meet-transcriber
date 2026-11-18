@@ -1023,10 +1023,6 @@ _PASS_WRAPPERS = frozenset(("sudo", "doas", "env", "command", "exec", "nohup", "
 _VALUE_FLAGS = {"xargs": {"-I", "-n", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs"},
                 "timeout": {"-s", "-k", "--signal", "--kill-after"}, "sudo": {"-u", "-g", "-C", "-D", "-h", "-p"},
                 "nice": {"-n"}, "env": {"-u", "-C", "-S"}, "start-process": {"-ArgumentList", "-FilePath"}}
-# Оболочки с кодом в строке: (программа → флаги, после которых код).
-_SHELLS = {"bash": {"-c"}, "sh": {"-c"}, "zsh": {"-c"}, "dash": {"-c"}, "ksh": {"-c"}, "fish": {"-c", "--command"},
-           "cmd": {"/c", "/k", "/r"}, "powershell": {"-c", "-command", "-com", "-comm", "-comma", "-comman"},
-           "pwsh": {"-c", "-command", "-com", "-comm", "-comma", "-comman"}}
 _EVALS = frozenset(("eval", "iex", "invoke-expression", "invoke-command", "icm"))
 _CD = frozenset(("cd", "pushd", "chdir", "set-location", "sl", "push-location"))
 _SEPARATORS = frozenset((";", ";;", "&&", "||", "|", "&", "|&", "(", ")", "{", "}", "$(", "${"))
@@ -1238,6 +1234,134 @@ def _paths_of(words: list[str]) -> list[str]:
     return [w for w in words[1:] if not w.startswith("-")]
 
 
+# --- Оболочки с кодом в строке: один разбор для ворот Claude Code (`shell_risk`) и запроса Codex
+# (`codex_command`). Флаги слитно и порознь (`bash -lc`, `sh -l -c`, `zsh --login -c`, `bash -c -l`),
+# `cmd /s /c`, сокращения PowerShell (`-c`, `-co`, `/Command`, `-cwa`), кодированный код (`-e`, `-ec`).
+
+POSIX_SHELLS = frozenset(("bash", "sh", "zsh", "dash", "ksh", "fish"))
+PS_SHELLS = frozenset(("powershell", "pwsh"))
+SHELL_PROGRAMS = POSIX_SHELLS | PS_SHELLS | {"cmd"}
+_SH_VALUE = frozenset(("-o", "+o", "-O", "+O", "--rcfile", "--init-file"))
+_PS_PARAMS = ("encodedcommand", "command", "commandwithargs", "file", "encodedarguments", "executionpolicy",
+              "inputformat", "outputformat", "windowstyle", "version", "configurationname", "configurationfile",
+              "psconsolefile", "workingdirectory", "settingsfile", "custompipename", "noprofile", "nologo",
+              "noninteractive", "noexit", "mta", "sta", "login", "interactive", "help")
+_PS_ALIASES = {"c": "command", "cwa": "commandwithargs", "e": "encodedcommand", "ec": "encodedcommand",
+               "ea": "encodedarguments", "ep": "executionpolicy", "ex": "executionpolicy", "f": "file",
+               "if": "inputformat", "o": "outputformat", "of": "outputformat", "w": "windowstyle", "v": "version",
+               "config": "configurationname", "wd": "workingdirectory", "l": "login", "nop": "noprofile",
+               "noni": "noninteractive", "nol": "nologo", "i": "interactive"}
+_PS_VALUE = frozenset(("encodedarguments", "executionpolicy", "inputformat", "outputformat", "windowstyle",
+                       "version", "configurationname", "configurationfile", "psconsolefile", "workingdirectory",
+                       "settingsfile", "custompipename"))
+
+
+@dataclass(frozen=True)
+class ShellCode:
+    """Код в строке у оболочки: `tool` — каким инструментом его читать
+    (None — `cmd`: решает вызывающий), `code`, `args` — позиционные
+    аргументы после кода (`$0`, `$1`, `$args`), `options` — флаги до кода
+    (как написаны; у PowerShell — полное имя параметра), `encoded` —
+    `-EncodedCommand`: код не прочесть."""
+    tool: str | None
+    code: str
+    args: tuple[str, ...] = ()
+    options: tuple[str, ...] = ()
+    encoded: bool = False
+
+
+def _ps_param(name: str) -> str | None:
+    """Имя параметра PowerShell по сокращению; неоднозначное — в закрытую
+    сторону (кодированный код, затем код)."""
+    if name in _PS_ALIASES:
+        return _PS_ALIASES[name]
+    found = [p for p in _PS_PARAMS if p.startswith(name)] if name else []
+    return found[0] if found else None          # `_PS_PARAMS` начинается с опасных
+
+
+def _posix_code(prog: str, words: list[str]) -> ShellCode | None:
+    code_mode, options, k = False, [], 1
+    code_letters = "cC" if prog == "fish" else "c"          # у fish `-C` — тоже код (init-command)
+    while k < len(words):
+        w = words[k]
+        if w == "--":
+            k += 1
+            break
+        if w.startswith("--"):
+            name, eq, value = w.partition("=")
+            if prog == "fish" and name in ("--command", "--init-command"):
+                if eq:
+                    return ShellCode("Bash", value, tuple(words[k + 1:]), tuple(options))
+                code_mode = True
+            options.append(w)
+            k += 2 if name in _SH_VALUE and not eq else 1
+            continue
+        if len(w) > 1 and w[0] in "-+" and w[1:].isalpha():
+            if w[0] == "-" and any(ch in code_letters for ch in w[1:]):
+                code_mode = True
+            options.append(w)
+            k += 2 if w[-1] in "oO" else 1
+            continue
+        break
+    if not code_mode:
+        return None                                  # сценарий файлом или оболочка без кода
+    return ShellCode("Bash", words[k] if k < len(words) else "", tuple(words[k + 1:]), tuple(options))
+
+
+def _cmd_code(words: list[str]) -> ShellCode | None:
+    for k, w in enumerate(words[1:], 1):
+        if w[:2].lower() in ("/c", "/k", "/r"):
+            code = " ".join(([w[2:]] if w[2:] else []) + words[k + 1:])
+            return ShellCode(None, code, (), tuple(words[1:k]))
+    return None
+
+
+def _ps_code(prog: str, words: list[str]) -> ShellCode | None:
+    options, k = [], 1
+    while k < len(words):
+        w = words[k]
+        if len(w) > 1 and w[0] in "-/":
+            name, colon, value = w.lstrip("-/").partition(":")
+            param = _ps_param(name.lower())
+            if param == "encodedcommand":
+                return ShellCode("PowerShell", "", (), tuple(options), encoded=True)
+            if param == "command":                   # всё после флага — код
+                return ShellCode("PowerShell", " ".join(([value] if colon else []) + words[k + 1:]), (),
+                                 tuple(options))
+            if param == "commandwithargs":
+                rest = ([value] if colon else []) + words[k + 1:]
+                return ShellCode("PowerShell", rest[0] if rest else "", tuple(rest[1:]), tuple(options))
+            if param == "file":
+                return None
+            options.append(param or name.lower())
+            k += 2 if param in _PS_VALUE and not colon else 1
+            continue
+        break
+    if k < len(words) and prog == "powershell":
+        # Windows PowerShell 5.1: позиционный аргумент — это `-Command` (у pwsh — `-File`).
+        return ShellCode("PowerShell", " ".join(words[k:]), (), tuple(options))
+    return None
+
+
+def shell_code(words: list[str]) -> ShellCode | None:
+    """`bash -lc '<код>'`, `sh -l -c …`, `zsh --login -c …`, `fish --command=…`,
+    `cmd /s /c …`, `powershell -NoProfile -Command …`, `pwsh -cwa …`,
+    `powershell <код>` → код в строке; None — не оболочка или сценарий файлом."""
+    if not words:
+        return None
+    prog = _program(words[0])
+    if prog in POSIX_SHELLS:
+        return _posix_code(prog, words)
+    if prog in PS_SHELLS:
+        return _ps_code(prog, words)
+    if prog == "cmd":
+        return _cmd_code(words)
+    return None
+
+
+_ARGS_AS_CODE = 8         # позиционные аргументы оболочки, проверяемые как команды (дальше — по словам)
+
+
 def _command_risk(words: list[str], tool: str, inside, cd: bool, depth: int) -> str:
     words = _strip_wrappers(words)
     if not words:
@@ -1254,18 +1378,25 @@ def _command_risk(words: list[str], tool: str, inside, cd: bool, depth: int) -> 
             risk = shell_risk(tool, code, inside=inside, _depth=depth + 1)
             if risk:
                 return risk
-    if prog in _SHELLS:
-        flags = _SHELLS[prog]
-        if prog in ("powershell", "pwsh") and any(
-                len(w) > 2 and "-encodedcommand".startswith(w.lower()) for w in words[1:]):
+    if prog in SHELL_PROGRAMS:
+        if depth > _RISK_DEPTH:
+            return DELETE
+        sc = shell_code(words)
+        if sc is None:
+            # Сценарий файлом (`bash x.sh`) — что внутри, Meet не видит: решает автомод CLI.
+            return ""
+        if sc.encoded:
             return DELETE                       # код не прочесть — в закрытую сторону
-        for i, w in enumerate(words[1:], 1):
-            if w.lower() in flags:
-                code = " ".join(words[i + 1:])
-                return shell_risk("PowerShell" if prog in ("powershell", "pwsh") else "Bash", code,
-                                  inside=inside, _depth=depth + 1)
-        # Сценарий файлом (`bash x.sh`) — что внутри, Meet не видит: решает автомод CLI.
-        return ""
+        code = sc.code
+        if "workingdirectory" in sc.options:
+            code = "cd . ; " + code             # другая папка: перенос — как после `cd`
+        risks = [shell_risk(sc.tool or "Bash", code, inside=inside, _depth=depth + 1)]
+        # Позиционные аргументы код может выполнить (`bash -c '"$@"' _ rm x`): каждый хвост — как команда.
+        args = list(sc.args)
+        risks += [_command_risk(args[i:], tool, inside, cd, depth + 1) for i in range(min(len(args), _ARGS_AS_CODE))]
+        if len(args) > _ARGS_AS_CODE:
+            risks.append(_fallback_risk(" ".join(args)))
+        return _worst(risks)
     if prog in _EVALS:
         code = " ".join(w for w in words[1:] if not w.startswith("-"))
         return shell_risk(tool, code, inside=inside, _depth=depth + 1)
@@ -2649,41 +2780,42 @@ CODEX = "codex"
 CODEX_COMMAND = "item/commandExecution/requestApproval"
 CODEX_FILE_CHANGE = "item/fileChange/requestApproval"
 CODEX_UNSANDBOXED = "⚠ Codex выполнит эту команду без своей песочницы"
-_POSIX_SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
-_POSIX_SHELL_FLAGS = frozenset(("-c", "-lc", "-l"))
-_PS_SHELLS = frozenset(("powershell", "pwsh"))
-_PS_QUIET = frozenset(("-noprofile", "-nologo", "-noninteractive"))
+_POSIX_QUIET = re.compile(r"^(?:-[lceuxv]+|--login|--noprofile|--norc)$")
+_PS_QUIET = frozenset(("noprofile", "nologo", "noninteractive"))
+_CMD_QUIET = frozenset(("/d", "/q", "/s"))
 
 
 def codex_command(command: str, *, windows: bool) -> tuple[str, str]:
     """Команда из запроса Codex → (инструмент, код) для ворот. Обёртка
-    оболочки целиком (`bash -lc '<код>'`, `powershell -NoProfile -Command
-    "<код>"`) снимается: ворота судят по коду внутри. Что-то сверх одной
-    обёртки с одним кодом — команда как есть (её разберёт `shell_risk`);
-    инструмент тогда — по системе (PowerShell на Windows, иначе Bash)."""
+    оболочки целиком (`bash -lc '<код>'`, `sh -l -c …`, `cmd /d /c …`,
+    `powershell -NoProfile -Command "<код>"`; разбор — `shell_code`, общий с
+    `shell_risk`) снимается: ворота судят по коду внутри. Что-то сверх одной
+    обёртки с одним кодом (разделители, перенаправления, позиционные
+    аргументы, флаги со значением или рабочей папкой, кодированный код) —
+    команда как есть (её разберёт `shell_risk`); инструмент тогда — по
+    системе (PowerShell на Windows, иначе Bash)."""
     text = str(command or "")
+    default = "PowerShell" if windows else "Bash"
     try:
-        words = shlex.split(text, posix=False)
+        first = shlex.split(text, posix=False)[:1]
     except ValueError:
-        words = []
-    if len(words) >= 3:
-        prog = _program(words[0].strip("\"'"))
-        if prog in _PS_SHELLS and words[-2].lower() in ("-command", "-c") \
-                and all(w.lower() in _PS_QUIET for w in words[1:-2]):
-            code = words[-1]
-            if len(code) >= 2 and code[0] == code[-1] and code[0] in "'\"":
-                code = code[1:-1]
-            return "PowerShell", code
-        if prog in _POSIX_SHELLS:
-            try:
-                posix = shlex.split(text)
-            except ValueError:
-                posix = []
-            flags = posix[1:-1]
-            if len(posix) >= 3 and flags and all(w in _POSIX_SHELL_FLAGS for w in flags) \
-                    and any("c" in w for w in flags):
-                return "Bash", posix[-1]
-    return ("PowerShell" if windows else "Bash"), text
+        first = []
+    if not first:
+        return default, text
+    ps = _program(first[0].strip("\"'")) in PS_SHELLS
+    tokens = _tokens(text, "PowerShell" if ps else "Bash")
+    if not tokens or _commands(tokens) != [tokens]:
+        return default, text
+    sc = shell_code(tokens)
+    if sc is None or sc.encoded or sc.args:
+        return default, text
+    prog = _program(tokens[0])
+    quiet = (all(o in _PS_QUIET for o in sc.options) if prog in PS_SHELLS
+             else all(o.lower() in _CMD_QUIET for o in sc.options) if prog == "cmd"
+             else all(_POSIX_QUIET.match(o) for o in sc.options))
+    if not quiet:
+        return default, text
+    return sc.tool or default, sc.code
 
 
 def _ps_quote(path: str) -> str:
