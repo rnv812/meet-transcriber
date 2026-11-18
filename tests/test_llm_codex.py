@@ -952,3 +952,24 @@ def test_without_on_event_the_call_is_as_before(monkeypatch, tmp_path):
     _setup(monkeypatch)
     _run(cwd=tmp_path)
     assert "--json" not in FakePopen.calls[0].cmd
+
+
+def test_exec_starts_in_its_own_group_on_posix(monkeypatch, tmp_path):
+    from meet.llm import base
+
+    _setup(monkeypatch)
+    monkeypatch.setattr(base, "_WINDOWS", False)
+    _run(cwd=tmp_path, allowed_dirs=(tmp_path,))
+    kw = FakePopen.calls[0].kw
+    assert kw["start_new_session"] is True and "creationflags" not in kw
+
+
+def test_streaming_exec_starts_in_its_own_group_on_posix(monkeypatch, tmp_path):
+    from meet.llm import base
+
+    _stream_setup(monkeypatch, [{"type": "turn.started"}])
+    monkeypatch.setattr(base, "_WINDOWS", False)
+    StreamPopen.release.set()
+    asyncio.run(codex.run("Вопрос?", system_prompt="s", cwd=tmp_path, on_event=lambda ev: None))
+    kw = StreamPopen.calls[0].kw
+    assert kw["start_new_session"] is True and "creationflags" not in kw

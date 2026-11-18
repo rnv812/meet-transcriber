@@ -45,7 +45,8 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+_WINDOWS = sys.platform == "win32"
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if _WINDOWS else 0
 
 # Одинаковый текст таймаута у всех провайдеров: по нему вызывающий отличает
 # «модель не успела» от прочих ошибок.
@@ -326,10 +327,20 @@ SESSION_MARKERS = (
 )
 
 
+def popen_kwargs() -> dict:
+    """Аргументы Popen для CLI-агента: без окна консоли (Windows), своя группа
+    процессов (POSIX) — чтобы `kill_tree` гасил и внуков."""
+    if _WINDOWS:
+        return {"creationflags": _NO_WINDOW}
+    return {"start_new_session": True}
+
+
 def kill_tree(proc) -> None:
     """Убить процесс CLI со всеми детьми: Codex и OpenCode запускают свои
-    процессы, а у npm-сценария (.cmd) прямой ребёнок — cmd.exe."""
-    if sys.platform == "win32":
+    процессы, а у npm-сценария (.cmd) прямой ребёнок — cmd.exe. На POSIX —
+    вся группа процессов, но только если группа своя (запущен с
+    `popen_kwargs`): чужую группу, например самого Meet, не трогаем."""
+    if _WINDOWS:
         try:
             subprocess.run(
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
@@ -337,6 +348,14 @@ def kill_tree(proc) -> None:
             )
         except (OSError, subprocess.SubprocessError):
             pass
+    else:
+        try:
+            import signal
+
+            if os.getpgid(proc.pid) == proc.pid:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, AttributeError):
+            pass  # процесс уже завершился или группа не наша
     try:
         proc.kill()
     except OSError:
@@ -349,7 +368,7 @@ def run_tree(cmd: list[str], *, timeout: float, **popen) -> tuple[int, bytes, by
     `subprocess.TimeoutExpired` (`subprocess.run` убил бы только прямого
     ребёнка, а node и opencode.exe за сценарием .cmd остались бы жить)."""
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, creationflags=_NO_WINDOW, **popen)
+                            stderr=subprocess.PIPE, **popen_kwargs(), **popen)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

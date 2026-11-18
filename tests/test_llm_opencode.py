@@ -758,3 +758,12 @@ def test_none_and_read_are_as_in_0_3_7(tmp_path):
     assert opencode.permission_for("none", dirs, work_dirs=dirs) == opencode.readonly_permission(dirs)
     read = opencode.permission_for("read", dirs, work_dirs=dirs)
     assert "edit" not in read and "bash" not in read and read["external_directory"]["*"] == "allow"
+
+
+def test_run_starts_in_its_own_group_on_posix(fake, monkeypatch):
+    from meet.llm import base
+
+    monkeypatch.setattr(base, "_WINDOWS", False)
+    _run(allowed_dirs=(), model="openai/gpt-5", max_turns=2)
+    kw = FakePopen.calls[0].kw
+    assert kw["start_new_session"] is True and "creationflags" not in kw

@@ -97,11 +97,10 @@ from pathlib import Path
 from meet import netproxy, tempdirs
 from meet.llm.base import (
     CANCELLED_ERROR, EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, deny_prompt, drop_session_markers, image_note,
-    is_uuid, kill_tree, resume_failure, run_tree, split_images,
+    is_uuid, kill_tree, popen_kwargs, resume_failure, run_tree, split_images,
 )
 from meet.llm.detect import find_codex
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 _ERR_LIMIT = 500
 # Хвост stderr при чтении по ходу вызова: ошибка Codex — в конце.
 _STDERR_TAIL = 64 * 1024
@@ -211,9 +210,8 @@ def _transport_type(item: dict) -> str | None:
 
 def _mcp_list_json(exe: str, env: dict | None) -> str:
     """Вывод `codex mcp list --json` (тесты подменяют: CLI не запускается)."""
-    res = subprocess.run([exe, "mcp", "list", "--json"], capture_output=True, timeout=30,
-                         creationflags=_NO_WINDOW, env=env)
-    return (res.stdout or b"").decode("utf-8", errors="replace")
+    _, out, _ = run_tree([exe, "mcp", "list", "--json"], timeout=30, env=env)
+    return out.decode("utf-8", errors="replace")
 
 
 def access_args(access: str | None, servers=(), work_dirs=(), *,
@@ -584,7 +582,7 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, creationflags=_NO_WINDOW, env=env,
+                stderr=subprocess.PIPE, env=env, **popen_kwargs(),
             )
         except OSError as e:
             return AgentReply(text="", error=f"не удалось запустить Codex: {e}")

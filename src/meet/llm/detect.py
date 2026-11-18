@@ -24,7 +24,6 @@ from urllib.parse import urlparse
 from meet.settings import DEFAULT_LOCAL_BASE_URL
 
 _WINDOWS = sys.platform == "win32"
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if _WINDOWS else 0
 _BATCH_SUFFIXES = (".cmd", ".bat")
 
 # macOS/Linux: куда ставят CLI, если PATH их не видит. Приложение, открытое из
@@ -381,27 +380,26 @@ def logged_in(name: str, path: str) -> tuple[bool, str | None]:
         env = env_without_api_key()
     else:
         return True, None
+    from meet.llm.base import run_tree
+
     try:
-        done = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=20, env=env, creationflags=_NO_WINDOW,
-        )
+        code, raw_out, raw_err = run_tree(cmd, timeout=20, env=env)
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"{type(e).__name__}: {e}"
-    out = (done.stdout or "").strip()
-    err = (done.stderr or "").strip()
+    out = raw_out.decode("utf-8", errors="replace").strip()
+    err = raw_err.decode("utf-8", errors="replace").strip()
     if name == "claude-code":
         try:
             status = json.loads(out)
             ok = bool(status.get("loggedIn"))
         except (ValueError, AttributeError):
             status, ok = None, False
-        if done.returncode == 0 and ok:
+        if code == 0 and ok:
             return True, None
         if isinstance(status, dict):
             # Сам JSON не показываем: в нём почта и организация.
             return False, "вход в Claude Code не выполнен (claude auth login)"
-        return False, _tail(err or out) or f"код выхода {done.returncode}"
-    if done.returncode == 0:
+        return False, _tail(err or out) or f"код выхода {code}"
+    if code == 0:
         return True, None
-    return False, _tail(err or out) or f"код выхода {done.returncode}"
+    return False, _tail(err or out) or f"код выхода {code}"

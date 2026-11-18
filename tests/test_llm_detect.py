@@ -254,15 +254,19 @@ class _Done:
         self.returncode, self.stdout, self.stderr = code, out, err
 
 
+def _via_run_tree(monkeypatch, fn):
+    from meet.llm import base
+
+    monkeypatch.setattr(base, "run_tree", fn)
+
+
 def test_codex_logged_in(monkeypatch):
-    monkeypatch.setattr(detect.subprocess, "run",
-                        lambda *a, **k: _Done(0, "Logged in using ChatGPT"))
+    _via_run_tree(monkeypatch, lambda *a, **k: (0, b"Logged in using ChatGPT", b""))
     assert detect.logged_in("codex", "codex.exe") == (True, None)
 
 
 def test_codex_not_logged_in(monkeypatch):
-    monkeypatch.setattr(detect.subprocess, "run",
-                        lambda *a, **k: _Done(1, "", "Not logged in"))
+    _via_run_tree(monkeypatch, lambda *a, **k: (1, b"", b"Not logged in"))
     ok, why = detect.logged_in("codex", "codex.exe")
     assert ok is False and "Not logged in" in why
 
@@ -273,18 +277,17 @@ def test_claude_logged_in_drops_api_key(monkeypatch):
     def run(cmd, **kw):
         seen["cmd"] = cmd
         seen["env"] = kw.get("env")
-        return _Done(0, '{"loggedIn": true, "authMethod": "claude.ai"}')
+        return 0, b'{"loggedIn": true, "authMethod": "claude.ai"}', b""
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(detect.subprocess, "run", run)
+    _via_run_tree(monkeypatch, run)
     assert detect.logged_in("claude-code", "claude.exe") == (True, None)
     assert seen["cmd"][1:3] == ["auth", "status"]
     assert "ANTHROPIC_API_KEY" not in seen["env"]
 
 
 def test_claude_not_logged_in(monkeypatch):
-    monkeypatch.setattr(detect.subprocess, "run",
-                        lambda *a, **k: _Done(1, '{"loggedIn": false}'))
+    _via_run_tree(monkeypatch, lambda *a, **k: (1, b'{"loggedIn": false}', b""))
     ok, why = detect.logged_in("claude-code", "claude.exe")
     assert ok is False and why
 
@@ -293,7 +296,7 @@ def test_logged_in_cli_missing(monkeypatch):
     def boom(*a, **k):
         raise FileNotFoundError("нет файла")
 
-    monkeypatch.setattr(detect.subprocess, "run", boom)
+    _via_run_tree(monkeypatch, boom)
     ok, why = detect.logged_in("codex", "codex.exe")
     assert ok is False and why
 

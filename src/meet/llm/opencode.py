@@ -89,6 +89,7 @@ from pathlib import Path
 from meet import netproxy, tempdirs
 from meet.llm.base import (
     EMPTY_ERROR, NO_VISION_NOTE, TIMEOUT_ERROR, AgentReply, drop_session_markers, kill_tree, path_variants,
+    popen_kwargs,
     resume_failure, run_tree,
 )
 from meet.llm.detect import OPENCODE_NOT_FOUND, find_opencode
@@ -620,7 +621,7 @@ def _exec(exe: str, root: Path, model: str | None, stdin_text: str, timeout_s: f
             proc = subprocess.Popen(
                 build_command(exe, str(call_dir), model, resume), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(call_dir), env=env,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **popen_kwargs(),
             )
         except OSError as e:
             return AgentReply(text="", error=f"не удалось запустить OpenCode: {e}")
