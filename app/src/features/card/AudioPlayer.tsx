@@ -36,7 +36,7 @@
  *
  * Клавиши (как на YouTube, пока фокус не в поле ввода, не в терминале агента и
  * не в окне): Пробел/K — пуск и пауза, J/L — ±10 с, ←/→ — ±5 с, Shift+←/→ —
- * соседняя глава, Ctrl+←/→ — соседняя реплика, M — звук, 0–9 — к 0–90 %.
+ * соседняя глава, Ctrl+←/→ (на Mac ⌥+←/→) — соседняя реплика, M — звук, 0–9 — к 0–90 %.
  * На полосе с фокусом ещё Home/End.
  *
  * Состояние — на одну запись: карточка монтирует плеер заново с `key={id}`.
@@ -70,6 +70,7 @@ import { Tip } from "../../ui/Tip";
 import { Truncate } from "../../ui/Truncate";
 import type { PersonColor } from "./Turns";
 import { PlayerKeysTip } from "./PlayerKeysTip";
+import { OS, type Os } from "../../lib/platform";
 import "./player.css";
 
 /** Играющий фрагмент: с какой секунды и до какой. */
@@ -126,12 +127,16 @@ export type PlayerKey =
   | { kind: "mute" } | { kind: "percent"; p: number };
 
 export function playerKey(e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey"
-  | "defaultPrevented" | "target">): PlayerKey | null {
-  if (e.defaultPrevented || e.altKey || e.metaKey) return null;
+  | "defaultPrevented" | "target">, os: Os = OS): PlayerKey | null {
+  if (e.defaultPrevented || e.metaKey) return null;
+  const mac = os === "macos";
+  // На Mac реплики листает ⌥+←/→: Ctrl+стрелки забирает система (рабочие столы).
+  if (e.altKey && !(mac && !e.ctrlKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight"))) return null;
   const target = e.target instanceof Element ? e.target : null;
   if (target?.closest(KEYS_IGNORED)) return null;
   const arrow = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
-  if (e.ctrlKey) return arrow && !e.shiftKey ? { kind: "turn", dir: arrow as 1 | -1 } : null;
+  if (mac ? e.altKey : e.ctrlKey) return arrow && !e.shiftKey ? { kind: "turn", dir: arrow as 1 | -1 } : null;
+  if (e.ctrlKey && mac) return null;
   if (arrow) return e.shiftKey ? { kind: "chapter", dir: arrow as 1 | -1 } : { kind: "seek", by: arrow * SEEK_STEP_S };
   if (e.shiftKey) return null;
   if (e.key === " " || e.code === "Space") return target?.closest(PRESSABLE) ? null : { kind: "toggle" };

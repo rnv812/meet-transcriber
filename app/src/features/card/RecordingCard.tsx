@@ -53,6 +53,7 @@ import { MicSplitNote } from "./micSplit";
 import { PaneResizer } from "../../ui/PaneResizer";
 import { createPlayClock, PlayTime } from "./playClock";
 import "./card.css";
+import { key } from "../../lib/platform";
 
 type Loaded = Recording & { transcript: Transcript | null };
 
@@ -645,7 +646,7 @@ export function RecordingCard({
   const tools = status.kind === "ready" && turns.length ? (
     <>
       {/* Нажатие не снимает выделение в реплике: по нему и откроется окно. */}
-      <IconButton icon={PenLine} label="Исправить распознанное" tooltip="Исправить выделенное в реплике (Ctrl+E)"
+      <IconButton icon={PenLine} label="Исправить распознанное" tooltip={`Исправить выделенное в реплике (${key("Ctrl+E")})`}
         aria-keyshortcuts="Control+E" aria-expanded={textFix.hintId !== null} aria-controls={textFix.hintId ?? undefined}
         onMouseDown={(e) => e.preventDefault()} onClick={(e) => textFix.openFromBar(e.currentTarget)} />
       {/* Причина недоступности — подсказкой на самой кнопке: недоступная .btn наведение получает (ui/button.css). */}

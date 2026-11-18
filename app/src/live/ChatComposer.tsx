@@ -52,6 +52,7 @@ import { Tip } from "../ui/Tip";
 import { type Suggestion, argHint, suggestions } from "./slash";
 import type { Chat, ChatDraft } from "./useChat";
 import "./chat.css";
+import { key } from "../lib/platform";
 
 /** Самое большее вложений в сообщении (как у резидента). */
 export const MAX_ATTACHMENTS = 10;
@@ -325,7 +326,7 @@ export function ChatComposer({
         {/* Скрепка — слева от поля (макет MeetLive). */}
         {inTauri() && (
           <IconButton icon={Paperclip} label="Приложить файл" disabled={disabled}
-            tooltip="Приложить файл (или перетащите его сюда, или вставьте скриншот Ctrl+V)" onClick={() => void pick()} />
+            tooltip={`Приложить файл (или перетащите его сюда, или вставьте скриншот ${key("Ctrl+V")})`} onClick={() => void pick()} />
         )}
         {/* Поле с подсказкой команд — combobox (ARIA 1.2): список «/» — его listbox, активный пункт —
             aria-activedescendant; имя прежнее — «Сообщение ассистенту». */}
@@ -334,7 +335,7 @@ export function ChatComposer({
           aria-controls={menuOpen ? menuId : undefined} aria-expanded={menuOpen}
           aria-activedescendant={menuOpen ? `${menuId}-${active}` : undefined} aria-autocomplete="list"
           placeholder={disabled ? "Писать ассистенту сейчас нельзя" : placeholder}
-          aria-description="Enter — отправить, Shift+Enter — новая строка, Ctrl+V — вставить скриншот, «/» — команды"
+          aria-description={`Enter — отправить, Shift+Enter — новая строка, ${key("Ctrl+V")} — вставить скриншот, «/» — команды`}
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onPaste={onPaste} />
         {chat.writing && (
           // Контурная, со словом «Стоп»: красная кнопка-значок в шапке останавливает запись, а не ответ.

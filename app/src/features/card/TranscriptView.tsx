@@ -36,6 +36,7 @@ import { FindAsk, TranscriptShown } from "./transcriptShown";
 import { caretOffset } from "./TurnEdit";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 import { createTurnWords, TurnWordsContext } from "./turnWords";
+import { IS_MAC, key } from "../../lib/platform";
 
 export const FIND_DELAY_MS = 150;
 
@@ -482,7 +483,7 @@ export function TranscriptView({
               onKeyDown={onKeyDown}
             />
             {/* Подсказка клавиши — пока поле пустое: не наезжает на текст и крестик очистки. */}
-            {!text && <span className="kbd" aria-hidden="true">Ctrl F</span>}
+            {!text && <span className="kbd" aria-hidden="true">{IS_MAC ? "⌘F" : "Ctrl F"}</span>}
           </div>
           <span className={`find__count num${active && !hits.length ? " find__count--none" : ""}`}
             aria-live="polite" aria-atomic="true">{counter}</span>
@@ -498,7 +499,7 @@ export function TranscriptView({
             <TipLine>Слова без кавычек находят реплики, где есть все эти слова в любой форме: «задача» найдёт и «задачи».</TipLine>
             <TipLine>Фраза в кавычках, например <code>"план работ"</code>, ищется точно, слово в слово.</TipLine>
             <TipLine><code>спикер:Анна</code> — только реплики этого спикера.</TipLine>
-            <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить и закрыть.</TipLine>
+            <TipLine>{key("Ctrl+F")} — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить и закрыть.</TipLine>
           </HelpTip>
           <span className="find__gap" />
           <IconButton icon={X} label="Закрыть поиск" tooltip="Закрыть поиск (Esc)" onClick={closeFind} />

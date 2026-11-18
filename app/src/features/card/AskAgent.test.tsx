@@ -113,6 +113,15 @@ test("выбранные реплики: «Спросить агента о вы
   expect(text).toBe("Про реплики:\n[00:00] Анна: «Начинаем планёрку.»\n[02:10] Анна: «Договорились.»");
 });
 
+test("Mac: ⌘-щелчок выбирает реплики так же, как Ctrl+щелчок", async () => {
+  const { container } = await card();
+  fireEvent.click(rows(container)[2]!, { metaKey: true });
+  fireEvent.click(rows(container)[0]!, { metaKey: true });
+  await userEvent.click(screen.getByRole("button", { name: "Спросить агента о выбранных" }));
+  const text = (await unsent()).querySelector("pre")!.textContent;
+  expect(text).toBe("Про реплики:\n[00:00] Анна: «Начинаем планёрку.»\n[02:10] Анна: «Договорились.»");
+});
+
 test("A на выбранной реплике — о всех выбранных", async () => {
   const { container } = await card();
   fireEvent.click(rows(container)[0]!, { ctrlKey: true });

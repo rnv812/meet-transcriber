@@ -1,4 +1,4 @@
-import { detectOs, IS_MAC, osTexts } from "./platform";
+import { detectOs, IS_MAC, keyLabel, osTexts } from "./platform";
 
 test("macOS узнаётся по platform или по Macintosh в userAgent", () => {
   expect(detectOs({ platform: "MacIntel", userAgent: "" })).toBe("macos");
@@ -35,4 +35,14 @@ test("тексты с названием ОС", () => {
   // «Открыть папку записи в …» (0.6.1): на Mac — Finder.
   expect(mac.fileManager).toBe("Finder");
   expect(mac.otherSide).toBe("Звук собеседников");
+});
+
+describe("keyLabel", () => {
+  it("Mac пишет клавиши по-маковски, Windows оставляет как есть", () => {
+    expect(keyLabel("Ctrl+F", "macos")).toBe("⌘F");
+    expect(keyLabel("Ctrl+F", "windows")).toBe("Ctrl+F");
+    expect(keyLabel("Ctrl+Shift+Z", "macos")).toBe("⌘⇧Z");
+    expect(keyLabel("Ctrl+Shift+Z", "windows")).toBe("Ctrl+Shift+Z");
+    expect(keyLabel("Ctrl+щелчок", "macos")).toBe("⌘щелчок");
+  });
 });

@@ -23,6 +23,7 @@ import { Tip } from "../../ui/Tip";
 import { TargetPicker, type Target } from "./speakers/TargetPicker";
 import type { PersonColor } from "./Turns";
 import { Icon } from "../../ui/Icon";
+import { IS_MAC, key } from "../../lib/platform";
 
 type Menu = { anchor: HTMLElement; turn: number | null };
 /** «Разделить реплику здесь»: реплика, сегмент и место в его тексте; текст вокруг места — для подписи. */
@@ -316,7 +317,7 @@ export function useTurnEdit({
                 Чтобы разделить реплику на две, щёлкните правой кнопкой мыши по месту разделения в тексте.
               </span>
               <button type="button" className="spk-link" onClick={() => { onSelect(one, "toggle"); closeMenu(); }}>
-                {selected.has(one) ? "Убрать из выбранных" : "Выбрать реплику (Ctrl+щелчок)"}
+                {selected.has(one) ? "Убрать из выбранных" : `Выбрать реплику (${IS_MAC ? "⌘-щелчок" : "Ctrl+щелчок"})`}
               </button>
               <button type="button" className="spk-link" onClick={() => { closeMenu(); onOpenPanel(turn.speaker); }}>
                 Все реплики спикера — в панели «Спикеры»
@@ -360,7 +361,7 @@ export function useTurnEdit({
           {askGroup(splitAt.turn)}
           {word && onFixWord && (
             <div className="tmenu__links">
-              <Tip content="Исправить распознанное (выделите слова и нажмите Ctrl+E)">
+              <Tip content={`Исправить распознанное (выделите слова и нажмите ${key("Ctrl+E")})`}>
                 <button type="button" className="spk-link"
                   onClick={() => { const at = splitAt; closeMenu(); onFixWord(at.turn, at.offset, at.anchor); }}>
                   Исправить слово «{turnText.slice(word.start, word.end)}»…
@@ -403,7 +404,7 @@ export function useTurnEdit({
             </button>
           )}
           <button type="button" className="spk-link" onClick={clear}>Снять выделение</button>
-          <span className="muted tsel__hint">Ctrl+щелчок — добавить реплику, Shift+щелчок — диапазон, Esc — снять</span>
+          <span className="muted tsel__hint">{IS_MAC ? "⌘-щелчок" : "Ctrl+щелчок"} — добавить реплику, Shift+щелчок — диапазон, Esc — снять</span>
         </>
       ) : done && (
         <>

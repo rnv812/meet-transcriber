@@ -40,3 +40,26 @@ export function osTexts(os: Os) {
 export const OS: Os = detectOs();
 export const IS_MAC = OS === "macos";
 export const OS_TEXT = osTexts(OS);
+
+const MAC_KEYS: Record<string, string> = { Ctrl: "⌘", Shift: "⇧", Alt: "⌥" };
+
+/**
+ * Подпись сочетания клавиш: на Windows как написано («Ctrl+Shift+Z»), на Mac
+ * по-маковски — «⌘⇧Z» (Ctrl → ⌘, Shift → ⇧, Alt → ⌥, без плюсов). Сочетание
+ * записывают в виде Windows: «Ctrl+F», «Ctrl+щелчок».
+ */
+export function keyLabel(combo: string, os: Os = OS): string {
+  if (os !== "macos") return combo;
+  const parts = combo.split("+");
+  const out: string[] = [];
+  let i = 0;
+  for (; i < parts.length - 1; i++) {
+    const mapped = MAC_KEYS[parts[i]!];
+    if (!mapped) break;
+    out.push(mapped);
+  }
+  return out.join("") + parts.slice(i).join("+");
+}
+
+/** Подписи клавиш выбранной ОС для подсказок окна. */
+export const key = (combo: string) => keyLabel(combo, OS);

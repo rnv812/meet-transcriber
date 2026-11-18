@@ -31,6 +31,7 @@ import { useAssistant } from "./assistant";
 import { SummaryTab } from "./SummaryTab";
 import { FindAsk, TranscriptShown } from "./transcriptShown";
 import "./assistant.css";
+import { key } from "../../lib/platform";
 
 type Tab = "transcript" | "summary" | "assistant" | "agent";
 /**
@@ -216,7 +217,7 @@ export function CardTabs({
         </div>
         {tab === "transcript" && (stage === "ready" || stage === "text") && (
           <div className="card-tabs__tools">
-            <IconButton icon={Search} label="Найти в расшифровке" tooltip="Найти в расшифровке (Ctrl+F)"
+            <IconButton icon={Search} label="Найти в расшифровке" tooltip={`Найти в расшифровке (${key("Ctrl+F")})`}
               aria-keyshortcuts="Control+F" onClick={() => setFindTick((n) => n + 1)} />
             {tools}
           </div>

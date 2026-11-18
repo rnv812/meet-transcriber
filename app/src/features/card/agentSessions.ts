@@ -32,6 +32,7 @@ import {
   PASTE_WAIT_MS, POLL_MS, coldReadiness, dialogShown, ownTitle, promptVisible, screenOutput, screenRows,
   quietNeeded, screenText,
 } from "./agentReady";
+import { OS, type Os } from "../../lib/platform";
 import { terminalTheme, watchAppearance } from "./terminalTheme";
 
 /** Как часто смотреть, не стал ли готов сеанс, когда ссылки, ждущей вставки, нет. */
@@ -88,13 +89,21 @@ const EXIT_LINE = "\r\n\x1b[90m— агент завершил работу —\
 let xterm: Promise<[typeof import("@xterm/xterm"), typeof import("@xterm/addon-fit")]> | null = null;
 const loadXterm = () => (xterm ??= Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]));
 
-/** Ctrl+Shift+C — копировать выделение, Ctrl+Shift+V — вставить; остальное — агенту. */
-function clipboardKeys(term: Terminal) {
+/**
+ * Windows: Ctrl+Shift+C — копировать выделение, Ctrl+Shift+V — вставить.
+ * Mac: ⌘C — копировать, когда есть выделение (без него клавиша идёт агенту),
+ * ⌘V — вставить; Ctrl+C остаётся прерыванием. Остальное — агенту.
+ */
+export function clipboardKeys(term: Terminal, os: Os = OS) {
+  const mac = os === "macos";
   return (e: KeyboardEvent): boolean => {
-    if (e.type !== "keydown" || !e.ctrlKey || !e.shiftKey || e.altKey) return true;
+    if (e.type !== "keydown" || e.altKey) return true;
+    const combo = mac ? e.metaKey && !e.ctrlKey && !e.shiftKey : e.ctrlKey && e.shiftKey && !e.metaKey;
+    if (!combo) return true;
     if (e.code === "KeyC") {
-      e.preventDefault();
       const text = term.getSelection();
+      if (mac && !text) return true;
+      e.preventDefault();
       if (text) void navigator.clipboard?.writeText(text).catch(() => {});
       return false;
     }

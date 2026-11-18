@@ -25,6 +25,7 @@ import { Tip } from "../../ui/Tip";
 import { floatingStyle, useFloating } from "../../ui/floating";
 import { rulesOf, withRule } from "../settings/ReplacementsEditor";
 import { Icon } from "../../ui/Icon";
+import { key } from "../../lib/platform";
 
 type Box = { left: number; top: number; bottom: number };
 /** Что исправляем: реплика, сегмент и начало в его тексте; `split` — выделение через границу фраз. */
@@ -308,7 +309,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     const canApply = !busy && !target.split && !!right && !(same && !hotword) && !(all && count === 0);
     node = (
       <>
-        <Tip content={open ? null : "Исправить распознанное (Ctrl+E)"} describe={false}>
+        <Tip content={open ? null : `Исправить распознанное (${key("Ctrl+E")})`} describe={false}>
           <button ref={floatRef} type="button" className={`tfix-float${open ? " tfix-float--anchor" : ""}`}
             style={floatingStyle(floatPos)} aria-hidden={open || undefined}
             tabIndex={open ? -1 : undefined} aria-keyshortcuts="Control+E"
@@ -426,7 +427,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
           anchorToggles id={hintId} takeFocus>
           <p className="tfix__hint">
             Выделите в реплике неверно распознанное слово или фразу (слово — двойным щелчком) и нажмите
-            «Исправить…» или Ctrl+E.
+            «Исправить…» или {key("Ctrl+E")}.
           </p>
         </Popover>
       </>

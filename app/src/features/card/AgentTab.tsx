@@ -50,6 +50,7 @@ import {
 import { Callout } from "./Callout";
 import { PastQuestions } from "./PastQuestions";
 import "./agent.css";
+import { IS_MAC } from "../../lib/platform";
 
 export {
   CONFIRM_SCREEN, OPENCODE_FALLBACK_QUIET_MS, OPENCODE_QUIET_MS, PASTE_WAIT_MS, QUIET_MS, coldReadiness, opencodePromptVisible,
@@ -468,7 +469,7 @@ export function AgentTab({
             <code>--continue</code>); «Новая сессия» начинает
             разговор заново.
           </TipLine>
-          <TipLine>Копировать — Ctrl+Shift+C, вставить — Ctrl+Shift+V или правой кнопкой мыши.</TipLine>
+          <TipLine>{IS_MAC ? "Копировать — ⌘C при выделенном тексте, вставить — ⌘V или правой кнопкой мыши. Ctrl+C прерывает агента." : "Копировать — Ctrl+Shift+C, вставить — Ctrl+Shift+V или правой кнопкой мыши."}</TipLine>
           <TipLine>
             Агент продолжает работать, когда вы переходите на другую вкладку, к другой встрече или в настройки; у
             встречи в списке тогда зелёная точка. Одновременно работают до трёх агентов (включая открытый): давно не
