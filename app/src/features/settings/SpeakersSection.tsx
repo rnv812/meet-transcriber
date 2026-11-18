@@ -9,6 +9,8 @@
  * Токен и образец голоса — мгновенные действия (свои запросы резиденту), порог
  * и одновременная речь — черновик `asr`. Образец пишется с микрофона из
  * черновика «Звука».
+ *
+ * Сверху (0.6.2) — «Как сейчас настроено» по сохранённым настройкам.
  */
 
 import type { Endpoint } from "../../lib/api";
@@ -16,15 +18,34 @@ import { Slider } from "../../ui/Slider";
 import { SLIDER_WIDTH, TextRow } from "./fields";
 import { HfTokenRow } from "./HfTokenRow";
 import { OwnerVoiceRow } from "./OwnerVoice";
-import { Row, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { NowLine, Row, SettingsCard, Switch, type NowPart, type Raw, type SetFn } from "./Section";
 import { pickedName } from "./SoundSection";
 import { VoiceThresholdTip } from "./tips";
 
-export function SpeakersSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint: Endpoint }) {
+/** Порог узнавания в процентах (как у ползунка). */
+const percent = (value: unknown) => Math.round(Number(value ?? 0.75) * 100);
+
+/** «Как сейчас» по сохранённым настройкам: разделение, порог, нахлёст и микрофон. */
+export function speakersNow(saved: Raw): NowPart[] {
+  const a = saved.asr ?? {};
+  return [
+    { text: a.fast_diarization === true ? "pyannote, быстрее" : "pyannote", to: "Быстрее разделять на спикеров" },
+    { text: `порог узнавания ${percent(a.voice_threshold)}%`, to: "Порог узнавания голоса" },
+    { text: a.overlap ? "нахлёст отмечается" : "нахлёст не отмечается", to: "Отмечать одновременную речь" },
+    {
+      text: a.mic_speakers !== false ? "голоса в микрофоне различаются" : "микрофон — только ваши реплики",
+      to: "Различать голоса в микрофоне",
+    },
+    { text: a.mic_dedupe !== false ? "повторы убираются" : "повторы не убираются", to: "Убирать повторы соседа и эхо" },
+  ];
+}
+
+export function SpeakersSection({ draft, saved, set, endpoint }: { draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint }) {
   const v = (k: string) => draft.asr?.[k];
-  const threshold = Math.round(Number(v("voice_threshold") ?? 0.75) * 100);
+  const threshold = percent(v("voice_threshold"));
   return (
     <>
+      <NowLine parts={speakersNow(saved)} />
       <SettingsCard title="Разделение на спикеров">
         <HfTokenRow endpoint={endpoint} />
         <Switch label="Отмечать одновременную речь" hint="Реплики, где говорят одновременно, помечаются «нахлёст»: спикер в них может быть определён неточно"

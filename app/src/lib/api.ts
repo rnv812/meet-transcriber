@@ -390,6 +390,8 @@ export type Model = {
   title: string;
   note: string;
   size_gb: number;
+  /** Язык модели из каталога: "ru" — только русский, "multi" — многоязычная. */
+  language?: string;
   gated?: boolean;
   recommended?: boolean;
   downloaded: boolean;

@@ -1007,8 +1007,10 @@ test("правка порога узнавания — точка у «Спик�
 
 test("поиск ждёт данных раздела: строка блока движка находится, даже если движок ответил позже 2 с", async () => {
   watchScrolls();
-  let answer: (s: api.EngineState) => void = () => {};
-  vi.mocked(api.getEngine).mockImplementation(() => new Promise((ok) => { answer = ok; }));
+  // Состояние движка спрашивают и раздел, и блок «Движок и модели»: ответ — всем сразу.
+  const waiting: ((s: api.EngineState) => void)[] = [];
+  const answer = (s: api.EngineState) => { for (const ok of waiting.splice(0)) ok(structuredClone(s)); };
+  vi.mocked(api.getEngine).mockImplementation(() => new Promise((ok) => { waiting.push(ok); }));
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await screen.findByRole("radiogroup", { name: "Уведомления" });
   await userEvent.type(screen.getByRole("combobox", { name: "Поиск по настройкам" }), "расположение");
@@ -1072,5 +1074,173 @@ describe("«изменено» и «Сбросить раздел»", () => {
     expect(await screen.findByRole("button", { name: "Сбросить раздел" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Категории" }));
     expect(screen.queryByRole("button", { name: "Сбросить раздел" })).toBeNull();
+  });
+});
+
+describe("«Подобрать под этот компьютер» и «Как сейчас настроено»", () => {
+  const STOCK = "Systran/faster-whisper-large-v3";
+  const MLX = "mlx-community/whisper-large-v3-turbo";
+  /** Каталог с языками моделей (как у резидента) и стоковой large-v3. */
+  const fullCatalogue = (over: { gigaam?: boolean; mlx?: boolean } = {}): api.ModelsState => {
+    const c = catalogue();
+    c.items = c.items.map((m) => ({
+      ...m,
+      language: m.id === "large-v3" || m.backend === "gigaam" ? "ru" : "multi",
+      ...(m.id === "gigaam/v3_e2e_rnnt" && over.gigaam === false ? { downloaded: false, size_on_disk: 0 } : {}),
+    }));
+    c.items.push(modelItem({ id: STOCK, backend: "faster-whisper", title: "Whisper large-v3 — стоковая", size_gb: 3.1, language: "multi" }));
+    if (over.mlx) {
+      c.items.push(modelItem({ id: MLX, backend: "mlx-whisper", title: "Whisper large-v3 turbo — MLX (Mac)", size_gb: 1.6, language: "multi" }));
+    }
+    return c;
+  };
+  const open = async (engine: Partial<api.EngineState> | null, asr: Record<string, unknown>, models = fullCatalogue()) => {
+    if (engine) vi.mocked(api.getEngine).mockResolvedValue({ ...structuredClone(engineState), ...engine });
+    vi.mocked(api.getSettings).mockResolvedValue({ ...structuredClone(settings), asr: { ...settings.asr, ...asr } });
+    vi.mocked(api.getModels).mockResolvedValue(models);
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="asr" />);
+  };
+  const fitButton = () => screen.findByRole("button", { name: /Подобрать под этот компьютер|Уже подобрано/ });
+  const nowLine = () => screen.findByRole("group", { name: "Как сейчас настроено" });
+  const NO_GPU = { flavor: "cpu" as const, gpu: { available: false, name: null }, cuda_ok: false, cuda_reason: "видеокарта NVIDIA не найдена" };
+
+  test("машина без NVIDIA: в черновик — GigaAM на процессоре, список изменений и скачивания; без «Сохранить» ничего не пишется", async () => {
+    await open(NO_GPU, { device: "cuda", cpu_backend: "faster-whisper", cpu_model: "large-v3" }, fullCatalogue({ gigaam: false }));
+    const button = await fitButton();
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    const changes = screen.getByRole("list", { name: "Что изменится" });
+    expect(changes).toHaveTextContent("Устройство: Видеокарта → Авто");
+    expect(changes).toHaveTextContent("Движок на процессоре: Whisper → GigaAM");
+    // Whisper процессора — только для записей не на русском: русский fine-tune меняется на лёгкую многоязычную.
+    expect(changes).toHaveTextContent(
+      "Whisper на процессоре для записей не на русском: Whisper large-v3 — русский fine-tune → Whisper medium");
+    const downloads = screen.getByRole("list", { name: "Что скачать" });
+    expect(downloads).toHaveTextContent("GigaAM v3 — русский — 0,45 ГБ");
+    expect(downloads).toHaveTextContent("Whisper medium — 1,5 ГБ");
+    expect(screen.getByText(/Всего 1,95 ГБ/)).toBeInTheDocument();
+    expect(screen.getByText(/без видеокарты NVIDIA/, { selector: ".fit__title" })).toBeInTheDocument();
+    // Значения — в черновике: строка процессора уже с GigaAM, кнопка — «Уже подобрано».
+    expect(within(deviceRow("Процессор")).getByRole("radio", { name: "GigaAM" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Уже подобрано" })).toBeDisabled();
+    expect(api.patchSettings).not.toHaveBeenCalled();
+    expect(await savedPatch()).toEqual({ asr: { device: "auto", cpu_backend: "gigaam", cpu_model: "medium" } });
+  });
+
+  test("Mac: GigaAM и MLX Whisper для записей не на русском — скачать модель MLX", async () => {
+    await open({ flavor: "mac", gpu: { available: false, name: null }, cuda_ok: false, cuda_reason: "видеокарта NVIDIA не найдена" },
+      { device: "auto", cpu_backend: "faster-whisper", cpu_model: "medium" }, fullCatalogue({ mlx: true }));
+    const button = await fitButton();
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    expect(screen.getByText(/Mac/, { selector: ".fit__title" })).toHaveTextContent("MLX Whisper");
+    const changes = screen.getByRole("list", { name: "Что изменится" });
+    expect(changes).toHaveTextContent("Движок на процессоре: Whisper → GigaAM");
+    expect(changes).not.toHaveTextContent("Устройство");
+    const downloads = screen.getByRole("list", { name: "Что скачать" });
+    expect(downloads).toHaveTextContent("Whisper large-v3 turbo — MLX (Mac) — 1,6 ГБ");
+    // На Mac 14+ записи не на русском берёт MLX — Whisper процессора не скачиваем.
+    expect(downloads).not.toHaveTextContent("Whisper medium");
+    expect(api.patchSettings).not.toHaveBeenCalled();
+  });
+
+  test("NVIDIA с CUDA: GigaAM для русского, многоязычный Whisper на видеокарте для остальных", async () => {
+    await open({ cuda_ok: true }, { device: "cpu", backend: "faster-whisper", model: "large-v3" });
+    const button = await fitButton();
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    const changes = screen.getByRole("list", { name: "Что изменится" });
+    expect(changes).toHaveTextContent("Устройство: Процессор → Авто");
+    expect(changes).toHaveTextContent("Движок на видеокарте: Whisper → GigaAM");
+    expect(changes).toHaveTextContent(
+      "Whisper на видеокарте для записей не на русском: Whisper large-v3 — русский fine-tune → Whisper large-v3 — стоковая");
+    expect(screen.getByRole("list", { name: "Что скачать" })).toHaveTextContent("Whisper large-v3 — стоковая — 3,1 ГБ");
+    expect(screen.getByText(/RTX 5070 Ti/, { selector: ".fit__title" })).toBeInTheDocument();
+    expect(await savedPatch()).toEqual({ asr: { device: "auto", backend: "gigaam", model: STOCK } });
+  });
+
+  test("значения уже подходят — «Уже подобрано», кнопка недоступна", async () => {
+    await open({ cuda_ok: true }, { device: "auto", backend: "gigaam", model: STOCK, gigaam_model: "v3_e2e_rnnt" });
+    await waitFor(async () => expect(await fitButton()).toHaveAccessibleName("Уже подобрано"));
+    expect(await fitButton()).toBeDisabled();
+  });
+
+  test("сведения о машине ещё загружаются — кнопка недоступна", async () => {
+    vi.mocked(api.getEngine).mockImplementation(() => new Promise(() => {}));
+    await open(null, {});
+    const button = await fitButton();
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleName("Подобрать под этот компьютер");
+    expect(screen.getByText("Узнаю, что это за компьютер…")).toBeInTheDocument();
+  });
+
+  test("«Распознавание»: строка «Как сейчас» — по сохранённым настройкам; часть — ссылка к опции", async () => {
+    await open(NO_GPU, { device: "auto", cpu_backend: "gigaam", cpu_model: "medium" });
+    const line = await nowLine();
+    await waitFor(() => expect(line).toHaveTextContent(
+      "процессор · GigaAM v3 — русский · не на русском — Whisper medium · речь на русском"));
+    // Несохранённый черновик строку не меняет.
+    await userEvent.click(within(deviceRow("Процессор")).getByRole("radio", { name: "Whisper" }));
+    expect(line).toHaveTextContent("GigaAM v3 — русский");
+    await userEvent.click(within(line).getByRole("button", { name: "речь на русском" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Язык речи" })).toHaveFocus());
+    // Движок — в строке того устройства, что распознаёт (процессор), а не в первой строке «Движок».
+    await userEvent.click(within(line).getByRole("button", { name: "GigaAM v3 — русский" }));
+    await waitFor(() => expect(within(deviceRow("Процессор")).getByRole("radio", { name: "Whisper" })).toHaveFocus());
+  });
+
+  test("«Спикеры», «Модели и анализ», «Ассистент»: строки «Как сейчас» по сохранённым настройкам", async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({
+      ...structuredClone(settings),
+      asr: { ...settings.asr, overlap: true, fast_diarization: false, voice_threshold: 0.75, mic_speakers: true, mic_dedupe: false },
+      llm: { provider: "codex", enabled: ["claude-code", "codex"] },
+      analysis: { auto: false },
+      assist: { participant: true, profile: "work", frequency: "normal" },
+      assistant: { knowledge_dir: "C:\\kb\\Work" },
+    });
+    vi.mocked(api.getAssistant).mockResolvedValue({
+      provider: "codex", setting: "codex", checking: false, knowledge_dir: null,
+      available: { "claude-code": { found: true, path: "claude" }, codex: { found: true, path: "codex" } },
+    });
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="speakers" />);
+    expect(await nowLine()).toHaveTextContent(
+      "pyannote · порог узнавания 75% · нахлёст отмечается · голоса в микрофоне различаются · повторы не убираются");
+    await userEvent.click(screen.getByRole("button", { name: "Модели и анализ" }));
+    expect(await nowLine()).toHaveTextContent("по умолчанию — Codex · включены: Claude Code, Codex · без анализа после расшифровки");
+    await userEvent.click(screen.getByRole("button", { name: "Ассистент" }));
+    const line = await nowLine();
+    expect(line).toHaveTextContent("участник встречи · ведёт Codex · профиль «Рабочая встреча» · пишет обычно · база знаний — Work");
+    // Ссылка на модель ведёт в «Модели и анализ», к таблице моделей.
+    await userEvent.click(within(line).getByRole("button", { name: "ведёт Codex" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "Модели и анализ" })).toBeInTheDocument();
+  });
+
+  test("«Модели и анализ»: подбор выключает не найденные на машине модели и ничего не включает", async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({
+      ...structuredClone(settings),
+      llm: { provider: "auto", enabled: ["claude-code", "codex", "opencode"] },
+      analysis: { auto: false },
+    });
+    vi.mocked(api.getAssistant).mockResolvedValue({
+      provider: "claude-code", setting: "auto", checking: false, knowledge_dir: null,
+      available: { "claude-code": { found: true, path: "claude" }, codex: { found: false }, opencode: { found: false } },
+    });
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
+    const button = await fitButton();
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    const changes = screen.getByRole("list", { name: "Что изменится" });
+    expect(changes).toHaveTextContent("Выключить Codex — не найден на этом компьютере");
+    expect(changes).toHaveTextContent("Выключить OpenCode — не найден на этом компьютере");
+    expect(screen.getByText("Скачивать ничего не нужно.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Анализировать встречу после расшифровки" })).not.toBeChecked();
+    expect(api.patchSettings).not.toHaveBeenCalled();
+    expect(await savedPatch()).toEqual({ llm: { enabled: ["claude-code"] } });
+  });
+
+  test("«Модели и анализ»: пока сведения о моделях на машине не пришли — кнопка недоступна", async () => {
+    vi.mocked(api.getAssistant).mockImplementation(() => new Promise(() => {}));
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
+    expect(await fitButton()).toBeDisabled();
   });
 });

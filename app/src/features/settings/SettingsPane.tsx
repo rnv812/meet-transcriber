@@ -39,6 +39,10 @@
  * ним строка «Включите «…», чтобы увидеть «…»» (`aria-live`); она держится,
  * пока переключатель не изменён или не выбран другой результат. Меню и индекс —
  * `settingsIndex.ts`.
+ *
+ * «Как сейчас настроено» (0.6.2, `NowLine`): часть строки ведёт к своей опции
+ * тем же путём, что выбор в поиске (`OpenOption`); `scope` — блок, внутри
+ * которого искать строку, если подпись в разделе повторяется.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type MutableRefObject } from "react";
@@ -75,7 +79,9 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { JiraSection } from "./JiraSection";
 import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { ModelsSection, modelsChangesInvalid } from "./ModelsSection";
-import { ChangedLabels, RevealFineTuning, SeeAlsoSlot, SettingsCard, type Raw, type SetFn } from "./Section";
+import {
+  ChangedLabels, OpenOption, RevealFineTuning, SeeAlsoSlot, SettingsCard, type OptionTarget, type Raw, type SetFn,
+} from "./Section";
 import { SettingsSearch } from "./SettingsSearch";
 import {
   type BlockId, MENU, MENU_GROUPS, SETTINGS_INDEX, type SectionId, type SettingsEntry, sectionKeys, sectionTitle,
@@ -251,7 +257,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   // Поиск по настройкам: запрос, найденная строка (прокрутить и подсветить) и
   // просьба раскрыть «Тонкую настройку» (номер; 0 — нет, см. RevealFineTuning).
   const [query, setQuery] = useState("");
-  const [jump, setJump] = useState<{ entry: SettingsEntry; tick: number } | null>(null);
+  const [jump, setJump] = useState<{ entry: SettingsEntry; tick: number; scope?: string } | null>(null);
   const [reveal, setReveal] = useState(0);
   // Строка найдена, но скрыта выключенным переключателем: запись и место под ним для подсказки.
   const [needs, setNeeds] = useState<{ entry: SettingsEntry; label: string } | null>(null);
@@ -273,14 +279,19 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     setBlock({ id: to, tick: ++jumps.current });
   };
   /** Выбор в выдаче поиска: раздел, при `advanced` — раскрыть «Тонкую настройку», затем строка. */
-  const pick = (entry: SettingsEntry) => {
+  const pick = (entry: SettingsEntry, scope?: string) => {
     const tick = ++jumps.current;
     setQuery("");
     setSectionState(entry.section);
     setBlock(null);
     setReveal(entry.advanced ? tick : 0);
     setNeeds(null);
-    setJump({ entry, tick });
+    setJump({ entry, tick, scope });
+  };
+  /** Ссылка из строки «Как сейчас»: опция по подписи — как выбор в поиске. */
+  const openOption = ({ to, section: where, scope }: OptionTarget) => {
+    const target = where ?? section;
+    pick(SETTINGS_INDEX.find((e) => e.section === target && e.label === to) ?? { section: target, label: to }, scope);
   };
   const [settings, setSettings] = useState<Raw | null>(null);
   const [draft, setDraft] = useState<Raw>({});
@@ -370,7 +381,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     };
     /** true — дело сделано: строка найдена или её нет, а ждать уже нечего. */
     const attempt = (): boolean => {
-      const row = findRow(root, jump.entry.label);
+      // Строка внутри блока (`scope`): пока блока нет — как будто нет и строки.
+      const base = jump.scope ? root.querySelector<HTMLElement>(jump.scope) : root;
+      const row = base ? findRow(base, jump.entry.label) : null;
       if (!row) {
         // Раздел ещё грузит свои данные (настройки, движок, каталог моделей) — ждать их;
         // данные пришли, а строки так и нет (скрыта переключателем) — раздел открыт, и хватит.
@@ -625,6 +638,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           )}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="settings__content" ref={contentRef}>
+          <OpenOption.Provider value={openOption}>
           <ChangedLabels.Provider value={new Set(changedLabels)}>
           <SeeAlsoSlot.Provider value={seeSlot}>
           <RevealFineTuning.Provider value={reveal}>
@@ -658,7 +672,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
                 onOpenSpeakers={() => setSection("speakers")} />
             </AsrSection>
           ) : section === "speakers" ? (
-            <SpeakersSection draft={draft} set={set} endpoint={endpoint} />
+            <SpeakersSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
           ) : section === "dictionary" ? (
             <DictionarySection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "models" ? (
@@ -693,6 +707,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           </RevealFineTuning.Provider>
           </SeeAlsoSlot.Provider>
           </ChangedLabels.Provider>
+          </OpenOption.Provider>
           </div>
         </div>
       </div>

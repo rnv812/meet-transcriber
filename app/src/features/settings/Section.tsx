@@ -1,10 +1,11 @@
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Disclosure } from "../../ui/Disclosure";
 import { radioKeys, Segmented as SegmentedControl } from "../../ui/Segmented";
 import { Tip } from "../../ui/Tip";
+import type { SectionId } from "./settingsIndex";
 
 /**
  * Подписи строк текущего раздела, чьё значение в черновике отличается от
@@ -227,6 +228,112 @@ export function SeeAlso({ head = false, children }: { head?: boolean; children: 
   const slot = useContext(SeeAlsoSlot);
   if (head && slot) return createPortal(<span className="see-also">{children}</span>, slot);
   return <p className="muted sdesc see-also">{children}</p>;
+}
+
+/**
+ * Опция, к которой ведёт ссылка: подпись строки (как в индексе поиска),
+ * раздел (по умолчанию — открытый) и `scope` — селектор блока, внутри
+ * которого искать строку, если подпись в разделе не одна (строки
+ * «Видеокарта» и «Процессор» в «Распознавании»: `[data-device="cpu"]`).
+ */
+export type OptionTarget = { to: string; section?: SectionId; scope?: string };
+
+/**
+ * Перейти к опции: SettingsPane открывает раздел, раскрывает «Тонкую
+ * настройку» и прокручивает к строке — так же, как выбор в поиске. Нет
+ * (раздел отрисован отдельно, в тестах) — части строки «Как сейчас» без ссылок.
+ */
+export const OpenOption = createContext<((target: OptionTarget) => void) | null>(null);
+
+/** Часть строки «Как сейчас настроено»: текст и опция, к которой он ведёт. */
+export type NowPart = OptionTarget & { text: string };
+
+/**
+ * «Как сейчас настроено» (0.6.2): одна строка о сохранённых настройках
+ * раздела (не о черновике), каждая часть — ссылка к своей опции.
+ */
+export function NowLine({ parts }: { parts: NowPart[] }) {
+  const open = useContext(OpenOption);
+  if (parts.length === 0) return null;
+  return (
+    <div role="group" aria-label="Как сейчас настроено" className="snow">
+      <span className="snow__lead">Сейчас настроено:</span>{" "}
+      {parts.map((p, i) => (
+        <Fragment key={`${p.to}-${i}`}>
+          {i > 0 && <span aria-hidden="true"> · </span>}
+          {open ? <Button variant="link" onClick={() => open(p)}>{p.text}</Button> : <span>{p.text}</span>}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/** Модель, которую придётся скачать под подобранные значения. */
+export type FitDownload = { id: string; title: string; size_gb: number; why: string };
+
+/** Что подобрано: для какой машины, какие правки (текстом) и что скачать (null — неизвестно). */
+export type FitPlan = { title: string; changes: string[]; downloads: FitDownload[] | null };
+
+/** Гигабайты по-русски: «0,45 ГБ», «3,1 ГБ». */
+export const gbText = (gb: number): string => `${String(Number(gb.toFixed(2))).replace(".", ",")} ГБ`;
+
+/**
+ * «Подобрать под этот компьютер» (0.6.2): кнопка кладёт значения `plan` в
+ * черновик (`onApply`) и показывает, что изменилось и сколько придётся
+ * скачать; пишет обычное «Сохранить». Пока сведения о машине загружаются —
+ * недоступна; правок нет (черновик уже такой) — «Уже подобрано».
+ */
+export function FitPanel({ state, plan, downloadNote, onApply }: {
+  state: "loading" | "unavailable" | "ready";
+  /** Подбор для этой машины; `changes` — отличия от черновика. */
+  plan: FitPlan | null;
+  /** Где скачать модели (ссылка на блок). */
+  downloadNote?: ReactNode;
+  onApply: () => void;
+}) {
+  // Что показали после нажатия: список правок на тот момент (после него черновик уже совпадает).
+  const [shown, setShown] = useState<FitPlan | null>(null);
+  const ready = state === "ready" && plan !== null;
+  const matched = ready && plan.changes.length === 0;
+  const visible = matched ? shown : null;
+  const apply = () => {
+    if (!plan) return;
+    setShown(plan);
+    onApply();
+  };
+  const total = visible?.downloads?.reduce((sum, d) => sum + d.size_gb, 0) ?? 0;
+  return (
+    <div className="fit">
+      <div className="fit__bar">
+        <Button onClick={apply} disabled={!ready || matched}>{matched ? "Уже подобрано" : "Подобрать под этот компьютер"}</Button>
+        {state === "loading" && <span className="fit__note">Узнаю, что это за компьютер…</span>}
+        {state === "unavailable" && <span className="fit__note">Сведения о компьютере недоступны</span>}
+      </div>
+      <div aria-live="polite">
+        {visible && (
+          <div className="fit__result">
+            <p className="fit__title">{visible.title}</p>
+            <ul className="fit__list" aria-label="Что изменится">
+              {visible.changes.map((c) => <li key={c}>{c}</li>)}
+            </ul>
+            {visible.downloads === null ? (
+              <p className="fit__text">Сколько скачать — неизвестно: список моделей не загрузился.</p>
+            ) : visible.downloads.length === 0 ? (
+              <p className="fit__text">Скачивать ничего не нужно.</p>
+            ) : (
+              <>
+                <ul className="fit__list" aria-label="Что скачать">
+                  {visible.downloads.map((d) => <li key={d.id}>{d.title} — {gbText(d.size_gb)} ({d.why})</li>)}
+                </ul>
+                <p className="fit__text">Всего {gbText(total)}.{downloadNote && <> {downloadNote}</>}</p>
+              </>
+            )}
+            <p className="fit__text">Применится после «Сохранить».</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** Тип сырых настроек: структуру определяет резидент, окно правит по секциям. */

@@ -16,7 +16,7 @@ const ep = { base: "/api", token: null };
 function Harness({ initial, onDraft }: { initial: Raw; onDraft?: (d: Raw) => void }) {
   const [draft, setDraft] = useState<Raw>(initial);
   return (
-    <SpeakersSection draft={draft} endpoint={ep}
+    <SpeakersSection draft={draft} saved={initial} endpoint={ep}
       set={(g, k, v) => setDraft((cur) => {
         const next = { ...cur, [g]: { ...(cur[g] ?? {}), [k]: v } };
         onDraft?.(next);

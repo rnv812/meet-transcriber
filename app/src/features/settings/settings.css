@@ -361,6 +361,21 @@
  * заливки, с причиной.
  */
 .asr-now { display: block; margin-top: 2px; color: var(--ink-2); }
+
+/*
+ * «Как сейчас настроено» над карточками раздела: одна строка, части — ссылки
+ * к своим опциям; «Подобрать под этот компьютер» — кнопка, под ней что
+ * изменится и сколько скачать.
+ */
+.snow { margin: 0 0 var(--s-3); font-size: var(--text-sm); line-height: 1.6; color: var(--ink-2); }
+.snow__lead { color: var(--ink-3); }
+.fit { margin: var(--s-3) 0 var(--s-2); }
+.fit__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.fit__note { font-size: var(--text-sm); color: var(--ink-3); }
+.fit__result { margin-top: var(--s-2); font-size: var(--text-sm); line-height: 1.5; color: var(--ink-2); }
+.fit__title { margin: 0 0 4px; color: var(--ink); }
+.fit__list { margin: 0 0 4px; padding-left: var(--s-4); }
+.fit__text { margin: 0 0 4px; }
 .asr-intro { margin: var(--s-3) 0 var(--s-1); line-height: 1.5; }
 .asr-device {
   margin: var(--s-3) 0; padding: 2px var(--s-4); border-radius: var(--r-lg);

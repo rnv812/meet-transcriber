@@ -13,10 +13,8 @@
  * `asr.resolve_device`, включая движок профиля CPU).
  */
 
-import { useEffect, useId, useState, type ReactNode } from "react";
-import {
-  type Endpoint, type EngineState, type Model, type ModelsState, GIGAAM_PREFIX, getEngine, getModels, isGigaam,
-} from "../../lib/api";
+import { useId, useState, type ReactNode } from "react";
+import { type EngineState, type Model, type ModelsState, GIGAAM_PREFIX, isGigaam } from "../../lib/api";
 import { Button } from "../../ui/Button";
 import { Select, type SelectOption } from "../../ui/Select";
 import { fieldClass } from "./fields";
@@ -30,7 +28,7 @@ const GIGAAM_FALLBACK = [
   { name: "v3_e2e_rnnt", title: "GigaAM v3 — русский" },
   { name: "v3_e2e_ctc", title: "GigaAM v3 CTC — русский" },
 ];
-const DEFAULT_GIGAAM = "v3_e2e_rnnt";
+export const DEFAULT_GIGAAM = "v3_e2e_rnnt";
 const OTHER = "\u0000other";
 /** Ширина списка модели GigaAM в строке: под самое длинное название. */
 const SELECT_WIDTH = 260;
@@ -88,8 +86,13 @@ function secondaryNote(row: AsrDevice, device: string, gpu: GpuState): string {
 const whisperModels = (models: ModelsState | null) =>
   (models?.items ?? []).filter((m) => m.kind === "asr" && !isGigaam(m) && m.backend !== "mlx-whisper");
 
-const modelTitle = (models: ModelsState | null, id: string) =>
+export const modelTitle = (models: ModelsState | null, id: string) =>
   models?.items.find((m) => m.id === id)?.title ?? id;
+
+/** Название модели GigaAM по имени без префикса: из каталога, иначе из запасного списка. */
+export const gigaamTitle = (models: ModelsState | null, name: string) =>
+  models?.items.find((m) => m.id === GIGAAM_PREFIX + name)?.title
+    ?? GIGAAM_FALLBACK.find((m) => m.name === name)?.title ?? `GigaAM ${name}`;
 
 /** Пункт списка моделей: название и справа серым — скачана ли. */
 function modelOption(m: Model): SelectOption {
@@ -157,7 +160,7 @@ function DeviceRow({ device, draft, set, models, gpu, active, otherUsesGigaam }:
 
   return (
     <section className={`asr-device asr-device--${state}`} role="group" aria-labelledby={`${uid}-title`}
-      data-state={state}>
+      data-state={state} data-device={device}>
       <div className="asr-device__head">
         <span id={`${uid}-title`} className="asr-device__title">{TITLE[device]}</span>
         {active && !unavailable && <span className="badge badge--fresh">используется</span>}
@@ -206,23 +209,19 @@ function DeviceRow({ device, draft, set, models, gpu, active, otherUsesGigaam }:
   );
 }
 
-/** Устройство, строки видеокарты и процессора. Состояние движка и каталог моделей — свои запросы. */
-export function AsrChoice({ draft, saved, set, endpoint, help, onOpenEngine }: {
-  draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint; help?: ReactNode;
+/**
+ * Устройство, строки видеокарты и процессора. Состояние движка и каталог
+ * моделей загружает раздел (AsrSection): они нужны и строке «Как сейчас», и
+ * подбору под компьютер.
+ */
+export function AsrChoice({ draft, saved, set, engine, engineTried, models, help, onOpenEngine }: {
+  draft: Raw; saved: Raw; set: SetFn; help?: ReactNode;
+  /** Состояние движка (`/engine`); null — не загрузилось или ещё грузится (`engineTried`). */
+  engine: EngineState | null; engineTried: boolean;
+  models: ModelsState | null;
   /** Прокрутить к блоку «Движок и модели» (скачать модели). */
   onOpenEngine?: () => void;
 }) {
-  const [engine, setEngine] = useState<EngineState | null>(null);
-  const [engineTried, setEngineTried] = useState(false);
-  const [models, setModels] = useState<ModelsState | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void getEngine(endpoint).then((e) => { if (alive) setEngine(e); }, () => {})
-      .finally(() => { if (alive) setEngineTried(true); });
-    void getModels(endpoint).then((m) => { if (alive) setModels(m); }, () => {});
-    return () => { alive = false; };
-  }, [endpoint]);
-
   const asr = draft.asr ?? {};
   const device = String(asr.device ?? "auto");
   const gpu = gpuState(engine);

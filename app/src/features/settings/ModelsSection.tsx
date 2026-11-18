@@ -15,6 +15,14 @@
  * `llm.provider`/`base_url`, поэтому после сохранения `llm` и после «Проверить»
  * (резидент сбрасывает кэш) сведения перечитываются. «Проверить» зовёт модель
  * по сохранённым настройкам — до полутора минут.
+ *
+ * Сверху (0.6.2) — «Как сейчас настроено» по сохранённым настройкам и
+ * «Подобрать под этот компьютер» (`modelsFit`): включённые модели, чьей
+ * программы на этом компьютере нет (Claude Code, Codex, OpenCode — «не
+ * найден»), выключаются. Ничего не включается и модель по умолчанию не
+ * меняется: текст встречи не уходит новой модели и новый автоматический
+ * вызов не появляется без решения человека. Локальная модель не
+ * выключается: её сервер может быть просто не запущен.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -28,7 +36,7 @@ import { Select } from "../../ui/Select";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Tip } from "../../ui/Tip";
 import { fieldClass } from "./fields";
-import { FineTuning, Radio, Row, SettingsCard, type Raw, type SetFn } from "./Section";
+import { FineTuning, FitPanel, NowLine, Radio, Row, SettingsCard, type FitPlan, type NowPart, type Raw, type SetFn } from "./Section";
 import { LocalModelRows, LocalViaProxyRow } from "./LocalModelRows";
 import { ProviderTip } from "./tips";
 import { PRIVACY_CLOUD, PRIVACY_LOCAL } from "../../lib/llm";
@@ -221,6 +229,49 @@ export const AUTO_SHORT = "первая готовая из включённых
 export const AUTO_ORDER = "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode — только явным выбором)";
 
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
+/** Название модели для строк «Как сейчас» (и в «Ассистенте»). */
+export const providerTitle = titleOf;
+
+/** Модели, у которых резидент ищет программу на машине (`available[…].found`). */
+const PROGRAMS = [CLAUDE, CODEX, OPENCODE];
+
+/**
+ * Подбор под компьютер: выключить включённые модели, чьей программы на
+ * машине нет. Модель по умолчанию остаётся, у «Авто» — хотя бы одна своя.
+ */
+export function modelsFit(llm: Record<string, unknown> | undefined, info: AssistantInfo): { plan: FitPlan; enabled: string[] } {
+  const chosen = String(llm?.provider ?? "auto");
+  const enabled = enabledOf(llm);
+  let missing = enabled.filter((p) => PROGRAMS.includes(p) && p !== chosen && info.available[p]?.found === false);
+  if (chosen === "auto" && !enabled.some((p) => AUTO_CANDIDATES.includes(p) && !missing.includes(p))) {
+    missing = missing.filter((p) => !AUTO_CANDIDATES.includes(p));
+  }
+  const found = PROGRAMS.filter((p) => info.available[p]?.found === true).map(titleOf);
+  return {
+    enabled: enabled.filter((p) => !missing.includes(p)),
+    plan: {
+      title: `${found.length > 0 ? `На этом компьютере найдены: ${found.join(", ")}` : "На этом компьютере не найдено ни одной программы моделей"}. `
+        + "Подбор выключает модели, которых здесь нет, и ничего не включает",
+      changes: missing.map((p) => `Выключить ${titleOf(p)} — не найден на этом компьютере`),
+      downloads: [],
+    },
+  };
+}
+
+/** «Как сейчас» по сохранённым настройкам: модель по умолчанию, включённые, анализ после расшифровки. */
+export function modelsNow(saved: Raw, info: AssistantInfo | null): NowPart[] {
+  const provider = String(saved.llm?.provider ?? "auto");
+  const now = info?.setting === "auto" && info.provider ? ` (сейчас ${titleOf(info.provider)})` : "";
+  const enabled = enabledOf(saved.llm).map(titleOf);
+  return [
+    { text: `по умолчанию — ${provider === "auto" ? `Авто${now}` : titleOf(provider)}`, to: "Модели" },
+    { text: enabled.length > 0 ? `включены: ${enabled.join(", ")}` : "ни одна не включена", to: "Модели" },
+    {
+      text: saved.analysis?.auto !== false ? "анализ после расшифровки" : "без анализа после расшифровки",
+      to: "Анализировать встречу после расшифровки",
+    },
+  ];
+}
 
 type Check = { busy: boolean; ok?: boolean; text?: string };
 
@@ -358,9 +409,13 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
   const ocModel = String(llm("opencode_model") ?? "");
   const ocModelProblem = opencodeModelError(ocModel);
 
+  const fit = info ? modelsFit(draft.llm, info) : null;
   return (
     <>
+      <NowLine parts={modelsNow(saved, info)} />
       <SettingsCard title="Провайдеры">
+        <FitPanel state={info ? "ready" : infoError ? "unavailable" : "loading"} plan={fit?.plan ?? null}
+          onApply={() => { if (fit) set("llm", "enabled", fit.enabled); }} />
         <Row label="Модели"
           hint="Включённые можно выбрать у действий карточки. Модель по умолчанию готовит анализ, итоги и названия автоматически и ведёт живого ассистента"
           help={<ProviderTip />} stack>

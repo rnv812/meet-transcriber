@@ -4,13 +4,19 @@
  * прежде свой раздел); в «Тонкой настройке» внизу — уточнение времени слов.
  * Порог узнавания голоса и одновременная речь — в «Спикерах», термины и
  * исправления — в «Словаре» (0.4).
+ *
+ * Сверху (0.6.2) — «Как сейчас настроено» по сохранённым настройкам и
+ * «Подобрать под этот компьютер» (asrFit): значения — в черновик, пишет
+ * «Сохранить». Состояние движка и каталог моделей загружает раздел.
  */
 
-import type { ReactNode } from "react";
-import { type Endpoint, GIGAAM_PREFIX } from "../../lib/api";
+import { useEffect, useState, type ReactNode } from "react";
+import { type Endpoint, type EngineState, type ModelsState, GIGAAM_PREFIX, getEngine, getModels } from "../../lib/api";
+import { Button } from "../../ui/Button";
 import { AsrChoice, backendOf } from "./AsrChoice";
+import { asrFit, asrNow } from "./asrFit";
 import { TextRow } from "./fields";
-import { FineTuning, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { FineTuning, FitPanel, NowLine, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 import { AsrModelTip } from "./tips";
 
 /**
@@ -42,16 +48,37 @@ export function AsrSection({ draft, saved, set, endpoint, onOpenEngine, children
   children?: ReactNode;
 }) {
   const v = (k: string) => draft.asr?.[k];
+  const [engine, setEngine] = useState<EngineState | null>(null);
+  const [engineTried, setEngineTried] = useState(false);
+  const [models, setModels] = useState<ModelsState | null>(null);
+  const [modelsTried, setModelsTried] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void getEngine(endpoint).then((e) => { if (alive) setEngine(e); }, () => {})
+      .finally(() => { if (alive) setEngineTried(true); });
+    void getModels(endpoint).then((m) => { if (alive) setModels(m); }, () => {})
+      .finally(() => { if (alive) setModelsTried(true); });
+    return () => { alive = false; };
+  }, [endpoint]);
+
+  // Подбор ждёт и каталог: в нём размеры моделей и какие из них только русские.
+  const fitState = !engineTried || !modelsTried ? "loading" : engine ? "ready" : "unavailable";
+  const fit = fitState === "ready" && engine ? asrFit(engine, draft.asr, models) : null;
   return (
     <>
+      {engineTried && <NowLine parts={asrNow(saved, engine, models)} />}
       <SettingsCard title="Когда расшифровывать">
         <Switch label="Расшифровывать сразу после записи" value={Boolean(draft.recording?.auto_transcribe)}
           hint="Включено — расшифровка встаёт в очередь, как только запись остановлена; выключено — по кнопке «Расшифровать» в карточке"
           onChange={(x) => set("recording", "auto_transcribe", x)} />
       </SettingsCard>
       <SettingsCard title="Устройство и модель">
-        <AsrChoice draft={draft} saved={saved} set={set} endpoint={endpoint} help={<AsrModelTip />}
-          onOpenEngine={onOpenEngine} />
+        <FitPanel state={fitState} plan={fit?.plan ?? null}
+          downloadNote={<>Скачать модели — в блоке{" "}
+            <Button variant="link" onClick={onOpenEngine}>«Модели распознавания»</Button>.</>}
+          onApply={() => { for (const [k, x] of Object.entries(fit?.values ?? {})) set("asr", k, x); }} />
+        <AsrChoice draft={draft} saved={saved} set={set} engine={engine} engineTried={engineTried} models={models}
+          help={<AsrModelTip />} onOpenEngine={onOpenEngine} />
       </SettingsCard>
       <SettingsCard title="Речь">
         <TextRow id="asr-language" label="Язык речи" short
