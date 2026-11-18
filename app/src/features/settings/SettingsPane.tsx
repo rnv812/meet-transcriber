@@ -26,10 +26,15 @@
  * меню; выбор открывает раздел, раскрывает «Тонкую настройку» (если строка в
  * ней), прокручивает к строке и подсвечивает её на 1,5 с. Пока раздел грузит
  * свои данные (индикатор загрузки, `aria-busy`), поиск ждёт их, а не
- * фиксированное время. Меню и индекс — `settingsIndex.ts`.
+ * фиксированное время. Строка, скрытая выключенным переключателем (`requires`
+ * в индексе): раздел открыт, первый выключенный переключатель подсвечен, под
+ * ним строка «Включите «…», чтобы увидеть «…»» (`aria-live`); она держится,
+ * пока переключатель не изменён или не выбран другой результат. Меню и индекс —
+ * `settingsIndex.ts`.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type MutableRefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   type Devices, type Endpoint, type Processes,
   NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
@@ -192,6 +197,19 @@ export function findRow(root: ParentNode, label: string): HTMLElement | null {
   return null;
 }
 
+/**
+ * Первый выключенный переключатель из цепочки условий строки (от внешнего к
+ * внутреннему); нет такого — null. Переключателя нет в окне (его самого
+ * скрыл внешний) — пропускается.
+ */
+function firstOffSwitch(root: ParentNode, requires: readonly string[]): string | null {
+  for (const label of requires) {
+    const sw = findRow(root, label)?.querySelector<HTMLElement>("[role=switch]");
+    if (sw?.getAttribute("aria-checked") === "false") return label;
+  }
+  return null;
+}
+
 /** Меню разделов: 220 px по макету, шире 280 — пустое место; тексту настроек справа — не меньше 420 px. */
 const SETTINGS_MENU = { def: 220, min: 180, max: 280, reserve: 420 };
 
@@ -224,6 +242,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   const [query, setQuery] = useState("");
   const [jump, setJump] = useState<{ entry: SettingsEntry; tick: number } | null>(null);
   const [reveal, setReveal] = useState(0);
+  // Строка найдена, но скрыта выключенным переключателем: запись и место под ним для подсказки.
+  const [needs, setNeeds] = useState<{ entry: SettingsEntry; label: string } | null>(null);
+  const [needsSlot, setNeedsSlot] = useState<HTMLElement | null>(null);
   const jumps = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -232,6 +253,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     setSectionState(id);
     setReveal(0);
     setBlock(null);
+    setNeeds(null);
   };
   /** Раздел и прокрутка к его блоку (ссылки на бывший раздел, ставший блоком). */
   const openBlock = (id: SectionId, to: BlockId) => {
@@ -246,6 +268,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     setSectionState(entry.section);
     setBlock(null);
     setReveal(entry.advanced ? tick : 0);
+    setNeeds(null);
     setJump({ entry, tick });
   };
   const [settings, setSettings] = useState<Raw | null>(null);
@@ -326,6 +349,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
         // Раздел ещё грузит свои данные (настройки, движок, каталог моделей) — ждать их;
         // данные пришли, а строки так и нет (скрыта переключателем) — раздел открыт, и хватит.
         if (root.querySelector(BUSY)) return false;
+        const off = jump.entry.requires ? firstOffSwitch(root, jump.entry.requires) : null;
+        setNeeds(off ? { entry: jump.entry, label: off } : null);
         finish();
         return true;
       }
@@ -344,6 +369,43 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     }
     return () => watch?.disconnect();
   }, [jump, section, settings]);
+
+  // Подсказка под выключенным переключателем-условием: подсветить его, дописать строку под ним;
+  // переключатель изменён — строка уходит и поиск повторяется (искомая строка или следующее условие).
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!needs || !root) return;
+    const row = findRow(root, needs.label);
+    const sw = row?.querySelector<HTMLElement>("[role=switch]");
+    if (!row || !sw || needs.entry.section !== section) {
+      setNeeds(null);
+      return;
+    }
+    const slot = document.createElement("div");
+    slot.className = "setting-needs";
+    slot.setAttribute("role", "status");
+    slot.setAttribute("aria-live", "polite");
+    row.after(slot);
+    setNeedsSlot(slot);
+    row.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+    sw.focus({ preventScroll: true });
+    row.classList.add(FOUND_CLASS);
+    const fade = setTimeout(() => row.classList.remove(FOUND_CLASS), HIGHLIGHT_MS);
+    const watch = new MutationObserver(() => {
+      if (sw.getAttribute("aria-checked") !== "false") {
+        setNeeds(null);
+        setJump({ entry: needs.entry, tick: ++jumps.current });
+      }
+    });
+    watch.observe(sw, { attributes: true, attributeFilter: ["aria-checked"] });
+    return () => {
+      clearTimeout(fade);
+      watch.disconnect();
+      row.classList.remove(FOUND_CLASS);
+      slot.remove();
+      setNeedsSlot(null);
+    };
+  }, [needs, section]);
 
   const set: SetFn = (group, key, value) => {
     setNotice(null);
@@ -492,6 +554,10 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           <div className="settings__content" ref={contentRef}>
           <SeeAlsoSlot.Provider value={seeSlot}>
           <RevealFineTuning.Provider value={reveal}>
+          {needs && needsSlot && createPortal(
+            <p className="setting-needs__text">
+              Включите «{needs.label}», чтобы увидеть «{needs.entry.label}»
+            </p>, needsSlot)}
           {!settings && section !== "about" && section !== "diagnostics" ? (
             error ? <EmptyState title="Настройки недоступны" /> : <Loading label="Загружаю настройки…" />
           ) : section === "app" ? (

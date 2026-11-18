@@ -10,6 +10,7 @@
  */
 
 import { OS_TEXT } from "../../lib/platform";
+import { FREEDOM_LABEL, PARTICIPANT_LABEL } from "./ParticipantRows";
 
 export type SectionId =
   | "app" | "sound" | "auto" | "asr" | "speakers" | "dictionary"
@@ -55,7 +56,15 @@ export type SettingsEntry = {
   keywords?: string[];
   /** Строка в «Тонкой настройке» раздела. */
   advanced?: boolean;
+  /**
+   * Подписи переключателей, под которыми строка скрыта, от внешнего к
+   * внутреннему: пока какой-то выключен, строки в окне нет. Поиск называет
+   * первый выключенный («Включите «…», чтобы увидеть «…»»).
+   */
+  requires?: string[];
 };
+
+const UNDER_PARTICIPANT = [PARTICIPANT_LABEL];
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
   // Общее
@@ -124,23 +133,23 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "models", label: "Прокси для подключения к моделям", keywords: ["proxy", "сеть"] },
   { section: "models", label: "Локальную модель — через прокси", keywords: ["proxy"], advanced: true },
   { section: "assistant", label: "Ассистент — участник встречи", hint: "Агент, который пишет во время встречи", keywords: ["участник", "агент"] },
-  { section: "assistant", label: "Профиль по умолчанию", hint: "Рабочая встреча или личный", keywords: ["личный", "рабочая"] },
-  { section: "assistant", label: "Как часто писать", keywords: ["частота", "реже", "чаще"] },
+  { section: "assistant", label: "Профиль по умолчанию", hint: "Рабочая встреча или личный", keywords: ["личный", "рабочая"], requires: UNDER_PARTICIPANT },
+  { section: "assistant", label: "Как часто писать", keywords: ["частота", "реже", "чаще"], requires: UNDER_PARTICIPANT },
   {
     section: "assistant", label: "Расширенные возможности ассистента (файлы вне встречи, MCP, веб) — по согласию",
-    keywords: ["mcp", "веб", "свобода", "согласие"],
+    keywords: ["mcp", "веб", "свобода", "согласие"], requires: UNDER_PARTICIPANT,
   },
   {
     section: "assistant", label: "Нажимать кнопки ассистента голосом", hint: "Сказать надпись кнопки вслух",
-    keywords: ["голос", "кнопки", "voice_buttons", "вслух"],
+    keywords: ["голос", "кнопки", "voice_buttons", "вслух"], requires: UNDER_PARTICIPANT,
   },
   {
     section: "assistant", label: "Действия ассистента", hint: "Действует сам или спрашивает каждое действие",
-    keywords: ["автомод", "разрешить", "подтверждение", "agent_mode"],
+    keywords: ["автомод", "разрешить", "подтверждение", "agent_mode"], requires: [PARTICIPANT_LABEL, FREEDOM_LABEL],
   },
   { section: "assistant", label: "База знаний для ассистента", hint: "Папка с материалами", keywords: ["obsidian", "папка", "kb"] },
-  { section: "assistant", label: "Показывать ассистенту карту: базу знаний и прошлые встречи группы", keywords: ["карта", "прошлые встречи"] },
-  { section: "assistant", label: "Не показывать ассистенту", hint: "Исключённые папки базы знаний", keywords: ["исключения", "исключённые"] },
+  { section: "assistant", label: "Показывать ассистенту карту: базу знаний и прошлые встречи группы", keywords: ["карта", "прошлые встречи"], requires: UNDER_PARTICIPANT },
+  { section: "assistant", label: "Не показывать ассистенту", hint: "Исключённые папки базы знаний", keywords: ["исключения", "исключённые"], requires: UNDER_PARTICIPANT },
   {
     section: "assistant", label: "Окно живой расшифровки, с", hint: "Как часто расшифровывается новый звук",
     keywords: ["живая расшифровка", "секунды"], advanced: true,

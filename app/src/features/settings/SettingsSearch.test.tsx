@@ -176,3 +176,64 @@ test("своя «×» вместо системной: очищает запро
   expect(onQuery).toHaveBeenLastCalledWith("");
   expect(screen.getByRole("combobox", { name: "Поиск по настройкам" })).toHaveFocus();
 });
+
+// Строка под выключенным переключателем: поиск открывает раздел, подсвечивает условие и говорит, что включить.
+const FREEDOM = "Расширенные возможности ассистента (файлы вне встречи, MCP, веб) — по согласию";
+const withAssist = (assist: Record<string, unknown>) =>
+  vi.mocked(api.getSettings).mockResolvedValue(structuredClone({ ...settings, assist }));
+const pickFound = async (query: string, optionName: string) => {
+  const field = await open();
+  await userEvent.type(field, query);
+  await userEvent.click(screen.getByRole("option", { name: optionName }));
+};
+
+test("скрытая строка: раздел открыт, переключатель-условие подсвечен, под ним подсказка с aria-live", async () => {
+  withAssist({ participant: false });
+  await pickFound("кнопки ассистента", "Ассистент › Нажимать кнопки ассистента голосом");
+  expect(await screen.findByRole("heading", { level: 2, name: "Ассистент" })).toBeInTheDocument();
+  const sw = await screen.findByRole("switch", { name: "Ассистент — участник встречи" });
+  const note = await screen.findByText("Включите «Ассистент — участник встречи», чтобы увидеть «Нажимать кнопки ассистента голосом»");
+  expect(sw.closest(".srow")).toHaveClass("setting-found");
+  expect(sw.closest(".srow")!.nextElementSibling).toContainElement(note);
+  expect(note.closest("[aria-live]")).toHaveAttribute("aria-live", "polite");
+});
+
+test("включили переключатель — подсказка уходит, искомая строка видна и подсвечена", async () => {
+  withAssist({ participant: false });
+  await pickFound("кнопки ассистента", "Ассистент › Нажимать кнопки ассистента голосом");
+  await screen.findByText(/^Включите «Ассистент — участник встречи»/);
+  await userEvent.click(screen.getByRole("switch", { name: "Ассистент — участник встречи" }));
+  const target = await screen.findByRole("switch", { name: "Нажимать кнопки ассистента голосом" });
+  await waitFor(() => expect(target.closest(".srow")).toHaveClass("setting-found"));
+  expect(screen.queryByText(/^Включите «/)).toBeNull();
+});
+
+test("подсказка не гаснет сама, а при выборе другого результата уходит", async () => {
+  withAssist({ participant: false });
+  const field = await open();
+  await userEvent.type(field, "кнопки ассистента");
+  await userEvent.click(screen.getByRole("option", { name: "Ассистент › Нажимать кнопки ассистента голосом" }));
+  await screen.findByText(/^Включите «Ассистент — участник встречи»/);
+  await new Promise((r) => setTimeout(r, HIGHLIGHT_MS + 200));
+  expect(screen.getByText(/^Включите «Ассистент — участник встречи»/)).toBeInTheDocument();
+  await userEvent.type(screen.getByRole("combobox", { name: "Поиск по настройкам" }), "тема");
+  await userEvent.click(screen.getByRole("option", { name: "Общее › Тема" }));
+  await waitFor(() => expect(screen.queryByText(/^Включите «/)).toBeNull());
+});
+
+test("цепочка условий: названо первое выключенное; после его включения — следующее", async () => {
+  withAssist({ participant: false, agent_freedom: false });
+  await pickFound("действия ассистента", "Ассистент › Действия ассистента");
+  await screen.findByText("Включите «Ассистент — участник встречи», чтобы увидеть «Действия ассистента»");
+  await userEvent.click(screen.getByRole("switch", { name: "Ассистент — участник встречи" }));
+  await screen.findByText(`Включите «${FREEDOM}», чтобы увидеть «Действия ассистента»`);
+  expect(screen.queryByText(/«Ассистент — участник встречи», чтобы/)).toBeNull();
+});
+
+test("видимая строка: подсказки нет, поведение прежнее", async () => {
+  withAssist({ participant: true });
+  await pickFound("кнопки ассистента", "Ассистент › Нажимать кнопки ассистента голосом");
+  const target = await screen.findByRole("switch", { name: "Нажимать кнопки ассистента голосом" });
+  await waitFor(() => expect(target.closest(".srow")).toHaveClass("setting-found"));
+  expect(screen.queryByText(/^Включите «/)).toBeNull();
+});

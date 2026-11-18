@@ -473,3 +473,6 @@
   .settings__body { padding: 0 20px 24px; }
   .settings__state { max-width: 160px; }
 }
+
+/* Подсказка поиска под выключенным переключателем-условием: строка в тон пояснениям, отступ как у .srow__hint. */
+.setting-needs__text { margin: 0 0 var(--s-2); color: var(--ink-3); font-size: var(--text-sm); line-height: 1.45; }
