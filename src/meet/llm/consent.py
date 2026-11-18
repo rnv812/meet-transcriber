@@ -25,7 +25,7 @@
 карточкой.
 
 **Всегда запрещено:** закрытые папки (`kb_exclude`), чувствительные пути
-(`sensitive_paths`: ключи SSH и облаков, секреты Claude Code и Codex — `CLI_SECRETS`,
+(`sensitive_paths`: ключи SSH и облаков, секреты Claude Code, Codex, Gemini CLI и Antigravity — `CLI_SECRETS`,
 профили браузеров, хранилища паролей ОС, служебная папка Meet с его токеном,
 `.env` вне встречи), фоновое выполнение (подагенты Task/Agent, Bash с
 `run_in_background`, расписания), обращения к локальным адресам (API Meet),
@@ -1523,16 +1523,19 @@ def _glob_root(pattern: str) -> tuple[str, bool]:
     return "/".join(keep), False
 
 
-# Секреты Claude Code и Codex (0.5 — вместо их папок целиком): ключи входа, настройки
+# Секреты Claude Code, Codex, Gemini CLI и Antigravity (вместо их папок целиком): ключи входа, настройки
 # (в `env` бывают ключи API), связь с редактором (токен в .lock), снимки окружения
 # оболочки, история сессий и резервные копии файлов. Навыки, плагины, команды,
-# агенты, промпты — читать можно (навык берёт из своей папки шаблон).
+# агенты, промпты — читать можно (навык берёт из своей папки шаблон); так же
+# `~/.gemini/GEMINI.md` — обычный файл контекста, не секрет.
 CLI_SECRETS = (
     ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json", ".claude/ide",
     ".claude/shell-snapshots", ".claude/session-env", ".claude/projects", ".claude/history.jsonl",
     ".claude/file-history", ".claude/todos", ".claude/debug",
     ".codex/auth.json", ".codex/config.toml", ".codex/sessions", ".codex/archived_sessions",
     ".codex/history.jsonl", ".codex/log",
+    ".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/settings.json", ".gemini/tmp",
+    ".gemini/antigravity", ".gemini/antigravity-cli",
 )
 
 

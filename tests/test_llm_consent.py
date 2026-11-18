@@ -251,6 +251,31 @@ def test_real_secrets_of_claude_code_and_codex_stay_closed(dirs, target):
 
 
 @pytest.mark.parametrize("target", [
+    "{home}/.gemini/oauth_creds.json", "{home}/.gemini/google_accounts.json", "{home}/.gemini/settings.json",
+    "{home}/.gemini/tmp/abc/chats/s.json",
+    "{home}/.gemini/antigravity/state.db", "{home}/.gemini/antigravity-cli/auth.json",
+])
+def test_secrets_of_gemini_and_antigravity_stay_closed(dirs, target):
+    """Файлы входа Gemini CLI и Antigravity (настольного и CLI) закрыты для чтения."""
+    gate = _gate(dirs, CONFIRM)
+    path = target.format(**{k: str(v) for k, v in dirs.items()})
+    assert gate.decide("Read", {"file_path": path}).why == "sensitive", path
+    assert gate.decide("Bash", {"command": f'cat "{path}"'}).outcome == DENY, path
+
+
+def test_gemini_context_file_is_not_a_secret(dirs):
+    gate = _gate(dirs, CONFIRM)
+    path = dirs["home"] / ".gemini" / "GEMINI.md"
+    assert gate.decide("Read", {"file_path": str(path)}).why != "sensitive"
+
+
+def test_cli_secrets_list_is_in_the_module_docstring():
+    for name in ("Gemini", "Antigravity"):
+        assert name in consent.__doc__
+    assert {".gemini/oauth_creds.json", ".gemini/antigravity-cli"} <= set(consent.CLI_SECRETS)
+
+
+@pytest.mark.parametrize("target", [
     "{home}/.claude/skills/newdoc/SKILL.md", "{home}/.claude/skills/newdoc/assets/template.docx",
     "{home}/.claude/plugins/cache/team/newdoc/1.0/skills/newdoc/assets/template.docx",
     "{home}/.claude/commands/review.md", "{home}/.claude/agents/helper.md", "{home}/.codex/prompts/x.md",
