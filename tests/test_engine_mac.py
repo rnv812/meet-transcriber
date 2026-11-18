@@ -182,6 +182,8 @@ def test_components_show_mlx_install_error_on_macos_14(monkeypatch, tmp_path):
 def test_windows_has_no_mlx_step_or_component(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(engine, "gpu", lambda: {"available": False, "name": None})
+    # shutil.which при подменённой win32 на Mac идёт в _winapi, которого там нет.
+    monkeypatch.setattr(engine.shutil, "which", lambda name, *a, **kw: None)
     assert _mlx_component(engine.state()) is None
     for flavor in ("cpu", "cuda"):
         assert not any("mlx" in arg for s in engine.install_steps(flavor) for arg in s)

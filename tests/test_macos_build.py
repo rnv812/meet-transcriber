@@ -246,7 +246,7 @@ def test_workflow_dry_run_skips_windows_and_publishing():
                 "(github.event_name == 'workflow_dispatch' && !inputs.macos_only))") in _job(name), name
     # Пуш в ветку пробного прогона собирает только macOS.
     assert 'branches: ["ci/macos-dry-run"]' in WORKFLOW
-    assert "runs-on: macos-14" in WORKFLOW
+    assert "runs-on: macos-15" in WORKFLOW
     assert 'bash scripts/build_release_macos.sh "$VERSION"' in WORKFLOW
     publish = WORKFLOW[WORKFLOW.index("  publish-macos:"):]
     assert "needs: [release, macos]" in publish
