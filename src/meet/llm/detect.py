@@ -40,6 +40,16 @@ _UNIX_DIRS = (
     "~/.bun/bin",
     "~/.volta/bin",
     "~/.opencode/bin",       # установщик OpenCode (curl -fsSL https://opencode.ai/install | bash)
+    "~/Library/pnpm",        # pnpm add -g на macOS
+    "~/.local/share/pnpm",   # pnpm add -g на Linux
+)
+
+# Папки shim'ов менеджеров версий — после nvm: CLI, поставленный в nvm, важнее
+# shim'а, который может вести на другую версию node. Относительно DATA_DIR
+# менеджера (`MISE_DATA_DIR`, `ASDF_DATA_DIR`) или `~`.
+_UNIX_SHIM_DIRS = (
+    "~/.local/share/mise/shims",
+    "~/.asdf/shims",
 )
 
 # Страница установки OpenCode — подсказка «не найден».
@@ -59,14 +69,29 @@ def _home() -> str:
 
 def _unix_dirs(home: str) -> list[Path]:
     """Папки установки CLI на macOS/Linux, `~` — `home`; у nvm — все версии
-    node, новые первыми."""
-    dirs = [Path(home + d[1:]) if d.startswith("~") else Path(d) for d in _UNIX_DIRS]
+    node, новые первыми. Задана `PNPM_HOME` — её папка первая из pnpm'овских;
+    shim'ы mise и asdf (`MISE_DATA_DIR`/`ASDF_DATA_DIR`, если заданы, и
+    обычные места) — последние, после nvm."""
+    def expand(d: str) -> Path:
+        return Path(home + d[1:]) if d.startswith("~") else Path(d)
+
+    dirs = [expand(d) for d in _UNIX_DIRS]
+    pnpm_home = os.environ.get("PNPM_HOME")
+    if pnpm_home:
+        dirs.append(Path(pnpm_home))
     nvm = Path(home) / ".nvm" / "versions" / "node"
     try:
         versions = sorted(nvm.iterdir(), key=_version_key, reverse=True)
     except OSError:
         versions = []
-    return dirs + [v / "bin" for v in versions]
+    shims = [Path(os.environ[var]) / "shims"
+             for var in ("MISE_DATA_DIR", "ASDF_DATA_DIR") if os.environ.get(var)]
+    shims += [expand(d) for d in _UNIX_SHIM_DIRS]
+    out: list[Path] = []
+    for d in dirs + [v / "bin" for v in versions] + shims:
+        if d not in out:
+            out.append(d)
+    return out
 
 
 def _version_key(folder: Path) -> tuple[int, ...]:

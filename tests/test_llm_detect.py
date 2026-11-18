@@ -89,6 +89,8 @@ def _no_path(monkeypatch, home):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    for var in ("PNPM_HOME", "MISE_DATA_DIR", "ASDF_DATA_DIR"):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(detect, "_UNIX_DIRS",
                         tuple(d for d in detect._UNIX_DIRS if d.startswith("~")))
 
@@ -158,8 +160,56 @@ def test_unix_dirs_cover_common_installs():
     dirs = [str(d).replace("\\", "/") for d in detect._unix_dirs("/Users/u")]
     for d in ("/Users/u/.local/bin", "/Users/u/.claude/local", "/opt/homebrew/bin",
               "/usr/local/bin", "/Users/u/.npm-global/bin", "/Users/u/.bun/bin",
-              "/Users/u/.volta/bin"):
+              "/Users/u/.volta/bin", "/Users/u/Library/pnpm", "/Users/u/.local/share/pnpm",
+              "/Users/u/.local/share/mise/shims", "/Users/u/.asdf/shims"):
         assert d in dirs, d
+
+
+def test_unix_dirs_take_package_manager_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "pn"))
+    monkeypatch.setenv("MISE_DATA_DIR", str(tmp_path / "mise"))
+    monkeypatch.setenv("ASDF_DATA_DIR", str(tmp_path / "asdf"))
+    dirs = detect._unix_dirs("/Users/u")
+    for d in (tmp_path / "pn", tmp_path / "mise" / "shims", tmp_path / "asdf" / "shims"):
+        assert d in dirs, d
+    monkeypatch.delenv("PNPM_HOME")
+    monkeypatch.delenv("MISE_DATA_DIR")
+    monkeypatch.delenv("ASDF_DATA_DIR")
+    dirs = detect._unix_dirs("/Users/u")
+    assert tmp_path / "pn" not in dirs and tmp_path / "mise" / "shims" not in dirs
+
+
+def test_shim_dirs_come_after_nvm(monkeypatch, tmp_path):
+    (tmp_path / ".nvm" / "versions" / "node" / "v22.1.0").mkdir(parents=True)
+    monkeypatch.setenv("MISE_DATA_DIR", str(tmp_path / "mise"))
+    dirs = detect._unix_dirs(str(tmp_path))
+    nvm = dirs.index(tmp_path / ".nvm" / "versions" / "node" / "v22.1.0" / "bin")
+    for shim in (tmp_path / "mise" / "shims", tmp_path / ".asdf" / "shims",
+                 tmp_path / ".local" / "share" / "mise" / "shims"):
+        assert dirs.index(shim) > nvm, shim
+
+
+def test_find_codex_posix_in_library_pnpm(monkeypatch, tmp_path):
+    exe = _unix_cli(tmp_path, "Library/pnpm", "codex")
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_codex() == str(exe)
+
+
+def test_find_codex_posix_in_pnpm_home(monkeypatch, tmp_path):
+    exe = _unix_cli(tmp_path, "custom/pnpm", "codex")
+    _no_path(monkeypatch, tmp_path)
+    monkeypatch.setenv("PNPM_HOME", str(tmp_path / "custom" / "pnpm"))
+    assert detect.find_codex() == str(exe)
+
+
+def test_find_codex_posix_nvm_wins_over_shims(monkeypatch, tmp_path):
+    _unix_cli(tmp_path, ".asdf/shims", "codex")
+    _unix_cli(tmp_path, ".local/share/mise/shims", "codex")
+    nvm = _unix_cli(tmp_path, ".nvm/versions/node/v22.1.0/bin", "codex")
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_codex() == str(nvm)
+    nvm.unlink()
+    assert detect.find_codex() == str(tmp_path / ".local/share/mise/shims" / "codex")
 
 
 def test_claude_not_found_names_the_platform_program(monkeypatch):
