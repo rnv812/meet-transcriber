@@ -66,16 +66,16 @@ beforeEach(() => {
   vi.mocked(shell.pickFolder).mockResolvedValue(null);
 });
 
-/** «Модели ИИ» (0.4): провайдеры, модели Claude Code и OpenCode, локальная модель, прокси. */
+/** «Модели и анализ» (0.6.2; 0.4 — «Модели ИИ»): провайдеры, модели Claude Code и OpenCode, локальная модель, прокси. */
 const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
 /** «Ассистент» (0.4): участник встречи, база знаний, живая расшифровка. */
 const openAssistant = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" />);
 /** Строка модели в таблице «Модели» (0.4: таблица вместо групп). */
 const option = (name: string) => screen.getByRole("row", { name });
 
-test("раздел «Модели ИИ» есть в меню и открывается по initial", async () => {
+test("раздел «Модели и анализ» есть в меню и открывается по initial", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Модели ИИ" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Модели и анализ" })).toHaveAttribute("aria-current", "page");
   expect(await screen.findByRole("radio", { name: "Авто" })).toBeChecked();
 });
 

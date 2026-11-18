@@ -57,9 +57,9 @@ beforeEach(() => {
 const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="export" />);
 const save = () => userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
 
-test("раздел «Экспорт встреч» есть в меню и открывается по initial", async () => {
+test("раздел «Экспорт и Jira» есть в меню и открывается по initial", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Экспорт" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Экспорт и Jira" })).toHaveAttribute("aria-current", "page");
   expect(await screen.findByRole("group", { name: "Папка для встреч" })).toBeInTheDocument();
 });
 

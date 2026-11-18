@@ -253,7 +253,7 @@ export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
           {onOpenSettings
             ? <button type="button" className="link-btn" onClick={onOpenSettings}>настройках</button>
             : "настройках"}
-          {" "}«Анализ встречи».
+          {" "}«Модели и анализ».
         </TipLine>
       </HelpTip>
       <span className="analysis-offer__actions">

@@ -91,7 +91,7 @@ test("основные строки остаются на виду: «Звонк
   expect(within(browsers).getByRole("checkbox", { name: "Google Chrome" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Распознавание" }));
   expect(await screen.findByLabelText("Язык речи")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Модели ИИ" }));
+  await userEvent.click(screen.getByRole("button", { name: "Модели и анализ" }));
   expect(await screen.findByRole("table", { name: "Модели" })).toBeInTheDocument();
   expect(screen.getByLabelText("Адрес сервера")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Дополнительно" }));

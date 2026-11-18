@@ -5,6 +5,7 @@ import * as api from "../../lib/api";
 import { usePeople } from "../../state/usePeople";
 import { CardHeader } from "../card/CardHeader";
 import type { Person } from "../../lib/types";
+import { settingsFor } from "./MyVoice";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -134,7 +135,17 @@ test("«Мой голос»: недоступная кнопка объясня�
   await waitFor(() => expect(derive).toBeDisabled());
   expect(derive).toHaveAccessibleDescription("Сначала установите движок расшифровки — без него голос не разобрать.");
   await userEvent.click(within(mine).getByRole("button", { name: "Открыть настройки" }));
-  expect(onOpenSettings).toHaveBeenCalledWith("engine");
+  // Движок и модели — блок внизу «Распознавания».
+  expect(onOpenSettings).toHaveBeenCalledWith("asr#engine");
+});
+
+test.each([
+  ["Сначала установите движок расшифровки — без него голос не разобрать", "asr#engine"],
+  ["модель голосов не скачана (скачайте модель диаризации в «Распознавание» → «Модели распознавания»)", "asr#engine"],
+  ["Нужен токен Hugging Face — без него модель голосов не загрузить", "speakers"],
+  ["Идёт запись встречи", null],
+])("settingsFor(%j) — %j", (reason, place) => {
+  expect(settingsFor(reason)).toBe(place);
 });
 
 test("поиск «Найти человека» ищет и по «Кто это»", async () => {

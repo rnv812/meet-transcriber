@@ -1,7 +1,10 @@
 /**
  * Настройки: слева меню — заголовок «Настройки», поиск, шесть групп («Общее»,
- * «Запись», «Расшифровка», «ИИ», «Встречи», «Система») и 17 узких разделов
- * (0.4); справа — колонка раздела (по центру, не шире 760 px; шапка с
+ * «Запись», «Расшифровка», «ИИ», «Встречи», «Система») и 13 разделов
+ * (0.6.2; в 0.4 — 17: «Оформление» и «Приложение» сведены в «Общее», «Движок и
+ * модели» — в «Распознавание», «Анализ встречи» — в «Модели и анализ», «Jira» —
+ * в «Экспорт и Jira»; ключи настроек прежние); справа — колонка раздела (по
+ * центру, не шире 760 px; шапка с
  * «Сохранить» и строкой «см. также» — над той же колонкой), внутри —
  * подгруппы-карточки. Плотность обычная: строки, поля и кнопки — 32 px по
  * одной линейке (доводка 0.4, C1).
@@ -16,12 +19,14 @@
  * App); «Сбросить…» тоже спрашивает.
  *
  * Прежние id разделов (глубокие ссылки трея, карточек, оболочки) ведут в новые
- * через `LEGACY_SECTION`.
+ * через `LEGACY_SECTION`; если прежний раздел стал блоком, окно прокручивает к
+ * нему (`data-block` у первой карточки блока).
  *
  * Над меню — «Поиск по настройкам» (SettingsSearch, Ctrl+F): выдача вместо
  * меню; выбор открывает раздел, раскрывает «Тонкую настройку» (если строка в
- * ней), прокручивает к строке и подсвечивает её на 1,5 с. Меню и индекс —
- * `settingsIndex.ts`.
+ * ней), прокручивает к строке и подсвечивает её на 1,5 с. Пока раздел грузит
+ * свои данные (индикатор загрузки, `aria-busy`), поиск ждёт их, а не
+ * фиксированное время. Меню и индекс — `settingsIndex.ts`.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type MutableRefObject } from "react";
@@ -58,7 +63,7 @@ import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { ModelsSection, modelsChangesInvalid } from "./ModelsSection";
 import { RevealFineTuning, SeeAlsoSlot, SettingsCard, type Raw, type SetFn } from "./Section";
 import { SettingsSearch } from "./SettingsSearch";
-import { MENU, MENU_GROUPS, type SectionId, type SettingsEntry } from "./settingsIndex";
+import { type BlockId, MENU, MENU_GROUPS, type SectionId, type SettingsEntry } from "./settingsIndex";
 import { SoundSection } from "./SoundSection";
 import { SpeakersSection } from "./SpeakersSection";
 import "./settings.css";
@@ -66,40 +71,56 @@ import "./settings.css";
 export { modelUsage } from "./AsrSection";
 export type { SectionId } from "./settingsIndex";
 
+/** Куда ведёт ссылка на настройки: раздел и, если нужно, блок в нём («asr#engine»). */
+type Place = SectionId | `${SectionId}#${BlockId}`;
+
 /**
- * Id разделов 0.3.7 → разделы 0.4: глубокие ссылки трея (`{section:"assistant"}`),
- * карточек (`onOpenSettings(...)`), `StorageNotices` (`"engine"`) и событие
- * оболочки `open-section` продолжают работать.
+ * Id разделов 0.3.7 и 0.4 → место в 13 разделах 0.6.2 (раздел#блок): глубокие
+ * ссылки трея (`{section:"assistant"}`), карточек (`onOpenSettings(...)`),
+ * `StorageNotices` (`"engine"`) и событие оболочки `open-section` продолжают
+ * работать. «app» — прежнее «Приложение»: теперь блок в «Общем» (раздел с тем
+ * же id из меню открывается сверху).
  */
-export const LEGACY_SECTION: Record<string, SectionId> = {
-  appearance: "appearance",
-  recording: "app",
+export const LEGACY_SECTION: Record<string, Place> = {
+  appearance: "app#appearance",
+  app: "app#app",
+  recording: "app#app",
   sound: "sound",
   auto: "auto",
   asr: "asr",
-  engine: "engine",
+  engine: "asr#engine",
   export: "export",
+  jira: "export#jira",
   assistant: "assistant",
-  analysis: "analysis",
+  analysis: "models#analysis",
   categories: "categories",
-  markup: "analysis",
+  markup: "models#analysis",
   diagnostics: "diagnostics",
   about: "about",
   advanced: "advanced",
 };
 
-/** Раздел по id (новому или прежнему); неизвестный — undefined. */
-function sectionOf(id: string | undefined): SectionId | undefined {
+const BLOCKS: readonly string[] = ["appearance", "app", "engine", "analysis", "jira"] satisfies BlockId[];
+
+/**
+ * Место по id: прежний id (LEGACY_SECTION), id раздела или «раздел#блок»;
+ * неизвестный — undefined.
+ */
+function placeOf(id: string | undefined): { section: SectionId; block: BlockId | null } | undefined {
   if (!id) return undefined;
-  return MENU.find((m) => m.id === id)?.id ?? (Object.hasOwn(LEGACY_SECTION, id) ? LEGACY_SECTION[id] : undefined);
+  const place: string = Object.hasOwn(LEGACY_SECTION, id) ? LEGACY_SECTION[id]! : id;
+  const [name, block] = place.split("#");
+  const section = MENU.find((m) => m.id === name)?.id;
+  if (!section) return undefined;
+  return { section, block: block && BLOCKS.includes(block) ? block as BlockId : null };
 }
 
-const NO_DRAFT: SectionId[] = ["appearance", "diagnostics", "about"];
+const NO_DRAFT: SectionId[] = ["diagnostics", "about"];
 
 /**
  * Разделы, в которых видна правка ключа `group.key`: точка у раздела в меню.
- * Движок и модели распознавания выбираются только в «Распознавании»; «Движок и
- * модели» — установка и загрузка.
+ * Движок и модели распознавания выбираются в «Распознавании» (там же блок
+ * установки и загрузки).
  */
 export function sectionsOf(group: string, key: string): SectionId[] {
   switch (group) {
@@ -119,11 +140,11 @@ export function sectionsOf(group: string, key: string): SectionId[] {
     case "llm": return ["models"];
     case "assist": return ["assistant"];
     case "agent": return ["advanced"];
-    case "assistant": return key === "auto_title" ? ["analysis"] : ["assistant"];
-    case "analysis": return ["analysis"];
+    case "assistant": return key === "auto_title" ? ["models"] : ["assistant"];
+    case "analysis": return ["models"];
     case "categories": return ["categories"];
-    case "transcript_view": return key === "jira" ? ["analysis", "jira"] : ["analysis"];
-    case "integrations": return key.startsWith("jira") ? ["jira"] : ["advanced"];
+    case "transcript_view": return key === "jira" ? ["models", "export"] : ["models"];
+    case "integrations": return key.startsWith("jira") ? ["export"] : ["advanced"];
     case "hooks": return ["advanced"];
     default: return [];
   }
@@ -141,9 +162,8 @@ export type SettingsGuard = {
 
 /** Где Ctrl+F не уводит к поиску по настройкам: диалоги и всплывающие окна. */
 const FIND_IGNORED = "[role=dialog], [role=alertdialog], [aria-modal=true], .popover";
-/** Сколько раз и как часто искать строку, пока раздел догружает данные. */
-const FIND_TRIES = 20;
-const FIND_RETRY_MS = 100;
+/** Раздел ещё грузит данные (ui/Loading): поиск строки ждёт, пока индикатор не уйдёт. */
+const BUSY = "[aria-busy=true]";
 /** Подсветка найденной строки (0.5: `--surface-2`, гаснет за 2 с — settings.css). */
 export const HIGHLIGHT_MS = 2000;
 const FOUND_CLASS = "setting-found";
@@ -185,7 +205,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   /** Сюда настройки кладут, есть ли несохранённое и как его сохранить (вопрос при уходе — в App). */
   guardRef?: MutableRefObject<SettingsGuard | null>;
   recordingsDir: string | null;
-  /** Открыть сразу этот раздел (id из MENU или прежний из LEGACY_SECTION); неизвестный — «Приложение». */
+  /** Открыть сразу это место (id из MENU, «раздел#блок» или прежний из LEGACY_SECTION); неизвестный — «Общее». */
   initial?: string;
   /** Новый номер — снова перейти в `initial` (повторная просьба оболочки или карточки). */
   initialTick?: number;
@@ -193,7 +213,12 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
    *  "engine" — сразу на шаг движка (переустановка в «Движке и моделях»). */
   onRunWizard?: (step?: "hardware" | "engine") => void;
 }) {
-  const [section, setSectionState] = useState<SectionId>(() => sectionOf(initial) ?? "app");
+  const [section, setSectionState] = useState<SectionId>(() => placeOf(initial)?.section ?? "app");
+  // Прокрутить к блоку раздела (переход по прежнему id): блок и номер просьбы.
+  const [block, setBlock] = useState<{ id: BlockId; tick: number } | null>(() => {
+    const id = placeOf(initial)?.block;
+    return id ? { id, tick: 0 } : null;
+  });
   // Поиск по настройкам: запрос, найденная строка (прокрутить и подсветить) и
   // просьба раскрыть «Тонкую настройку» (номер; 0 — нет, см. RevealFineTuning).
   const [query, setQuery] = useState("");
@@ -206,12 +231,20 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   const setSection = (id: SectionId) => {
     setSectionState(id);
     setReveal(0);
+    setBlock(null);
+  };
+  /** Раздел и прокрутка к его блоку (ссылки на бывший раздел, ставший блоком). */
+  const openBlock = (id: SectionId, to: BlockId) => {
+    setSectionState(id);
+    setReveal(0);
+    setBlock({ id: to, tick: ++jumps.current });
   };
   /** Выбор в выдаче поиска: раздел, при `advanced` — раскрыть «Тонкую настройку», затем строка. */
   const pick = (entry: SettingsEntry) => {
     const tick = ++jumps.current;
     setQuery("");
     setSectionState(entry.section);
+    setBlock(null);
     setReveal(entry.advanced ? tick : 0);
     setJump({ entry, tick });
   };
@@ -247,12 +280,22 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
 
   // Повторная просьба открыть раздел (новый `initialTick`) — даже если он уже был запрошен.
   useEffect(() => {
-    const asked = sectionOf(initial);
+    const asked = placeOf(initial);
     if (asked) {
-      setSectionState(asked);
+      setSectionState(asked.section);
       setReveal(0);
+      setBlock(asked.block ? { id: asked.block, tick: ++jumps.current } : null);
     }
   }, [initial, initialTick]);
+
+  // Блок прежнего раздела: когда раздел отрисован с настройками — прокрутить к его первой карточке.
+  useEffect(() => {
+    if (!block) return;
+    const card = contentRef.current?.querySelector<HTMLElement>(`[data-block="${block.id}"]`);
+    if (!card) return; // настройки ещё грузятся — эффект повторится с ними
+    card.scrollIntoView?.({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+    setBlock((cur) => (cur?.tick === block.tick ? null : cur));
+  }, [block, section, settings]);
 
   // Ctrl+F (⌘F) на панели настроек — к поиску по настройкам (по коду клавиши: и в русской раскладке).
   useEffect(() => {
@@ -267,19 +310,24 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Найденная строка: дождаться раздела (и данных), прокрутить к строке, подсветить на 1,5 с, фокус — на её элемент.
+  // Найденная строка: дождаться раздела и его данных, прокрутить к строке, подсветить, фокус — на её элемент.
   useEffect(() => {
-    if (!jump) return;
-    let tries = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const attempt = () => {
-      const row = contentRef.current ? findRow(contentRef.current, jump.entry.label) : null;
+    const root = contentRef.current;
+    if (!jump || !root) return;
+    let watch: MutationObserver | undefined;
+    const finish = () => {
+      watch?.disconnect();
+      setJump((cur) => (cur?.tick === jump.tick ? null : cur));
+    };
+    /** true — дело сделано: строка найдена или её нет, а ждать уже нечего. */
+    const attempt = (): boolean => {
+      const row = findRow(root, jump.entry.label);
       if (!row) {
-        // Раздел ещё грузит свои данные (движок, «О программе») — подождать немного;
-        // строки так и нет (скрыта переключателем) — раздел открыт, и хватит.
-        if (++tries < FIND_TRIES) timer = setTimeout(attempt, FIND_RETRY_MS);
-        else setJump((cur) => (cur?.tick === jump.tick ? null : cur));
-        return;
+        // Раздел ещё грузит свои данные (настройки, движок, каталог моделей) — ждать их;
+        // данные пришли, а строки так и нет (скрыта переключателем) — раздел открыт, и хватит.
+        if (root.querySelector(BUSY)) return false;
+        finish();
+        return true;
       }
       row.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
       const control = row.querySelector<HTMLElement>(CHECKED_CONTROL) ?? row.querySelector<HTMLElement>(FOCUSABLE_CONTROL)
@@ -287,10 +335,14 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
       control?.focus({ preventScroll: true });
       row.classList.add(FOUND_CLASS);
       setTimeout(() => row.classList.remove(FOUND_CLASS), HIGHLIGHT_MS);
-      setJump((cur) => (cur?.tick === jump.tick ? null : cur));
+      finish();
+      return true;
     };
-    attempt();
-    return () => clearTimeout(timer);
+    if (!attempt()) {
+      watch = new MutationObserver(() => { attempt(); });
+      watch.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy"] });
+    }
+    return () => watch?.disconnect();
   }, [jump, section, settings]);
 
   const set: SetFn = (group, key, value) => {
@@ -440,16 +492,19 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           <div className="settings__content" ref={contentRef}>
           <SeeAlsoSlot.Provider value={seeSlot}>
           <RevealFineTuning.Provider value={reveal}>
-          {!settings && section !== "about" && section !== "diagnostics" && section !== "appearance" ? (
+          {!settings && section !== "about" && section !== "diagnostics" ? (
             error ? <EmptyState title="Настройки недоступны" /> : <Loading label="Загружаю настройки…" />
-          ) : section === "appearance" ? (
-            <SettingsCard>
-              <AppearanceSection endpoint={endpoint} value={appearance ?? DEFAULT_APPEARANCE}
-                onPreview={onAppearance ?? (() => {})} />
-            </SettingsCard>
           ) : section === "app" ? (
-            <AppSection draft={draft} set={set} recordingsDir={recordingsDir}
-              onRunWizard={onRunWizard && (() => onRunWizard("hardware"))} />
+            <>
+              {/* Оформление — мимо черновика: применяется и пишется сразу. */}
+              <SettingsCard title="Оформление" block="appearance">
+                <p className="muted sdesc">Оформление применяется сразу. Остальное в этом разделе — по кнопке «Сохранить».</p>
+                <AppearanceSection endpoint={endpoint} value={appearance ?? DEFAULT_APPEARANCE}
+                  onPreview={onAppearance ?? (() => {})} />
+              </SettingsCard>
+              <AppSection draft={draft} set={set} recordingsDir={recordingsDir}
+                onRunWizard={onRunWizard && (() => onRunWizard("hardware"))} />
+            </>
           ) : section === "sound" ? (
             <SoundSection draft={draft} set={set} devices={devices} endpoint={endpoint}
               onOpenSpeakers={() => setSection("speakers")} />
@@ -458,31 +513,32 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
               onToggle={(v) => void toggleAuto(v)} />
           ) : section === "asr" ? (
             <AsrSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}
-              onOpenEngine={() => setSection("engine")} />
+              onOpenEngine={() => openBlock("asr", "engine")}>
+              <EngineSection endpoint={endpoint} draft={draft} onReinstall={onRunWizard && (() => onRunWizard("engine"))}
+                onOpenSpeakers={() => setSection("speakers")} />
+            </AsrSection>
           ) : section === "speakers" ? (
             <SpeakersSection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "dictionary" ? (
             <DictionarySection draft={draft} set={set} endpoint={endpoint} />
-          ) : section === "engine" ? (
-            <EngineSection endpoint={endpoint} draft={draft} onReinstall={onRunWizard && (() => onRunWizard("engine"))}
-              onOpenAsr={() => setSection("asr")} onOpenSpeakers={() => setSection("speakers")} />
           ) : section === "models" ? (
-            <ModelsSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
+            <ModelsSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}>
+              <AnalysisSection draft={draft} set={set} onOpenJira={() => openBlock("export", "jira")} />
+            </ModelsSection>
           ) : section === "assistant" ? (
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}
               onOpenModels={() => setSection("models")} />
-          ) : section === "analysis" ? (
-            <AnalysisSection draft={draft} set={set} onOpenJira={() => setSection("jira")} />
           ) : section === "categories" ? (
             <SettingsCard>
               <CategoriesSection value={draft.categories} onChange={setCategories} endpoint={endpoint} />
             </SettingsCard>
           ) : section === "export" ? (
-            <SettingsCard>
-              <ExportSection draft={draft} set={set} endpoint={endpoint} />
-            </SettingsCard>
-          ) : section === "jira" ? (
-            <JiraSection draft={draft} set={set} />
+            <>
+              <SettingsCard title="Выгрузка в базу знаний">
+                <ExportSection draft={draft} set={set} endpoint={endpoint} />
+              </SettingsCard>
+              <JiraSection draft={draft} set={set} />
+            </>
           ) : section === "diagnostics" ? (
             <SettingsCard>
               <DiagnosticsPane endpoint={endpoint} />

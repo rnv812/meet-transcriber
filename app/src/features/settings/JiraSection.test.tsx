@@ -33,7 +33,7 @@ const toggle = (name: string) => screen.findByRole("switch", { name });
 
 test("Jira: переключатель и адрес уходят в настройки; негодный адрес не сохраняется", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Jira" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Экспорт и Jira" })).toHaveAttribute("aria-current", "page");
   expect(await toggle("Ссылки на задачи Jira")).toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("button", { name: "Как работают ссылки на Jira" })).toBeInTheDocument();
   const base = screen.getByRole("textbox", { name: "Адрес Jira" });

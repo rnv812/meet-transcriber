@@ -305,7 +305,7 @@ export function App() {
       <ShellResize list={section === "recordings" && !bareLibrary} />
       {/* Итог переноса движка и моделей, остатки в общем кэше, прерванный перенос — где бы ни был человек. */}
       {resident.endpoint && resident.status === "online" && (
-        <StorageNotices endpoint={resident.endpoint} onOpenEngine={() => openSettings("engine")} />
+        <StorageNotices endpoint={resident.endpoint} onOpenEngine={() => openSettings("asr#engine")} />
       )}
       <GroupsLayer ui={groupsUi} />
       {leaving && (

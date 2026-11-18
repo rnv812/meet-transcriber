@@ -4,9 +4,10 @@
  * защита идущей записи. `POST /engine/install` резидента остаётся для CLI,
  * в окне его нет.
  *
- * Раздел «Движок и модели» (EngineSection): состояние движка, где хранить,
- * загрузка моделей и их папки. Выбор движка и модели — в «Распознавании»,
- * токен Hugging Face — в «Спикерах», мастер — в «Приложении» (0.4).
+ * Блок «Движок и модели» внизу «Распознавания» (EngineSection; 0.6.2, прежде —
+ * свой раздел): состояние движка, где хранить, загрузка моделей и их папки.
+ * Выбор движка и модели — выше в том же разделе, токен Hugging Face — в
+ * «Спикерах», мастер — в «Общем».
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -77,27 +78,22 @@ export function EnginePane({ endpoint, onReinstall }: {
   );
 }
 
-export function EngineSection({ endpoint, draft, onReinstall, onOpenAsr, onOpenSpeakers }: {
+export function EngineSection({ endpoint, draft, onReinstall, onOpenSpeakers }: {
   endpoint: Endpoint;
   /** Черновик настроек: где выбрана модель (по «Распознаванию»). */
   draft: Raw;
   onReinstall?: () => void;
-  onOpenAsr: () => void;
   onOpenSpeakers: () => void;
 }) {
   return (
     <>
-      <SeeAlso head>
-        Выбор движка и модели — в разделе{" "}
-        <Button variant="link" onClick={onOpenAsr}>«Распознавание»</Button>.
-      </SeeAlso>
-      <SettingsCard title="Движок">
+      <SettingsCard title="Движок расшифровки" block="engine">
         <EnginePane endpoint={endpoint} onReinstall={onReinstall} />
       </SettingsCard>
       <SettingsCard title="Хранение">
         <StoragePane endpoint={endpoint} />
       </SettingsCard>
-      <SettingsCard title="Модели">
+      <SettingsCard title="Модели распознавания">
         <ModelsPane endpoint={endpoint} usage={modelUsage(draft)} />
         <SeeAlso>
           Токен Hugging Face для закрытых моделей — в разделе{" "}

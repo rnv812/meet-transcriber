@@ -1,5 +1,6 @@
 /**
- * «Jira» (0.4, прежде — часть «Подсветки расшифровки»): ссылки на задачи,
+ * Блок «Jira» раздела «Экспорт и Jira» (0.6.2; 0.4 — свой раздел, прежде —
+ * часть «Подсветки расшифровки»): ссылки на задачи,
  * адрес, проекты с вариантами названия, проект по умолчанию (JiraSettings);
  * в «Тонкой настройке» — шаблон ключа для текста. Ключи прежние:
  * `transcript_view.jira` (его же переключает «Ссылки на задачи: показывать»
@@ -14,7 +15,7 @@ export function JiraSection({ draft, set }: { draft: Raw; set: SetFn }) {
   const pattern = String(draft.integrations?.jira_pattern ?? "");
   return (
     <>
-      <SettingsCard title="Ссылки на задачи">
+      <SettingsCard title="Jira" block="jira">
         <JiraSettings draft={draft} set={set} />
       </SettingsCard>
       <FineTuning defaultOpen={pattern !== ""}>

@@ -12,29 +12,28 @@
 import { OS_TEXT } from "../../lib/platform";
 
 export type SectionId =
-  | "appearance" | "app" | "sound" | "auto" | "asr" | "speakers" | "dictionary" | "engine"
-  | "models" | "assistant" | "analysis" | "categories" | "export" | "jira"
+  | "app" | "sound" | "auto" | "asr" | "speakers" | "dictionary"
+  | "models" | "assistant" | "categories" | "export"
   | "advanced" | "diagnostics" | "about";
+
+/**
+ * Блок внутри раздела, к которому ведёт прежний id (0.6.2: 17 разделов
+ * сведены в 13): «Оформление» и «Приложение» — в «Общем», «Движок и модели» —
+ * в «Распознавании», «Анализ встречи» — в «Моделях и анализе», «Jira» — в
+ * «Экспорте и Jira». Якорь — `data-block` у первой карточки блока.
+ */
+export type BlockId = "appearance" | "app" | "engine" | "analysis" | "jira";
 
 /** Меню: группы и их разделы (порядок — как в окне). */
 export const MENU_GROUPS: { title: string; items: { id: SectionId; title: string }[] }[] = [
-  { title: "Общее", items: [{ id: "appearance", title: "Оформление" }, { id: "app", title: "Приложение" }] },
+  { title: "Общее", items: [{ id: "app", title: "Общее" }] },
   { title: "Запись", items: [{ id: "sound", title: "Звук" }, { id: "auto", title: "Автозапись" }] },
   {
     title: "Расшифровка",
-    items: [
-      { id: "asr", title: "Распознавание" }, { id: "speakers", title: "Спикеры" },
-      { id: "dictionary", title: "Словарь" }, { id: "engine", title: "Движок и модели" },
-    ],
+    items: [{ id: "asr", title: "Распознавание" }, { id: "speakers", title: "Спикеры" }, { id: "dictionary", title: "Словарь" }],
   },
-  {
-    title: "ИИ",
-    items: [{ id: "models", title: "Модели ИИ" }, { id: "assistant", title: "Ассистент" }, { id: "analysis", title: "Анализ встречи" }],
-  },
-  {
-    title: "Встречи",
-    items: [{ id: "categories", title: "Категории" }, { id: "export", title: "Экспорт" }, { id: "jira", title: "Jira" }],
-  },
+  { title: "ИИ", items: [{ id: "models", title: "Модели и анализ" }, { id: "assistant", title: "Ассистент" }] },
+  { title: "Встречи", items: [{ id: "categories", title: "Категории" }, { id: "export", title: "Экспорт и Jira" }] },
   {
     title: "Система",
     items: [{ id: "advanced", title: "Дополнительно" }, { id: "diagnostics", title: "Диагностика" }, { id: "about", title: "О программе" }],
@@ -60,10 +59,10 @@ export type SettingsEntry = {
 
 export const SETTINGS_INDEX: SettingsEntry[] = [
   // Общее
-  { section: "appearance", label: "Тема", hint: "Системная, светлая или тёмная", keywords: ["тёмная", "светлая", "dark", "light"] },
-  { section: "appearance", label: "Палитра сияния", hint: "Цвет сияния, знака ИИ и главной кнопки", keywords: ["цвет", "акцент"] },
-  { section: "appearance", label: "Вид сияния", hint: "Сияние или волны", keywords: ["волны", "фон"] },
-  { section: "appearance", label: "Живое сияние", hint: "Медленный дрейф сияния", keywords: ["анимация", "движение"] },
+  { section: "app", label: "Тема", hint: "Системная, светлая или тёмная", keywords: ["тёмная", "светлая", "dark", "light"] },
+  { section: "app", label: "Палитра сияния", hint: "Цвет сияния, знака ИИ и главной кнопки", keywords: ["цвет", "акцент"] },
+  { section: "app", label: "Вид сияния", hint: "Сияние или волны", keywords: ["волны", "фон"] },
+  { section: "app", label: "Живое сияние", hint: "Медленный дрейф сияния", keywords: ["анимация", "движение"] },
   { section: "app", label: OS_TEXT.autostart, hint: "Приложение запускается и отслеживает звонки", keywords: ["автозапуск", "при входе"] },
   { section: "app", label: "Уведомления", hint: "Все, только важные или никаких", keywords: ["оповещения"] },
   { section: "speakers", label: "Ваше имя в расшифровке", hint: "Как подписаны ваши реплики", keywords: ["имя", "спикер"] },
@@ -107,14 +106,14 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: ["скорость", "диаризация", "ускорить", "спикеры"] },
   { section: "dictionary", label: "Термины распознавания", hint: "Слова, которые модель должна знать", keywords: ["hotwords", "словарь", "термины"] },
   { section: "dictionary", label: "Исправления для будущих расшифровок", hint: "Как распознаётся → как правильно", keywords: ["замены", "правила"] },
-  { section: "engine", label: "Состояние", hint: "Установлен ли движок расшифровки", keywords: ["движок", "переустановить"] },
-  { section: "engine", label: "Видеокарта", keywords: ["gpu", "cuda"] },
-  { section: "engine", label: "ffmpeg", keywords: ["аудио"] },
-  { section: "engine", label: "Компоненты", keywords: ["pytorch", "cuda"] },
-  { section: "engine", label: "Расположение", hint: "Где установлен движок", keywords: ["путь"] },
-  { section: "engine", label: "Где хранить движок и модели", hint: "Перенос на другой диск", keywords: ["диск", "перенос", "место"] },
-  { section: "engine", label: "Папка моделей", keywords: ["кэш", "hugging face"] },
-  { section: "engine", label: "Папка моделей GigaAM", keywords: ["gigaam"] },
+  { section: "asr", label: "Состояние", hint: "Установлен ли движок расшифровки", keywords: ["движок", "переустановить"] },
+  { section: "asr", label: "Видеокарта", keywords: ["gpu", "cuda"] },
+  { section: "asr", label: "ffmpeg", keywords: ["аудио"] },
+  { section: "asr", label: "Компоненты", keywords: ["pytorch", "cuda"] },
+  { section: "asr", label: "Расположение", hint: "Где установлен движок", keywords: ["путь"] },
+  { section: "asr", label: "Где хранить движок и модели", hint: "Перенос на другой диск", keywords: ["диск", "перенос", "место"] },
+  { section: "asr", label: "Папка моделей", keywords: ["кэш", "hugging face"] },
+  { section: "asr", label: "Папка моделей GigaAM", keywords: ["gigaam"] },
   // ИИ
   { section: "models", label: "Модели", hint: "Какие включены и какая по умолчанию", keywords: ["провайдер", "claude", "codex", "opencode", "локальная"] },
   { section: "models", label: "Модель Claude Code", keywords: ["sonnet", "opus", "haiku", "уровень рассуждений", "effort"] },
@@ -150,18 +149,18 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "assistant", label: "Активность подсказок", hint: "Прежний режим (участник выключен)", keywords: ["подсказки", "сводка"], advanced: true },
   { section: "assistant", label: "Модель для живых подсказок", hint: "Прежний режим (участник выключен)", keywords: ["подсказки", "быстрее"], advanced: true },
   { section: "assistant", label: "Сколько подсказок держать", hint: "Прежний режим (участник выключен)", keywords: ["подсказки"], advanced: true },
-  { section: "analysis", label: "Анализировать встречу после расшифровки", keywords: ["анализ", "автоматически"] },
-  { section: "analysis", label: "Типы реплик", hint: "Размечать и показывать: вопрос, решение, задача, риск", keywords: ["значки", "разметка", "фильтры"] },
-  { section: "analysis", label: "Важность", hint: "Размечать и показывать: полоса у важных реплик", keywords: ["важные реплики", "разметка"] },
-  { section: "analysis", label: "Главы", hint: "Размечать и показывать: заголовки глав", keywords: ["разметка", "темы"] },
-  { section: "analysis", label: "Наблюдения", hint: "Размечать и показывать: блок «Наблюдения»", keywords: ["разметка", "противоречия"] },
-  { section: "analysis", label: "Ссылки на задачи", hint: "Размечать и показывать: задачи Jira", keywords: ["jira", "разметка"] },
-  { section: "analysis", label: "Кривая важности над плеером", keywords: ["плеер", "кривая"] },
-  { section: "analysis", label: "Подписи глав на полосе плеера", keywords: ["плеер", "главы"] },
-  { section: "analysis", label: "Улучшать расшифровку автоматически после распознавания", keywords: ["улучшить", "исправления"] },
-  { section: "analysis", label: "Название встречи", hint: "Модель предлагает название", keywords: ["заголовок"] },
-  { section: "analysis", label: "Придумывать название встречи", hint: "Название ставится само", keywords: ["заголовок", "автоматически"] },
-  { section: "analysis", label: "Определять категорию автоматически", keywords: ["категория"] },
+  { section: "models", label: "Анализировать встречу после расшифровки", keywords: ["анализ", "автоматически"] },
+  { section: "models", label: "Типы реплик", hint: "Размечать и показывать: вопрос, решение, задача, риск", keywords: ["значки", "разметка", "фильтры"] },
+  { section: "models", label: "Важность", hint: "Размечать и показывать: полоса у важных реплик", keywords: ["важные реплики", "разметка"] },
+  { section: "models", label: "Главы", hint: "Размечать и показывать: заголовки глав", keywords: ["разметка", "темы"] },
+  { section: "models", label: "Наблюдения", hint: "Размечать и показывать: блок «Наблюдения»", keywords: ["разметка", "противоречия"] },
+  { section: "models", label: "Ссылки на задачи", hint: "Размечать и показывать: задачи Jira", keywords: ["jira", "разметка"] },
+  { section: "models", label: "Кривая важности над плеером", keywords: ["плеер", "кривая"] },
+  { section: "models", label: "Подписи глав на полосе плеера", keywords: ["плеер", "главы"] },
+  { section: "models", label: "Улучшать расшифровку автоматически после распознавания", keywords: ["улучшить", "исправления"] },
+  { section: "models", label: "Название встречи", hint: "Модель предлагает название", keywords: ["заголовок"] },
+  { section: "models", label: "Придумывать название встречи", hint: "Название ставится само", keywords: ["заголовок", "автоматически"] },
+  { section: "models", label: "Определять категорию автоматически", keywords: ["категория"] },
   // Встречи
   { section: "categories", label: "Категории встреч", hint: "Названия, цвета и описания для ИИ", keywords: ["категория", "цвет"] },
   { section: "export", label: "Папка для встреч", hint: "Куда выгружаются встречи в базе знаний", keywords: ["obsidian", "база знаний", "выгрузка"] },
@@ -170,11 +169,11 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "export", label: "Имя файла итогов", keywords: ["выгрузка"] },
   { section: "export", label: "Что выгружать", hint: "Расшифровку, итоги, звук", keywords: ["выгрузка", "аудио"] },
   { section: "export", label: "Выгружать автоматически после расшифровки", keywords: ["выгрузка", "автоматически"] },
-  { section: "jira", label: "Ссылки на задачи Jira", hint: "Задачи из встречи открываются в Jira", keywords: ["jira", "задачи"] },
-  { section: "jira", label: "Адрес Jira", keywords: ["url", "jira"] },
-  { section: "jira", label: "Проекты", hint: "Ключи проектов Jira и как их произносят", keywords: ["jira", "ключ проекта"] },
-  { section: "jira", label: "Проект по умолчанию", keywords: ["jira"] },
-  { section: "jira", label: "Шаблон ключа для текста", hint: "Регулярное выражение для ключей задач", keywords: ["jira", "regex"], advanced: true },
+  { section: "export", label: "Ссылки на задачи Jira", hint: "Задачи из встречи открываются в Jira", keywords: ["jira", "задачи"] },
+  { section: "export", label: "Адрес Jira", keywords: ["url", "jira"] },
+  { section: "export", label: "Проекты", hint: "Ключи проектов Jira и как их произносят", keywords: ["jira", "ключ проекта"] },
+  { section: "export", label: "Проект по умолчанию", keywords: ["jira"] },
+  { section: "export", label: "Шаблон ключа для текста", hint: "Регулярное выражение для ключей задач", keywords: ["jira", "regex"], advanced: true },
   // Система
   { section: "advanced", label: "Запускать команду после записи", keywords: ["хук", "hook", "скрипт"] },
   { section: "advanced", label: "Команда", hint: "Программа и аргументы", keywords: ["хук", "hook"] },

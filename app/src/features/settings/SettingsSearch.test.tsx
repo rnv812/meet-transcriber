@@ -77,8 +77,8 @@ test("поле «Поиск по настройкам» над меню — Auro
   await userEvent.type(field, "прокси");
   expect(screen.queryByRole("button", { name: "Звук" })).toBeNull();
   const names = options().map((o) => o.textContent);
-  expect(names[0]).toBe("Модели ИИ › Прокси для подключения к моделям");
-  expect(names).toContain("Модели ИИ › Локальную модель — через прокси");
+  expect(names[0]).toBe("Модели и анализ › Прокси для подключения к моделям");
+  expect(names).toContain("Модели и анализ › Локальную модель — через прокси");
   expect(field).toHaveAttribute("aria-expanded", "true");
   expect(field).toHaveAttribute("aria-activedescendant", options()[0]!.id);
 });
@@ -104,13 +104,13 @@ test("Esc очищает поиск, меню возвращается", async (
 test("↑/↓ по выдаче, Enter — раздел, «Тонкая настройка» раскрыта, строка прокручена и подсвечена", async () => {
   const field = await open();
   await userEvent.type(field, "прокси");
-  const target = options().findIndex((o) => o.textContent === "Модели ИИ › Локальную модель — через прокси");
+  const target = options().findIndex((o) => o.textContent === "Модели и анализ › Локальную модель — через прокси");
   expect(target).toBeGreaterThan(0);
   await userEvent.keyboard("{ArrowDown}".repeat(target));
   expect(options()[target]).toHaveAttribute("aria-selected", "true");
   expect(field).toHaveAttribute("aria-activedescendant", options()[target]!.id);
   await userEvent.keyboard("{ArrowUp}{ArrowDown}{Enter}");
-  expect(await screen.findByRole("heading", { level: 2, name: "Модели ИИ" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { level: 2, name: "Модели и анализ" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Тонкая настройка" })).toHaveAttribute("aria-expanded", "true");
   const box = await screen.findByRole("switch", { name: "Локальную модель — через прокси" });
   const row = box.closest(".srow")!;
@@ -119,7 +119,7 @@ test("↑/↓ по выдаче, Enter — раздел, «Тонкая наст
   expect(scrolls.at(-1)).toEqual({ block: "center", behavior: "smooth" });
   // Поиск очищен — снова меню, раздел выбран.
   expect(field).toHaveValue("");
-  expect(screen.getByRole("button", { name: "Модели ИИ" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Модели и анализ" })).toHaveAttribute("aria-current", "page");
   await waitFor(() => expect(row).not.toHaveClass("setting-found"), { timeout: HIGHLIGHT_MS + 1000 });
 });
 
@@ -128,10 +128,10 @@ test("клик по строке выдачи — открывает разде�
   const field = await open();
   await userEvent.type(field, "главы");
   // 0.5: совпавшее слово в выдаче — жирным.
-  expect(screen.getByRole("option", { name: "Анализ встречи › Главы" }).querySelector(".ssearch__hit"))
+  expect(screen.getByRole("option", { name: "Модели и анализ › Главы" }).querySelector(".ssearch__hit"))
     .toHaveTextContent("Главы");
-  await userEvent.click(screen.getByRole("option", { name: "Анализ встречи › Главы" }));
-  expect(await screen.findByRole("heading", { level: 2, name: "Анализ встречи" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("option", { name: "Модели и анализ › Главы" }));
+  expect(await screen.findByRole("heading", { level: 2, name: "Модели и анализ" })).toBeInTheDocument();
   // Строка таблицы «Размечать / Показывать»: фокус — на первом переключателе.
   await waitFor(() => expect(screen.getByRole("switch", { name: "Главы: размечать" })).toHaveFocus());
   expect(screen.getByRole("switch", { name: "Главы: размечать" }).closest("tr")).toHaveClass("setting-found");

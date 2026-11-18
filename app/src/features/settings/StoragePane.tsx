@@ -1,5 +1,5 @@
 /**
- * «Где хранить движок и модели» (раздел «Движок и модели»). Переносит оболочка
+ * «Где хранить движок и модели» (блок «Движок и модели» в «Распознавании»). Переносит оболочка
  * (`storage_move`): ставит движок в новую папку заново, копирует и сверяет
  * модели, перезапускает службу записи из новой папки и только потом удаляет
  * прежнее. Записи не переносятся — у них своя папка в «Записи».
@@ -16,6 +16,7 @@ import {
   storageStatus,
 } from "../../lib/shell";
 import { Button } from "../../ui/Button";
+import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { gb } from "../wizard/gate";
 import { PathText, Row } from "./Section";
@@ -199,7 +200,8 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
     await load();
   };
 
-  if (!info) return error ? <p className="error">{error}</p> : null;
+  // Пока сведений нет — индикатор загрузки: по нему поиск по настройкам ждёт строку.
+  if (!info) return error ? <p className="error">{error}</p> : <Loading label="Проверяю, где движок и модели…" />;
   const app = inTauri() && status !== null;
   const running = move.kind === "running";
   const system = onSystemDisk(info, status);

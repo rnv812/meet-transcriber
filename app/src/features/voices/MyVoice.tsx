@@ -23,12 +23,16 @@ import { ItemMenu } from "../recordings/ItemMenu";
 import { OwnerVoiceFound, deriveNote, sampleText, sentence, useOwnerVoice } from "../settings/OwnerVoice";
 import { OwnerVoiceDialog } from "../settings/OwnerVoiceDialog";
 
-/** Раздел настроек, где чинится причина «нельзя записать» (тексты резидента — owner_voice_control). */
+/**
+ * Место в настройках, где чинится причина «нельзя записать» (тексты резидента —
+ * owner_voice_control): движок и модели — блок внизу «Распознавания»
+ * («asr#engine»), токен — «Спикеры».
+ */
 export function settingsFor(reason: string | null | undefined): string | null {
   const r = (reason ?? "").toLowerCase();
-  if (r.includes("движок")) return "engine";
+  if (r.includes("движок")) return "asr#engine";
   if (r.includes("токен")) return "speakers";
-  if (r.includes("скачайте")) return "engine";
+  if (r.includes("скачайте")) return "asr#engine";
   return null;
 }
 

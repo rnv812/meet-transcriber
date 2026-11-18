@@ -21,7 +21,7 @@ const GB = 1024 ** 3;
 
 export function StorageNotices({ endpoint, onOpenEngine }: {
   endpoint: Endpoint;
-  /** Открыть «Движок и модели» (там ход переноса). */
+  /** Открыть блок «Движок и модели» в «Распознавании» (там ход переноса). */
   onOpenEngine: () => void;
 }) {
   const move = useMove();

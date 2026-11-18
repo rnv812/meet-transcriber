@@ -1,9 +1,12 @@
 /**
  * «Распознавание»: устройство, движок и модель для видеокарты и процессора
- * (AsrChoice), язык речи; в «Тонкой настройке» — уточнение времени слов. Порог узнавания голоса и
- * одновременная речь — в «Спикерах», термины и исправления — в «Словаре» (0.4).
+ * (AsrChoice), язык речи; ниже — блок «Движок и модели» (`children`, 0.6.2:
+ * прежде свой раздел); в «Тонкой настройке» внизу — уточнение времени слов.
+ * Порог узнавания голоса и одновременная речь — в «Спикерах», термины и
+ * исправления — в «Словаре» (0.4).
  */
 
+import type { ReactNode } from "react";
 import { type Endpoint, GIGAAM_PREFIX } from "../../lib/api";
 import { AsrChoice, backendOf } from "./AsrChoice";
 import { TextRow } from "./fields";
@@ -31,8 +34,12 @@ export function modelUsage(draft: Raw): Record<string, string[]> {
   return out;
 }
 
-export function AsrSection({ draft, saved, set, endpoint, onOpenEngine }: {
-  draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint; onOpenEngine: () => void;
+export function AsrSection({ draft, saved, set, endpoint, onOpenEngine, children }: {
+  draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint;
+  /** К блоку «Движок и модели» (скачать модели). */
+  onOpenEngine: () => void;
+  /** Блоки раздела перед «Тонкой настройкой» (движок и модели). */
+  children?: ReactNode;
 }) {
   const v = (k: string) => draft.asr?.[k];
   return (
@@ -51,6 +58,7 @@ export function AsrSection({ draft, saved, set, endpoint, onOpenEngine }: {
           hint="Код языка, например ru или en; auto — определить по записи. GigaAM понимает только русский"
           value={String(v("language") ?? "ru")} onChange={(x) => set("asr", "language", x)} />
       </SettingsCard>
+      {children}
       <FineTuning>
         <Switch label="Уточнять время каждого слова" hint="Точнее границы реплик; расшифровка занимает немного больше времени. После GigaAM не нужно: время слов у него своё"
           value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />

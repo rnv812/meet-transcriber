@@ -141,9 +141,10 @@ test("ошибка сохранения — текстом резидента, �
   expect(screen.queryByText(/Error:/)).toBeNull();
 });
 
+/** Блок «Движок и модели» — внизу «Распознавания». */
 const openEngine = async (props: { onRunWizard?: () => void } = {}) => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} {...props} />);
-  await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
 };
 const openSpeakers = async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
@@ -206,10 +207,10 @@ test("токен из переменной среды — удалить из п
   expect(within(row).queryByRole("button", { name: "Удалить токен…" })).toBeNull();
 });
 
-test("«Приложение»: кнопка «Запустить мастер»", async () => {
+test("«Общее»: кнопка «Запустить мастер»", async () => {
   const onRunWizard = vi.fn();
   render(<SettingsPane endpoint={ep} recordingsDir={null} onRunWizard={onRunWizard} />);
-  expect(await screen.findByRole("heading", { name: "Приложение" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { level: 2, name: "Общее" })).toBeInTheDocument();
   await userEvent.click(await screen.findByRole("button", { name: "Запустить мастер" }));
   expect(onRunWizard).toHaveBeenCalledWith("hardware");
 });
@@ -224,8 +225,7 @@ test("«Дополнительно»: «Пройти мастер заново»
 
 test("движок не загрузился — сообщение без «Error:»", async () => {
   vi.mocked(api.getEngine).mockRejectedValue(new Error("нет python"));
-  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
-  await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
+  await openEngine();
   expect(await screen.findByText("Движок не загрузился: нет python")).toBeInTheDocument();
 });
 
@@ -325,8 +325,10 @@ const catalogue = (): api.ModelsState => ({
   can_download: true, can_download_gigaam: true, gigaam_cache: "C:\\data\\meet\\models\\gigaam",
 });
 
+/** Строка модели — в карточке «Модели распознавания» (выше в том же разделе модели названы и в выборе). */
 const modelRow = (title: string) => {
-  const label = screen.getByText(title);
+  const card = screen.getByRole("heading", { level: 3, name: "Модели распознавания" }).closest("section")!;
+  const label = within(card as HTMLElement).getByText(title);
   return label.closest(".srow") as HTMLElement;
 };
 
@@ -506,19 +508,20 @@ test("«Распознавание»: вопрос при уходе знает 
   await waitFor(() => expect(guard.current?.dirty).toEqual([]));
 });
 
-test("«Движок и модели»: выбора движка нет — ссылка ведёт в «Распознавание»", async () => {
+test("«Распознавание»: ссылка «Модели распознавания» прокручивает к блоку движка и моделей того же раздела", async () => {
+  const scrolled = watchScrolls();
   await openEngine();
-  expect(screen.queryByRole("radiogroup")).toBeNull();
-  await userEvent.click(await screen.findByRole("button", { name: "«Распознавание»" }));
-  expect(screen.getByRole("heading", { name: "Распознавание" })).toBeInTheDocument();
-  expect(screen.getByRole("group", { name: "Видеокарта" })).toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", { name: "«Модели распознавания»" }));
+  expect(screen.getByRole("heading", { level: 2, name: "Распознавание" })).toBeInTheDocument();
+  await waitFor(() => expect(scrolled.at(-1)).toHaveAttribute("data-block", "engine"));
+  expect(scrolled.at(-1)).toContainElement(screen.getByRole("heading", { level: 3, name: "Движок расшифровки" }));
 });
 
 test("«Движок и модели»: модели GigaAM — размер, где выбрана, удаление", async () => {
   vi.mocked(api.getModels).mockResolvedValue(catalogue());
   vi.mocked(api.removeModel).mockResolvedValue({ ok: true });
   await openEngine();
-  await screen.findByText("GigaAM v3 — русский");
+  await waitFor(() => modelRow("GigaAM v3 — русский"));
   const rnnt = modelRow("GigaAM v3 — русский");
   const ctc = modelRow("GigaAM v3 CTC — русский");
   expect(rnnt).toHaveTextContent("0.45 ГБ");
@@ -532,11 +535,8 @@ test("«Движок и модели»: модели GigaAM — размер, г
   expect(within(ctc).queryByRole("button", { name: /Удалить/ })).toBeNull();
   expect(screen.getByText("C:\\data\\meet\\models\\gigaam")).toBeInTheDocument();
 
-  // Отметка следует черновику «Распознавания»: процессор на Whisper — GigaAM больше нигде не выбрана.
-  await userEvent.click(screen.getByRole("button", { name: "Распознавание" }));
+  // Отметка следует черновику того же раздела: процессор на Whisper — GigaAM больше нигде не выбрана.
   await userEvent.click(within(screen.getByRole("group", { name: "Процессор" })).getByRole("radio", { name: "Whisper" }));
-  await userEvent.click(screen.getByRole("button", { name: "Движок и модели" }));
-  await screen.findByText("GigaAM v3 — русский");
   const unused = modelRow("GigaAM v3 — русский");
   expect(within(unused).queryByText("Выбрана")).toBeNull();
   const loads = vi.mocked(api.getModels).mock.calls.length;
@@ -553,7 +553,7 @@ test("«Движок и модели»: модели GigaAM — размер, г
 test("«Движок и модели»: без пакета GigaAM его модели не скачать", async () => {
   vi.mocked(api.getModels).mockResolvedValue({ ...catalogue(), can_download_gigaam: false });
   await openEngine();
-  await screen.findByText("GigaAM v3 CTC — русский");
+  await waitFor(() => modelRow("GigaAM v3 CTC — русский"));
   expect(within(modelRow("GigaAM v3 CTC — русский")).getByRole("button", { name: "Скачать" })).toBeDisabled();
   expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByRole("button", { name: "Обновить" }))
     .toBeEnabled();
@@ -564,7 +564,7 @@ test("«Движок и модели»: скачанная GigaAM — «Скач
   state.items[2] = { ...state.items[2]!, downloaded: false, removable: true, size_on_disk: 1000 };
   vi.mocked(api.getModels).mockResolvedValue(state);
   await openEngine();
-  await screen.findByText("GigaAM v3 — русский");
+  await waitFor(() => modelRow("GigaAM v3 — русский"));
   const rnnt = modelRow("GigaAM v3 — русский");
   expect(within(rnnt).getByText("Скачана")).toBeInTheDocument();
   expect(within(rnnt).queryByRole("button", { name: "Обновить" })).toBeNull();
@@ -578,7 +578,7 @@ test("«Движок и модели»: удаление выбранной Giga
   vi.mocked(api.getModels).mockResolvedValue(catalogue());
   vi.mocked(api.removeModel).mockResolvedValue({ ok: true });
   await openEngine();
-  await screen.findByText("GigaAM v3 — русский");
+  await waitFor(() => modelRow("GigaAM v3 — русский"));
   const rnnt = modelRow("GigaAM v3 — русский");
   await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
   const ask = within(rnnt).getByRole("alertdialog", { name: "Удалить модель «GigaAM v3 — русский»?" });
@@ -642,7 +642,6 @@ test("правка — точка у своего раздела в меню и 
   // Движок и модель выбираются только в «Распознавании» — и точка только там.
   await userEvent.click(within(screen.getByRole("group", { name: "Видеокарта" })).getByRole("radio", { name: "GigaAM" }));
   expect(menuItem("Распознавание").querySelector("[data-dirty]")).not.toBeNull();
-  expect(menuItem("Движок и модели").querySelector("[data-dirty]")).toBeNull();
 });
 
 test("«Сбросить…» спрашивает и только потом отменяет правки всех разделов", async () => {
@@ -709,12 +708,17 @@ test("команда после записи: сказано, что ассис�
   expect(tip).toHaveTextContent("дописывает");
 });
 
-test("«Оформление» — первый раздел, без «Сохранить»: применяется сразу", async () => {
-  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="appearance" />);
+test("«Общее» — первый раздел: сначала оформление, затем приложение; подписано, что применяется сразу, а что — по «Сохранить»", async () => {
+  const { container } = render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   const nav = await screen.findByRole("navigation", { name: "Разделы настроек" });
-  expect(within(nav).getAllByRole("button")[0]).toHaveTextContent("Оформление");
+  expect(within(nav).getAllByRole("button")[0]).toHaveTextContent("Общее");
   expect(await screen.findByRole("radiogroup", { name: "Тема" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Сохранить" })).not.toBeInTheDocument();
+  expect(screen.getByRole("radiogroup", { name: "Уведомления" })).toBeInTheDocument();
+  const cards = [...container.querySelectorAll(".settings__content .scard__title")].map((h) => h.textContent);
+  expect(cards.slice(0, 2)).toEqual(["Оформление", "Запуск и уведомления"]);
+  expect(screen.getByText("Оформление применяется сразу. Остальное в этом разделе — по кнопке «Сохранить»."))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeInTheDocument();
 });
 
 test("ключи оформления не попадают в черновик других разделов", async () => {
@@ -727,11 +731,11 @@ test("ключи оформления не попадают в черновик 
 // --- 0.4: группы меню, узкие разделы, перенос строк ---------------------------
 
 const GROUPS: [string, string[]][] = [
-  ["Общее", ["Оформление", "Приложение"]],
+  ["Общее", ["Общее"]],
   ["Запись", ["Звук", "Автозапись"]],
-  ["Расшифровка", ["Распознавание", "Спикеры", "Словарь", "Движок и модели"]],
-  ["ИИ", ["Модели ИИ", "Ассистент", "Анализ встречи"]],
-  ["Встречи", ["Категории", "Экспорт", "Jira"]],
+  ["Расшифровка", ["Распознавание", "Спикеры", "Словарь"]],
+  ["ИИ", ["Модели и анализ", "Ассистент"]],
+  ["Встречи", ["Категории", "Экспорт и Jira"]],
   ["Система", ["Дополнительно", "Диагностика", "О программе"]],
 ];
 
@@ -741,15 +745,15 @@ test("меню — группы с подписями обычным регис�
   expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual(GROUPS.flatMap(([, items]) => items));
   for (const [title, items] of GROUPS) {
     const group = within(nav).getByRole("group", { name: title });
-    expect(within(group).getByText(title)).toBeVisible();
+    expect(within(group).getByText(title, { selector: ".settings__group-title" })).toBeVisible();
     expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(items);
   }
 });
 
-test("без initial открывается «Приложение»; заголовок раздела — второго уровня, плотность обычная (кнопки и поля — 32 px)", async () => {
+test("без initial открывается «Общее»; заголовок раздела — второго уровня, плотность обычная (кнопки и поля — 32 px)", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
-  const head = await screen.findByRole("heading", { level: 2, name: "Приложение" });
-  expect(screen.getByRole("button", { name: "Приложение" })).toHaveAttribute("aria-current", "page");
+  const head = await screen.findByRole("heading", { level: 2, name: "Общее" });
+  expect(screen.getByRole("button", { name: "Общее" })).toHaveAttribute("aria-current", "page");
   // Плотность compact (28 px кнопки) — только в таблицах; на теле настроек её нет (доводка 0.4, C1).
   expect(head.closest("[data-density='compact']")).toBeNull();
   expect(screen.getByRole("button", { name: "Сохранить" })).toHaveClass("btn--sm");
@@ -758,34 +762,68 @@ test("без initial открывается «Приложение»; загол
 });
 
 test.each([
-  ["recording", "Приложение"], ["markup", "Анализ встречи"], ["sound", "Звук"], ["auto", "Автозапись"],
-  ["asr", "Распознавание"], ["engine", "Движок и модели"], ["export", "Экспорт"], ["assistant", "Ассистент"],
-  ["analysis", "Анализ встречи"], ["categories", "Категории"], ["diagnostics", "Диагностика"],
-  ["about", "О программе"], ["advanced", "Дополнительно"], ["appearance", "Оформление"],
-  // Новые id тоже открываются напрямую.
-  ["app", "Приложение"], ["speakers", "Спикеры"], ["dictionary", "Словарь"], ["models", "Модели ИИ"], ["jira", "Jira"],
+  ["sound", "Звук"], ["auto", "Автозапись"], ["asr", "Распознавание"], ["export", "Экспорт и Jira"],
+  ["assistant", "Ассистент"], ["categories", "Категории"], ["diagnostics", "Диагностика"],
+  ["about", "О программе"], ["advanced", "Дополнительно"],
+  ["speakers", "Спикеры"], ["dictionary", "Словарь"], ["models", "Модели и анализ"],
 ])("id «%s» открывает раздел «%s»", async (id, title) => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial={id} />);
   expect(await screen.findByRole("heading", { level: 2, name: title })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: title })).toHaveAttribute("aria-current", "page");
 });
 
-test("LEGACY_SECTION: все прежние id 0.3.7, «recording» → «app», «markup» → «analysis»", () => {
+/** Куда прокручивали: элементы, у которых вызван scrollIntoView. */
+function watchScrolls(): Element[] {
+  const seen: Element[] = [];
+  Element.prototype.scrollIntoView = function (this: Element) { seen.push(this); };
+  return seen;
+}
+afterEach(() => { delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView; });
+
+test.each([
+  // прежний id, новый раздел, блок, заголовок первой карточки блока
+  ["engine", "Распознавание", "engine", "Движок расшифровки"],
+  ["asr#engine", "Распознавание", "engine", "Движок расшифровки"],
+  ["analysis", "Модели и анализ", "analysis", "Анализ после расшифровки"],
+  ["markup", "Модели и анализ", "analysis", "Анализ после расшифровки"],
+  ["jira", "Экспорт и Jira", "jira", "Jira"],
+  ["appearance", "Общее", "appearance", "Оформление"],
+  ["app", "Общее", "app", "Запуск и уведомления"],
+  ["recording", "Общее", "app", "Запуск и уведомления"],
+])("прежний id «%s» открывает «%s» и прокручивает к блоку «%s»", async (id, title, block, card) => {
+  const scrolled = watchScrolls();
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial={id} />);
+  expect(await screen.findByRole("heading", { level: 2, name: title })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: title })).toHaveAttribute("aria-current", "page");
+  await waitFor(() => expect(scrolled.at(-1)).toHaveAttribute("data-block", block));
+  expect(scrolled.at(-1)).toContainElement(screen.getByRole("heading", { level: 3, name: card }));
+});
+
+test("раздел по своему id открывается сверху: прокрутки к блоку нет", async () => {
+  const scrolled = watchScrolls();
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="asr" />);
+  await screen.findByRole("heading", { level: 3, name: "Движок расшифровки" });
+  expect(scrolled).toEqual([]);
+});
+
+test("LEGACY_SECTION: прежние id 0.3.7 и 0.4 ведут в раздел и блок; разделов 13", () => {
   expect(Object.keys(LEGACY_SECTION).sort()).toEqual([
-    "about", "advanced", "analysis", "appearance", "asr", "assistant", "auto", "categories", "diagnostics", "engine",
-    "export", "markup", "recording", "sound",
+    "about", "advanced", "analysis", "app", "appearance", "asr", "assistant", "auto", "categories", "diagnostics",
+    "engine", "export", "jira", "markup", "recording", "sound",
   ]);
-  expect(LEGACY_SECTION.recording).toBe("app");
-  expect(LEGACY_SECTION.markup).toBe("analysis");
-  expect(GROUPS.flatMap(([, items]) => items)).toHaveLength(17);
+  expect(LEGACY_SECTION).toMatchObject({
+    engine: "asr#engine", analysis: "models#analysis", markup: "models#analysis", jira: "export#jira",
+    appearance: "app#appearance", app: "app#app", recording: "app#app",
+  });
+  expect(GROUPS.flatMap(([, items]) => items)).toHaveLength(13);
 });
 
 test("повторная просьба открыть прежний раздел (новый initialTick) возвращает в его новый раздел", async () => {
   const { rerender } = render(<SettingsPane endpoint={ep} recordingsDir={null} initial="markup" initialTick={1} />);
-  expect(await screen.findByRole("heading", { level: 2, name: "Анализ встречи" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { level: 2, name: "Модели и анализ" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Звук" }));
   rerender(<SettingsPane endpoint={ep} recordingsDir={null} initial="markup" initialTick={2} />);
-  expect(await screen.findByRole("heading", { level: 2, name: "Анализ встречи" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { level: 2, name: "Модели и анализ" })).toBeInTheDocument();
 });
 
 test("«Спикеры»: токен Hugging Face, «Мой голос», порог узнавания и одновременная речь — подгруппы-карточки", async () => {
@@ -797,14 +835,14 @@ test("«Спикеры»: токен Hugging Face, «Мой голос», пор
   expect(screen.getAllByRole("heading", { level: 3 }).length).toBeGreaterThanOrEqual(2);
 });
 
-test("«Звук» и «Движок и модели» — без голоса, токена и мастера: там ссылки на «Спикеры»", async () => {
+test("«Звук» и блок движка и моделей — без голоса, токена и мастера: там ссылки на «Спикеры»", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="sound" onRunWizard={vi.fn()} />);
   expect(await screen.findByRole("combobox", { name: "Микрофон" })).toBeInTheDocument();
   expect(screen.queryByRole("group", { name: "Мой голос" })).toBeNull();
   // «См. также» всего раздела — в шапке под заголовком (доводка 0.4, C10).
   await waitFor(() => expect(document.querySelector(".settings__head .settings__see"))
     .toContainElement(screen.getByRole("button", { name: "«Спикеры»" })));
-  await userEvent.click(screen.getByRole("button", { name: "Движок и модели" }));
+  await userEvent.click(screen.getByRole("button", { name: "Распознавание" }));
   expect(await screen.findByText(/Движок не загрузился/)).toBeInTheDocument();
   expect(screen.queryByRole("group", { name: "Токен Hugging Face" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Запустить мастер" })).toBeNull();
@@ -844,7 +882,7 @@ test("«Приложение»: уведомления, папка записе�
   expect(screen.getByText("Мастер первого запуска")).toBeInTheDocument();
 });
 
-test("«Модели ИИ» — провайдеры и прокси; «Ассистент» — участник и база знаний, без моделей и запуска агента", async () => {
+test("«Модели и анализ» — провайдеры и прокси; «Ассистент» — участник и база знаний, без моделей и запуска агента", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
   expect(await screen.findByRole("table", { name: "Модели" })).toBeInTheDocument();
   expect(screen.getByRole("radiogroup", { name: "Прокси для подключения к моделям" })).toBeInTheDocument();
@@ -854,9 +892,9 @@ test("«Модели ИИ» — провайдеры и прокси; «Асси
   expect(screen.getByRole("group", { name: "База знаний для ассистента" })).toBeInTheDocument();
   expect(screen.queryByRole("table", { name: "Модели" })).toBeNull();
   expect(screen.queryByRole("group", { name: "Запуск Claude Code" })).toBeNull();
-  // Модель, которая ведёт ассистента, выбирается в «Моделях ИИ» — туда ссылка.
-  await userEvent.click(screen.getByRole("button", { name: "«Модели ИИ»" }));
-  expect(screen.getByRole("heading", { level: 2, name: "Модели ИИ" })).toBeInTheDocument();
+  // Модель, которая ведёт ассистента, выбирается в «Моделях и анализе» — туда ссылка.
+  await userEvent.click(screen.getByRole("button", { name: "«Модели и анализ»" }));
+  expect(screen.getByRole("heading", { level: 2, name: "Модели и анализ" })).toBeInTheDocument();
 });
 
 test("«Дополнительно»: команда после записи, маркер видеокарты и запуск агента (вкладка «Агент»)", async () => {
@@ -867,14 +905,23 @@ test("«Дополнительно»: команда после записи, м
   expect(screen.getByRole("group", { name: "Запуск Claude Code" })).toBeInTheDocument();
 });
 
-test("«Анализ встречи» вобрал «Подсветку расшифровки» (адрес и проекты Jira — нет); Jira — свой раздел", async () => {
-  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="analysis" />);
-  expect(await screen.findByRole("switch", { name: "Типы реплик: показывать" })).toBeInTheDocument();
+test("«Модели и анализ» — модели и блок анализа встречи (адрес и проекты Jira — нет); Jira — в «Экспорте и Jira»", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
+  expect(await screen.findByRole("table", { name: "Модели" })).toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: "Типы реплик: показывать" })).toBeInTheDocument();
   expect(screen.getByRole("switch", { name: "Подписи глав на полосе плеера" })).toBeInTheDocument();
   expect(screen.queryByRole("switch", { name: "Ссылки на задачи Jira" })).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Jira" }));
+  await userEvent.click(screen.getByRole("button", { name: "Экспорт и Jira" }));
   expect(await screen.findByRole("switch", { name: "Ссылки на задачи Jira" })).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Адрес Jira" })).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Папка для встреч" })).toBeInTheDocument();
+});
+
+test("«Тонкая настройка» объединённого раздела — одна, внизу, после всех блоков", async () => {
+  const { container } = render(<SettingsPane endpoint={ep} recordingsDir={null} initial="asr" />);
+  await screen.findByRole("heading", { level: 3, name: "Модели распознавания" });
+  expect(screen.getAllByRole("button", { name: "Тонкая настройка" })).toHaveLength(1);
+  expect(container.querySelector(".settings__content > :last-child")).toHaveClass("sfine");
 });
 
 test("подзаголовки — обычным регистром: стили настроек не делают текст прописным", () => {
@@ -920,9 +967,9 @@ test.each([
   ["asr", "voice_threshold", ["speakers"]], ["asr", "overlap", ["speakers"]], ["asr", "fast_diarization", ["speakers"]], ["asr", "mic_speakers", ["speakers"]], ["asr", "mic_dedupe", ["speakers"]], ["asr", "replacements", ["dictionary"]],
   ["llm", "provider", ["models"]], ["llm", "proxy", ["models"]], ["assist", "participant", ["assistant"]],
   ["assist", "window_seconds", ["assistant"]], ["assistant", "knowledge_dir", ["assistant"]],
-  ["assistant", "auto_title", ["analysis"]], ["agent", "launch", ["advanced"]], ["analysis", "auto", ["analysis"]],
-  ["transcript_view", "types", ["analysis"]], ["transcript_view", "curve", ["analysis"]], ["transcript_view", "jira", ["analysis", "jira"]],
-  ["integrations", "jira_base_url", ["jira"]], ["integrations", "gpu_marker", ["advanced"]], ["hooks", "command", ["advanced"]],
+  ["assistant", "auto_title", ["models"]], ["agent", "launch", ["advanced"]], ["analysis", "auto", ["models"]],
+  ["transcript_view", "types", ["models"]], ["transcript_view", "curve", ["models"]], ["transcript_view", "jira", ["models", "export"]],
+  ["integrations", "jira_base_url", ["export"]], ["integrations", "gpu_marker", ["advanced"]], ["hooks", "command", ["advanced"]],
   ["export", "folder_template", ["export"]],
 ] as const)("sectionsOf(%s, %s) — %j", (group, key, sections) => {
   expect(sectionsOf(group, key)).toEqual(sections);
@@ -938,3 +985,19 @@ test("правка порога узнавания — точка у «Спик�
   expect(await guard.current!.save()).toBe(true);
   expect(api.patchSettings).toHaveBeenCalledWith(ep, { asr: { voice_threshold: 0.8 } });
 });
+
+test("поиск ждёт данных раздела: строка блока движка находится, даже если движок ответил позже 2 с", async () => {
+  watchScrolls();
+  let answer: (s: api.EngineState) => void = () => {};
+  vi.mocked(api.getEngine).mockImplementation(() => new Promise((ok) => { answer = ok; }));
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await screen.findByRole("radiogroup", { name: "Уведомления" });
+  await userEvent.type(screen.getByRole("combobox", { name: "Поиск по настройкам" }), "расположение");
+  await userEvent.click(screen.getByRole("option", { name: "Распознавание › Расположение" }));
+  expect(await screen.findByRole("heading", { level: 2, name: "Распознавание" })).toBeInTheDocument();
+  // Прежде поиск сдавался через 20 попыток по 100 мс.
+  await new Promise((r) => setTimeout(r, 2300));
+  answer(structuredClone(engineState));
+  const label = await screen.findByText("Расположение", { selector: ".srow__label" });
+  await waitFor(() => expect(label.closest(".srow")).toHaveClass("setting-found"));
+}, 10_000);

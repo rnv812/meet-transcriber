@@ -280,7 +280,8 @@ class TextFixes:
         return segments
 
 
-MODEL_MISSING = "модель распознавания не скачана — скачайте в «Движок и модели»"
+MODEL_MISSING = ("модель распознавания не скачана — скачайте в настройках: "
+                 "«Распознавание» → «Модели распознавания»")
 
 
 class ModelMissing(RuntimeError):
@@ -303,7 +304,7 @@ def _on_disk(model_name: str) -> bool:
 
 
 MODEL_BROKEN = ("модель распознавания скачана не полностью или повреждена — скачайте её "
-                "заново в «Движок и модели»")
+                "заново в настройках: «Распознавание» → «Модели распознавания»")
 
 
 def _without_download(load):
@@ -389,7 +390,7 @@ def pick(cfg=None, *, log=print):
     name = cfg.asr.gigaam_model or gigaam_asr.MODEL_NAME
     if not gigaam_asr.downloaded(name):
         log("живой режим: модель GigaAM не скачана — распознаёт Whisper "
-            "(скачать: «Движок и модели»)")
+            "(скачать: «Распознавание» → «Модели распознавания»)")
         return whisper()
     device = asr.resolve_device(cfg.asr.device)
     return GigaamLive(name, device, fallback=whisper, log=log)

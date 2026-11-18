@@ -134,7 +134,11 @@ test("каждая подпись строки в каждом разделе е
   expect(first.get("asr")).toContain("Уточнять время каждого слова");
   expect(first.get("auto")).toContain("Сайты звонков");
   expect(second.get("assistant")).toContain("Активность подсказок");
-  expect(first.get("analysis")).toContain("Главы");
+  expect(first.get("models")).toContain("Главы");
+  // Блоки бывших разделов — в новых местах.
+  expect(first.get("asr")).toContain("Расположение");
+  expect(first.get("app")).toContain("Тема");
+  expect(first.get("export")).toContain("Адрес Jira");
 }, 60_000);
 
 test("индекс: известные разделы, без повторов; «Тонкая настройка» помечена advanced", () => {
@@ -153,7 +157,7 @@ test("индекс: известные разделы, без повторов; 
     "asr › Уточнять время каждого слова",
     "auto › Сайты звонков",
     "auto › Только если в заголовке окна сайт звонка",
-    "jira › Шаблон ключа для текста",
+    "export › Шаблон ключа для текста",
     "models › Локальную модель — через прокси",
   ].sort());
 });

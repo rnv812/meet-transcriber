@@ -33,7 +33,7 @@ export function assistantChangesInvalid(changes: Raw): boolean {
 
 export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: {
   draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint;
-  /** Перейти в «Модели ИИ»; без него ссылки нет. */
+  /** Перейти в «Модели и анализ»; без него ссылки нет. */
   onOpenModels?: () => void;
 }) {
   const { info } = useAssistantInfo(endpoint, saved);
@@ -44,7 +44,7 @@ export function AssistantSection({ draft, saved, set, endpoint, onOpenModels }: 
       {onOpenModels && (
         <SeeAlso head>
           Какая модель ведёт ассистента — в разделе{" "}
-          <Button variant="link" onClick={onOpenModels}>«Модели ИИ»</Button>.
+          <Button variant="link" onClick={onOpenModels}>«Модели и анализ»</Button>.
         </SeeAlso>
       )}
       <SettingsCard title="Участник встречи">

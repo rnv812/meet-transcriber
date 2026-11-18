@@ -76,6 +76,9 @@ def test_empty_base_never_downloads_the_model_at_live_start(monkeypatch):
     m.load()
     assert built == [] and not m.enabled and m.live_voices() is None
     assert any("модель голосов не скачана" in line for line in lines)
+    # Где скачать — новое место в настройках: блок моделей в «Распознавании».
+    reason = next(line for line in lines if "модель голосов не скачана" in line)
+    assert "«Распознавание» → «Модели распознавания»" in reason and "«Движок и модели»" not in reason
     # С базой голосов — как раньше (модель у таких пользователей уже есть).
     monkeypatch.setattr(vid, "load_voices", _base)
     VoiceMatcher(threshold=0.7, mic=True, log=lines.append).load()

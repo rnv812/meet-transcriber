@@ -319,7 +319,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       .then((r) => { if (!r.ok) setRetryError(r.error || RETRY_FAILED); })
       .catch((e) => setRetryError(errorText(e)));
   };
-  // Раздел «Модели ИИ» главного окна (оболочка откроет окно Meet на нём).
+  // Раздел «Модели и анализ» главного окна (оболочка откроет окно Meet на нём).
   const openModels = () => { void trayPanelOpen({ section: "models" }); };
 
   // Коротко: шапка узкой панели (от 300 px) вмещает таймер, состояние и пять кнопок.
@@ -627,7 +627,7 @@ function NeedsDecision({ m, lead, onShow }: { m: ChatMessage; lead?: ReactNode; 
 
 /**
  * «Не удалось запустить ассистента»: причина, «Повторить» (тот же старт или
- * подключение) и «Открыть настройки» (раздел «Модели ИИ»). В свёрнутой
+ * подключение) и «Открыть настройки» (раздел «Модели и анализ»). В свёрнутой
  * панели причина — в одной строке с заголовком: под шапкой места на две строки.
  */
 function StartFailed({ error, retryError, onRetry, onSettings, compact, lead }: {

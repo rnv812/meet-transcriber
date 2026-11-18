@@ -1,7 +1,8 @@
 /**
- * «Модели ИИ» (0.4, прежде — верх раздела «Ассистент»): какие модели включены и
- * какая по умолчанию, модель Claude Code и OpenCode, локальная модель, прокси; в «Тонкой
- * настройке» — «Локальную модель — через прокси».
+ * «Модели и анализ» (0.6.2; 0.4 — «Модели ИИ», прежде — верх раздела
+ * «Ассистент»): какие модели включены и какая по умолчанию, модель Claude Code
+ * и OpenCode, локальная модель, прокси; ниже — блок «Анализ встречи»
+ * (`children`); в «Тонкой настройке» внизу — «Локальную модель — через прокси».
  *
  * «Модели» (0.3.4): включённые модели (`llm.enabled`) можно выбрать у действий
  * карточки — «Переанализировать», «Итоги», «Улучшить расшифровку», «Предложить
@@ -16,7 +17,7 @@
  * по сохранённым настройкам — до полутора минут.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { type Endpoint, checkProvider, getAssistant } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { openUrl } from "../../lib/shell";
@@ -288,8 +289,10 @@ export function currentProvider(info: AssistantInfo | null, draft: Raw): string 
   return info?.provider ?? (chosen === "auto" ? null : chosen);
 }
 
-export function ModelsSection({ draft, saved, set, endpoint }: {
+export function ModelsSection({ draft, saved, set, endpoint, children }: {
   draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint;
+  /** Блоки раздела перед «Тонкой настройкой» (анализ встречи). */
+  children?: ReactNode;
 }) {
   const [checks, setChecks] = useState<Record<string, Check>>({});
   const [tick, setTick] = useState(0);
@@ -497,6 +500,7 @@ export function ModelsSection({ draft, saved, set, endpoint }: {
           )}
         </Radio>
       </SettingsCard>
+      {children}
       <FineTuning>
         <LocalViaProxyRow value={llm("local_via_proxy") === true} set={set} disabled={!on(LOCAL)} />
       </FineTuning>

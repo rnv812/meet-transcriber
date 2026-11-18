@@ -39,9 +39,9 @@ const save = () => userEvent.click(screen.getByRole("button", { name: "Сохр�
 
 const ITEMS = ["Типы реплик", "Важность", "Главы", "Наблюдения", "Ссылки на задачи"];
 
-test("раздел «Анализ встречи» есть в меню и открывается по initial", async () => {
+test("блок «Анализ встречи» — в разделе «Модели и анализ», прежний id открывает его", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Анализ встречи" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Модели и анализ" })).toHaveAttribute("aria-current", "page");
   expect(await toggle("Анализировать встречу после расшифровки")).toHaveAttribute("aria-checked", "true");
   for (const name of ["Определять категорию автоматически", "Название встречи"]) {
     expect(await toggle(name)).toHaveAttribute("aria-checked", "true");
@@ -107,22 +107,22 @@ test("«Ссылки на задачи: показывать» доступно 
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { transcript_view: { jira: false } }));
 });
 
-test("«Ссылки на задачи: показывать» — тот же ключ, что «Ссылки на задачи Jira» в разделе «Jira»", async () => {
+test("«Ссылки на задачи: показывать» — тот же ключ, что «Ссылки на задачи Jira» в разделе «Экспорт и Jira»", async () => {
   open();
   await userEvent.click(await toggle("Ссылки на задачи: показывать"));
   // Правка видна в обоих разделах.
-  expect(screen.getByRole("button", { name: "Jira" }).querySelector("[data-dirty]")).not.toBeNull();
-  expect(screen.getByRole("button", { name: "Анализ встречи" }).querySelector("[data-dirty]")).not.toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "«Jira»" }));
-  expect(screen.getByRole("heading", { level: 2, name: "Jira" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Экспорт и Jira" }).querySelector("[data-dirty]")).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Модели и анализ" }).querySelector("[data-dirty]")).not.toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "«Экспорт и Jira»" }));
+  expect(screen.getByRole("heading", { level: 2, name: "Экспорт и Jira" })).toBeInTheDocument();
   expect(await toggle("Ссылки на задачи Jira")).toHaveAttribute("aria-checked", "false");
   await save();
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { transcript_view: { jira: false } }));
 });
 
-test("прежний раздел «Подсветка расшифровки» (markup) — «Анализ встречи»: плеер и подсказки", async () => {
+test("прежний раздел «Подсветка расшифровки» (markup) — блок анализа в «Моделях и анализе»: плеер и подсказки", async () => {
   open("markup");
-  expect(screen.getByRole("button", { name: "Анализ встречи" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Модели и анализ" })).toHaveAttribute("aria-current", "page");
   expect(await toggle("Подписи глав на полосе плеера")).toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("radio", { name: "При наведении" })).toBeChecked();
   for (const tip of ["Что такое подсветка и разметка", "Что такое кривая важности", "Клавиши плеера"]) {

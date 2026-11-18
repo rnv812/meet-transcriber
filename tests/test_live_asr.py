@@ -273,3 +273,19 @@ def test_window_wav_never_stays_in_temp():
     g.transcribe_window(np.full(SR, 0.1, dtype=np.float32), offset_s=0.0)
     assert not list(g._tmp.glob("w*.wav"))
     g.unload()
+
+
+def test_model_texts_point_to_the_models_block_of_recognition():
+    """Раздела «Движок и модели» больше нет: модели скачивают в блоке
+    «Модели распознавания» раздела «Распознавание»."""
+    for text in (live_asr.MODEL_MISSING, live_asr.MODEL_BROKEN):
+        assert "«Распознавание» → «Модели распознавания»" in text
+        assert "«Движок и модели»" not in text
+
+
+def test_gigaam_not_downloaded_log_names_the_new_place(whisper, monkeypatch):
+    monkeypatch.setattr(gigaam_asr, "installed", lambda: True)
+    monkeypatch.setattr(gigaam_asr, "downloaded", lambda name: False)
+    logs = []
+    pick(_cfg(), log=logs.append)
+    assert any("«Распознавание» → «Модели распознавания»" in line for line in logs)

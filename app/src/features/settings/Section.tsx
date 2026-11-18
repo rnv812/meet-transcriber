@@ -152,11 +152,12 @@ export function FolderRow({ label, hint, help, value, onChange }: {
 /**
  * Подгруппа раздела настроек (0.4): карточка Atlas Aurora с заголовком и
  * строками `Row`/`Switch`/`Radio`. Без `title` — карточка без заголовка (раздел
- * из одной подгруппы).
+ * из одной подгруппы). `block` — якорь блока (`data-block`): к нему прокручивает
+ * переход по прежнему id раздела (SettingsPane, `LEGACY_SECTION`).
  */
-export function SettingsCard({ title, children }: { title?: string; children: ReactNode }) {
+export function SettingsCard({ title, block, children }: { title?: string; block?: string; children: ReactNode }) {
   return (
-    <section className="card scard">
+    <section className="card scard" data-block={block}>
       {title && <h3 className="type-card-title scard__title">{title}</h3>}
       {children}
     </section>

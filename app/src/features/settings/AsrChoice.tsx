@@ -1,7 +1,8 @@
 /**
  * «Распознавание»: чем распознаётся речь — устройство, а для видеокарты и для
  * процессора — свой движок (Whisper или GigaAM) и своя модель. Единственное
- * место выбора; установка движка и загрузка моделей — «Движок и модели».
+ * место выбора; установка движка и загрузка моделей — блок «Движок и модели»
+ * ниже в том же разделе.
  *
  * Ключи настроек прежние: `asr.device`, `asr.backend` + `asr.model`
  * (видеокарта), `asr.cpu_backend` + `asr.cpu_model` (процессор),
@@ -206,7 +207,7 @@ function DeviceRow({ device, draft, set, models, gpu, active, otherUsesGigaam }:
 /** Устройство, строки видеокарты и процессора. Состояние движка и каталог моделей — свои запросы. */
 export function AsrChoice({ draft, saved, set, endpoint, help, onOpenEngine }: {
   draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint; help?: ReactNode;
-  /** Перейти в «Движок и модели» (скачать модели). */
+  /** Прокрутить к блоку «Движок и модели» (скачать модели). */
   onOpenEngine?: () => void;
 }) {
   const [engine, setEngine] = useState<EngineState | null>(null);
@@ -241,8 +242,8 @@ export function AsrChoice({ draft, saved, set, endpoint, help, onOpenEngine }: {
       <p className="muted sdesc asr-intro">
         GigaAM понимает только русский, зато распознаёт в несколько раз быстрее. Whisper понимает и другие языки,
         точнее пишет английские термины и учитывает список терминов распознавания.
-        {onOpenEngine && <>{" "}Скачать и удалить модели можно в разделе{" "}
-          <Button variant="link" onClick={onOpenEngine}>«Движок и модели»</Button>.</>}
+        {onOpenEngine && <>{" "}Скачать и удалить модели можно ниже, в блоке{" "}
+          <Button variant="link" onClick={onOpenEngine}>«Модели распознавания»</Button>.</>}
       </p>
       {(["cuda", "cpu"] as const).map((d) => (
         <DeviceRow key={d} device={d} draft={draft} set={set} models={models} gpu={gpu} active={effect === d}
