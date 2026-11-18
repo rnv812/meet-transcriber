@@ -14,6 +14,19 @@ def ensure_ffmpeg() -> None:
         )
 
 
+def shift_filter(offset_s: float) -> str | None:
+    """Фильтр ffmpeg, сдвигающий звук во времени (сдвиг микрофона старой
+    записи, meet.track_sync): больше нуля — столько секунд тишины в начале,
+    меньше нуля — начало обрезано на столько же; ноль — None. Один на
+    расшифровку, плеер и объединение — сдвиг везде одинаковый."""
+    if offset_s > 0:
+        # all=1 — на каждом канале: дорожка может быть стерео.
+        return f"adelay=delays={round(offset_s * 1000, 3)}:all=1"
+    if offset_s < 0:
+        return f"atrim=start={-offset_s:.6f},asetpts=PTS-STARTPTS"
+    return None
+
+
 def to_wav16k(src: Path, dst: Path, normalize: bool = False, offset_s: float = 0.0) -> Path:
     """Любой аудио/видеофайл → mono 16 kHz wav (вход для ASR и диаризации).
 
@@ -31,11 +44,8 @@ def to_wav16k(src: Path, dst: Path, normalize: bool = False, offset_s: float = 0
     filters = []
     if normalize:
         filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
-    if offset_s > 0:
-        # all=1 — на каждом канале: до -ac 1 дорожка может быть стерео.
-        filters.append(f"adelay=delays={round(offset_s * 1000, 3)}:all=1")
-    elif offset_s < 0:
-        filters.append(f"atrim=start={-offset_s:.6f},asetpts=PTS-STARTPTS")
+    if offset_s:
+        filters.append(shift_filter(offset_s))
     if filters:
         cmd += ["-af", ",".join(filters)]
     cmd.append(str(dst))

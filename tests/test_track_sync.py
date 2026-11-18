@@ -231,3 +231,63 @@ def test_offset_to_apply_takes_only_an_accepted_estimate(stored, applied):
 ])
 def test_applied_offset_of_a_transcript_reads_old_ones_as_zero(transcript, applied):
     assert track_sync.applied_s(transcript) == pytest.approx(applied)
+
+
+# --- общий загрузчик сырой дорожки ---------------------------------------------
+
+
+def _two_tracks(tmp_path, transcript=None, meta=None):
+    folder = tmp_path / "2026-05-01_10-00"
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    if transcript is not None:
+        library.write_transcript(folder, transcript)
+    if meta is not None:
+        library.write_meta(folder, meta)
+    return folder
+
+
+def _ramp(path):
+    """Подставной декодер: отсчёты 1, 2, 3… — видно, откуда взят кусок."""
+    import numpy as np
+
+    return np.arange(1, 11, dtype=np.int16)
+
+
+def test_loader_delays_the_mic_by_the_applied_offset(tmp_path):
+    """Применённый сдвиг 0,3 с при частоте 10 Гц — три отсчёта тишины в начале
+    микрофона; системный звук как есть."""
+    folder = _two_tracks(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.3})
+    mic = track_sync.load_track(folder, "mic", _ramp, rate=10)
+    assert mic.tolist() == [0, 0, 0, *range(1, 11)]
+    assert track_sync.load_track(folder, "sys", _ramp, rate=10).tolist() == list(range(1, 11))
+
+
+def test_loader_trims_the_mic_start_by_a_negative_offset(tmp_path):
+    folder = _two_tracks(tmp_path, {"segments": [], track_sync.APPLIED_KEY: -0.2})
+    assert track_sync.load_track(folder, "mic", _ramp, rate=10).tolist() == list(range(3, 11))
+
+
+def test_loader_ignores_an_estimated_but_not_applied_offset(tmp_path):
+    """Оценка в meta.json есть, а расшифровка была без неё: текст стоит по
+    несдвинутому микрофону — и звук берётся несдвинутым."""
+    folder = _two_tracks(tmp_path, {"segments": []},
+                         meta={track_sync.META_KEY: {"mic_s": 0.4, "method": "durations"}})
+    assert track_sync.load_track(folder, "mic", _ramp, rate=10).tolist() == list(range(1, 11))
+
+
+def test_loader_takes_a_given_offset_and_misses_absent_tracks(tmp_path):
+    folder = _two_tracks(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.3})
+    assert track_sync.load_track(folder, "mic", _ramp, rate=10, offset=0.1).tolist()[:2] == [0, 1]
+    (folder / "mic.opus").unlink()
+    assert track_sync.load_track(folder, "mic", _ramp, rate=10) is None
+
+
+def test_track_time_moves_only_mic_times_to_the_raw_track(tmp_path):
+    folder = _two_tracks(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    offset = track_sync.folder_applied_s(folder)
+    assert offset == pytest.approx(0.4)
+    assert track_sync.track_time("mic", 10.0, offset) == pytest.approx(9.6)
+    assert track_sync.track_time("sys", 10.0, offset) == pytest.approx(10.0)
+    assert track_sync.folder_applied_s(tmp_path / "нет") == 0.0

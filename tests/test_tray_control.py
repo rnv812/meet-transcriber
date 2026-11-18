@@ -563,6 +563,33 @@ def test_saving_transcript_requires_segments(with_recordings, app):
     assert got["ok"] is True
 
 
+def test_editor_save_keeps_the_applied_track_offset(with_recordings, app):
+    """Сдвиг микрофона, с которым расшифрована запись, — свойство звука, а не
+    текста: редактор его не видит и не меняет, а плеер и образцы на него
+    опираются. Сохранение правки без поля его не теряет, чужое значение не
+    принимает."""
+    from meet import track_sync
+
+    library.write_transcript(with_recordings, {"version": 1, "segments": [],
+                                               track_sync.APPLIED_KEY: 0.4})
+    state = tray_control.TrayControl(app)
+    edited = {"version": 1, "segments": [{"start": 0, "end": 1, "speaker": "Вы", "text": "да"}]}
+    assert state.save_transcript("2026-08-18_11-00", edited)["ok"] is True
+    saved = library.read_transcript(with_recordings)
+    assert saved[track_sync.APPLIED_KEY] == 0.4 and saved["segments"][0]["text"] == "да"
+    state.save_transcript("2026-08-18_11-00", {**edited, track_sync.APPLIED_KEY: 3.0})
+    assert library.read_transcript(with_recordings)[track_sync.APPLIED_KEY] == 0.4
+
+
+def test_editor_save_does_not_invent_a_track_offset(with_recordings, app):
+    from meet import track_sync
+
+    library.write_transcript(with_recordings, {"version": 1, "segments": []})
+    state = tray_control.TrayControl(app)
+    state.save_transcript("2026-08-18_11-00", {"version": 1, "segments": [], track_sync.APPLIED_KEY: 3.0})
+    assert track_sync.APPLIED_KEY not in library.read_transcript(with_recordings)
+
+
 def test_naming_speakers_renames_and_enrolls(with_recordings, app, tmp_path):
     """Названный спикер попадает в базу голосов — это и есть «обучение клона».
     Прежний вход API идёт тем же путём, что панель: шагом истории."""

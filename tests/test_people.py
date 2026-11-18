@@ -127,6 +127,34 @@ def test_sample_is_a_clean_3_to_10_second_segment_of_the_latest_meeting(tmp_path
     assert people.sample("Пётр", voices, rec) is None
 
 
+def test_sample_on_the_mic_points_into_the_raw_track_of_a_shifted_recording(tmp_path):
+    """Человек рядом с владельцем говорит в микрофон; запись расшифрована со
+    сдвигом микрофона 0,4 с. Окно играет образец прямо из mic.opus — время
+    образца и его слов по этой дорожке, то есть на сдвиг раньше текста."""
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    words = [[5.0, 7.0, " при"], [7.0, 12.0, " вет"]]
+    m = _meeting(rec, "2026-09-29_15-30", [
+        {"start": 5, "end": 12, "speaker": "Анна", "text": "при вет", "track": "mic", "words": words}])
+    data = library.read_transcript_full(m)
+    library.write_transcript(m, {**data, "track_marks": "pipeline", "track_offset_applied_s": 0.4})
+    _voice(voices, "Анна", [m])
+    got = people.sample("Анна", voices, rec)
+    assert got["track"] == "mic"
+    assert (got["start"], got["end"]) == (pytest.approx(4.6), pytest.approx(11.6))
+    assert [w[:2] for w in got["words"]] == [[pytest.approx(4.6), pytest.approx(6.6)],
+                                            [pytest.approx(6.6), pytest.approx(11.6)]]
+    assert got["text"] == "при вет"
+
+
+def test_sample_on_sys_of_a_shifted_recording_keeps_text_time(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m = _meeting(rec, "2026-09-29_15-30", [{"start": 5, "end": 12, "speaker": "Демьян", "text": "а"}])
+    library.write_transcript(m, {**library.read_transcript(m), "track_offset_applied_s": 0.4})
+    _voice(voices, "Демьян", [m])
+    got = people.sample("Демьян", voices, rec)
+    assert (got["track"], got["start"], got["end"]) == ("sys", 5, 12)
+
+
 def test_avatar_is_normalised_to_square_png(tmp_path):
     voices = tmp_path / "voices"
     _voice(voices, "Демьян", [])

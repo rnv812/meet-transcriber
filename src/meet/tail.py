@@ -16,6 +16,10 @@
 кончился — `record.call_end` пишется по последнему его концу, и вернувшийся
 разговор остаётся целиком.
 
+Точка обрезки — по времени записи (системного звука); микрофон записи,
+расшифрованной со сдвигом (meet.track_sync), режется на применённый сдвиг
+раньше — там же в его сырой дорожке.
+
 Обрезка — новыми файлами `.part` и подменой всех дорожек разом после того,
 как каждая готова; хвост короче MIN_SAVING_S не трогаем (перекодирование
 того не стоит) и отмечаем `record.trim_skipped`, чтобы восстановление после
@@ -165,11 +169,15 @@ def trim(folder: Path, run=subprocess.run) -> float | None:
         if pending(folder):
             _append_event(folder, {"kind": TRIM_SKIPPED})
         return None
-    tracks = [p for p in (library.find_track(folder, s) for s in library.TRACK_STEMS) if p]
-    parts = {track: track.with_name(track.name + ".part") for track in tracks}
+    from meet import track_sync
+
+    offset = track_sync.folder_applied_s(folder)
+    tracks = {s: p for s, p in ((s, library.find_track(folder, s)) for s in library.TRACK_STEMS) if p}
+    parts = {track: track.with_name(track.name + ".part") for track in tracks.values()}
+    cuts = {track: max(0.0, track_sync.track_time(stem, cut, offset)) for stem, track in tracks.items()}
     try:
         for track, part in parts.items():
-            proc = _run(run, trim_command(track, part, cut))
+            proc = _run(run, trim_command(track, part, cuts[track]))
             if proc.returncode != 0:
                 raise RuntimeError(f"ffmpeg не обрезал {track.name}: {(proc.stderr or '').strip()[-200:]}")
         for track, part in parts.items():

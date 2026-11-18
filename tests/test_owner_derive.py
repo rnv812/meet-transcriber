@@ -73,7 +73,7 @@ class Library:
         self.audio = {}
 
     def meeting(self, name, voices, *, minutes=30, words=True, merged=False, call=True,
-                loud_sys=(), speaker="Вы", text_phase=False, segments=None):
+                loud_sys=(), speaker="Вы", text_phase=False, segments=None, mic_offset=None):
         folder = self.root / name
         folder.mkdir(parents=True)
         (folder / "mic.opus").write_bytes(b"")
@@ -86,13 +86,18 @@ class Library:
         data = {"version": 1, "segments": segs, "track_marks": "pipeline"}
         if text_phase:
             data["phase"] = "text"
+        if mic_offset is not None:
+            # Микрофон начал писать на mic_offset позже: текст расшифрован со
+            # сдвигом, а в сырой дорожке реплики стоят раньше.
+            data["track_offset_applied_s"] = mic_offset
         (folder / "transcript.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         (folder / "events.jsonl").write_text(
             json.dumps({"kind": "record.stopped", "duration_s": minutes * 60.0}) + "\n", encoding="utf-8")
         if merged:
             (folder / "meta.json").write_text(json.dumps({"merged_from": ["a", "b"]}), encoding="utf-8")
         end = (runs[-1][1] if runs else 0.0) + 5.0
-        self.audio[name] = {"runs": runs, "end": end, "loud_sys": list(loud_sys)}
+        self.audio[name] = {"runs": runs, "end": end, "loud_sys": list(loud_sys),
+                            "mic_offset": mic_offset or 0.0}
         return folder
 
     def decode(self, path, rate=16000):
@@ -100,8 +105,9 @@ class Library:
         n = int(spec["end"] * rate)
         if path.stem == "mic":
             out = np.zeros(n, dtype=np.int16)
+            shift = spec["mic_offset"]
             for a, b, v in spec["runs"]:
-                out[int(a * rate):int(b * rate)] = v * 1000
+                out[int((a - shift) * rate):int((b - shift) * rate)] = v * 1000
             return out
         out = np.zeros(n, dtype=np.int16)
         rng = np.random.default_rng(7)
@@ -223,6 +229,16 @@ def test_meeting_voice_is_dominant_cluster(lib):
     assert np.linalg.norm(voice.centroid) == pytest.approx(1.0)
 
 
+def test_meeting_voice_reads_the_mic_shifted_by_the_applied_offset(lib):
+    """Участки — по времени текста; голос участка — из сдвинутого микрофона.
+    Без сдвига кусок попадал бы наполовину в паузу и голоса бы не было."""
+    lib.meeting("2026-09-01_10-00", [OWNER] * 20, mic_offset=3.0)
+    voice = owner_derive.meeting_voice(lib.root / "2026-09-01_10-00", embed=FakeEmbed(),
+                                       decode=lib.decode, owner_labels={"Вы"})
+    assert voice.usable and float(voice.centroid @ VOICES[OWNER]) > 0.95
+    assert voice.mic_offset == pytest.approx(3.0)
+
+
 def test_mixed_meeting_has_no_voice(lib):
     """Два голоса поровну: доминирующего (от 60 %) нет."""
     lib.meeting("2026-09-01_10-00", [OWNER, OTHER] * 10)
@@ -278,6 +294,18 @@ def test_five_meetings_of_one_voice_give_a_suggestion(lib, voices_dir):
     assert all(owner_derive.SAMPLE_MIN_S <= r["end"] - r["start"] <= owner_derive.RUN_MAX_S for r in refs)
     assert found["seconds"] == pytest.approx(5 * 80.0) and found["quality"] > 0.9
     assert got.checked == 6 and got.found == 5
+
+
+def test_suggestion_samples_point_into_the_raw_mic_of_shifted_meetings(lib, voices_dir):
+    """Окно играет образец прямо из mic.opus: время ссылки — по сырой дорожке,
+    а не по тексту (у каждой встречи — свой сдвиг)."""
+    for day in range(1, 6):
+        lib.meeting(f"2026-09-0{day}_10-00", [OWNER] * 20, mic_offset=0.5 * day)
+    found = _find(lib, voices_dir).suggestion
+    for ref in found["samples"]:
+        raw = lib.decode(lib.root / ref["recording"] / "mic.opus")
+        piece = raw[int(ref["start"] * 16000):int(ref["end"] * 16000)]
+        assert piece.size and (piece == OWNER * 1000).all(), ref
 
 
 def test_inconsistent_voices_give_honest_reason(lib, voices_dir):

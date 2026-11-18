@@ -282,3 +282,106 @@ def test_real_ffmpeg_mixes_both_tracks(tmp_path):
     assert "channels=1" in probe.stdout
     duration = float(probe.stdout.split("duration=")[1].split()[0])
     assert 2.8 < duration < 3.3, "длина — по более длинной дорожке"
+
+
+# --- сдвиг микрофона старой записи (meet.track_sync) ---------------------------------
+
+
+def _mic_chain(cmd):
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    return graph.split("[1:a]", 1)[1].split(";", 1)[0], graph.split(";", 1)[0]
+
+
+def test_mix_command_delays_the_mic_by_a_positive_offset(tmp_path):
+    cmd = playback.mix_command(tmp_path / "sys.opus", tmp_path / "mic.opus", tmp_path / "p.tmp",
+                               mic_offset=0.4)
+    mic, sys_ = _mic_chain(cmd)
+    assert "adelay=delays=400" in mic and "all=1" in mic
+    assert "adelay" not in sys_ and "atrim" not in sys_
+
+
+def test_mix_command_trims_the_mic_start_by_a_negative_offset(tmp_path):
+    """Отрицательный сдвиг — как во временной копии при расшифровке: начало
+    микрофона срезано, звук собеседников не трогаем (его время — время текста)."""
+    cmd = playback.mix_command(tmp_path / "sys.opus", tmp_path / "mic.opus", tmp_path / "p.tmp",
+                               mic_offset=-0.25)
+    mic, sys_ = _mic_chain(cmd)
+    assert "atrim=start=0.250000" in mic and "asetpts=PTS-STARTPTS" in mic
+    assert "adelay" not in sys_ and "atrim" not in sys_
+
+
+def _call(tmp_path, transcript=None, meta=None):
+    from meet import library
+
+    _touch(tmp_path / "sys.opus", mtime=1_000_000)
+    _touch(tmp_path / "mic.opus", mtime=1_000_000)
+    if transcript is not None:
+        library.write_transcript(tmp_path, transcript)
+    if meta is not None:
+        library.write_meta(tmp_path, meta)
+
+
+def test_applied_offset_delays_the_mic_in_the_mix(tmp_path):
+    from meet import track_sync
+
+    _call(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    run = FakeRun()
+    playback.playback_path(tmp_path, run=run)
+    assert "adelay=delays=400" in _mic_chain(run.calls[0])[0]
+    stamp = json.loads((tmp_path / playback.STAMP_NAME).read_text(encoding="utf-8"))
+    assert stamp["mic_offset_s"] == pytest.approx(0.4)
+
+
+def test_estimated_but_not_applied_offset_is_not_in_the_mix(tmp_path):
+    from meet import track_sync
+
+    _call(tmp_path, {"segments": []}, meta={track_sync.META_KEY: {"mic_s": 0.4, "method": "durations"}})
+    run = FakeRun()
+    playback.playback_path(tmp_path, run=run)
+    mic, _ = _mic_chain(run.calls[0])
+    assert "adelay" not in mic and "atrim" not in mic
+
+
+def test_changed_offset_makes_the_mix_stale(tmp_path):
+    """Перерасшифровка применила сдвиг — дорожки те же, а сведение уже не то."""
+    from meet import library, track_sync
+
+    _call(tmp_path, {"segments": []})
+    run = FakeRun()
+    playback.playback_path(tmp_path, run=run)
+    assert len(run.calls) == 1
+    library.write_transcript(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    playback.playback_path(tmp_path, run=run)
+    assert len(run.calls) == 2
+    assert "adelay=delays=400" in _mic_chain(run.calls[1])[0]
+    playback.playback_path(tmp_path, run=run)  # тот же сдвиг — из кэша
+    assert len(run.calls) == 2
+
+
+def test_old_stamp_without_offset_stays_fresh_for_an_unshifted_recording(tmp_path):
+    """Отметка сведения прежних версий (без сдвига) у записи без сдвига —
+    свежая: обновление не пересводит библиотеку."""
+    _call(tmp_path, {"segments": []})
+    run = FakeRun()
+    playback.playback_path(tmp_path, run=run)
+    stamp_path = tmp_path / playback.STAMP_NAME
+    stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    stamp_path.write_text(json.dumps({"sources": stamp["sources"]}), encoding="utf-8")
+    playback.playback_path(tmp_path, run=run)
+    assert len(run.calls) == 1
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg не установлен")
+def test_real_ffmpeg_mixes_a_delayed_mic(tmp_path):
+    """Граф с задержкой микрофона принимает настоящий ffmpeg: сведение длиннее
+    на сдвиг."""
+    from meet import library, track_sync
+
+    for name, src in (("sys.opus", "sine=f=440:d=2"), ("mic.opus", "sine=f=220:d=2,volume=0.05")):
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src,
+                        "-c:a", "libopus", str(tmp_path / name)], check=True)
+    library.write_transcript(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 1.0})
+    path = playback.playback_path(tmp_path)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, check=True)
+    assert 2.8 < float(probe.stdout.strip()) < 3.3

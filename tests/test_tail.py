@@ -108,6 +108,17 @@ def test_trim_replaces_all_tracks_and_records_duration(tmp_path):
     assert not tail.pending(folder)
 
 
+def test_trim_cuts_the_mic_earlier_by_the_applied_offset(tmp_path):
+    """Микрофон расшифрованной со сдвигом записи начал писать на 2,5 с позже:
+    момент конца звонка в его сырой дорожке — на столько же раньше."""
+    folder = _folder(tmp_path)
+    library.write_transcript(folder, {"segments": [], "track_offset_applied_s": 2.5})
+    run = FakeFfmpeg()
+    assert tail.trim(folder, run=run) == 330.0
+    cuts = {Path(c[c.index("-i") + 1]).name: c[c.index("-t") + 1] for c in run.calls}
+    assert cuts == {"sys.opus": "330.000", "mic.opus": "327.500"}
+
+
 def test_failed_trim_keeps_the_tracks(tmp_path):
     folder = _folder(tmp_path)
     with pytest.raises(RuntimeError):

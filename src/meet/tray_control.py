@@ -2832,7 +2832,11 @@ class TrayControl:
 
     def save_transcript(self, recording_id: str, data: dict) -> dict:
         """Сохранить правки редактора. Пишем как есть: редактор — владелец
-        текста после расшифровки."""
+        текста после расшифровки. Кроме сдвига микрофона, с которым она
+        сделана (meet.track_sync): это свойство звука, по нему сводит плеер и
+        берутся образцы, — он остаётся от расшифровки, что бы ни прислали."""
+        from meet import track_sync
+
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
@@ -2841,6 +2845,10 @@ class TrayControl:
         with self._speakers_lock:  # не посреди правки спикеров
             # Текст до спикеров заменит окончательная расшифровка: правка пропала бы.
             self._refuse_text_only(folder)
+            data = {k: v for k, v in data.items() if k != track_sync.APPLIED_KEY}
+            before = library.read_transcript(folder) or {}
+            if track_sync.APPLIED_KEY in before:
+                data[track_sync.APPLIED_KEY] = before[track_sync.APPLIED_KEY]
             library.write_transcript(folder, _without_marks(data))
         self._analysis_check(folder)
         return {"ok": True, "path": str(library.transcript_path(folder))}

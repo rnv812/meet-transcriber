@@ -275,7 +275,13 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
     """Образец фразы человека — из последней по дате записи, где у него есть
     подходящий сегмент (правило — `speakers.pick_samples`). Нет подходящей
     фразы — None: окно покажет текст без ▶. `voices` — для единообразия с
-    остальными вызовами: образец берётся из транскриптов, а не из базы голосов."""
+    остальными вызовами: образец берётся из транскриптов, а не из базы голосов.
+
+    Окно играет образец прямо из файла дорожки, поэтому время образца и его
+    слов — по этой дорожке: у микрофона записи, расшифрованной со сдвигом
+    (meet.track_sync), — на применённый сдвиг раньше времени текста."""
+    from meet import track_sync
+
     name = valid_name(name)
     for folder in reversed(library.recording_folders(recordings)):
         if library.final_transcript(folder) is None:
@@ -285,9 +291,18 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
         found = speakers.pick_samples(turns, 1)
         if found:
             at, best = found[0]
-            return {"recording": folder.name, "start": best["start"], "end": best["end"],
-                    "track": _track_of(folder, data, turns[at]), "text": best["text"],
-                    "words": best["words"]}
+            track = _track_of(folder, data, turns[at])
+            offset = track_sync.applied_s(data) if track == "mic" else 0.0
+            if not offset:
+                return {"recording": folder.name, "start": best["start"], "end": best["end"],
+                        "track": track, "text": best["text"], "words": best["words"]}
+
+            def raw(t):
+                return max(0.0, round(track_sync.track_time(track, t, offset), 3))
+
+            words = [[raw(w[0]), raw(w[1]), *w[2:]] for w in best["words"]]
+            return {"recording": folder.name, "start": raw(best["start"]), "end": raw(best["end"]),
+                    "track": track, "text": best["text"], "words": words}
     return None
 
 

@@ -423,6 +423,41 @@ def test_audio_test_tells_owner_speech_from_remote_speech(meeting):
                                   owner_labels={"Вы"}) == {}
 
 
+def _applied(folder, offset):
+    """Расшифровка с применённым сдвигом микрофона (meet.track_sync)."""
+    from meet import track_sync
+
+    data = library.read_transcript(folder)
+    library.write_transcript(folder, {**data, track_sync.APPLIED_KEY: offset})
+
+
+def test_audio_test_reads_the_mic_shifted_by_the_applied_offset(meeting):
+    """Микрофон начал писать на 2 с позже: реплика «Вы» 48–50 с по тексту
+    звучит в сырой дорожке на 46–48 с."""
+    _applied(meeting, 2.0)
+    segs = library.read_transcript(meeting)["segments"]
+    tracks = _call_audio(owner_spans=[(46.0, 48.0)], remote_spans=[(0.0, 3.0)])
+    got = segvoices.audio_tracks(meeting, segs, [10], load=lambda src: tracks[src.name],
+                                 owner_labels={"Вы"})
+    assert got == {"48.00-50.00": "mic"}
+
+
+def test_mic_turn_voice_is_taken_from_the_shifted_place(meeting):
+    _applied(meeting, 2.0)
+    raw = np.zeros(16000 * 60, dtype=np.int16)
+    raw[46 * 16000:48 * 16000] = 1000  # голос реплики в сырой дорожке
+    levels = []
+
+    def embed(audio):
+        levels.append(float(np.median(np.abs(audio))) * 32768.0)
+        return A.astype(np.float32)
+
+    got = segvoices.compute(meeting, [10], embed=embed,
+                            load=lambda src: raw if src.name == "mic.opus" else np.zeros_like(raw))
+    assert got["computed"] == 1
+    assert levels == [pytest.approx(1000.0)]
+
+
 def test_split_job_decides_tracks_by_audio_and_the_edit_keeps_them(meeting, base):
     """Задача «Разделить» решает дорожки по звуку; резидент видит решение до
     правки и пишет его вместе с правкой (`track_source: "audio"` и версия

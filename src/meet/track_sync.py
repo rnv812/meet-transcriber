@@ -33,6 +33,16 @@
 Применяет оценку «Расшифровать заново» (`transcribe._transcribe_two_track`):
 сдвигает временную 16-кГц копию микрофона, а применённый сдвиг пишет в
 транскрипт (`APPLIED_KEY`). Файлы дорожек не меняются.
+
+Всё, что после этого читает сырой `mic.opus` по времени текста, берёт только
+применённый сдвиг (оценённый, но не применённый с текстом не согласован):
+голоса реплик и тест громкости (`segvoices`), голос владельца по прошлым
+встречам (`owner_derive`) — через `load_track`; ссылки окна на кусок сырой
+дорожки (образец человека, образцы голоса владельца) — через `track_time`;
+сведение плеера (`playback`), объединение встреч (`merge`) и обрезка хвоста
+(`tail`) — тем же сдвигом в своих командах ffmpeg (`audio.shift_filter`).
+Сдвиг больше нуля — микрофон запоздал: время текста t звучит в сырой дорожке
+в t − сдвиг.
 """
 
 from __future__ import annotations
@@ -102,6 +112,45 @@ def applied_s(transcript: dict | None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.0
     return float(value)
+
+
+def folder_applied_s(folder: Path) -> float:
+    """Применённый сдвиг микрофона записи — из её транскрипта (нет — 0)."""
+    return applied_s(library.read_transcript(Path(folder)))
+
+
+def track_time(stem: str, t: float, offset: float) -> float:
+    """Время текста → время в сырой дорожке `stem`: у микрофона — на
+    применённый сдвиг раньше, у остальных — то же."""
+    return float(t) - float(offset) if stem == "mic" else float(t)
+
+
+def shift_audio(audio, offset_s: float, rate: int):
+    """Сырой звук → на шкалу текста (как `audio.to_wav16k(offset_s=…)`):
+    больше нуля — тишина в начале, меньше — начало срезано."""
+    import numpy as np
+
+    n = int(round(abs(float(offset_s)) * rate))
+    if not n:
+        return audio
+    if offset_s > 0:
+        return np.concatenate([np.zeros(n, dtype=audio.dtype), audio])
+    return audio[n:]
+
+
+def load_track(folder: Path, stem: str, load, rate: int, offset: float | None = None):
+    """Сырая дорожка `stem` записи на шкале текста. `load(path)` декодирует
+    файл в моно с частотой `rate`; микрофон сдвигается на применённый сдвиг
+    (`offset`; None — из транскрипта записи). Дорожки нет — None."""
+    src = library.find_track(Path(folder), stem)
+    if src is None:
+        return None
+    audio = load(src)
+    if stem != "mic":
+        return audio
+    if offset is None:
+        offset = folder_applied_s(folder)
+    return shift_audio(audio, offset, rate)
 
 
 def recorded_mark() -> dict:

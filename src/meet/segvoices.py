@@ -27,7 +27,11 @@
 
 Пометкам без источника на старой записи (их писали сборки до этого правила,
 иногда ошибочно: переименованный собеседник становился «микрофоном») веры
-нет: дорожка вычисляется заново, а первая же правка их переписывает."""
+нет: дорожка вычисляется заново, а первая же правка их переписывает.
+
+Звук дорожек берётся на шкале текста (`track_sync.load_track`): микрофон
+старой записи, расшифрованной со сдвигом, сдвигается на него — голос и
+громкость реплики «Вы» берутся оттуда, где она звучала."""
 
 from __future__ import annotations
 
@@ -38,7 +42,7 @@ from pathlib import Path
 
 import numpy as np
 
-from meet import library
+from meet import library, track_sync
 
 CACHE_NAME = "segment_voices.json"
 # Короче — эмбеддинг неустойчив: такие сегменты берут группу соседей.
@@ -281,19 +285,20 @@ def _floor(db: np.ndarray) -> float:
 
 
 def audio_tracks(folder: Path, segments: list[dict], idx: list[int], load=None,
-                 owner_labels: set[str] | None = None) -> dict[str, str]:
+                 owner_labels: set[str] | None = None, offset: float | None = None) -> dict[str, str]:
     """Тест громкости: чья дорожка звучит на отрезке сегмента. → время
     сегмента → "mic" | "sys"; неясные (тишина, оба поровну, спор с подписью
     без явного перевеса) не решены. `load(src) -> int16 при ENERGY_RATE`
-    подменяется в тестах."""
+    подменяется в тестах; `offset` — применённый сдвиг микрофона (None — из
+    транскрипта записи)."""
     load = load or (lambda src: decode(src, ENERGY_RATE))
     labels = owners() if owner_labels is None else owner_labels
     levels = {}
     for stem in ("mic", "sys"):
-        src = library.find_track(folder, stem)
-        if src is None:
+        audio = track_sync.load_track(folder, stem, load, ENERGY_RATE, offset=offset)
+        if audio is None:
             return {}
-        db = _frame_db(load(src), ENERGY_RATE)
+        db = _frame_db(audio, ENERGY_RATE)
         levels[stem] = (db, _floor(db))
     out: dict[str, str] = {}
     for i in idx:
@@ -339,7 +344,8 @@ def decide_tracks(folder: Path, data: dict, idx: list[int], bus=None, load=None,
     if not needs_audio(folder, data, idx):
         return 0
     try:
-        got = audio_tracks(folder, _segments(data), idx, load=load, owner_labels=owner_labels)
+        got = audio_tracks(folder, _segments(data), idx, load=load, owner_labels=owner_labels,
+                           offset=track_sync.applied_s(data))
     except (OSError, RuntimeError, ValueError) as e:
         if bus is not None:
             bus.emit("log", text=f"дорожки реплик по звуку не определены: {e}")
@@ -584,11 +590,11 @@ def compute(folder: Path, idx: list[int], bus=None, embed=None, load=decode, ene
     skipped = 0
     done = total - len(todo)
     bus.progress("voices", label="голоса реплик", done=done, total=total)
+    offset = track_sync.applied_s(data)
     for track in sorted({t for _, t, _ in todo}):
-        src = library.find_track(folder, track)
-        if src is None:
+        audio = track_sync.load_track(folder, track, load, SAMPLE_RATE, offset=offset)
+        if audio is None:
             raise RuntimeError(f"нет дорожки {track} — голоса реплик не посчитать")
-        audio = load(src)
         for i, t, k in todo:
             if t != track:
                 continue

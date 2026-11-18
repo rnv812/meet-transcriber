@@ -28,6 +28,11 @@
    с уже сохранённым образцом владельца — «добавлять нечего»);
 7. для прослушивания — SAMPLE_COUNT участков из разных встреч.
 
+Участки — по времени текста, звук микрофона — на той же шкале
+(`track_sync.load_track`: запись, расшифрованная со сдвигом микрофона, —
+с ним). Ссылки на образцы окно играет прямо из `mic.opus`, поэтому их время —
+по сырой дорожке (`track_sync.track_time`).
+
 См. .superpowers/sdd/v033/speakers-design.md, §2.2 п.3, и t0-calibration.md."""
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from pathlib import Path
 
 import numpy as np
 
-from meet import library, owner_voice, segvoices, speaker_split
+from meet import library, owner_voice, segvoices, speaker_split, track_sync
 
 SAMPLE_RATE = 16000
 # --- кандидаты ---
@@ -117,6 +122,9 @@ class MeetingVoice:
     centroid: np.ndarray | None = None
     seconds: float = 0.0
     share: float = 0.0
+    # Сдвиг микрофона, с которым расшифрована встреча: участки — по времени
+    # текста, ссылки на сырой mic.opus — на него раньше.
+    mic_offset: float = 0.0
 
     @property
     def usable(self) -> bool:
@@ -407,7 +415,11 @@ def meeting_runs(folder: Path, *, embed, decode, owner_labels: set[str] | None, 
 
     def mic() -> np.ndarray:
         if "mic" not in loaded:
-            loaded["mic"] = decode(library.find_track(folder, "mic"), SAMPLE_RATE)
+            audio = track_sync.load_track(folder, "mic", lambda src: decode(src, SAMPLE_RATE),
+                                          SAMPLE_RATE, offset=track_sync.applied_s(data))
+            if audio is None:
+                raise RuntimeError("нет дорожки микрофона")
+            loaded["mic"] = audio
         return loaded["mic"]
 
     runs = owner_runs(data, owner_labels, mic=mic, vad=vad)
@@ -439,7 +451,9 @@ def summarize(name: str, runs: list[Run], stop: float = CLUSTER_STOP) -> Meeting
 def meeting_voice(folder: Path, *, embed, decode, owner_labels: set[str] | None, vad=None) -> MeetingVoice:
     """Голос владельца в одной встрече: доминирующий кластер его участков."""
     runs = meeting_runs(folder, embed=embed, decode=decode, owner_labels=owner_labels, vad=vad)
-    return summarize(Path(folder).name, runs)
+    voice = summarize(Path(folder).name, runs)
+    voice.mic_offset = track_sync.folder_applied_s(folder)
+    return voice
 
 
 # --- по всем встречам --------------------------------------------------------------
@@ -474,7 +488,9 @@ def _samples(group: list[MeetingVoice], center: np.ndarray) -> list[dict]:
         if not fit:
             continue
         best = max(fit, key=lambda r: float(r.emb @ center))
-        out.append({"recording": m.name, "start": best.start, "end": best.end, "track": "mic"})
+        start = max(0.0, round(track_sync.track_time("mic", best.start, m.mic_offset), 3))
+        end = round(track_sync.track_time("mic", best.end, m.mic_offset), 3)
+        out.append({"recording": m.name, "start": start, "end": end, "track": "mic"})
         if len(out) >= SAMPLE_COUNT:
             break
     return out

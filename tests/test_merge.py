@@ -115,7 +115,8 @@ def test_imports_only_stay_a_single_source_track():
 
 
 def test_concat_plan_pads_each_piece_to_its_part_and_fills_gaps_with_silence():
-    cmd = merge.concat_command([(Path("a/mic.opus"), 61.5), (None, 30.0), (Path("c/mic.opus"), 10.0)],
+    cmd = merge.concat_command([(Path("a/mic.opus"), 61.5, 0.0), (None, 30.0, 0.0),
+                                (Path("c/mic.opus"), 10.0, 0.0)],
                                Path("out/mic.opus.part"))
     assert cmd[0] == "ffmpeg"
     # отсутствующая дорожка — не вход, а генератор тишины в графе
@@ -134,7 +135,61 @@ def test_concat_plan_pads_each_piece_to_its_part_and_fills_gaps_with_silence():
 def test_plan_has_one_piece_per_part_in_order():
     parts = [_part("a", "2026-09-30T10:00:00", 60, ("sys", "mic")),
              _part("b", "2026-09-30T11:00:00", 30, ("sys",))]
-    assert merge.pieces(parts, "mic") == [(Path("a/mic.opus"), 60), (None, 30)]
+    assert merge.pieces(parts, "mic") == [(Path("a/mic.opus"), 60, 0.0), (None, 30, 0.0)]
+
+
+def _transcribed(folder, applied):
+    from meet import track_sync
+
+    library.write_transcript(folder, {"segments": [], track_sync.APPLIED_KEY: applied})
+
+
+def test_part_takes_the_offset_its_transcript_was_built_with(tmp_path):
+    """Сдвиг части — тот, с которым её расшифровали; оценённый, но не
+    применённый (только в meta.json) не в счёт."""
+    from meet import track_sync
+
+    a = _recording(tmp_path, "2026-09-30_10-00")
+    _transcribed(a, 0.4)
+    b = _recording(tmp_path, "2026-09-30_10-30")
+    library.write_meta(b, {track_sync.META_KEY: {"mic_s": 0.7, "method": "durations"}})
+    assert merge.describe_part(a, probe=lambda p: 60.0, end=lambda f: None).mic_offset == pytest.approx(0.4)
+    assert merge.describe_part(b, probe=lambda p: 60.0, end=lambda f: None).mic_offset == 0.0
+
+
+def test_pieces_carry_the_offset_of_each_part_only_for_the_mic():
+    parts = [_part("a", "2026-09-30T10:00:00", 60, ("sys", "mic")),
+             _part("b", "2026-09-30T11:00:00", 30, ("sys", "mic"))]
+    parts[0].mic_offset, parts[1].mic_offset = 0.4, 1.2
+    assert merge.pieces(parts, "mic") == [(Path("a/mic.opus"), 60, 0.4), (Path("b/mic.opus"), 30, 1.2)]
+    assert merge.pieces(parts, "sys") == [(Path("a/sys.opus"), 60, 0.0), (Path("b/sys.opus"), 30, 0.0)]
+
+
+def test_concat_plan_shifts_each_piece_by_its_own_offset():
+    cmd = merge.concat_command([(Path("a/mic.opus"), 60.0, 0.4), (Path("b/mic.opus"), 30.0, 1.2),
+                                (Path("c/mic.opus"), 10.0, -0.25), (None, 5.0, 0.0)],
+                               Path("out/mic.opus.part"))
+    chains = cmd[cmd.index("-filter_complex") + 1].split(";")
+    assert "adelay=delays=400" in chains[0] and "adelay=delays=1200" in chains[1]
+    assert "atrim=start=0.250000" in chains[2] and "adelay" not in chains[2]
+    # сдвиг — до доливки и обрезки по длине части: часть остаётся своей длины
+    assert chains[0].index("adelay") < chains[0].index("apad") < chains[0].index("atrim=end=60.000")
+    assert "adelay" not in chains[3] and "atrim=start" not in chains[3]
+
+
+def test_run_shifts_the_mic_of_two_parts_with_different_offsets(tmp_path, monkeypatch):
+    monkeypatch.setattr(merge.shutil, "which", lambda name: name)
+    a = _recording(tmp_path, "2026-09-30_10-00", started=_at("2026-09-30T10:00:00"))
+    b = _recording(tmp_path, "2026-09-30_10-30", started=_at("2026-09-30T10:30:00"))
+    _transcribed(a, 0.4)
+    _transcribed(b, 1.2)
+    folder = merge.create(tmp_path, [a, b], keep_originals=False)
+    run = FakeRun()
+    merge.run(folder, run=run, probe=lambda p: 60.0)
+    sys_cmd, mic_cmd = run.calls
+    mic = mic_cmd[mic_cmd.index("-filter_complex") + 1].split(";")
+    assert "adelay=delays=400" in mic[0] and "adelay=delays=1200" in mic[1]
+    assert "adelay" not in sys_cmd[sys_cmd.index("-filter_complex") + 1]
 
 
 # --- части в meta.json и перерывы -----------------------------------------------------
@@ -363,3 +418,26 @@ def test_unfinished_tail_of_an_auto_recording_is_left_out(tmp_path, monkeypatch)
     assert parts[1]["start_offset_s"] == 900.0
     assert parts[1]["gap_s"] == 900.0  # 10:15 → 10:30, а не 10:25 → 10:30
     assert "atrim=end=900.000" in run.calls[0][run.calls[0].index("-filter_complex") + 1]
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+                    reason="ffmpeg не установлен")
+def test_real_ffmpeg_concatenates_shifted_parts(tmp_path):
+    """Граф со сдвигом принимает настоящий ffmpeg; длина дорожки — по-прежнему
+    сумма частей."""
+    def tone(path: Path, seconds: float) -> None:
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", f"anullsrc=r=48000:cl=stereo:d={seconds}", "-c:a", "libopus", str(path)],
+                       check=True)
+
+    a = tmp_path / "2026-09-30_10-00"
+    b = tmp_path / "2026-09-30_10-30"
+    for folder, applied in ((a, 0.4), (b, -0.3)):
+        folder.mkdir()
+        tone(folder / "sys.opus", 2.0 if folder is a else 1.0)
+        tone(folder / "mic.opus", 1.6 if folder is a else 1.0)
+        _transcribed(folder, applied)
+    folder = merge.create(tmp_path, [a, b], keep_originals=True)
+    merge.run(folder)
+    for role in ("sys", "mic"):
+        assert merge.probe_duration(folder / f"{role}.opus") == pytest.approx(3.0, abs=0.15)

@@ -11,8 +11,10 @@
    времени склеивает ffmpeg'ом каждую дорожку: `sys`, `mic` или `source`
    (импорт). Нет дорожки в какой-то части — на её место тишина той же длины:
    дорожки обязаны остаться выровненными, иначе расшифровка двух дорожек
-   поставила бы реплики не туда. Части пишутся в `meta.parts`
-   (сдвиг в общей записи, исходное начало, перерыв перед частью).
+   поставила бы реплики не туда. Микрофон части, расшифрованной со
+   сдвигом (meet.track_sync), сдвигается при склейке на этот её сдвиг — у
+   каждой части свой. Части пишутся в `meta.parts` (сдвиг в общей записи,
+   исходное начало, перерыв перед частью).
 3. Обычная расшифровка общей папки — спикеры одни на всю встречу. Перерывы
    вставляются в транскрипт отметками «— перерыв N мин —» (`with_breaks`,
    зовёт `meet.transcribe`): это не реплика, а разделитель.
@@ -71,6 +73,9 @@ class Part:
     duration_s: float
     tracks: dict = field(default_factory=dict)
     title: str | None = None
+    # Сдвиг микрофона, с которым расшифрована часть (meet.track_sync): при
+    # склейке её микрофон сдвигается на него.
+    mic_offset: float = 0.0
 
 
 # --- части ------------------------------------------------------------------------
@@ -164,8 +169,11 @@ def describe_part(folder: Path, probe=probe_duration, end=None) -> Part:
         cut = None  # не измерили — берём запись целиком
     if cut and 0 < cut < duration:
         duration = cut
+    from meet import track_sync  # track_sync сам берёт отсюда probe_duration
+
     return Part(id=folder.name, folder=folder, start=start, duration_s=float(duration),
-                tracks={k: Path(v) for k, v in card.tracks.items()}, title=card.title)
+                tracks={k: Path(v) for k, v in card.tracks.items()}, title=card.title,
+                mic_offset=track_sync.folder_applied_s(folder))
 
 
 def output_roles(parts: list[Part]) -> tuple[str, ...]:
@@ -182,30 +190,36 @@ def role_track(part: Part, role: str) -> Path | None:
     return part.tracks.get(role)
 
 
-def pieces(parts: list[Part], role: str) -> list[tuple[Path | None, float]]:
-    return [(role_track(p, role), p.duration_s) for p in parts]
+def pieces(parts: list[Part], role: str) -> list[tuple[Path | None, float, float]]:
+    """(файл, длина части, сдвиг) по частям; сдвиг — только у микрофона."""
+    return [(role_track(p, role), p.duration_s, p.mic_offset if role == "mic" else 0.0)
+            for p in parts]
 
 
-def concat_command(items: list[tuple[Path | None, float]], out: Path) -> list[str]:
+def concat_command(items: list[tuple[Path | None, float, float]], out: Path) -> list[str]:
     """ffmpeg: куски подряд, каждый ровно длиной своей части.
 
-    Короткая дорожка части дополняется тишиной (`apad`) и обрезается до длины
-    части (`atrim`); отсутствующая — генератор тишины той же длины
-    (`anullsrc`). Всё приводится к формату записи — моно 16 кГц, — чтобы
-    `concat` склеивал одинаковое."""
+    Кусок со сдвигом (микрофон части, расшифрованной со сдвигом) сначала
+    сдвигается (`audio.shift_filter`). Короткая дорожка части дополняется
+    тишиной (`apad`) и обрезается до длины части (`atrim`); отсутствующая —
+    генератор тишины той же длины (`anullsrc`). Всё приводится к формату
+    записи — моно 16 кГц, — чтобы `concat` склеивал одинаковое."""
+    from meet.audio import shift_filter
+
     args: list[str] = []
     chains: list[str] = []
     labels: list[str] = []
     norm = f"aformat=sample_fmts=fltp:sample_rates={RATE}:channel_layouts=mono"
     inputs = 0
-    for index, (path, seconds) in enumerate(items):
+    for index, (path, seconds, offset) in enumerate(items):
         end = f"atrim=end={seconds:.3f}"
         if path is None:
             chains.append(f"anullsrc=r={RATE}:cl=mono,{end},{norm}[a{index}]")
         else:
             args += ["-i", str(path)]
+            shift = shift_filter(offset)
             chains.append(f"[{inputs}:a:0]aresample={RATE},{norm},asetpts=PTS-STARTPTS,"
-                          f"apad,{end},asetpts=PTS-STARTPTS[a{index}]")
+                          f"{shift + ',' if shift else ''}apad,{end},asetpts=PTS-STARTPTS[a{index}]")
             inputs += 1
         labels.append(f"[a{index}]")
     graph = ";".join(chains) + ";" + "".join(labels) + f"concat=n={len(items)}:v=0:a=1[out]"
