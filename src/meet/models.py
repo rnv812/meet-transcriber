@@ -83,6 +83,20 @@ CATALOGUE = (
         "language": "ru",
     },
     {
+        # MLX Whisper (meet.mlx_asr) — нерусские встречи на видеоядрах Apple
+        # Silicon. Только Mac (`platform`): на других машинах её не видно и не
+        # скачать. Выбирать её не нужно: движок берёт её сам, если она скачана.
+        "id": "mlx-community/whisper-large-v3-turbo",
+        "kind": ASR,
+        "backend": "mlx-whisper",
+        "title": "Whisper large-v3 turbo — MLX (Mac)",
+        "note": "встречи не на русском — на видеоядрах Apple Silicon, в разы быстрее процессора; "
+                "нужна macOS 14 или новее",
+        "size_gb": 1.6,
+        "language": "multi",
+        "platform": "macos",
+    },
+    {
         "id": "pyannote/speaker-diarization-community-1",
         "kind": DIARIZATION,
         "title": "Диаризация pyannote community-1",
@@ -99,6 +113,15 @@ CATALOGUE = (
         "language": "ru",
     },
 )
+
+
+def catalogue() -> list[dict]:
+    """Модели каталога для этой машины: строки с `platform` ("macos") — только
+    на своей платформе (показ в окне и загрузка)."""
+    from meet import plat
+
+    here = "macos" if plat.is_macos() else None
+    return [m for m in CATALOGUE if m.get("platform") in (None, here)]
 
 
 # Исходное HF_HUB_CACHE человека ("" — переменной не было), до того как
@@ -383,7 +406,7 @@ def state(selected: str | None = None, selected_gigaam: str | None = None) -> di
     have_token = bool(token())
     gigaam_selected = GIGAAM_PREFIX + selected_gigaam if selected_gigaam else None
     items = []
-    for model in CATALOGUE:
+    for model in catalogue():
         is_gigaam = model.get("backend") == "gigaam"
         is_downloaded = downloaded(model["id"])
         items.append({
@@ -472,7 +495,7 @@ def download(repo_id: str, on_line=None) -> int:
     Тянет `huggingface_hub`, который приходит вместе с движком: без движка
     качать нечем и незачем — расшифровывать всё равно будет некому.
     """
-    known = {model["id"] for model in CATALOGUE}
+    known = {model["id"] for model in catalogue()}
     from meet import paths
 
     if (missing := paths.storage_missing()) is not None:

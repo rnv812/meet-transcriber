@@ -302,6 +302,11 @@ def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
 
 def _recognize_on_device(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     choice = run.choose(wav)
+    if choice.backend == asr.MLX_WHISPER:
+        try:
+            return run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice, on_progress=run.part))
+        except Exception as e:
+            return _fallback_from_mlx(wav, hotwords, run, e)
     if choice.backend != "gigaam":
         return _whisper(wav, hotwords, run)
     try:
@@ -310,6 +315,19 @@ def _recognize_on_device(wav: Path, hotwords: str | None, run: "_Run") -> list[S
         if choice.device == "cuda" and asr.missing_cuda_library(e):
             raise  # Whisper на той же карте упадёт так же — _cuda_fallback
         return _fallback_to_whisper(wav, hotwords, run, choice.device, e)
+
+
+def _fallback_from_mlx(wav: Path, hotwords: str | None, run: "_Run", error: Exception) -> list[Segment]:
+    """MLX Whisper упал (Metal, модель, пакет) — встречу распознаёт
+    faster-whisper на процессоре, как без MLX. Причина — строкой в журнал
+    (тип и текст ошибки, без текста встречи); дальше в этой задаче, включая
+    вторую дорожку, — только faster-whisper. Пометка выбора сохраняется."""
+    import dataclasses
+
+    reason = f"{type(error).__name__}: {str(error)[:200]}"
+    print(f"MLX Whisper не сработал ({reason}) — распознаёт Whisper на процессоре")
+    run.choice = dataclasses.replace(run.choice or asr.Choice(), backend="faster-whisper", device="cpu")
+    return _whisper(wav, hotwords, run)
 
 
 def _cuda_fallback(wav: Path, hotwords: str | None, run: "_Run", error: Exception) -> list[Segment]:

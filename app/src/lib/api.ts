@@ -384,7 +384,8 @@ export type EngineState = {
 export type Model = {
   id: string;
   kind: "asr" | "diarization" | "align";
-  /** Движок модели распознавания: "faster-whisper" или "gigaam" (id с префиксом «gigaam/»). */
+  /** Движок модели распознавания: "faster-whisper", "gigaam" (id с префиксом «gigaam/») или
+   *  "mlx-whisper" (только Mac: движок берёт её сам, в выборе модели Whisper её нет). */
   backend?: string;
   title: string;
   note: string;

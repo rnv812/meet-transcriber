@@ -353,6 +353,23 @@ const savedPatch = async () => {
   return vi.mocked(api.patchSettings).mock.calls[0]?.[1];
 };
 
+test("«Распознавание»: модели MLX (Mac) нет в выборе модели Whisper, но она есть в списке моделей", async () => {
+  const withMlx = catalogue();
+  withMlx.items.push(modelItem({ id: "mlx-community/whisper-large-v3-turbo", backend: "mlx-whisper",
+    title: "Whisper large-v3 turbo — MLX (Mac)", size_gb: 1.6 }));
+  vi.mocked(api.getEngine).mockResolvedValue({ ...structuredClone(engineState), cuda_ok: true });
+  vi.mocked(api.getSettings).mockResolvedValue(structuredClone(settings));
+  vi.mocked(api.getModels).mockResolvedValue(withMlx);
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+  const gpu = await screen.findByRole("group", { name: "Видеокарта" });
+  await userEvent.click(await within(gpu).findByRole("combobox", { name: "Модель Whisper" }));
+  expect(screen.getByRole("option", { name: /^Whisper medium/ })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /MLX/ })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  expect(modelRow("Whisper large-v3 turbo — MLX (Mac)")).toBeInTheDocument();
+});
+
 test("«Распознавание»: строки видеокарты и процессора показывают движок и модель из настроек", async () => {
   await openAsr({ cuda_ok: true });
   const gpu = await screen.findByRole("group", { name: "Видеокарта" });

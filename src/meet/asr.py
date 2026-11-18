@@ -632,6 +632,8 @@ def drop_hallucinations(
 # скачалась / не загрузилась (нет сети, файл битый).
 NOT_RUSSIAN = "not_russian"
 GIGAAM_FAILED = "gigaam_failed"
+# Движок MLX Whisper (meet.mlx_asr) — имя в выборе и в транскрипте.
+MLX_WHISPER = "mlx-whisper"
 # Сколько секунд речи (суммарно, из нескольких мест записи) слушать, чтобы
 # определить язык, и сколько кусков для этого брать.
 DETECT_LANGUAGE_S = 60
@@ -644,7 +646,10 @@ DETECT_MIN_PROBABILITY = 0.8
 @dataclass(frozen=True)
 class Choice:
     """Чем распознавать встречу: движок, устройство, модель GigaAM и, если
-    движок не тот, что выбран в настройках, — почему (`note`)."""
+    движок не тот, что выбран в настройках, — почему (`note`).
+
+    Движки: "faster-whisper", "gigaam", "mlx-whisper" (Mac 14+, нерусская
+    встреча, устройство "mps" — видеоядра Apple, `meet.mlx_asr`)."""
 
     backend: str = "faster-whisper"
     device: str = "cpu"
@@ -797,13 +802,31 @@ def detect_language(path: Path, *, model_factory=None, regions=None) -> tuple[st
         return None
 
 
+def _on_mlx(choice: Choice, language: str) -> Choice:
+    """Whisper на процессоре для нерусской встречи на Mac — MLX Whisper на
+    видеоядрах, если он есть (`mlx_asr.usable`: macOS 14+, пакет, модель).
+    Иначе выбор не меняется."""
+    if choice.backend != "faster-whisper" or choice.device != "cpu" or language in ("ru", AUTO_LANGUAGE):
+        return choice
+    from meet import mlx_asr
+
+    if not mlx_asr.usable():
+        return choice
+    print("распознаёт MLX Whisper на видеоядрах")
+    return Choice(MLX_WHISPER, mlx_asr.DEVICE, note=choice.note, cpu_reason=choice.cpu_reason)
+
+
 def choose(path: Path | None = None, *, detect=None) -> Choice:
     """Движок для встречи — один на обе дорожки.
 
     GigaAM только русский: язык встречи не русский (или `auto` уверенно —
     не меньше DETECT_MIN_PROBABILITY — определил другой по образцу речи) —
     распознаёт Whisper, с пометкой NOT_RUSSIAN. Неуверенный ответ детектора —
-    русский. Пакета GigaAM нет в движке (старая установка) — тоже Whisper."""
+    русский. Пакета GigaAM нет в движке (старая установка) — тоже Whisper.
+
+    Whisper на процессоре для нерусской встречи на Mac 14+ с MLX и
+    скачанной моделью — MLX Whisper (`_on_mlx`); язык `auto` без
+    определения (выбран Whisper) — как раньше."""
     from meet import gigaam_asr, settings
 
     device = resolve_device()
@@ -813,7 +836,8 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     except Exception:
         cfg = settings.Asr()
     if cfg.backend_for(device) != "gigaam":
-        return Choice("faster-whisper", device, cpu_reason=reason)
+        return _on_mlx(Choice("faster-whisper", device, cpu_reason=reason),
+                       (cfg.language or DEFAULT_LANGUAGE).strip().lower())
     language = (cfg.language or DEFAULT_LANGUAGE).strip().lower()
     if language == AUTO_LANGUAGE:
         found = (detect or detect_language)(path) if path is not None else None
@@ -826,7 +850,7 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     if language != "ru":
         print(f"GigaAM распознаёт только русский, а язык записи — {language}: "
               "распознаёт Whisper")
-        return Choice("faster-whisper", device, note=NOT_RUSSIAN, cpu_reason=reason)
+        return _on_mlx(Choice("faster-whisper", device, note=NOT_RUSSIAN, cpu_reason=reason), language)
     if not gigaam_asr.installed():
         print("GigaAM не установлен в движке — распознаёт Whisper "
               "(переустановите движок в настройках)")
@@ -856,8 +880,16 @@ def transcribe_wav(
     `choice` (asr.choose) с движком GigaAM — распознаёт GigaAM (подсказок
     у него нет: `hotwords` не нужны, термины чинит пайплайн после).
 
+    `choice` с движком MLX Whisper — `mlx_asr` (подсказки — затравкой
+    initial_prompt); его сбой ловит вызывающий (откат на faster-whisper).
+
     `on_progress(доля)` — ход распознавания 0…1: у Whisper — по концу
     последнего сегмента от длительности записи, у GigaAM — по кускам."""
+    if choice is not None and choice.backend == MLX_WHISPER:
+        from meet import mlx_asr
+
+        return mlx_asr.transcribe(path, mlx_asr.MODEL, whisper_language(language or _asr_settings()[1]),
+                                  hotwords, on_progress)
     if choice is not None and choice.backend == "gigaam":
         from meet import gigaam_asr
 

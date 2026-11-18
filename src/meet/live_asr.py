@@ -13,6 +13,9 @@
   процессе, без запуска ffmpeg на каждое окно (`gigaam_asr.in_process_wav`).
   Окно без речи (Silero VAD) модель не видит вовсе. Подсказок (hotwords) у
   GigaAM нет: термины чинят правила замены и возврат латиницы (`TextFixes`);
+* **MLX Whisper** (Mac 14+, `meet.mlx_asr`) — язык встречи не русский (и не
+  `auto`), MLX и его модель на месте: короткие окна ~8–10 с на видеоядрах,
+  без меток слов. Не загрузился или трижды подряд не распознал окно — Whisper;
 * **Whisper** — язык встречи не русский, GigaAM не установлена или не
   скачана, выбран `assist.live_asr = whisper`, или GigaAM не загрузилась /
   трижды подряд не распознала окно. Окна ~15–20 с: на коротких Whisper
@@ -214,6 +217,90 @@ class GigaamLive:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+# Окна MLX Whisper: короче, чем у Whisper на процессоре (видеоядра
+# распознают окно за доли секунды), но не 5 с, как у GigaAM: на совсем
+# коротких окнах Whisper заметно хуже.
+MLX_POLICY = WindowPolicy(min_s=6.0, max_s=10.0, merge_s=20.0)
+
+
+class MlxLive:
+    """MLX Whisper для живого режима (см. модуль): окна MLX_POLICY без меток
+    слов, тишину отсекает тот же VAD. `fallback()` — Whisper на процессоре на
+    случай, если MLX не загрузился или трижды подряд не распознал окно."""
+
+    def __init__(self, language: str | None, *, fallback=None, log=print) -> None:
+        from meet import mlx_asr
+
+        self.language = language
+        self.model_name = mlx_asr.MODEL
+        self.device = mlx_asr.DEVICE
+        self._fallback_factory = fallback
+        self._fallback = None
+        self._errors = 0
+        self._log = log
+        self.policy = MLX_POLICY
+        self.name = "MLX Whisper"
+        self.latin_pass = False
+
+    @property
+    def active(self):
+        """Кто сейчас распознаёт: self или запасной Whisper."""
+        return self._fallback or self
+
+    def load(self) -> None:
+        from meet import mlx_asr
+
+        try:
+            mlx_asr.warm_up(self.model_name)  # модель грузится сейчас, а не на первой реплике
+        except Exception as e:
+            self._log(f"живой режим: MLX Whisper не загрузился ({type(e).__name__}) — распознаёт Whisper")
+            self._switch()
+            return
+        self._log("живой режим: распознаёт MLX Whisper на видеоядрах, окна ~8 с")
+
+    def _switch(self) -> None:
+        if self._fallback_factory is None:
+            raise RuntimeError("MLX Whisper недоступен, а запасного Whisper нет")
+        from meet import mlx_asr
+
+        mlx_asr.unload()
+        fallback = self._fallback_factory()
+        fallback.load()
+        self._fallback = fallback
+        self.policy = getattr(fallback, "policy", None)  # None — окна Whisper движка
+        self.name = getattr(fallback, "name", "Whisper")
+
+    def transcribe_window(self, audio, *, offset_s: float = 0.0, hotwords: str | None = None,
+                          initial_prompt: str | None = None) -> list:
+        if self._fallback is not None:
+            return self._fallback.transcribe_window(audio, offset_s=offset_s, hotwords=hotwords,
+                                                    initial_prompt=initial_prompt)
+        from meet import mlx_asr
+
+        # У mlx_whisper нет hotwords: термины — в начале затравки.
+        prompt = " ".join(p.strip() for p in (hotwords, initial_prompt) if p and p.strip()) or None
+        try:
+            segments = mlx_asr.transcribe_audio(
+                audio, self.model_name, self.language, prompt, words=False, offset_s=offset_s,
+                temperature=0.0, condition_on_previous_text=False)
+        except Exception as e:
+            self._errors += 1
+            if self._errors >= GIGAAM_MAX_ERRORS and self._fallback_factory is not None:
+                self._log(f"живой режим: MLX Whisper не распознаёт окна ({type(e).__name__}) — "
+                          "дальше распознаёт Whisper")
+                self._switch()
+            raise
+        self._errors = 0
+        return segments
+
+    def unload(self) -> None:
+        if self._fallback is not None:
+            self._fallback.unload()
+        from meet import mlx_asr
+
+        mlx_asr.unload()
+
+
 # Потоков torch для GigaAM на CPU в живом режиме. Замер M10 (i9-13900H): 8
 # потоков — 0,47 с на окно ~5 с, 14 — 0,45–0,55 с, но с редкими провалами,
 # когда процессор занят и другим (звонок, задачи расшифровки).
@@ -381,6 +468,11 @@ def pick(cfg=None, *, log=print):
         log("живой режим: распознаёт Whisper (так в настройках)")
         return whisper()
     language = (cfg.asr.language or asr.DEFAULT_LANGUAGE).strip().lower()
+    if language not in ("ru", asr.AUTO_LANGUAGE):
+        from meet import mlx_asr
+
+        if mlx_asr.usable(log=log):
+            return MlxLive(language, fallback=whisper, log=log)
     if language != "ru":
         log(f"живой режим: язык распознавания «{language}» — распознаёт Whisper")
         return whisper()
