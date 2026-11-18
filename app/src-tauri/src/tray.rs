@@ -248,8 +248,7 @@ impl KbFailure {
     }
 }
 
-/// `/state.live` без `started_at`: секундомер — забота панели, а меню и
-/// уведомлениям он не нужен.
+/// `/state.live`: что нужно меню, уведомлениям и заголовку в строке меню.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Live {
     /// Звук уже идёт к ассистенту (своя запись или отвод обычной); модель
@@ -279,6 +278,10 @@ pub struct Live {
     /// `"stop"` — остановили). Пока ассистент жив — `None`; старый резидент
     /// поля не присылает.
     pub ended_by: Option<String>,
+    /// Стенное время начала захвата звука, секунды Unix (у подключённого к
+    /// записи — начало самой записи); `None` — звук ещё не идёт или старый
+    /// резидент. Для длительности в строке меню macOS (`menu_bar_title`).
+    pub started_at: Option<f64>,
 }
 
 impl Live {
@@ -304,6 +307,10 @@ impl Live {
             attached: flag("attached"),
             with_recording: flag("with_recording"),
             ended_by: text("ended_by"),
+            started_at: value
+                .get("started_at")
+                .and_then(Value::as_f64)
+                .filter(|at| at.is_finite()),
         }
     }
 
@@ -1116,6 +1123,33 @@ fn clock(seconds: f64) -> String {
     } else {
         format!("{minutes:02}:{secs:02}")
     }
+}
+
+/// Текст рядом со значком в строке меню macOS: «● 12:34», пока идёт
+/// запись — обычная, временная или с ассистентом; `None` — пусто (ожидание,
+/// расшифровка, нет связи, «Стоп» уже нажат). `now` — стенное время, секунды
+/// Unix: запись с ассистентом считается от его `started_at`, а без него
+/// (старый резидент) остаётся только точка.
+pub fn menu_bar_title(view: Option<&View>, now: f64) -> Option<String> {
+    let view = view?;
+    if view.recording {
+        return Some(format!("● {}", clock(view.elapsed_s)));
+    }
+    if !view.live.active || view.live.stopping {
+        return None;
+    }
+    Some(match view.live.started_at {
+        Some(at) => format!("● {}", clock(now - at)),
+        None => "●".to_string(),
+    })
+}
+
+/// Стенное время, секунды Unix (для `menu_bar_title`).
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// То, от чего зависит меню. Пересобираем его только при смене этого, а не на
@@ -1995,6 +2029,7 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState, icon_size: u32) {
     let mut tracker = Tracker::default();
     let mut shown_icon = Some(icon_for(None, &ResidentStatus::Starting));
     let mut shown_tip: Option<String> = None;
+    let mut shown_title: Option<String> = None;
     let mut shown_menu = Some(initial_menu);
     let mut level_read: Option<Instant> = None;
     // Окно ассистента открыто нами (по последнему полученному снимку). Без
@@ -2066,6 +2101,14 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState, icon_size: u32) {
             if shown_tip.as_deref() != Some(text.as_str()) && tray.set_tooltip(Some(&text)).is_ok()
             {
                 shown_tip = Some(text);
+            }
+            // Строка меню macOS: длительность записи рядом со значком (на
+            // Windows у значка трея текста нет).
+            if cfg!(target_os = "macos") {
+                let title = menu_bar_title(view.as_ref(), unix_now());
+                if shown_title != title && tray.set_title(title.as_deref()).is_ok() {
+                    shown_title = title;
+                }
             }
             *lock(&state.forget_gaps) = view
                 .as_ref()
@@ -2498,6 +2541,51 @@ mod tests {
     }
 
     #[test]
+    fn menu_bar_title_shows_how_long_the_meeting_has_been_recorded() {
+        let now = 1_759_300_754.0;
+        // Ожидание, нет связи, расшифровка — заголовка нет.
+        assert_eq!(menu_bar_title(Some(&idle()), now), None);
+        assert_eq!(menu_bar_title(None, now), None);
+        let mut busy = idle();
+        busy.busy = true;
+        assert_eq!(menu_bar_title(Some(&busy), now), None);
+        // Запись 754 с — «● 12:34», за час — с часами.
+        let mut rec = idle();
+        rec.recording = true;
+        rec.elapsed_s = 754.2;
+        assert_eq!(menu_bar_title(Some(&rec), now).as_deref(), Some("● 12:34"));
+        rec.elapsed_s = 3723.0;
+        assert_eq!(
+            menu_bar_title(Some(&rec), now).as_deref(),
+            Some("● 1:02:03")
+        );
+        // Временная встреча и ассистент, подключённый к записи, — время записи.
+        rec.temporary = true;
+        rec.live = attached(true, false, false);
+        rec.live.started_at = Some(now - 5.0);
+        assert_eq!(
+            menu_bar_title(Some(&rec), now).as_deref(),
+            Some("● 1:02:03")
+        );
+        // Запись с ассистентом (пишет он) — от начала захвата звука.
+        let mut live = with_live(true, false, false);
+        live.live.started_at = Some(now - 754.0);
+        assert_eq!(menu_bar_title(Some(&live), now).as_deref(), Some("● 12:34"));
+        // Старый резидент без started_at — только точка.
+        live.live.started_at = None;
+        assert_eq!(menu_bar_title(Some(&live), now).as_deref(), Some("●"));
+        // Часы отстали от резидента — не «минус», а ноль.
+        live.live.started_at = Some(now + 30.0);
+        assert_eq!(menu_bar_title(Some(&live), now).as_deref(), Some("● 00:00"));
+        // «Стоп» нажат: ассистент дописывает, но встреча кончилась — пусто.
+        let stopping = with_live(true, false, true);
+        assert_eq!(menu_bar_title(Some(&stopping), now), None);
+        // Ассистент ещё грузится — звук не пишется, заголовка нет.
+        let starting = with_live(false, true, false);
+        assert_eq!(menu_bar_title(Some(&starting), now), None);
+    }
+
+    #[test]
     fn tooltip_texts() {
         let running = ResidentStatus::Running;
         assert_eq!(tooltip(Some(&idle()), &running), "Meet · ожидание звонка");
@@ -2913,6 +3001,7 @@ mod tests {
                 attached: false,
                 with_recording: false,
                 ended_by: None,
+                started_at: None,
             },
             ..idle()
         }
@@ -3061,6 +3150,7 @@ mod tests {
                 attached: false,
                 with_recording: false,
                 ended_by: None,
+                started_at: Some(1759300000.0),
             }
         );
         let v = View::from_json(
@@ -3408,6 +3498,7 @@ mod tests {
             attached: true,
             with_recording: false,
             ended_by: None,
+            started_at: None,
         }
     }
 
