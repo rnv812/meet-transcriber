@@ -452,6 +452,94 @@ def test_codex_without_freedom_gets_no_access_flag(tmp_path):
     assert "access" not in runner.calls[0][1]
 
 
+
+def _codex_sandbox(monkeypatch, tmp_path, config):
+    """Codex на Windows: `[windows] sandbox` в config.toml пользователя есть или нет."""
+    from meet.llm import codex
+
+    home = tmp_path / "codex-home"
+    home.mkdir(exist_ok=True)
+    (home / "config.toml").write_text(config, encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setattr(codex, "_ON_WINDOWS", True)
+
+
+def _sandbox_lines(h):
+    return [m for m in h.chat.messages() if m["kind"] == "system" and m.get("notice") == "codex_sandbox"]
+
+
+def test_codex_user_turn_without_windows_sandbox_says_it_only_reads_once(tmp_path, monkeypatch):
+    """Без `[windows] sandbox` Codex на Windows в ходе USER фактически только
+    читает: строка ассистента об этом — одна на встречу, Meet ключ не ставит."""
+    from meet.assist.participant import CODEX_SANDBOX_NOTICE
+
+    _codex_sandbox(monkeypatch, tmp_path, 'model = "gpt-5.5"\n')
+    runner = FakeRunner([SILENT, SILENT, SILENT])
+    h = _make(tmp_path, provider="codex", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        publish(h, 10, "Олег", "Начнём")
+        h.clock.t = 100
+        await h.p.tick()                                  # ход по расшифровке (NONE) — без строки
+        assert _sandbox_lines(h) == []
+        await h.p.post_user_message("поправь заметку")
+        await h.p.tick()
+        await h.p.post_user_message("и ещё одну")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    (line,) = _sandbox_lines(h)
+    assert line["text"] == CODEX_SANDBOX_NOTICE
+    assert CODEX_SANDBOX_NOTICE.startswith("Codex сможет только читать: настройте песочницу Codex")
+    assert [kw["access"] for _p, kw in runner.calls] == [consent.NONE, consent.USER, consent.USER]
+    assert not (tmp_path / "codex-home" / "config.toml").read_text(encoding="utf-8").count("sandbox")
+
+
+def test_codex_sandbox_line_is_not_repeated_after_a_restart(tmp_path, monkeypatch):
+    _codex_sandbox(monkeypatch, tmp_path, "")
+    h = _make(tmp_path, provider="codex", runner=FakeRunner([SILENT]), freedom=True)
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("сделай")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    again = _make(tmp_path, provider="codex", runner=FakeRunner([SILENT]), freedom=True, folder=h.folder)
+
+    async def second():
+        await again.p.start()
+        await again.p.post_user_message("ещё")
+        await again.p.tick()
+        await again.p.shutdown()
+
+    run(second())
+    assert len(_sandbox_lines(again)) == 1
+
+
+@pytest.mark.parametrize("case", ["configured", "confirm", "not-windows"])
+def test_codex_sandbox_line_only_when_writes_would_be_lost(tmp_path, monkeypatch, case):
+    from meet.llm import codex
+
+    _codex_sandbox(monkeypatch, tmp_path, '[windows]\nsandbox = "elevated"\n' if case == "configured" else "")
+    if case == "not-windows":
+        monkeypatch.setattr(codex, "_ON_WINDOWS", False)
+    h = _make(tmp_path, provider="codex", runner=FakeRunner([SILENT]), freedom=True,
+              agent_mode="confirm" if case == "confirm" else "auto")
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("сделай")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert _sandbox_lines(h) == []
+
+
 # --- настройка -------------------------------------------------------------------------
 
 

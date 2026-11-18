@@ -342,6 +342,27 @@ def test_codex_supports_what_is_meaningful(tmp_path, monkeypatch):
     assert {c["name"] for c in h.p.view()["commands"]} == {"help", "mcp", "clear", "model"}
 
 
+
+@pytest.mark.parametrize("bad", ["gpt&calc", "gpt%PATH%"])
+def test_codex_model_with_shell_characters_is_refused(tmp_path, bad):
+    """Имя модели уходит в командную строку Codex (`-m`): знаки cmd.exe — отказ
+    строкой, модель прежняя, следующий ход без неё."""
+    runner = FakeRunner([SILENT])
+    h = _make(tmp_path, provider="codex", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await _post(h, f"/model {bad}")
+        await h.p.post_user_message("что дальше?")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    (line,) = _lines(h, "model")
+    assert line["level"] == "error" and "недопустимые символы" in line["text"]
+    assert "model" not in runner.calls[0][1] and h.p.view().get("model_override") is None
+
+
 # --- «Продолжить разговор» после встречи ---
 
 

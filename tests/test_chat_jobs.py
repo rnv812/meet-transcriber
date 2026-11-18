@@ -19,6 +19,15 @@ from meet.llm.base import AgentReply, resume_failure
 RID = "2026-10-07_10-00"
 
 
+@pytest.fixture(autouse=True)
+def _codex_sandbox_set_up(monkeypatch):
+    """Строка «Codex сможет только читать…» (Windows без `[windows] sandbox`)
+    проверяется в тестах участника; здесь лента одинакова на любой системе."""
+    from meet.llm import codex
+
+    monkeypatch.setattr(codex, "_ON_WINDOWS", False)
+
+
 class Runner:
     def __init__(self, *replies):
         self.replies = list(replies)

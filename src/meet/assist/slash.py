@@ -22,7 +22,8 @@
   переписки чата; лента остаётся;
 * `/model [имя]` — без имени текущая модель и список, с именем — сменить
   (Claude Code — `set_model` до конца сессии, Codex/OpenCode — на следующие
-  ходы; неизвестную CLI отвергает — строка ошибки);
+  ходы; неизвестную CLI отвергает — строка ошибки; имя Codex со знаками
+  cmd.exe — отказ до остановки хода, `Participant.model_error`);
 * `/compact [указание]` — Claude Code: отдельным ходом (сжатие — строкой
   «Контекст сжат (было N токенов)»), у прочих — «недоступно».
 
@@ -280,6 +281,11 @@ async def _model(p, msg, cmd) -> None:
         return
     if p.provider not in (CLAUDE, *RUNNERS):
         await p.command_line(msg, cmd, unavailable("model", p.provider_label), level="info")
+        return
+    error = p.model_error(name)
+    if error:     # имя уходит в командную строку CLI: отказ до остановки хода
+        p.log_command("model", "отказ: недопустимое имя")
+        await p.command_line(msg, cmd, error, level="error")
         return
     await p.halt_turn()
     resolved = await p.set_model(name)

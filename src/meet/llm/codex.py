@@ -5,7 +5,10 @@
 Рабочая папка — база знаний (первая существующая из `allowed_dirs[1:]`),
 иначе `cwd`. Флаги сверены с `codex exec --help` (codex-cli 0.159.0; 0.4 —
 0.160.0: `--approve-for-me`, `--add-dir`).
-`model` и `max_turns` — понятия Claude; Codex берёт модель из своего конфига.
+`model` — модель хода (`-m`, и после `resume`): выбирает её `/model`
+ассистента; None — модель из конфига Codex. Имя проверяется (`model_error`):
+Codex из npm — `codex.cmd`, его аргументы разбирает cmd.exe, поэтому
+`& % ^ | < > "` и пробел не проходят. `max_turns` — понятие Claude.
 `effort` — усилие рассуждения на один вызов (`-c model_reasoning_effort=…`),
 для «Быстрее» в живых подсказках; None — как в конфиге Codex.
 
@@ -67,7 +70,15 @@ V4 (0.3.6, v4-design §5.1, §12):
 изменение через MCP до выполнения не остановить, а это категория «спросить
 человека». Удаление и отправку наружу Codex остановить не даёт — запрет
 только в промпте (`participant_prompts._FREEDOM_RUNNER`); сеть песочницы
-workspace-write по умолчанию выключена.
+workspace-write по умолчанию выключена. Песочницу задаёт сам
+`--approve-for-me` (workspace-write, перекрывает `sandbox_mode` пользователя);
+`--sandbox` рядом с ним Codex отвергает при разборе — его здесь нет.
+Ловушка Windows: без `[windows] sandbox` в `$CODEX_HOME/config.toml` ход
+фактически только читает. Meet читает этот единственный ключ
+(`windows_sandbox`, tomllib), сам его не ставит, а ассистент один раз за
+встречу пишет об этом строку (`sandbox_missing`). В запасном пути
+`--ignore-user-config` значение пользователя передаётся явно (`-c
+windows.sandbox=…`): без него запись на Windows пропала бы и у настроенного.
 
 Без свободы (`access=None`) — как в 0.3.6: песочница только-чтение, а
 MCP-серверы из `config.toml` пользователя Codex загружает сам (так было и в
@@ -98,6 +109,46 @@ _SESSION_LINE = re.compile(r"^\s*session id:\s*([0-9a-fA-F-]{36})\s*$", re.MULTI
 _RESUME_FAILED = re.compile(r"no rollout found|thread/resume", re.IGNORECASE)
 # Постоянная рабочая папка сохраняемых сеансов (во временной папке системы).
 KEEP_WORKDIR = "meet-codex-sessions"
+_ON_WINDOWS = sys.platform == "win32"
+# Имя модели для `-m`: как у OpenCode (`settings.opencode_model_error`) — без
+# знаков cmd.exe (`codex.cmd` из npm), не с «-» (иначе это флаг), до 128 знаков.
+_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}")
+MODEL_ERROR = ("В имени модели Codex недопустимые символы: только латиница, цифры и . _ - : @ + /, "
+               "в начале — буква или цифра, например gpt-5.5")
+# Значение `[windows] sandbox` (elevated, unelevated), которое можно передать `-c`.
+_SANDBOX_VALUE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+
+
+def model_error(value) -> str | None:
+    """Негодное имя модели Codex — текст для человека; пусто — годится
+    (модель из конфига Codex)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str) or not _MODEL.fullmatch(value.strip()):
+        return MODEL_ERROR
+    return None
+
+
+def windows_sandbox() -> str | None:
+    """`[windows] sandbox` из `$CODEX_HOME/config.toml` (по умолчанию
+    `~/.codex`) — единственный ключ, который Meet читает из настроек Codex.
+    Нет файла, ключа, не строка, файл не разобрался — None. Блокирующее."""
+    import tomllib
+
+    try:
+        with open(_home() / "config.toml", "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError):
+        return None
+    section = data.get("windows") if isinstance(data, dict) else None
+    value = section.get("sandbox") if isinstance(section, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def sandbox_missing() -> bool:
+    """Codex на Windows без `[windows] sandbox`: ход USER фактически только
+    читает. На других системах ключ не нужен — False. Блокирующее."""
+    return _ON_WINDOWS and windows_sandbox() is None
 
 
 def keep_dir() -> str:
@@ -163,15 +214,18 @@ def _mcp_list_json(exe: str, env: dict | None) -> str:
     return (res.stdout or b"").decode("utf-8", errors="replace")
 
 
-def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
+def access_args(access: str | None, servers=(), work_dirs=(), *,
+                windows_sandbox: str | None = None) -> list[str]:
     """Флаги exec для свободы (до подкоманды `resume`). None — как в 0.3.6
     (песочница только-чтение). `none`, `read` — только чтение файлов:
     песочница только-чтение, веб-поиск выключен. `user` (0.4) — песочница
-    workspace-write с автопроверкой (`--approve-for-me`), существующие
-    `work_dirs` — `--add-dir`, веб-поиск — как в настройках Codex. На любом
-    уровне MCP `servers` выключены (`servers` None — список не прочитался —
-    или имя, которое ключом не выключить, → `--ignore-user-config`),
-    приложения, браузер и управление компьютером — тоже."""
+    workspace-write с автопроверкой (`--approve-for-me`; `--sandbox` рядом с
+    ним Codex отвергает — его нет), существующие `work_dirs` — `--add-dir`,
+    веб-поиск — как в настройках Codex. На любом уровне MCP `servers`
+    выключены (`servers` None — список не прочитался — или имя, которое
+    ключом не выключить, → `--ignore-user-config`; тогда `windows_sandbox` —
+    значение `[windows] sandbox` пользователя — передаётся `-c`), приложения,
+    браузер и управление компьютером — тоже."""
     if access is None:
         return ["--sandbox", "read-only"]
     if access == "user":
@@ -190,6 +244,9 @@ def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
     if enabled is None or any(not (isinstance(n, str) and _MCP_KEY.match(n) and t in stubs)
                               for n, t in entries):
         out.append("--ignore-user-config")     # в закрытую сторону: без config.toml — без MCP
+        if windows_sandbox and _SANDBOX_VALUE.fullmatch(windows_sandbox):
+            # Без config.toml пропал бы и `[windows] sandbox`: запись на Windows — только с ним.
+            out += ["-c", f'windows.sandbox="{windows_sandbox}"']
     else:
         for name, kind in entries:
             # Заглушка того же транспорта, что у сервера: команда в таблице с url
@@ -215,16 +272,21 @@ def _workdir(allowed_dirs, cwd) -> str:
 
 def build_command(exe: str, workdir: str, out_file: str, *, effort: str | None = None,
                   images=(), keep_session: bool = False, resume: str | None = None,
-                  access: str | None = None, servers=(), work_dirs=()) -> list[str]:
+                  access: str | None = None, servers=(), work_dirs=(),
+                  model: str | None = None, windows_sandbox: str | None = None) -> list[str]:
     """Командная строка `codex exec` (prompt — в stdin, `-` последним).
     Продолжение: песочница, папки и автопроверка — до `resume` (у подкоманды
-    их нет), остальное — после неё, id сеанса — перед `-`. `access` — уровень
-    хода (`access_args`; `servers` — MCP-серверы, что выключить; `work_dirs` —
-    рабочие папки хода USER)."""
-    head = [exe, "exec", *access_args(access, servers, work_dirs), "--skip-git-repo-check"]
+    их нет), остальное — после неё (и `-m model`: он есть у обеих), id
+    сеанса — перед `-`. `access` — уровень хода (`access_args`; `servers` —
+    MCP-серверы, что выключить; `work_dirs` — рабочие папки хода USER;
+    `windows_sandbox` — значение пользователя для запасного пути). `model`
+    уже проверен (`model_error`)."""
+    head = [exe, "exec", *access_args(access, servers, work_dirs, windows_sandbox=windows_sandbox),
+            "--skip-git-repo-check"]
     # Сохраняемый сеанс — события JSON (id в thread.started; проверено на 0.159.0).
     events = ["--json"] if keep_session or resume else []
     rest = [*events, "--output-last-message", out_file,
+            *(["-m", model] if model else []),
             *(["-c", f'model_reasoning_effort="{effort}"'] if effort else []),
             *[f"--image={i}" for i in images or ()]]
     if resume:
@@ -356,7 +418,8 @@ class _Call:
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
           env: dict | None = None, effort: str | None = None, images=(),
           keep_session: bool = False, resume: str | None = None,
-          call: _Call | None = None, access: str | None = None, work_dirs=()) -> AgentReply:
+          call: _Call | None = None, access: str | None = None, work_dirs=(),
+          model: str | None = None) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
     # Папка с pid в имени (meet.tempdirs): процесс убили посреди ответа — файл
     # с ответом модели о встрече удалит резидент.
@@ -364,9 +427,11 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
                                      ignore_cleanup_errors=True) as tmp:
         out_file = Path(tmp) / "last-message.txt"
         servers = mcp_servers(exe, env) if access is not None else ()
+        sandbox = windows_sandbox() if access is not None else None
         cmd = build_command(exe, workdir, str(out_file), effort=effort, images=images,
                             keep_session=keep_session, resume=resume, access=access,
-                            servers=servers, work_dirs=work_dirs)
+                            servers=servers, work_dirs=work_dirs, model=model,
+                            windows_sandbox=sandbox)
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -461,9 +526,14 @@ async def run(
     `read` — только чтение файлов, без MCP и веба; `user` (0.4) — правка
     `work_dirs` и команды с автопроверкой Codex, см. модуль); у `none`
     рабочая папка — первая из `allowed_dirs` (папка встречи). None — как в
-    0.3.6."""
+    0.3.6.
+
+    `model` — `-m` (см. модуль); негодное имя — ошибка без запуска Codex."""
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса Codex: {resume!r}")
+    if model_error(model):
+        return AgentReply(text="", error=model_error(model))
+    model = model.strip() if isinstance(model, str) and model.strip() else None
     exe = find_codex()
     if exe is None:
         return AgentReply(text="", error="не найден Codex CLI (codex)")
@@ -483,7 +553,7 @@ async def run(
     try:
         reply = await asyncio.to_thread(
             _exec, exe, workdir, stdin_text, timeout_s, env, effort,
-            sent, keep_session, resume, call, access, tuple(work_dirs or ()),
+            sent, keep_session, resume, call, access, tuple(work_dirs or ()), model,
         )
     except asyncio.CancelledError:
         call.cancel()  # «Стоп»: процесс Codex убит, поток дочитает и выйдет

@@ -158,6 +158,10 @@ _ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
 # Однократная строка первой сессии после обновления до 0.4 (спец. §7, решение 1).
 MODE_NOTICE = ("Ассистент теперь сам выполняет обычные действия, рискованные — с вашего разрешения. "
                "Вернуть подтверждение каждого действия — Настройки → Ассистент.")
+# Codex на Windows без `[windows] sandbox` в своём config.toml: ход по просьбе
+# фактически только читает (`codex.sandbox_missing`). Строка — одна на встречу.
+CODEX_SANDBOX_NOTICE = ("Codex сможет только читать: настройте песочницу Codex — ключ "
+                        "[windows] sandbox в его config.toml. Meet этот ключ не меняет.")
 
 
 # --- разбор потока: текст сообщения, который уже можно показать ---
@@ -614,6 +618,8 @@ class Participant:
         # (первая сессия после обновления до 0.4, `assist.agent_mode_noticed`).
         self._mode_notice = bool(mode_notice) and self.freedom and self.agent_mode == consent.MODE_AUTO
         self._on_mode_notice = on_mode_notice
+        # Строку о песочнице Codex на Windows проверили в этой сессии.
+        self._sandbox_checked = False
 
     # --- события ---
 
@@ -872,6 +878,26 @@ class Participant:
                 await asyncio.to_thread(self._on_mode_notice)
             except Exception as e:
                 self._log(f"агент: отметка о строке автомода не сохранена ({type(e).__name__})")
+
+    async def _note_codex_sandbox(self) -> None:
+        """Ход USER у Codex на Windows без `[windows] sandbox`: правки и
+        команды фактически не пройдут — строка об этом, одна на встречу (уже
+        есть в журнале — не повторяется). Проверка — раз за сессию."""
+        from meet.llm import codex
+
+        self._sandbox_checked = True
+        try:
+            if not await asyncio.to_thread(codex.sandbox_missing):
+                return
+            if any(m.get("notice") == "codex_sandbox" for m in await self._io(self._chatlog.messages)):
+                return
+            added = await self._io(self._chatlog.append, "system", text=CODEX_SANDBOX_NOTICE,
+                                   notice="codex_sandbox")
+        except (OSError, RuntimeError, ValueError) as e:
+            self._log(f"агент: строка о песочнице Codex не записана ({type(e).__name__})")
+            return
+        self._log("агент: у Codex на Windows не настроена песочница — ход только читает")
+        self._emit_chat([added.event])
 
     async def _load_info(self) -> None:
         """Карта, запреты, материалы — один раз на сессию (в потоке): шапка
@@ -1828,6 +1854,9 @@ class Participant:
 
     async def _send(self, turn: _Turn, session, text: str) -> AgentReply:
         kwargs = {"level": self.consent_level(turn.inputs)} if self.freedom else {}
+        if (kwargs.get("level") == consent.USER and self.provider == "codex"
+                and self.agent_mode == consent.MODE_AUTO and not self._sandbox_checked):
+            await self._note_codex_sandbox()
         task = asyncio.ensure_future(session.send(
             text, images=turn.inputs.images if self.vision else (),
             on_text=partial(self._on_text, turn), timeout_s=self._turn_timeout,
@@ -2114,6 +2143,15 @@ class Participant:
         self.session_state = None
         self._changed()
 
+    def model_error(self, name: str) -> str | None:
+        """Имя модели для `/model`, которое нельзя передать провайдеру, — текст
+        отказа (Codex: `codex.model_error`); годится — None."""
+        if self.provider == "codex":
+            from meet.llm import codex
+
+            return codex.model_error(name)
+        return None
+
     def model_choices(self) -> list[str]:
         return [m["value"] for m in self._models]
 
@@ -2134,7 +2172,11 @@ class Participant:
 
     async def set_model(self, name: str) -> str:
         """`/model имя`: Claude Code — `set_model` до конца сессии (новые
-        процессы — с ней же); Codex, OpenCode — на следующие вызовы."""
+        процессы — с ней же); Codex, OpenCode — на следующие вызовы. Негодное
+        имя (`model_error`) — ValueError, модель прежняя."""
+        error = self.model_error(name)
+        if error:
+            raise ValueError(error)
         if self.provider == "claude-code":
             conv = await self.conversation()
             resolved = await conv.set_model(name)

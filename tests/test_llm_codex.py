@@ -629,3 +629,114 @@ def test_none_and_read_stay_read_only_even_with_working_folders(monkeypatch, tmp
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
     assert "--approve-for-me" not in cmd and "--add-dir" not in cmd
     assert codex.access_args(access, SERVERS, work_dirs=("C:/x",)) == codex.access_args(access, SERVERS)
+
+
+# --- модель (`/model`) и песочница Windows ----------------------------------------------
+
+
+def test_model_goes_as_m_flag_also_after_resume(monkeypatch, tmp_path):
+    """`/model имя` у Codex: `-m имя` в команде, при продолжении — после `resume`
+    (флаг есть у обеих подкоманд, сверено с `--help` 0.160.0)."""
+    _setup(monkeypatch, stdout=THREAD)
+    monkeypatch.setattr(codex.tempdirs, "system_temp", lambda: tmp_path)
+    _run(cwd=tmp_path, model="gpt-5.5")
+    cmd = FakePopen.calls[-1].cmd
+    assert cmd[cmd.index("-m") + 1] == "gpt-5.5" and cmd[-1] == "-"
+    _run(cwd=tmp_path, model="gpt-5.5", resume=SID)
+    cmd = FakePopen.calls[-1].cmd
+    assert cmd.index("-m") > cmd.index("resume") and cmd[cmd.index("-m") + 1] == "gpt-5.5"
+    _run(cwd=tmp_path)
+    assert "-m" not in FakePopen.calls[-1].cmd           # без модели — как в конфиге Codex
+
+
+@pytest.mark.parametrize("name", ["gpt&calc", "gpt%PATH%", "a|b", "a b", "-x", 'a"b', "a^b", "a>b", ""])
+def test_bad_model_name_is_refused(name):
+    if name == "":
+        assert codex.model_error(name) is None            # пусто — модель из конфига Codex
+        return
+    assert "недопустимые символы" in codex.model_error(name)
+
+
+def test_good_model_names_pass():
+    for name in ("gpt-5.5", "gpt-5.1-codex-max", "o3", "openai/gpt-oss-20b", "model:latest"):
+        assert codex.model_error(name) is None, name
+
+
+def test_bad_model_name_never_reaches_a_process(monkeypatch, tmp_path):
+    _setup(monkeypatch)
+    reply = _run(cwd=tmp_path, model="gpt&calc")
+    assert reply.error and "недопустимые символы" in reply.error and FakePopen.calls == []
+
+
+def _codex_home(monkeypatch, tmp_path, text):
+    home = tmp_path / "codex-home"
+    home.mkdir(exist_ok=True)
+    if text is not None:
+        (home / "config.toml").write_text(text, encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    return home
+
+
+@pytest.mark.parametrize("text, want", [
+    ('model = "gpt-5.5"\n[windows]\nsandbox = "elevated"\n', "elevated"),
+    ('[windows]\nsandbox = "unelevated"\n', "unelevated"),
+    ('model = "gpt-5.5"\n', None),
+    ("[windows]\nsandbox = 1\n", None),
+    ("[windows\nbroken", None),
+    (None, None),
+])
+def test_windows_sandbox_is_the_only_key_read(monkeypatch, tmp_path, text, want):
+    _codex_home(monkeypatch, tmp_path, text)
+    assert codex.windows_sandbox() == want
+
+
+def test_sandbox_missing_only_on_windows(monkeypatch, tmp_path):
+    _codex_home(monkeypatch, tmp_path, 'model = "gpt-5.5"\n')
+    monkeypatch.setattr(codex, "_ON_WINDOWS", True)
+    assert codex.sandbox_missing() is True
+    monkeypatch.setattr(codex, "_ON_WINDOWS", False)
+    assert codex.sandbox_missing() is False
+    _codex_home(monkeypatch, tmp_path, '[windows]\nsandbox = "elevated"\n')
+    monkeypatch.setattr(codex, "_ON_WINDOWS", True)
+    assert codex.sandbox_missing() is False
+
+
+@pytest.mark.parametrize("access", ["user", "read"])
+def test_ignore_user_config_keeps_the_users_windows_sandbox(monkeypatch, tmp_path, access):
+    """Запасной путь без config.toml пользователя: его `[windows] sandbox`
+    передаётся явно (`-c`), иначе на Windows ход только читает."""
+    _access_setup(monkeypatch, tmp_path, None)
+    _codex_home(monkeypatch, tmp_path, '[windows]\nsandbox = "elevated"\n')
+    cmd, _m = _access_cmd(tmp_path, access, resume=ACCESS_SID)
+    assert "--ignore-user-config" in cmd
+    overrides = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-c"]
+    assert 'windows.sandbox="elevated"' in overrides
+    k = [i for i, a in enumerate(cmd) if a == "-c" and cmd[i + 1].startswith("windows.")][0]
+    assert k < cmd.index("resume")
+    if access == "user":
+        assert "--approve-for-me" in cmd and "--sandbox" not in cmd
+
+
+def test_users_own_config_needs_no_sandbox_override(monkeypatch, tmp_path):
+    _access_setup(monkeypatch, tmp_path, SERVERS)
+    _codex_home(monkeypatch, tmp_path, '[windows]\nsandbox = "elevated"\n')
+    cmd, _m = _access_cmd(tmp_path, "user")
+    assert "--ignore-user-config" not in cmd
+    assert not any(a.startswith("windows.") for a in cmd)
+
+
+def test_odd_sandbox_value_is_not_passed(monkeypatch, tmp_path):
+    _access_setup(monkeypatch, tmp_path, None)
+    _codex_home(monkeypatch, tmp_path, '[windows]\nsandbox = "a\\" b"\n')
+    cmd, _m = _access_cmd(tmp_path, "user")
+    assert "--ignore-user-config" in cmd and not any(a.startswith("windows.") for a in cmd)
+
+
+def test_user_turn_is_approve_for_me_never_sandbox():
+    """`--approve-for-me` сам ставит workspace-write; с `--sandbox` Codex
+    отвергает флаг при разборе — у USER его нет ни в каком виде."""
+    for servers in (SERVERS, None):
+        for sandbox in (None, "elevated"):
+            args = codex.access_args("user", servers, windows_sandbox=sandbox)
+            assert "--approve-for-me" in args
+            assert not any(a in ("--sandbox", "-s") or a.startswith("--sandbox=") for a in args)
