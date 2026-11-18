@@ -487,8 +487,9 @@ def _access_cmd(tmp_path, access, **kw):
     return FakePopen.calls[-1].cmd, meeting
 
 
-SERVERS = [{"name": "team-jira", "enabled": True}, {"name": "team-gitlab", "enabled": True},
-           {"name": "off", "enabled": False}]
+SERVERS = [{"name": "team-jira", "enabled": True, "transport": "stdio"},
+           {"name": "team-gitlab", "enabled": True, "transport": "stdio"},
+           {"name": "off", "enabled": False, "transport": "stdio"}]
 
 
 @pytest.mark.parametrize("access", ["none", "read"])
@@ -506,8 +507,10 @@ def test_every_free_turn_is_read_only_without_mcp_apps_or_web(monkeypatch, tmp_p
     assert (cmd[cmd.index("-C") + 1] == str(meeting)) is (access == "none")
 
 
-@pytest.mark.parametrize("servers", [None, [{"name": "my.server", "enabled": True}],
-                                     [{"name": "имя с пробелом", "enabled": True}]])
+@pytest.mark.parametrize("servers", [None, [{"name": "my.server", "enabled": True, "transport": "stdio"}],
+                                     [{"name": "имя с пробелом", "enabled": True, "transport": "stdio"}],
+                                     [{"name": "ws", "enabled": True, "transport": "websocket"}],
+                                     [{"name": "nt", "enabled": True}]])
 def test_unreadable_mcp_list_or_unaddressable_name_fails_closed(monkeypatch, tmp_path, servers):
     """Список не прочитался или имя не выключить ключом — без config.toml целиком."""
     _access_setup(monkeypatch, tmp_path, servers)
@@ -515,6 +518,34 @@ def test_unreadable_mcp_list_or_unaddressable_name_fails_closed(monkeypatch, tmp
     assert "--ignore-user-config" in cmd
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
     assert not any(a.startswith("mcp_servers.") for a in cmd)
+
+
+def test_http_server_is_disabled_by_url_not_command(monkeypatch, tmp_path):
+    """Сервер с url (streamable_http) выключаем заглушкой url: команда в его таблице — «url is not supported for stdio»."""
+    servers = [{"name": "web", "enabled": True, "transport": "streamable_http"},
+               {"name": "local", "enabled": True, "transport": "stdio"}]
+    _access_setup(monkeypatch, tmp_path, servers)
+    cmd, _meeting = _access_cmd(tmp_path, "read")
+    overrides = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-c"]
+    assert 'mcp_servers.web={enabled=false,url="http://127.0.0.1:9/__meet_disabled_mcp__"}' in overrides
+    assert 'mcp_servers.local={enabled=false,command="__meet_disabled_mcp__"}' in overrides
+    assert "--ignore-user-config" not in cmd
+
+
+def test_mcp_list_keeps_transport_type_for_plugin_servers(monkeypatch):
+    """Серверы плагинов не записаны в config.toml: вид транспорта берём из `codex mcp list`."""
+    raw = json.dumps([{"name": "plug", "enabled": True, "transport": {"type": "streamable_http", "url": "https://x"}},
+                      {"name": "loc", "enabled": True, "transport": {"type": "stdio", "command": "c"}},
+                      {"name": "bare", "enabled": True}])
+    monkeypatch.setattr(codex, "_mcp_list_json", lambda exe, env: raw)
+    monkeypatch.setattr(codex, "_mcp_cache", {})
+    assert codex.mcp_servers("C:/codex.exe") == [
+        {"name": "plug", "enabled": True, "transport": "streamable_http"},
+        {"name": "loc", "enabled": True, "transport": "stdio"},
+        {"name": "bare", "enabled": True, "transport": None}]
+    args = codex.access_args("read", codex.mcp_servers("C:/codex.exe")[:2])
+    assert 'mcp_servers.plug={enabled=false,url="http://127.0.0.1:9/__meet_disabled_mcp__"}' in args
+    assert "--ignore-user-config" in codex.access_args("read", codex.mcp_servers("C:/codex.exe"))
 
 
 def test_access_flags_go_before_resume(monkeypatch, tmp_path):
@@ -546,7 +577,8 @@ def test_mcp_list_is_parsed_cached_and_failure_is_none(monkeypatch):
     monkeypatch.setattr(codex, "_mcp_list_json", listed)
     monkeypatch.setattr(codex, "_mcp_cache", {})
     first = codex.mcp_servers("C:/codex.exe")
-    assert first == [{"name": "team-jira", "enabled": True}, {"name": "x", "enabled": False}]
+    assert first == [{"name": "team-jira", "enabled": True, "transport": None},
+                     {"name": "x", "enabled": False, "transport": None}]
     assert codex.mcp_servers("C:/codex.exe") == first and calls == ["C:/codex.exe"]
     monkeypatch.setattr(codex, "_mcp_list_json", lambda exe, env: "not json")
     assert codex.mcp_servers("C:/other.exe") is None

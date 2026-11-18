@@ -44,8 +44,10 @@ V4 (0.3.6, v4-design §5.1, §12):
 
 * любой ход (`none` — без просьбы, `read` — по просьбе): `--sandbox
   read-only`; MCP-серверы пользователя выключены (`-c
-  mcp_servers.<имя>={enabled=false,command="__meet_disabled_mcp__"}` по списку `codex mcp list --json`);
-  список не прочитался или есть имя, которое так не выключить, — весь
+  mcp_servers.<имя>={enabled=false,command="__meet_disabled_mcp__"}` для stdio,
+  `{enabled=false,url="http://127.0.0.1:9/__meet_disabled_mcp__"}` для streamable_http —
+  по списку `codex mcp list --json`, вид транспорта — оттуда же);
+  список не прочитался, есть имя, которое так не выключить, или неизвестный вид транспорта — весь
   `config.toml` пользователя не загружается (`--ignore-user-config`, вход
   остаётся); выключены приложения, браузер, управление компьютером (`--disable
   apps browser_use computer_use in_app_browser`) и веб-поиск (`-c
@@ -136,12 +138,22 @@ def mcp_servers(exe: str | None = None, env: dict | None = None, *, refresh: boo
         data = json.loads(_mcp_list_json(exe, env))
         if not isinstance(data, list):
             raise ValueError("не список")
-        found = [{"name": str(x["name"]), "enabled": x.get("enabled") is not False}
+        found = [{"name": str(x["name"]), "enabled": x.get("enabled") is not False,
+                  "transport": _transport_type(x)}
                  for x in data if isinstance(x, dict) and isinstance(x.get("name"), str)]
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         found = None
     _mcp_cache[exe] = (time.monotonic(), found)
     return found
+
+
+def _transport_type(item: dict) -> str | None:
+    """Вид транспорта сервера из `codex mcp list --json` (`transport.type`:
+    `stdio`, `streamable_http`); нет — None. Серверы плагинов в config.toml не
+    записаны, поэтому берём не оттуда."""
+    transport = item.get("transport")
+    kind = transport.get("type") if isinstance(transport, dict) else None
+    return kind if isinstance(kind, str) else None
 
 
 def _mcp_list_json(exe: str, env: dict | None) -> str:
@@ -171,13 +183,18 @@ def access_args(access: str | None, servers=(), work_dirs=()) -> list[str]:
         out = ["--sandbox", "read-only"]
     enabled = [s for s in servers or () if not isinstance(s, dict) or s.get("enabled", True)] \
         if servers is not None else None
-    names = [s.get("name") if isinstance(s, dict) else s for s in enabled or ()]
-    if enabled is None or any(not (isinstance(n, str) and _MCP_KEY.match(n)) for n in names):
+    stubs = {"stdio": 'command="__meet_disabled_mcp__"',
+             "streamable_http": 'url="http://127.0.0.1:9/__meet_disabled_mcp__"'}
+    entries = [(s.get("name"), s.get("transport")) if isinstance(s, dict) else (s, None)
+               for s in enabled or ()]
+    if enabled is None or any(not (isinstance(n, str) and _MCP_KEY.match(n) and t in stubs)
+                              for n, t in entries):
         out.append("--ignore-user-config")     # в закрытую сторону: без config.toml — без MCP
     else:
-        for name in names:
-            # Полная запись: транспорт обязателен и для отключённых MCP из плагинов.
-            out += ["-c", f'mcp_servers.{name}={{enabled=false,command="__meet_disabled_mcp__"}}']
+        for name, kind in entries:
+            # Заглушка того же транспорта, что у сервера: команда в таблице с url
+            # (и наоборот) ломает ход — «url is not supported for stdio».
+            out += ["-c", f"mcp_servers.{name}={{enabled=false,{stubs[kind]}}}"]
     for feature in _NONE_FEATURES:
         out += ["--disable", feature]
     if access != "user":
