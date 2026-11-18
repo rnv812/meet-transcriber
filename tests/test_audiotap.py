@@ -868,3 +868,162 @@ def test_preflight_asks_the_helper(monkeypatch, tmp_path):
     assert audiotap.preflight(run=lambda *a, **k: SimpleNamespace(returncode=0)) is True
     monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
     assert audiotap.preflight(run=run) is False
+
+
+# --- медленное рукопожатие: тишина перед первыми данными ---------------------------
+
+
+class _Clock:
+    """Часы записи (`recorder.time.monotonic`), которые двигает тест."""
+
+    def __init__(self, t: float = 1000.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _record_clock(monkeypatch) -> _Clock:
+    clock = _Clock()
+    monkeypatch.setattr(recorder, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep))
+    return clock
+
+
+class _SlowHandshakeOut:
+    """stdout помощника: рукопожатие приходит через `delay_s` по часам записи, потом PCM."""
+
+    def __init__(self, clock: _Clock, delay_s: float, pcm: bytes) -> None:
+        self._clock, self._delay = clock, delay_s
+        self._body = io.BytesIO(HANDSHAKE + pcm)
+
+    def readline(self):
+        self._clock.t += self._delay
+        return self._body.readline()
+
+    def read(self, size):
+        return self._body.read(size)
+
+
+def _slow_popen(clock: _Clock, delay_s: float, pcm: bytes):
+    def popen(argv, **kwargs):
+        helper = FakeHelper(b"")
+        helper.stdout = _SlowHandshakeOut(clock, delay_s, pcm)
+        FakeHelper.instances.append(helper)
+        return helper
+
+    return popen
+
+
+def _tap_track(tmp_path):
+    return recorder._Track("sys.opus", lambda p: mac_audio.tap_device(), 0, tmp_path,
+                           log=lambda m: None)
+
+
+def _wait_written(track, n: int, timeout: float = 2.0) -> bytes:
+    deadline = time.monotonic() + timeout
+    while track.bytes_written < n and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert track.bytes_written >= n, "звук помощника не дошёл до дорожки"
+    with track._lock:
+        return bytes(track.writer.data)
+
+
+def _silence_runs(data: bytes, rate: int) -> list:
+    """Отрезки тишины (начало, длина) в секундах — моно int16."""
+    runs, start = [], None
+    samples = memoryview(data).cast("h")
+    for i, v in enumerate(samples):
+        if v == 0 and start is None:
+            start = i
+        elif v != 0 and start is not None:
+            runs.append((start / rate, (i - start) / rate))
+            start = None
+    if start is not None:
+        runs.append((start / rate, (len(samples) - start) / rate))
+    return runs
+
+
+@pytest.mark.parametrize("delay_s", [2.0, 0.4])
+def test_slow_handshake_is_silence_before_the_first_pcm(mac_recorder, monkeypatch, tmp_path,
+                                                        delay_s):
+    """Помощник ответил через `delay_s` — это время тишиной ПЕРЕД его звуком, а
+    не после (раньше его доливал только такт вотчдога, посреди звука; задержку
+    меньше порога такта — никто)."""
+    clock = _record_clock(monkeypatch)
+    pcm_frames = 4800  # 0,1 с звука
+    monkeypatch.setattr(mac_audio, "_popen", _slow_popen(clock, delay_s, _pcm(pcm_frames)))
+    track = _tap_track(tmp_path)
+    t0 = clock.t
+    track.first_open(mac_audio.PyAudio(), t0)
+    data = _wait_written(track, int((delay_s + 0.1) * 48000) * 2 - 2 * 48)
+    runs = _silence_runs(data, 48000)
+    assert runs and runs[0][0] == 0.0
+    assert runs[0][1] == pytest.approx(delay_s, abs=0.06)
+    assert len(runs) == 1  # дальше — только звук помощника
+    clock.t = t0 + delay_s + 0.1  # звук кончился в своё время
+    track.tick_pad()
+    assert track.bytes_written == len(data)  # такт ничего не вставил посреди звука
+    track.close_stream()
+
+
+def test_reopened_helper_pause_is_silence_before_its_new_data(mac_recorder, monkeypatch, tmp_path):
+    clock = _record_clock(monkeypatch)
+    monkeypatch.setattr(mac_audio, "_popen", _slow_popen(clock, 0.0, _pcm(4800)))
+    track = _tap_track(tmp_path)
+    t0 = clock.t
+    p = mac_audio.PyAudio()
+    track.first_open(p, t0)
+    _wait_written(track, 4800 * 2)
+    track.close_stream()
+    clock.t = t0 + 0.1  # первый помощник отдал 0,1 с и умер
+    monkeypatch.setattr(mac_audio, "_popen", _slow_popen(clock, 1.0, _pcm(4800)))
+    assert track.reopen(p)
+    data = _wait_written(track, int(1.2 * 48000) * 2 - 2 * 48)
+    runs = _silence_runs(data, 48000)
+    assert len(runs) == 1
+    start, length = runs[0]
+    assert start == pytest.approx(0.1, abs=0.001)
+    assert length == pytest.approx(1.0, abs=0.06)  # рукопожатие нового — до его звука
+    track.close_stream()
+
+
+def test_tap_stream_calls_the_hook_after_the_handshake_before_data():
+    order = []
+    popen, _ = _popen_factory(HANDSHAKE + _pcm(1024))
+    stream = mac_audio.TapStream(48000, 1, lambda *a: (order.append("data"), (None, 0))[1], 1024,
+                                 popen=popen, helper="/r/meet-audiotap")
+    stream.before_data = lambda: order.append("hook")
+    stream.start_stream()
+    deadline = time.monotonic() + 2.0
+    while "data" not in order and time.monotonic() < deadline:
+        time.sleep(0.005)
+    stream.close()
+    assert order[:2] == ["hook", "data"]
+
+
+def test_tap_stream_without_handshake_never_calls_the_hook(monkeypatch):
+    monkeypatch.setattr(mac_audio, "HANDSHAKE_TIMEOUT_S", 0.2)
+    called = []
+    for popen in (lambda argv, **kw: _SilentHelper(),
+                  _popen_factory(b"", code=audiotap.EXIT_FAILED)[0],
+                  _popen_factory(b'{"meet_audiotap": 1, "rate": 16000, "channels": 1}\n')[0]):
+        stream = mac_audio.TapStream(48000, 1, lambda *a: (None, 0), 1024, popen=popen,
+                                     helper="/r/meet-audiotap")
+        stream.before_data = lambda: called.append(1)
+        with pytest.raises(audiotap.TapError):
+            stream.start_stream()
+    assert called == []
+
+
+def test_tap_stream_survives_a_failing_hook():
+    got = []
+    popen, _ = _popen_factory(HANDSHAKE + _pcm(1024))
+    stream = mac_audio.TapStream(48000, 1, lambda *a: (got.append(1), (None, 0))[1], 1024,
+                                 popen=popen, helper="/r/meet-audiotap")
+    stream.before_data = lambda: 1 / 0
+    stream.start_stream()
+    deadline = time.monotonic() + 2.0
+    while not got and time.monotonic() < deadline:
+        time.sleep(0.005)
+    stream.close()
+    assert got  # долив не удался — звук всё равно идёт

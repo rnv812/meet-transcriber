@@ -695,6 +695,11 @@ class _Track:
             stream_callback=cb,
             start=False,
         )
+        # Помощник системного звука на macOS (TapStream) стартует медленно
+        # (рукопожатие до 10 с): это время доливается его крючком перед первыми
+        # данными. У потока PortAudio крючка нет — он стартует быстро.
+        if hasattr(stream, "before_data"):
+            stream.before_data = self._pad_silence
         self._pad_silence()
         stream.start_stream()
         self.device_name = dev["name"]
@@ -732,6 +737,7 @@ class _Track:
                             pl.PA_CONTINUE, pl.PA_ABORT)
 
         stream = pl.ProcessLoopbackStream(cb, pl.exclude_pid() or 0)
+        stream.before_data = self._pad_silence  # время активации — тишиной перед звуком
         self._pad_silence()
         stream.start_stream()
         self.device_name = dev["name"]
@@ -1059,6 +1065,7 @@ class _Session:
                 f"{t.fname}: {t.device_name} "
                 f"({t.src_rate} Hz, {t.src_channels} ch)"
             )
+        self._mark_aligned()
         now = time.monotonic()
         self.tap_since = now
         tap = self.tracks[0]
@@ -1074,6 +1081,17 @@ class _Session:
                 for t in self.tracks
             ],
         )
+
+    def _mark_aligned(self) -> None:
+        """Пометка в meta.json: дорожки этой записи считают время от общего нуля,
+        сдвиг между ними оценивать нечего (`meet.track_sync`). Сбой — строка в
+        журнал: запись важнее."""
+        try:
+            from meet import library, track_sync
+
+            library.write_meta(self.out_dir, {track_sync.META_KEY: track_sync.recorded_mark()})
+        except Exception as e:
+            self.log(f"meta.json не обновлён: {e!r}")
 
     def levels(self) -> dict:
         """Уровни дорожек с прошлого опроса — для метра в UI."""

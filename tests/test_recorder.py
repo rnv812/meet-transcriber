@@ -1098,3 +1098,21 @@ def test_duration_counts_from_the_shared_start(tmp_path, monkeypatch):
     s.close(until=t0 + 10.0)
     stopped = next(e for e in seen if e.kind == events.RECORD_STOPPED)
     assert stopped.data["duration_s"] == 10.0
+
+
+def test_new_recording_is_marked_aligned_in_meta(tmp_path, monkeypatch):
+    """Запись с общим нолём сразу помечена в meta.json: оценивать её сдвиг нечего."""
+    from meet import track_sync
+
+    s = _session(monkeypatch, tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert meta[track_sync.META_KEY] == track_sync.recorded_mark()
+    s.close()
+
+
+def test_failed_start_leaves_no_alignment_mark(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch, capture=None)  # микрофона нет — запись не началась
+    s = recorder._Session(tmp_path, None, mic_device=None, output_device=None)
+    with pytest.raises(OSError):
+        s.start()
+    assert not (tmp_path / "meta.json").exists()

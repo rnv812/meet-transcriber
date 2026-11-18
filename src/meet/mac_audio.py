@@ -226,6 +226,11 @@ class TapStream:
         self.stalled = False
         self.exit_code: "int | None" = None
         self.notice: "str | None" = None
+        # Крючок «перед первыми данными»: зовётся после принятого рукопожатия,
+        # до запуска читателя. Дорожка доливает в нём тишину за время старта
+        # помощника — она встаёт перед его звуком, а не после. Атрибут, а не
+        # аргумент `open()`: у pyaudiowpatch лишних аргументов нет.
+        self.before_data = None
 
     def start_stream(self) -> None:
         helper = self._helper or audiotap.helper_path()
@@ -254,6 +259,7 @@ class TapStream:
             raise audiotap.TapError(
                 f"Помощник записи системного звука отдаёт {fmt['rate']} Гц, "
                 f"{fmt['channels']} кан. вместо {self.rate} Гц, {self.channels} кан.")
+        _call_hook(self.before_data)
         self._last_data = time.monotonic()
         self._reader = threading.Thread(target=self._pump, name="meet-audiotap",
                                         daemon=True)
@@ -393,6 +399,17 @@ class TapStream:
             proc.wait(timeout=STOP_TIMEOUT_S)
         except Exception:
             pass
+
+
+def _call_hook(hook) -> None:
+    """Крючок дорожки — без права остановить захват: сбой долива тишины не
+    повод терять звук (недолитое догонит такт вотчдога)."""
+    if hook is None:
+        return
+    try:
+        hook()
+    except Exception:
+        pass
 
 
 # --- выбор устройств для recorder ---------------------------------------------

@@ -118,3 +118,82 @@ def test_recorder_takes_process_loopback_and_falls_back_to_the_device(monkeypatc
     assert recorder._system_output(object())["name"] == "Динамики [Loopback]"
     monkeypatch.setattr(pl, "pseudo_device", lambda: {"name": pl.NAME, "process_loopback": True})
     assert recorder._system_output(object())["name"] == pl.NAME
+
+
+def test_hook_runs_after_start_before_the_first_read(monkeypatch):
+    order = []
+    stream, client, capture = _stream(monkeypatch, [(4, 0)],
+                                      lambda *a: (order.append("data"), (None, pl.PA_CONTINUE))[1])
+    client.Start = lambda: order.append("start")
+    stream.before_data = lambda: order.append("hook")
+    stream.start_stream()
+    deadline = time.monotonic() + 2
+    while "data" not in order and time.monotonic() < deadline:
+        time.sleep(0.005)
+    stream.stop_stream()
+    assert order[:3] == ["start", "hook", "data"]
+
+
+def test_hook_is_not_called_when_activation_fails(monkeypatch):
+    called = []
+    stream, _, _ = _stream(monkeypatch, [], lambda *a: (None, 0), error=OSError("активация отклонена"))
+    stream.before_data = lambda: called.append(1)
+    with pytest.raises(RuntimeError):
+        stream.start_stream()
+    assert called == []
+
+
+def test_failing_hook_does_not_stop_the_stream(monkeypatch):
+    got = []
+    stream, _, _ = _stream(monkeypatch, [(4, 0)], lambda *a: (got.append(1), (None, pl.PA_CONTINUE))[1])
+    stream.before_data = lambda: 1 / 0
+    stream.start_stream()
+    deadline = time.monotonic() + 2
+    while not got and time.monotonic() < deadline:
+        time.sleep(0.005)
+    stream.stop_stream()
+    assert got
+
+
+class _Writer:
+    def __init__(self, path, channels, rate):
+        self.data = bytearray()
+
+    def write(self, data):
+        self.data += data
+
+    def close(self):
+        pass
+
+
+def test_slow_activation_is_silence_before_the_first_data(monkeypatch, tmp_path):
+    """Активация process loopback заняла 3 с — это время тишиной перед звуком."""
+    from meet import recorder
+
+    clock = SimpleNamespace(t=1000.0)
+    monkeypatch.setattr(recorder, "time", SimpleNamespace(monotonic=lambda: clock.t, sleep=time.sleep))
+    monkeypatch.setattr(recorder, "_MAC", False)
+    monkeypatch.setattr(recorder, "OpusWriter", _Writer)
+    monkeypatch.setattr(pl, "_read", lambda data, n: data[:n])
+    client, capture = FakeClient(), FakeCapture([(480, 0)] * 10)   # 0,1 с звука
+
+    def slow_open(pid):
+        clock.t += 3.0
+        return client, capture
+
+    monkeypatch.setattr(pl, "_open_client", slow_open)
+    dev = {"name": pl.NAME, "index": -1, "defaultSampleRate": float(pl.RATE),
+           "maxInputChannels": pl.CHANNELS, "process_loopback": True}
+    track = recorder._Track("sys.opus", lambda p: dev, 0, tmp_path, log=lambda m: None)
+    t0 = clock.t
+    track.first_open(None, t0)
+    frame = 2 * pl.CHANNELS
+    want = int(3.1 * pl.RATE) * frame
+    deadline = time.monotonic() + 2
+    while track.bytes_written < want and time.monotonic() < deadline:
+        time.sleep(0.005)
+    track.close_stream()
+    data = bytes(track.writer.data)
+    lead = (len(data) - len(data.lstrip(b"\x00"))) // frame / pl.RATE
+    assert lead == pytest.approx(3.0, abs=0.06)
+    assert len(data) == pytest.approx(want, abs=frame * 48)

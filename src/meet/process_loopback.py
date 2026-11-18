@@ -83,6 +83,10 @@ class ProcessLoopbackStream:
         self._error: BaseException | None = None
         self._thread: threading.Thread | None = None
         self._active = False
+        # Крючок «перед первыми данными»: зовётся в потоке захвата после
+        # `client.Start()`, до первого чтения. Дорожка доливает в нём тишину
+        # за время активации — перед звуком, а не после.
+        self.before_data = None
 
     def start_stream(self, timeout: float = 5.0) -> None:
         self._thread = threading.Thread(target=self._run, name="meet-process-loopback", daemon=True)
@@ -114,6 +118,11 @@ class ProcessLoopbackStream:
                 self._error = e
                 self._ready.set()
                 return
+            if self.before_data is not None:
+                try:
+                    self.before_data()
+                except Exception:  # noqa: BLE001 — сбой долива не повод терять звук
+                    pass
             self._active = True
             self._ready.set()
             frame = 2 * CHANNELS
