@@ -16,6 +16,12 @@
 #     подписывается: недоверенная подпись образа лишь добавила бы вопрос
 #     Gatekeeper при первой установке, а обновление проверяет пакет внутри.
 #
+# Hardened runtime — по выбору, MEET_HARDENED_RUNTIME=1 (задел под Developer
+# ID; выпуски его не включают): `--options runtime` и права из
+# app/src-tauri/macos/Meet.entitlements (ввод звука; без него микрофон тихий)
+# у помощников и пакета. Своя личность — с `--timestamp`, ad-hoc (нет секрета)
+# — переподпись теми же флагами с `--timestamp=none`, без выпуска.
+#
 # Нет секрета: по тегу (MEET_REQUIRE_SIGNING=true) — сбой, иначе ad-hoc-подпись
 # сборки остаётся как есть, с предупреждением.
 # В $GITHUB_ENV — MEET_SIGNING_SHA1 (открытый хэш сертификата; его ждёт
@@ -37,12 +43,29 @@ BUNDLE_ID="$(sed -n 's/^[[:space:]]*"identifier"[[:space:]]*:[[:space:]]*"\([^"]
     "$ROOT/app/src-tauri/tauri.conf.json" | head -n 1)"
 [[ -n "$BUNDLE_ID" ]] || fail "нет identifier в tauri.conf.json"
 
+HARDENED=false
+[[ "${MEET_HARDENED_RUNTIME:-}" == "1" ]] && HARDENED=true
+ENTITLEMENTS="$ROOT/app/src-tauri/macos/Meet.entitlements"
+if $HARDENED && [[ ! -f "$ENTITLEMENTS" ]]; then
+    fail "нет файла прав $ENTITLEMENTS"
+fi
+
 # Подписать своей личностью с явным requirement.
 sign() {  # sign <путь> <идентификатор>
+    local extra=(--timestamp=none)
+    if $HARDENED; then
+        extra=(--options runtime --entitlements "$ENTITLEMENTS" --timestamp)
+    fi
     codesign --force --sign "$SIGNING_IDENTITY" --keychain "$SIGNING_KEYCHAIN" \
-        --timestamp=none --identifier "$2" \
+        "${extra[@]}" --identifier "$2" \
         --requirements "=designated => identifier \"$2\" and certificate leaf = H\"$SHA\"" \
         "$1"
+}
+
+# Пробная подпись hardened runtime без сертификата: ad-hoc, без метки времени.
+sign_adhoc_hardened() {  # sign_adhoc_hardened <путь> <идентификатор>
+    codesign --force --sign - --options runtime --entitlements "$ENTITLEMENTS" \
+        --timestamp=none --identifier "$2" "$1"
 }
 
 step "Подпись"
@@ -60,6 +83,12 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
     if [[ -n "${GITHUB_ENV:-}" ]]; then
         echo "MEET_SIGNING_SHA1=$SHA" >> "$GITHUB_ENV"
     fi
+elif $HARDENED; then
+    echo "Пробная подпись: ad-hoc с hardened runtime и правами из $(basename "$ENTITLEMENTS")"
+    for helper in uv ffmpeg meet-audiotap; do
+        sign_adhoc_hardened "$APP/Contents/Resources/resources/$helper" "$BUNDLE_ID.$helper"
+    done
+    sign_adhoc_hardened "$APP" "$BUNDLE_ID"
 else
     echo "Подпись остаётся ad-hoc (от tauri build)"
 fi

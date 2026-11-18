@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Права для подписи с hardened runtime (scripts/sign_macos.sh,
+  MEET_HARDENED_RUNTIME=1): одни и те же у Meet.app и помощников в
+  Resources (uv, ffmpeg, meet-audiotap). Без обычной подписи они не нужны.
+  Только ввод звука: при hardened runtime без него macOS молча отдаёт
+  микрофон тишиной и самому Meet, и его детям (резиденту, помощнику).
+  Запись экрана и системного звука (ScreenCaptureKit) прав в подписи не
+  требует — её разрешает пользователь в настройках.
+  disable-library-validation не нужен: Python резидента — отдельный процесс
+  вне пакета, свои библиотеки Meet.app не подгружает. Ничего шире не добавлять
+  без причины.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

@@ -479,6 +479,56 @@ def test_signing_uses_explicit_requirements_and_drops_the_key_at_once():
     assert "trap keychain_cleanup EXIT" in sign
 
 
+ENTITLEMENTS = ROOT / "app" / "src-tauri" / "macos" / "Meet.entitlements"
+
+
+def test_entitlements_give_audio_input_and_nothing_wider():
+    import plistlib
+
+    rights = plistlib.loads(ENTITLEMENTS.read_bytes())
+    assert rights == {"com.apple.security.device.audio-input": True}
+
+
+def test_hardened_runtime_is_opt_in_and_uses_the_entitlements():
+    sign = (ROOT / "scripts" / "sign_macos.sh").read_text(encoding="utf-8")
+    assert '[[ "${MEET_HARDENED_RUNTIME:-}" == "1" ]]' in sign
+    assert "app/src-tauri/macos/Meet.entitlements" in sign
+    assert '--options runtime --entitlements "$ENTITLEMENTS" --timestamp)' in sign
+    # Ad-hoc: без метки времени; обычная подпись остаётся прежней.
+    assert '--options runtime --entitlements "$ENTITLEMENTS" \\\n        --timestamp=none' in sign
+    assert "local extra=(--timestamp=none)" in sign
+    # Пробный прогон CI — вручную, не на теге, и проверяет права в подписи.
+    macos = _job("macos")
+    assert "hardened_trial" in WORKFLOW
+    package = _step(macos, "Sign and package")
+    assert "github.ref_type != 'tag' && inputs.hardened_trial" in package
+    check = _step(macos, "Hardened runtime check (trial)")
+    assert "codesign -d --entitlements :-" in check
+    assert "com.apple.security.device.audio-input" in check
+
+
+@needs_bash
+def test_hardened_runtime_without_certificate_resigns_ad_hoc_with_entitlements(tmp_path):
+    stubs = Stubs(tmp_path)
+    result = stubs.run("sign_macos.sh", str(_fake_app(tmp_path)), "0.0.1",
+                       MEET_HARDENED_RUNTIME="1")
+    assert result.returncode == 0, result.stderr
+    calls = stubs.called("codesign")
+    assert len(calls) == 4  # три помощника и пакет
+    for call in calls:
+        assert "--sign -" in call and "--options runtime" in call
+        assert "Meet.entitlements" in call and "--timestamp=none" in call
+    assert calls[-1].endswith("Meet.app")
+
+
+@needs_bash
+def test_default_signing_never_turns_on_hardened_runtime(tmp_path):
+    stubs = Stubs(tmp_path)
+    result = stubs.run("sign_macos.sh", str(_fake_app(tmp_path)), "0.0.1")
+    assert result.returncode == 0, result.stderr
+    assert not stubs.called("codesign")
+
+
 # --- слияние сумм выпуска (scripts/merge_sums.py) ----------------------------------
 
 def _merge_module():

@@ -31,6 +31,10 @@ on:
         description: "Только сборка macOS (без Windows и без публикации)"
         type: boolean
         default: true
+      hardened_trial:
+        description: "macOS: пробная подпись с hardened runtime (ad-hoc, без выпуска)"
+        type: boolean
+        default: false
 
 # Наименьшие права: по умолчанию токен только читает. Право писать в
 # Releases — только у job, которые публикуют (`release`, `publish-macos`), и
@@ -478,6 +482,9 @@ jobs:
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
           APP: ${{ steps.build.outputs.app }}
           VERSION: ${{ steps.version.outputs.version }}
+          # Пробный прогон (только вручную, не на теге): hardened runtime с
+          # правами из Meet.entitlements; без сертификата подпись ad-hoc.
+          MEET_HARDENED_RUNTIME: ${{ github.ref_type != 'tag' && inputs.hardened_trial && '1' || '' }}
         run: bash scripts/sign_macos.sh "$APP" "$VERSION"
 
       # designated requirement в журнале; при своей подписи — не cdhash, а
@@ -489,6 +496,25 @@ jobs:
           DMG: ${{ steps.package.outputs.dmg }}
           VERSION: ${{ steps.version.outputs.version }}
         run: bash scripts/check_macos_signature.sh "$APP" "$DMG" "$VERSION"
+
+      # Пробный прогон hardened runtime: флаг runtime и право на ввод звука
+      # видны у пакета и у каждого помощника.
+      - name: Hardened runtime check (trial)
+        if: github.ref_type != 'tag' && inputs.hardened_trial
+        env:
+          APP: ${{ steps.build.outputs.app }}
+        run: |
+          for target in "$APP" \
+              "$APP/Contents/Resources/resources/uv" \
+              "$APP/Contents/Resources/resources/ffmpeg" \
+              "$APP/Contents/Resources/resources/meet-audiotap"; do
+            echo "== $target"
+            codesign -dvv "$target" 2>&1 | grep -E 'flags=.*runtime' \
+              || { echo "ошибка: нет флага runtime у $target" >&2; exit 1; }
+            codesign -d --entitlements :- "$target" 2>&1 \
+              | grep -q 'com.apple.security.device.audio-input' \
+              || { echo "ошибка: нет audio-input в правах $target" >&2; exit 1; }
+          done
 
       # Страховка: sign_macos.sh удаляет связку сам сразу после подписи.
       - name: Remove signing keychain
