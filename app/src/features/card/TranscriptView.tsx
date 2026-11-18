@@ -10,6 +10,10 @@
  *
  * Клавиши: Ctrl+F — к полю (его ловит CardTabs), Enter / Shift+Enter —
  * следующее / предыдущее, Esc — очистить и вернуть фокус, где он был.
+ *
+ * Слова с таймкодами (`words`, грузятся отдельно): щелчок по слову играет с
+ * него; элементы слов — только у играющей реплики и у той, по которой
+ * щёлкнули (turnWords.ts), звучащее слово подсвечено по часам плеера.
  */
 
 import {
@@ -23,12 +27,15 @@ import { placeOf, restorePlace, scrollParent, type Place } from "../../lib/keepP
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
+import { wordAtOffset, type SegmentWords } from "../../lib/words";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { IconButton } from "../../ui/IconButton";
 import { JiraTasks, Legend, hasTypeFilters } from "./markup";
 import { MarkupMap } from "./MarkupMap";
 import { FindAsk, TranscriptShown } from "./transcriptShown";
+import { caretOffset } from "./TurnEdit";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
+import { createTurnWords, TurnWordsContext } from "./turnWords";
 
 export const FIND_DELAY_MS = 150;
 
@@ -66,8 +73,14 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 export function TranscriptView({
   turns, colors, playable, onPlay, onPlayRange, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, seekTo = null, nowTurn = null,
-  textPhase = false, notice = null, legendEnd = null,
+  textPhase = false, notice = null, legendEnd = null, words = null, onPlayAt, editingTurn = null,
 }: {
+  /** Слова сегментов (по номеру сегмента); null — ещё не пришли или их нет: реплики — как без них. */
+  words?: SegmentWords | null;
+  /** Щелчок по слову: играть с секунды `t`. */
+  onPlayAt?: (t: number) => void;
+  /** Реплика в правке (открыто окно «Исправить…»): щелчок по её слову не играет. */
+  editingTurn?: number | null;
   /** В конце строки легенды (0.6.1): «Анализ устарел · Переанализировать…». */
   legendEnd?: ReactNode;
   /** Строка над лентой, на месте «Наблюдений» (разовое предложение анализа). */
@@ -332,6 +345,36 @@ export function TranscriptView({
     if (held && held.turns === turns && box.current) restorePlace(held.scroller, box.current, turns, held.place);
   }, [turns]);
 
+  // Слова: у играющей реплики и у той, по которой щёлкнули, — элементы слов (только их текст перерисовывается).
+  const wordStore = useMemo(createTurnWords, []);
+  const [clicked, setClicked] = useState<number | null>(null);
+  useEffect(() => { setClicked(null); }, [turns]);
+  useLayoutEffect(() => { wordStore.set(turns, words, [nowTurn, clicked]); }, [wordStore, turns, words, nowTurn, clicked]);
+  const editing = useRef(editingTurn);
+  editing.current = editingTurn;
+  const playAt = useRef(onPlayAt);
+  playAt.current = onPlayAt;
+  /** Щелчок по тексту реплики: слово под указателем — играть с него. Выделение, правка, Ctrl/Shift — не наше. */
+  const wordClick = useCallback((i: number, e: MouseEvent<HTMLElement>) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.detail > 1) return;
+    if (editing.current === i || !playAt.current) return;
+    if (!(window.getSelection?.()?.isCollapsed ?? true)) return;
+    const spans = wordStore.of(i);
+    if (!spans) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (target?.closest("a, button")) return;
+    const el = target?.closest<HTMLElement>("[data-w]");
+    let k = el && e.currentTarget.contains(el) ? Number(el.dataset.w) : -1;
+    if (k < 0) {
+      // У реплики ещё нет элементов слов — слово по месту под указателем.
+      const at = caretOffset(e.currentTarget, e.clientX, e.clientY);
+      k = at === null ? -1 : wordAtOffset(spans, at);
+    }
+    setClicked(i);
+    const w = spans[k];
+    if (w) playAt.current(w.start);
+  }, [wordStore]);
+
   // «Сейчас играет»: атрибут мимо React — реплики не перерисовываются при смене.
   useLayoutEffect(() => {
     const root = box.current;
@@ -482,12 +525,15 @@ export function TranscriptView({
         </div>
       ) : (
         <div className="transcript__feed">
-          <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onPlayRange={onPlayRange}
-            onNameSpeaker={onNameSpeaker}
-            onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
-            marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
-            onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase}
-            insights={view?.insights} onJump={jumpTo} onAskInsight={onAskInsight} />
+          <TurnWordsContext.Provider value={wordStore}>
+            <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onPlayRange={onPlayRange}
+              onNameSpeaker={onNameSpeaker}
+              onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
+              marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
+              onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase}
+              insights={view?.insights} onJump={jumpTo} onAskInsight={onAskInsight}
+              onWordClick={playable && onPlayAt && words ? wordClick : undefined} />
+          </TurnWordsContext.Provider>
           {view && (
             <MarkupMap turns={turns} types={view.types} insights={view.insights} filter={filter} insightsOn={insightsOn}
               onJump={jumpTo} onScrollTo={scrollToTurn} />

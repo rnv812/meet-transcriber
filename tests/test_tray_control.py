@@ -1032,6 +1032,46 @@ def test_state_endpoint_survives_unavailable_recordings_drive(app, monkeypatch, 
     assert body["disk_free_gb"] is None and body["status"] == "idle"
 
 
+def test_words_route_serves_segment_words_and_none_for_edited(app, monkeypatch, tmp_path):
+    """Слова записи для окна (щелчок по слову, подсветка звучащего слова):
+    по сегментам транскрипта, с временем; у правленого сегмента слов нет.
+    Маршрут — с тем же токеном, что и остальные маршруты записей."""
+    import urllib.error
+    import urllib.request
+
+    from meet import control
+
+    folder = _saved_folder(tmp_path)
+    library.write_transcript(folder, {"segments": [
+        {"start": 12.0, "end": 13.0, "speaker": "Спикер 1", "text": "Добрый день.",
+         "words": [[12.0, 12.34, " Добрый"], [12.34, 13.0, " день."]]},
+        {"start": 14.0, "end": 15.0, "speaker": "Спикер 2", "text": "Правленый текст",
+         "words": [[14.0, 15.0, " Другой"]]},
+        {"start": 16.0, "end": 17.0, "speaker": "Спикер 2", "text": "Без слов"}]})
+    state = tray_control.TrayControl(app, queue=_Queue())
+    monkeypatch.setattr(state, "_root", lambda: folder.parent)
+    srv = control.ControlServer(state)
+    srv.start(publish=False)
+
+    def get(path, token=True):
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.port}{path}",
+                                     headers={"Authorization": f"Bearer {srv.token}"} if token else {})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    try:
+        body = get(f"/recordings/{folder.name}/words")
+        with pytest.raises(urllib.error.HTTPError) as no_token:
+            get(f"/recordings/{folder.name}/words", token=False)
+        with pytest.raises(urllib.error.HTTPError) as missing:
+            get("/recordings/2026-01-01_00-00/words")
+    finally:
+        srv.stop()
+    assert body == {"segments": [[[12.0, 12.34, " Добрый"], [12.34, 13.0, " день."]], None, None]}
+    assert no_token.value.code == 401
+    assert missing.value.code == 404
+
+
 def test_naming_speakers_rejects_unsafe_names(with_recordings, app, tmp_path):
     """Имя уходит в имя файла базы голосов: `..\\..\\x` писал бы мимо папки
     голосов. Отказ — до любых изменений: ни транскрипт, ни база не тронуты."""

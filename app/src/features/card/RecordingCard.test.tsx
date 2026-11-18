@@ -24,6 +24,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getSpeakers: vi.fn(),
   applySpeakers: vi.fn(),
   getRediarized: vi.fn(async () => { throw new Error("нового разделения нет"); }),
+  getWords: vi.fn(async () => ({ segments: [] })),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -88,6 +89,46 @@ test("ready: реплики и участники", async () => {
   expect(screen.getByText("(нахлёст)")).toBeInTheDocument();
   expect(screen.getAllByText("Демьян Петров").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "Слушать с 00:00" })).toBeInTheDocument();
+});
+
+test("слова грузятся отдельно: щелчок по слову играет с него, звучащее слово подсвечено", async () => {
+  load({}, { ...transcript, segments: [{ ...transcript.segments[0]!, has_words: true }, transcript.segments[1]!] });
+  vi.mocked(api.getWords).mockResolvedValue({ segments: [[[0, 0.5, " Привет"], [0.6, 1.2, " всем"]], null] });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await waitFor(() => expect(api.getWords).toHaveBeenCalledWith(ep, "r1"));
+  const audio = container.querySelector("audio")!;
+  // Реплика заиграла (с начала, как раньше) — у неё появились слова.
+  await userEvent.click(screen.getByRole("button", { name: "Слушать с 00:00" }));
+  const all = await waitFor(() => {
+    const found = [...container.querySelectorAll<HTMLElement>("[data-turn=\"0\"] [data-w]")];
+    expect(found).toHaveLength(2);
+    return found;
+  });
+  vi.mocked(HTMLMediaElement.prototype.play).mockClear();
+  await userEvent.click(all[1]!);
+  expect(audio.currentTime).toBe(0.6);
+  expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+  expect(all[1]).toHaveAttribute("data-word-now");
+  expect(api.getWords).toHaveBeenCalledTimes(1);
+});
+
+test("слова не пришли — реплики как раньше; у расшифровки без слов их и не просят", async () => {
+  load({}, { ...transcript, segments: [{ ...transcript.segments[0]!, has_words: true }, transcript.segments[1]!] });
+  vi.mocked(api.getWords).mockRejectedValue(new api.ApiError(500, "сбой"));
+  const { container, unmount } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await waitFor(() => expect(api.getWords).toHaveBeenCalled());
+  await userEvent.click(screen.getByRole("button", { name: "Слушать с 00:00" }));
+  expect(container.querySelector("audio")!.currentTime).toBe(0);
+  expect(container.querySelector("[data-w]")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  unmount();
+  vi.mocked(api.getWords).mockClear();
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(api.getWords).not.toHaveBeenCalled();
 });
 
 test("клик по безымянному спикеру открывает панель «Спикеры» на его строке, Esc закрывает", async () => {

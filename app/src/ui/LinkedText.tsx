@@ -11,26 +11,29 @@ import type { MouseEvent, ReactNode } from "react";
 import { findJira, jiraUrl, type JiraCard, type JiraLinker, type JiraMatch } from "../lib/jira";
 import type { Range } from "../lib/search";
 import { openUrl } from "../lib/shell";
+import type { WordSpan } from "../lib/words";
+import { wordPieces } from "./Highlight";
 import "./linked-text.css";
 import { Tip } from "./Tip";
 
-/** Кусок текста [from, to) с подсветкой совпадений `ranges`. */
-function marked(text: string, from: number, to: number, ranges: Range[], firstHit: number | undefined, key: string): ReactNode[] {
+/** Кусок текста [from, to) с подсветкой совпадений `ranges` и элементами слов `words` (если есть). */
+function marked(text: string, from: number, to: number, ranges: Range[], firstHit: number | undefined, key: string,
+  words?: readonly WordSpan[] | null): ReactNode[] {
   const out: ReactNode[] = [];
   let at = from;
   ranges.forEach(([s, e], r) => {
     const a = Math.max(s, from);
     const b = Math.min(e, to);
     if (a >= b) return;
-    if (a > at) out.push(text.slice(at, a));
+    if (a > at) out.push(...wordPieces(text, at, a, words, `${key}-${r}p`));
     out.push(
       <mark key={`${key}-${r}`} className="hit" data-hit={firstHit === undefined ? undefined : firstHit + r}>
-        {text.slice(a, b)}
+        {wordPieces(text, a, b, words, `${key}-${r}m`)}
       </mark>,
     );
     at = b;
   });
-  if (at < to) out.push(text.slice(at, to));
+  if (at < to) out.push(...wordPieces(text, at, to, words, `${key}-e`));
   return out;
 }
 
@@ -70,29 +73,31 @@ export function JiraLink({ linker, keyText, spoken, children }: {
 
 /**
  * Текст: ссылки Jira и подсветка `ranges` (если есть). Ссылки — `links`
- * (готовые, от резидента: реплика) или найденные в тексте по `linker`.
+ * (готовые, от резидента: реплика) или найденные в тексте по `linker`;
+ * `words` — элементы слов (звучащее слово, щелчок по слову) внутри них.
  */
-export function LinkedText({ text, ranges = [], firstHit, linker, links: given }: {
+export function LinkedText({ text, ranges = [], firstHit, linker, links: given, words }: {
   text: string;
   ranges?: Range[];
   firstHit?: number;
   linker: JiraCard | JiraLinker | null;
   links?: JiraMatch[];
+  words?: readonly WordSpan[] | null;
 }) {
   const links = linker ? given ?? findJira(text, linker) : [];
-  if (!links.length) return <>{marked(text, 0, text.length, ranges, firstHit, "t")}</>;
+  if (!links.length) return <>{marked(text, 0, text.length, ranges, firstHit, "t", words)}</>;
   const out: ReactNode[] = [];
   let at = 0;
   links.forEach((m, k) => {
     if (m.start < at || m.end > text.length) return;
-    if (m.start > at) out.push(...marked(text, at, m.start, ranges, firstHit, `p${k}`));
+    if (m.start > at) out.push(...marked(text, at, m.start, ranges, firstHit, `p${k}`, words));
     out.push(
       <JiraLink key={`j${k}`} linker={linker!} keyText={m.key} spoken={m.source ? m.spoken ?? text.slice(m.start, m.end) : undefined}>
-        {marked(text, m.start, m.end, ranges, firstHit, `j${k}`)}
+        {marked(text, m.start, m.end, ranges, firstHit, `j${k}`, words)}
       </JiraLink>,
     );
     at = m.end;
   });
-  if (at < text.length) out.push(...marked(text, at, text.length, ranges, firstHit, "tail"));
+  if (at < text.length) out.push(...marked(text, at, text.length, ranges, firstHit, "tail", words));
   return <>{out}</>;
 }

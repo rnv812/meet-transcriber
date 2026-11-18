@@ -157,6 +157,10 @@ button.turn__speaker:hover { text-decoration: underline; }
 .turn--cont .turn__gutter { flex-direction: column-reverse; }
 .turn__body { min-width: 0; }
 .turn__text { display: inline; margin: 0; color: var(--ink); line-height: 1.7; }
+/* Звучащее слово (data-word-now ставит playClock.useWordPaint): мягкая подложка акцента; в
+   найденном поиском — подложка поиска остаётся, слово отмечено чертой снизу. */
+.turn__text [data-word-now] { border-radius: 3px; background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent-soft); }
+.turn__text mark.hit [data-word-now] { background: none; box-shadow: inset 0 -2px 0 currentColor; }
 /* Пометки после текста: «в комнате», «(голос под вопросом)», бейдж типа, «важное», ✦. */
 .turn__marks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-left: 8px; vertical-align: 1px; }
 /* Узкая лента (0.6.1): левое поле уходит строкой над текстом — имя и время, текст во всю ширину.

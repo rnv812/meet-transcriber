@@ -75,6 +75,8 @@
   color: var(--ink-2); line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* Звучащее слово играющего образца (playClock.useWordPaint). */
+.spk-phrase__text [data-word-now] { border-radius: 3px; background: var(--accent-soft); color: var(--ink); }
 
 /* Действие в строке текста (и в полосах правки расшифровки — TurnEdit, TextFix). */
 .spk-link {

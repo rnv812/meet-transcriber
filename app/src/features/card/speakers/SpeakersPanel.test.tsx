@@ -1,7 +1,8 @@
 import { createRef, useState } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../../lib/api";
+import { createPlayClock, PlayTime } from "../playClock";
 import type { SpeakerRow, SpeakersView, SpeakerStep } from "../../../lib/types";
 import { PhrasePlayback } from "./SamplePhrases";
 import { SpeakersPanel } from "./SpeakersPanel";
@@ -107,6 +108,42 @@ test("образец: начало и длительность, «Останов
   expect(within(one!).getByRole("button", { name: "Прослушать фразу с 00:12" })).toBeInTheDocument();
   await userEvent.click(within(two!).getByRole("button", { name: "Остановить" }));
   expect(screen.queryByRole("button", { name: "Остановить" })).toBeNull();
+});
+
+test("играющий образец подсвечивает своё звучащее слово; остальные образцы — просто текст", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ speakers: [
+    row("Спикер 1", { samples: [
+      { start: 12, end: 16.2, text: "Склад готов.", words: [[12, 12.6, " Склад"], [12.7, 16.2, " готов."]] },
+      { start: 40, end: 46, text: "Поставка в пятницу.", words: [[40, 41, " Поставка"], [41, 42, " в"], [42, 46, " пятницу."]] }] }),
+  ] }));
+  const clock = createPlayClock();
+  const cardRef = createRef<HTMLElement>();
+  function Card() {
+    const [now, setNow] = useState<{ start: number; until: number } | null>(null);
+    return (
+      <PlayTime.Provider value={clock}>
+        <PhrasePlayback.Provider value={{ now, stop: () => setNow(null) }}>
+          <section ref={cardRef}>
+            <SpeakersPanel endpoint={ep} recordingId="r1" people={people} open focus={null} version={1} playable
+              cardRef={cardRef} onClose={vi.fn()} onShowTurns={vi.fn()} onChanged={vi.fn()}
+              onPlay={(start, until) => setNow({ start, until })} />
+          </section>
+        </PhrasePlayback.Provider>
+      </PlayTime.Provider>
+    );
+  }
+  render(<Card />);
+  const first = await screen.findByRole("region", { name: /^Спикер 1/ });
+  const [one, two] = within(first).getAllByRole("listitem");
+  expect(first.querySelector("[data-w]")).toBeNull();
+  await userEvent.click(within(one!).getByRole("button", { name: "Прослушать фразу с 00:12" }));
+  act(() => clock.set(12.8));
+  const lit = one!.querySelectorAll("[data-word-now]");
+  expect([...lit].map((x) => x.textContent)).toEqual(["готов."]);
+  expect(one!.querySelector(".spk-phrase__text")).toHaveTextContent("Склад готов.");
+  act(() => clock.set(12.65)); // между словами — ничего
+  expect(one!.querySelector("[data-word-now]")).toBeNull();
+  expect(two!.querySelector("[data-w]")).toBeNull();
 });
 
 test("нет подходящей фразы — подпись без ▶", async () => {

@@ -9,6 +9,7 @@
  */
 
 import { inTauri, invoke } from "./shell";
+import type { SegmentWords } from "./words";
 import type {
   AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
   ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, KbDocs, RecordingChat,
@@ -136,6 +137,12 @@ export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal, fil
     `/search${query([`q=${enc(q)}`, `limit=${LIBRARY_LIMIT}`, ...libraryFilterParams(filter)])}`, { signal });
 export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
+/**
+ * Слова с таймкодами по сегментам транскрипта (щелчок по слову, подсветка звучащего):
+ * в транскрипт карточки они не входят, их грузят отдельно; у правленого сегмента — null.
+ */
+export const getWords = (ep: Endpoint, id: string) =>
+  json<{ segments: SegmentWords }>(ep, `/recordings/${enc(id)}/words`);
 /** Название записи не длиннее (резидент обрезает так же). */
 export const TITLE_MAX = 200;
 /**

@@ -2679,6 +2679,20 @@ class TrayControl:
         data = _window_transcript(library.read_transcript_full(folder) if folder else None, folder)
         return data or {"error": "транскрипта нет"}
 
+    def words(self, recording_id: str) -> dict:
+        """Слова с таймкодами для окна (щелчок по слову, подсветка звучащего):
+        `segments` — по сегменту транскрипта, в его порядке, список
+        [начало, конец, текст] или None. Окно грузит их отдельно и лениво —
+        в транскрипт карточки они не входят (их много). У сегмента, текст или
+        время которого правили, слов нет: они больше не описывают его."""
+        folder = self._folder(recording_id)
+        data = library.read_transcript_full(folder) if folder else None
+        segments = (data or {}).get("segments")
+        if not isinstance(segments, list):
+            return {"error": "транскрипта нет"}
+        return {"segments": [s["words"] if isinstance(s, dict) and library.words_match(s) else None
+                             for s in segments]}
+
     def export(self, recording_id: str, fmt: str) -> dict:
         from meet import categories, export
 

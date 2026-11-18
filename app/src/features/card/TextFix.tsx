@@ -86,6 +86,8 @@ export type TextFix = {
   openFromBar: (anchor: HTMLElement) => void;
   /** id открытой подсказки «Как исправить» — для `aria-controls` кнопки панели; закрыта — null. */
   hintId: string | null;
+  /** Реплика, открытая в окне исправления; окно закрыто — null. */
+  editing: number | null;
   /** Кнопка у выделения и окно исправления. */
   node: ReactNode;
   /** Итог над репликами: что исправлено и что добавлено в термины, с «Отменить». */
@@ -431,5 +433,8 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     );
   }
 
-  return { onContextMenu, openWord, openFromBar, hintId: hint ? hintId : null, node, bar };
+  return {
+    onContextMenu, openWord, openFromBar, hintId: hint ? hintId : null, node, bar,
+    editing: open && target ? target.turn : null,
+  };
 }

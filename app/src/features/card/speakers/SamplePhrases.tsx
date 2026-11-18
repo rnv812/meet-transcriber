@@ -6,16 +6,22 @@
  * прежний сам. Подходящей фразы нет — подпись без ▶.
  *
  * Что сейчас играет и как остановить — из `PhrasePlayback` (его даёт карточка
- * записи по `onPhrase` плеера); без него «Остановить» не появляется.
+ * записи по `onPhrase` плеера); без него «Остановить» не появляется. У
+ * играющего образца со словами (`words`) звучащее слово подсвечено по часам
+ * плеера карточки (`PlayTime`).
  */
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo, useRef } from "react";
 import { Play, Square } from "lucide-react";
 import { clock } from "../../../lib/format";
 import { NO_PHRASE, sampleCaption, sampleUntil } from "../../../lib/samples";
-import type { SpeakerPhrase } from "../../../lib/types";
+import { nfc } from "../../../lib/search";
+import type { SampleWord, SpeakerPhrase } from "../../../lib/types";
+import { wordSpans } from "../../../lib/words";
+import { wordPieces } from "../../../ui/Highlight";
 import { Icon } from "../../../ui/Icon";
 import type { Phrase } from "../AudioPlayer";
+import { useWordPaint } from "../playClock";
 
 export type PhrasePlaybackValue = {
   /** Играющий фрагмент общего плеера; null — ничего не играет. */
@@ -25,6 +31,19 @@ export type PhrasePlaybackValue = {
 };
 
 export const PhrasePlayback = createContext<PhrasePlaybackValue>({ now: null, stop: () => {} });
+
+/** Текст образца; играет — по словам, звучащее подсвечено. */
+function SampleText({ text, words }: { text: string; words?: SampleWord[] }) {
+  const shown = useMemo(() => nfc(text), [text]);
+  const spans = useMemo(() => (words?.length ? wordSpans(shown, words) : null), [shown, words]);
+  const box = useRef<HTMLSpanElement>(null);
+  useWordPaint(box, spans);
+  return (
+    <span ref={box} className="spk-phrase__text">
+      {spans ? wordPieces(shown, 0, shown.length, spans, "s") : text}
+    </span>
+  );
+}
 
 export function SamplePhrases({ samples, label, playable, onPlay }: {
   samples: SpeakerPhrase[];
@@ -52,7 +71,7 @@ export function SamplePhrases({ samples, label, playable, onPlay }: {
                 onClick={() => onPlay(s.start, until)}><Icon as={Play} size="sm" /></button>
             )}
             <span className="spk-phrase__time num muted">{sampleCaption(s)}</span>
-            <span className="spk-phrase__text">{s.text}</span>
+            <SampleText text={s.text} words={on ? s.words : undefined} />
           </li>
         );
       })}

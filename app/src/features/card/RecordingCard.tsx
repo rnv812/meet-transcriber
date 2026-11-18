@@ -6,7 +6,7 @@ import {
 } from "../../lib/analysisView";
 import {
   answerAnalysisOffer, ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
-  kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
+  getWords, kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText, meetingEndOf } from "../../lib/format";
 import { jiraCard, JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
@@ -17,6 +17,7 @@ import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, statusOf } from "../../lib/status";
 import { speakerTones } from "../../lib/tones";
 import type { Category, ChatUpdatedEvent, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
+import type { SegmentWords } from "../../lib/words";
 import { KIND_LABEL } from "../../live/liveModel";
 import { AgentMark } from "../../ui/AgentMark";
 import { Button } from "../../ui/Button";
@@ -50,6 +51,7 @@ import type { PersonColor } from "./Turns";
 import { asrNoteText, systemAudioText } from "./asrNote";
 import { MicSplitNote } from "./micSplit";
 import { PaneResizer } from "../../ui/PaneResizer";
+import { createPlayClock, PlayTime } from "./playClock";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
@@ -248,11 +250,14 @@ export function RecordingCard({
   turnsRef.current = turns;
   /** Где плеер сейчас (последнее сообщение): реплики пересобраны — отметка «играет» по нему. */
   const playheadAt = useRef<number | null>(null);
+  /** Время плеера для подсветки звучащего слова (ленте и образцам): тот же `onPlayhead`, без второго слушателя. */
+  const playClock = useMemo(createPlayClock, []);
   const playhead = useCallback((t: number) => {
     playheadAt.current = t;
+    playClock.set(t);
     const i = turnAt(turnsRef.current, t);
     setNowTurn(i < 0 ? null : i); // тот же номер — React не перерисует
-  }, []);
+  }, [playClock]);
   // Пришли спикеры (или правка пересобрала реплики): номер звучащей реплики — в новом списке,
   // до показа кадра, чтобы отметка не мигнула на чужой реплике.
   useLayoutEffect(() => {
@@ -261,6 +266,23 @@ export function RecordingCard({
     const i = turnAt(turns, t);
     setNowTurn(i < 0 ? null : i);
   }, [turns]);
+  // Слова с таймкодами — отдельным запросом, когда расшифровка есть и у неё есть слова; до ответа
+  // (и при ошибке) реплики ведут себя как без них. Слова — к той расшифровке, для которой пришли.
+  const shownTranscript = rec?.transcript ?? null;
+  const [words, setWords] = useState<{ of: Transcript; segments: SegmentWords } | null>(null);
+  useEffect(() => {
+    const t = shownTranscript;
+    if (!t || !t.segments.some((s) => s.has_words)) return;
+    let live = true;
+    getWords(endpoint, id).then((w) => {
+      if (live && Array.isArray(w.segments) && w.segments.length === t.segments.length) {
+        setWords({ of: t, segments: w.segments });
+      }
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [endpoint, id, shownTranscript]);
+  const segWords = words && words.of === shownTranscript ? words.segments : null;
+  const playAt = useCallback((t: number) => player.current?.seek(t, true), []);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
   const openSpeakers = useCallback((label?: string) => setPanel((p) => ({
     open: true, mounted: true, focus: label ? { label, n: (p.focus?.n ?? 0) + 1 } : p.focus,
@@ -517,6 +539,7 @@ export function RecordingCard({
             ? <div className="tbars">{turnEdit.bar}{textFix.bar}{improve.bar && <div className="tfix-bar">{improve.bar}</div>}</div>
             : null}
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn}
+          words={segWords} onPlayAt={playAt} editingTurn={textFix.editing}
           legendEnd={staleInLegend ? analysisStatus : null}
           // Разовое предложение анализа — только на «Расшифровке», над лентой: вкладки не сдвигаются.
           notice={offerAnalysis ? (
@@ -530,7 +553,7 @@ export function RecordingCard({
       // него же — место чтения и поиск не теряются), но без действий, которым нужны спикеры.
       first = turns.length ? (
         <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play} textPhase
-          toolbar={textNote(status)} find={shownFind} seekTo={seekTo} nowTurn={nowTurn} />
+          toolbar={textNote(status)} find={shownFind} seekTo={seekTo} nowTurn={nowTurn} words={segWords} onPlayAt={playAt} />
       ) : (
         <EmptyState title="В записи нет речи" action={textNote(status)} />
       );
@@ -626,94 +649,96 @@ export function RecordingCard({
   // Макет «карточка готовой встречи»: шапка (название и действия, строка о встрече),
   // под ней — тихие строки и выноски, вкладки и тело карточки с границей сверху.
   return (
-    <PhrasePlayback.Provider value={phrasePlayback}>
-      <section className={`rec-card${panel.open && status.kind === "ready" ? " rec-card--with-spk" : ""}`} ref={cardEl}>
-        <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil}
-          speakers={status.kind === "text" ? NO_NAMES : speakers} people={people} tones={colors}
-          endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
-          onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
-          categories={categories} onCategory={chooseCategory}
-          onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} actions={actions} />
-        {titleSuggest.suggest && cardEl.current && (
-          <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
-            suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
-        )}
-        <div className="card__notices">
-          {error && <div className="card__error" role="alert">{error}</div>}
-          {/* Устаревший анализ — в конце легенды над лентой (0.6.1), остальное — здесь. */}
-          {status.kind === "ready" && !staleInLegend && analysisStatus}
-          {status.kind === "ready" && improve.status}
-          {kbDone && (
-            <Callout tone="ok" label="Выгрузка в базу знаний"
-              actions={inTauri() && <Button onClick={() => act(() => openFolder(kbDone.path))}>Открыть папку</Button>}>
-              Выгружено: <code className="card__path">{kbDone.path}</code>
-              {(kbDone.kept ?? []).map((name) => (
-                <span key={name} className="card__kept">{name} изменён вручную — не перезаписан</span>
-              ))}
-              {(kbDone.notes ?? []).map((line) => (
-                <span key={line} className="card__kept">{line}</span>
-              ))}
-            </Callout>
+    <PlayTime.Provider value={playClock}>
+      <PhrasePlayback.Provider value={phrasePlayback}>
+        <section className={`rec-card${panel.open && status.kind === "ready" ? " rec-card--with-spk" : ""}`} ref={cardEl}>
+          <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil}
+            speakers={status.kind === "text" ? NO_NAMES : speakers} people={people} tones={colors}
+            endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
+            onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
+            categories={categories} onCategory={chooseCategory}
+            onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} actions={actions} />
+          {titleSuggest.suggest && cardEl.current && (
+            <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
+              suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
           )}
-          {!kbDone && !error && kbError && (
-            <Callout tone="err">Не удалось выгрузить в базу знаний: {kbError}</Callout>
+          <div className="card__notices">
+            {error && <div className="card__error" role="alert">{error}</div>}
+            {/* Устаревший анализ — в конце легенды над лентой (0.6.1), остальное — здесь. */}
+            {status.kind === "ready" && !staleInLegend && analysisStatus}
+            {status.kind === "ready" && improve.status}
+            {kbDone && (
+              <Callout tone="ok" label="Выгрузка в базу знаний"
+                actions={inTauri() && <Button onClick={() => act(() => openFolder(kbDone.path))}>Открыть папку</Button>}>
+                Выгружено: <code className="card__path">{kbDone.path}</code>
+                {(kbDone.kept ?? []).map((name) => (
+                  <span key={name} className="card__kept">{name} изменён вручную — не перезаписан</span>
+                ))}
+                {(kbDone.notes ?? []).map((line) => (
+                  <span key={line} className="card__kept">{line}</span>
+                ))}
+              </Callout>
+            )}
+            {!kbDone && !error && kbError && (
+              <Callout tone="err">Не удалось выгрузить в базу знаний: {kbError}</Callout>
+            )}
+            {retranscribeFailed && (
+              <Callout tone="err" actions={<><Button onClick={doTranscribe} disabled={busy}>Повторить</Button>{logsButton}</>}>
+                Перерасшифровка не удалась: {retranscribeFailed.error || "без подробностей"}
+                <span className="muted"> · показана прежняя расшифровка</span>
+              </Callout>
+            )}
+            {status.kind === "ready" && !rediarizeOpen && (rec.rediarize_ready || rediarizing) && (
+              <Callout tone="note"
+                actions={<Button onClick={() => setRediarizeOpen(true)}>{rediarizing ? "Подробнее" : "Посмотреть"}</Button>}>
+                {rediarizing ? "Идёт переразделение на спикеров…" : "Новое разделение на спикеров готово — посмотрите и примените или откажитесь"}
+              </Callout>
+            )}
+            {status.kind === "ready" && rec.diarization?.startsWith("skipped_") && (
+              // Без токена HF (или без доступа к модели) расшифровка идёт одним потоком; токен — в разделе «Спикеры».
+              <Callout tone="warn"
+                actions={onOpenSettings && <Button onClick={() => onOpenSettings("speakers")}>Настроить</Button>}>
+                Без разделения на спикеров — настройте Hugging Face
+              </Callout>
+            )}
+            {asrNote && <Callout tone="note" role="note">{asrNote}</Callout>}
+            {status.kind === "ready" && (
+              <MicSplitNote info={rec.mic_split} diarization={rec.diarization} endpoint={endpoint}
+                onOpenSettings={onOpenSettings}
+                onShowRemoved={showRemoved} />
+            )}
+            {systemAudio && <Callout tone="warn" role="note">{systemAudio}</Callout>}
+          </div>
+          <JiraLinks.Provider value={jiraLinks}>{body}</JiraLinks.Provider>
+          {status.kind === "ready" && turnEdit.menu}
+          {status.kind === "ready" && textFix.node}
+          {status.kind === "ready" && improve.dialog}
+          {confirmNode}
+          {status.kind === "ready" && rediarizeOpen && (
+            <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
+              twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}
+              onClose={() => setRediarizeOpen(false)} onApplied={speakersChanged} />
           )}
-          {retranscribeFailed && (
-            <Callout tone="err" actions={<><Button onClick={doTranscribe} disabled={busy}>Повторить</Button>{logsButton}</>}>
-              Перерасшифровка не удалась: {retranscribeFailed.error || "без подробностей"}
-              <span className="muted"> · показана прежняя расшифровка</span>
-            </Callout>
+          {panel.open && status.kind === "ready" && (
+            <PaneResizer name="speakers" cssVar="--spk-w" spec={SPEAKERS_PANE} panel="after"
+              label="Ширина панели спикеров" className="spk-resize" />
           )}
-          {status.kind === "ready" && !rediarizeOpen && (rec.rediarize_ready || rediarizing) && (
-            <Callout tone="note"
-              actions={<Button onClick={() => setRediarizeOpen(true)}>{rediarizing ? "Подробнее" : "Посмотреть"}</Button>}>
-              {rediarizing ? "Идёт переразделение на спикеров…" : "Новое разделение на спикеров готово — посмотрите и примените или откажитесь"}
-            </Callout>
+          {panel.mounted && status.kind === "ready" && (
+            <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} tones={colors} avatarVersion={avatarVersion}
+              open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl} jobs={jobs}
+              onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged}
+              removedAsk={removedAsk} />
           )}
-          {status.kind === "ready" && rec.diarization?.startsWith("skipped_") && (
-            // Без токена HF (или без доступа к модели) расшифровка идёт одним потоком; токен — в разделе «Спикеры».
-            <Callout tone="warn"
-              actions={onOpenSettings && <Button onClick={() => onOpenSettings("speakers")}>Настроить</Button>}>
-              Без разделения на спикеров — настройте Hugging Face
-            </Callout>
-          )}
-          {asrNote && <Callout tone="note" role="note">{asrNote}</Callout>}
-          {status.kind === "ready" && (
-            <MicSplitNote info={rec.mic_split} diarization={rec.diarization} endpoint={endpoint}
-              onOpenSettings={onOpenSettings}
-              onShowRemoved={showRemoved} />
-          )}
-          {systemAudio && <Callout tone="warn" role="note">{systemAudio}</Callout>}
-        </div>
-        <JiraLinks.Provider value={jiraLinks}>{body}</JiraLinks.Provider>
-        {status.kind === "ready" && turnEdit.menu}
-        {status.kind === "ready" && textFix.node}
-        {status.kind === "ready" && improve.dialog}
-        {confirmNode}
-        {status.kind === "ready" && rediarizeOpen && (
-          <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
-            twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}
-            onClose={() => setRediarizeOpen(false)} onApplied={speakersChanged} />
-        )}
-        {panel.open && status.kind === "ready" && (
-          <PaneResizer name="speakers" cssVar="--spk-w" spec={SPEAKERS_PANE} panel="after"
-            label="Ширина панели спикеров" className="spk-resize" />
-        )}
-        {panel.mounted && status.kind === "ready" && (
-          <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} tones={colors} avatarVersion={avatarVersion}
-            open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl} jobs={jobs}
-            onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged}
-            removedAsk={removedAsk} />
-        )}
-        {status.kind !== "recording" && (hasAudio ? (
-          <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}
-            onAvailable={audioAvailable} turns={turns} chapters={view?.chapters} importance={view?.importance}
-            curveMode={prefs.curve} barLabels={prefs.barLabels} people={people} avatarVersion={avatarVersion}
-            onSeeked={seeked} onPlayhead={playhead} onPhrase={setPhrase} />
-        ) : (
-          <div className="player player--off" role="status"><span className="muted">Аудио недоступно</span></div>
-        ))}
-      </section>
-    </PhrasePlayback.Provider>
+          {status.kind !== "recording" && (hasAudio ? (
+            <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}
+              onAvailable={audioAvailable} turns={turns} chapters={view?.chapters} importance={view?.importance}
+              curveMode={prefs.curve} barLabels={prefs.barLabels} people={people} avatarVersion={avatarVersion}
+              onSeeked={seeked} onPlayhead={playhead} onPhrase={setPhrase} />
+          ) : (
+            <div className="player player--off" role="status"><span className="muted">Аудио недоступно</span></div>
+          ))}
+        </section>
+      </PhrasePlayback.Provider>
+    </PlayTime.Provider>
   );
 }

@@ -1,8 +1,10 @@
-import { memo, useContext, useMemo, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  memo, useContext, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type MouseEvent,
+} from "react";
 import { Play, Sparkle } from "lucide-react";
 import { seriesStarts, type ChapterView, type InsightView, type TurnRow } from "../../lib/analysisView";
 import { clock, plural, preciseClock } from "../../lib/format";
-import { JiraLinks, type JiraMatch } from "../../lib/jira";
+import { JiraLinks, type JiraCard, type JiraMatch } from "../../lib/jira";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
@@ -12,6 +14,8 @@ import { Icon } from "../../ui/Icon";
 import { Tip } from "../../ui/Tip";
 import { LinkedText } from "../../ui/LinkedText";
 import { InsightNote, TypeIcon } from "./markup";
+import { useWordPaint } from "./playClock";
+import { TurnWordsContext } from "./turnWords";
 
 /** Человек базы голосов для карточки: цвет, фото и «Кто это» (подсказка у чипа в шапке). */
 export type PersonColor = { name: string; color: string; has_avatar: boolean; role?: string };
@@ -33,11 +37,47 @@ export type TurnAnnotations = {
   chapters?: ChapterView[];
 };
 
-/** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
+const noSubscribe = () => () => {};
+
+/**
+ * Текст реплики. Единственный компонент на реплику: играющая реплика и та, по
+ * которой щёлкнули, рисуются по словам (`TurnWordsContext`) — меняется только
+ * их текст, лента не перерисовывается; звучащее слово красит `useWordPaint`.
+ */
+function TurnText({ i, text, mark, jira, onContextMenu, onClick }: {
+  i: number;
+  text: string;
+  mark?: { ranges: Range[]; first: number };
+  jira: JiraCard | null;
+  onContextMenu?: (e: MouseEvent<HTMLElement>) => void;
+  onClick?: (e: MouseEvent<HTMLElement>) => void;
+}) {
+  const store = useContext(TurnWordsContext);
+  const words = useSyncExternalStore(store?.subscribe ?? noSubscribe, () => store?.shown(i) ?? null);
+  const box = useRef<HTMLParagraphElement>(null);
+  useWordPaint(box, words);
+  return (
+    // Реплика, найденная только по спикеру, — совпадение целиком.
+    <p ref={box} className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
+      onContextMenu={onContextMenu} onClick={onClick}>
+      {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
+        links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} words={words} />
+        : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} words={words} />
+          : words ? <Highlight text={text} ranges={[]} words={words} /> : text}
+    </p>
+  );
+}
+
+/** Плоский список: 2 часа записи — около тысячи блоков; свой компонент — только у текста реплики (TurnText). */
 export const Turns = memo(function Turns({
   turns, colors, playable, onPlay, onPlayRange, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
-  rows, annotations, onAskChapter, onExpand, textPhase = false, insights, onJump, onAskInsight,
+  rows, annotations, onAskChapter, onExpand, textPhase = false, insights, onJump, onAskInsight, onWordClick,
 }: {
+  /**
+   * Щелчок по тексту реплики (без Ctrl/Shift): играть со слова под указателем — решает
+   * TranscriptView (нет слов, выделение, правка — не играть).
+   */
+  onWordClick?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   /** Наблюдения анализа (0.6.1): заметка — под первой репликой из ссылок наблюдения. */
   insights?: InsightView[];
   /** Переход к реплике (ссылка в заметке наблюдения). */
@@ -233,13 +273,9 @@ export const Turns = memo(function Turns({
               {time}
             </div>
             <div className="turn__body">
-              {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
-              <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
-                onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
-                {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
-                  links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} />
-                  : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
-              </p>
+              <TurnText i={i} text={text} mark={mark} jira={jira}
+                onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}
+                onClick={onWordClick ? (e) => onWordClick(i, e) : undefined} />
               {tags.length > 0 && <span className="turn__marks">{tags}</span>}
               {(notes.get(i) ?? []).map((x) => (
                 <InsightNote key={x.id} insight={x} turns={turns} own={i} onJump={(r) => onJump?.(r)} onAsk={onAskInsight} />
