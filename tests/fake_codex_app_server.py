@@ -11,7 +11,9 @@
                        продолжает (иначе — ошибка «no rollout found», как у
                        Codex); FAKE_CODEX_OTHER=1 — продолжает, но с другим id (THREAD);
   FAKE_CODEX_REVIEWER — что ответить в `approvalsReviewer` (по умолчанию —
-                       то, что прислал клиент).
+                       то, что прислал клиент);
+  FAKE_CODEX_TOOLS   — JSON `{сервер: {инструмент: readOnlyHint}}` для ответа на
+                       `mcpServerStatus/list` (аннотации инструментов MCP).
 
 Ход (`turn/start`) — по строкам текста первого ввода:
   CMD <команда>      — `item/started` (commandExecution), запрос
@@ -22,6 +24,12 @@
                        `item/fileChange/requestApproval`;
   RUN <команда>      — команда без запроса: `item/started` и `item/completed`;
   ASK <метод>        — серверный запрос другого вида (`mcpServer/elicitation/request`…);
+  MCP <сервер> <инструмент> <json> — вызов MCP: одобрение, как у Codex 0.160.0, —
+                       `mcpServer/elicitation/request` с `_meta.codex_approval_kind =
+                       "mcp_tool_call"`, затем `item/started` и `item/completed`
+                       (`mcpToolCall`; `failed`, если одобрения нет);
+  ELICIT <json>      — вопрос MCP-сервера пользователю (`mcpServer/elicitation/request`
+                       с параметрами из json);
   HANG               — ждёт `turn/interrupt`, затем `turn/completed` со
                        статусом `interrupted`;
   FAIL <текст>       — `turn/completed` со статусом `failed`.
@@ -64,10 +72,12 @@ class Server:
         self.backlog: list[dict] = []
 
     def answer_misc(self, msg: dict) -> None:
-        """Запрос клиента посреди хода: остановка — ответ сразу."""
+        """Запрос клиента посреди хода: остановка и статус MCP — ответ сразу."""
         if msg.get("method") == "turn/interrupt":
             self.interrupted = True
             send({"id": msg["id"], "result": {}})
+        elif msg.get("method") == "mcpServerStatus/list":
+            send({"id": msg["id"], "result": mcp_status(msg.get("params") or {})})
 
     def wait_response(self, rid: str) -> dict | None:
         while True:
@@ -98,7 +108,7 @@ class Server:
         n = -1
         for line in text.splitlines():
             head, _, rest = line.partition(" ")
-            if head not in ("CMD", "RUN", "PATCH", "ASK", "HANG", "FAIL"):
+            if head not in ("CMD", "RUN", "PATCH", "ASK", "MCP", "ELICIT", "HANG", "FAIL"):
                 continue
             n += 1
             iid = f"item-{n}"
@@ -129,6 +139,29 @@ class Server:
                 ok = decision in ("accept", "acceptForSession")
                 send({"method": "item/completed", "params": {
                     **base, "item": {**item, "status": "completed" if ok else "declined"}, "completedAtMs": 2}})
+            elif head == "MCP":
+                server, tool, args = rest.split(" ", 2)
+                args = json.loads(args)
+                got = self.request("mcpServer/elicitation/request", {
+                    **base, "serverName": server, "mode": "form",
+                    "message": f'Allow the {server} MCP server to run tool "{tool}"?',
+                    "requestedSchema": {"type": "object", "properties": {}},
+                    "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"],
+                              "tool_name": tool, "tool_params": args}})
+                action = (got or {}).get("result", {}).get("action")
+                decisions.append(action)
+                hint = read_only_hint(server, tool)
+                item = {"type": "mcpToolCall", "id": iid, "server": server, "tool": tool, "arguments": args,
+                        "status": "inProgress", "readOnlyHint": hint, "result": None, "error": None,
+                        "durationMs": None}
+                send({"method": "item/started", "params": {**base, "item": item, "startedAtMs": 1}})
+                done = ({**item, "status": "completed", "result": {"content": [{"type": "text", "text": "ок"}]}}
+                        if action == "accept" else
+                        {**item, "status": "failed", "error": {"message": "user rejected MCP tool call"}})
+                send({"method": "item/completed", "params": {**base, "item": done, "completedAtMs": 2}})
+            elif head == "ELICIT":
+                got = self.request("mcpServer/elicitation/request", {**base, **json.loads(rest)})
+                decisions.append((got or {}).get("result"))
             elif head == "ASK":
                 got = self.request(rest, {**base, "itemId": iid})
                 decisions.append(got.get("result") if got and "result" in got else {"error": (got or {}).get("error")})
@@ -152,6 +185,25 @@ class Server:
         send({"method": "turn/completed", "params": {"threadId": thread, "turn": {
             "id": turn_id, "items": [], "itemsView": "notLoaded", "status": status, "error": error,
             "startedAt": None, "completedAt": None, "durationMs": None}}})
+
+
+def _tools() -> dict:
+    return json.loads(os.environ.get("FAKE_CODEX_TOOLS") or "{}")
+
+
+def read_only_hint(server: str, tool: str):
+    return _tools().get(server, {}).get(tool)
+
+
+def mcp_status(params: dict) -> dict:
+    data = []
+    for server, tools in _tools().items():
+        if params.get("serverName") not in (None, server):
+            continue
+        data.append({"name": server, "authStatus": "unsupported", "resources": [], "resourceTemplates": [],
+                     "tools": {name: {"name": name, "inputSchema": {"type": "object"},
+                                      "annotations": {"readOnlyHint": hint}} for name, hint in tools.items()}})
+    return {"data": data, "nextCursor": None}
 
 
 def thread_result(params: dict, tid: str) -> dict:

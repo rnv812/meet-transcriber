@@ -1731,3 +1731,145 @@ def test_codex_file_change_with_several_files_stops_at_the_first_refusal(dirs):
     shown = _cards_answer(gate, ["deny", "allow"])
     changes = [{"path": str(dirs["kb"] / f"{n}.md"), "kind": {"type": "add"}, "diff": "+x\n"} for n in "ab"]
     assert _codex(gate, _FILE, {}, {"changes": changes})[0] == "decline" and len(shown) == 1
+
+
+# --- Codex: вызовы MCP пользователя (одобрение — `mcpServer/elicitation/request`) ----------------
+
+_ELICIT = consent.CODEX_ELICITATION
+
+
+def _mcp(server, tool, args=None, *, meta_tool=True, message=None):
+    """Одобрение вызова MCP так, как его присылает Codex 0.160.0: elicitation с
+    `_meta.codex_approval_kind = "mcp_tool_call"` и пустой формой."""
+    meta = {"codex_approval_kind": "mcp_tool_call", "persist": ["session", "always"]}
+    if meta_tool:
+        meta["tool_name"] = tool
+    if args is not None:
+        meta["tool_params"] = args
+    return {"threadId": "t", "turnId": "u", "serverName": server, "mode": "form",
+            "message": message or f'Allow the {server} MCP server to run tool "{tool}"?',
+            "requestedSchema": {"type": "object", "properties": {}}, "_meta": meta}
+
+
+def _ask_mcp(gate, params, read_only=None):
+    return consent.codex_approval(gate, _ELICIT, params, {"readOnlyHint": read_only}, windows=False)
+
+
+def test_codex_mcp_read_only_hint_passes_without_a_card_whatever_the_name(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, [])
+    answer, decision = _ask_mcp(gate, _mcp("atlas", "create_page_preview", {"title": "x"}), read_only=True)
+    assert answer == "accept" and decision.outcome == ALLOW and shown == []
+
+
+def test_codex_mcp_read_only_hint_does_not_open_closed_paths(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, [])
+    secret = str(dirs["home"] / ".ssh" / "id_rsa")
+    answer, decision = _ask_mcp(gate, _mcp("fs", "read_file", {"path": secret}), read_only=True)
+    assert answer == "decline" and decision.why == "sensitive" and shown == []
+
+
+def test_codex_mcp_change_is_an_mcp_write_card_and_deny_declines(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["deny"])
+    params = _mcp("jira", "jira_add_comment", {"issue_key": "ABC-1", "body": "готово"})
+    answer, decision = _ask_mcp(gate, params)
+    assert answer == "decline" and decision.why == "declined"
+    card = shown[0]
+    assert card["tool"] == "mcp__jira__jira_add_comment" and card["kind"] == "mcp"
+    assert card["grant"] == {"key": "mcp:mcp__jira__jira_add_comment:issue_key=ABC-1",
+                             "label": "MCP jira: jira_add_comment → ABC-1"}
+    assert "готово" in card["args"] and consent.CODEX_UNSANDBOXED not in card["warnings"]
+    assert gate.decide("mcp__jira__jira_add_comment", params["_meta"]["tool_params"]).why == "mcp-write"
+
+
+def test_codex_mcp_allow_for_the_meeting_lets_the_same_call_through(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, [consent.ALLOW_MEETING])
+    params = _mcp("jira", "jira_add_comment", {"issue_key": "ABC-1", "body": "a"})
+    assert _ask_mcp(gate, params)[0] == "accept"
+    again = _ask_mcp(gate, _mcp("jira", "jira_add_comment", {"issue_key": "ABC-1", "body": "b"}))
+    assert again[0] == "accept" and again[1].why == "granted" and len(shown) == 1
+    other = _ask_mcp(gate, _mcp("jira", "jira_add_comment", {"issue_key": "ABC-2", "body": "b"}))
+    assert other[0] == "decline" and len(shown) == 2          # другой объект — снова карточка
+
+
+def test_codex_mcp_read_by_name_passes_on_request_without_a_card(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, [])
+    answer, decision = _ask_mcp(gate, _mcp("jira", "jira_get_issue", {"issue_key": "ABC-1"}))
+    assert answer == "accept" and decision.outcome == ALLOW and shown == []
+
+
+def test_codex_mcp_on_explain_only_reads_and_never_shows_a_card(dirs):
+    gate = _auto(dirs, READ)
+    shown = _cards_answer(gate, [])
+    assert _ask_mcp(gate, _mcp("jira", "jira_get_issue", {"issue_key": "A-1"}))[0] == "accept"
+    assert _ask_mcp(gate, _mcp("atlas", "create_page_preview", {}), read_only=True)[0] == "accept"
+    answer, decision = _ask_mcp(gate, _mcp("jira", "jira_add_comment", {"issue_key": "A-1"}))
+    assert answer == "decline" and decision.why == "ask" and shown == []
+
+
+def test_codex_mcp_from_replicas_is_refused(dirs):
+    gate = _auto(dirs, NONE)
+    shown = _cards_answer(gate, [])
+    assert _ask_mcp(gate, _mcp("jira", "jira_get_issue", {"issue_key": "A-1"}), read_only=True)[0] == "decline"
+    assert shown == []
+
+
+def test_codex_mcp_in_confirm_mode_reads_and_asks_changes(dirs):
+    gate = _gate(dirs, CONFIRM)
+    shown = _cards_answer(gate, ["allow"])
+    assert _ask_mcp(gate, _mcp("jira", "jira_get_issue", {"issue_key": "A-1"}))[0] == "accept"
+    assert _ask_mcp(gate, _mcp("jira", "jira_transition_issue", {"issue_key": "A-1"}))[0] == "accept"
+    assert len(shown) == 1
+
+
+def test_codex_mcp_tool_name_comes_from_the_message_when_meta_has_none(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["deny"])
+    params = _mcp("jira", "jira_delete_issue", {"issue_key": "A-1"}, meta_tool=False)
+    assert _ask_mcp(gate, params)[0] == "decline"
+    assert shown[0]["tool"] == "mcp__jira__jira_delete_issue"
+
+
+@pytest.mark.parametrize("params", [
+    {**_mcp("jira", "x"), "serverName": ""},
+    _mcp("jira", "x", meta_tool=False, message="Something else"),
+    {**_mcp("jira", "bad name"), "message": ""},
+])
+def test_codex_mcp_approval_that_cannot_be_read_is_declined(dirs, params):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["allow"])
+    assert _ask_mcp(gate, params, read_only=True)[0] == "decline" and shown == []
+
+
+def _form(properties=None, mode="form", **extra):
+    return {"threadId": "t", "turnId": "u", "serverName": "jira", "mode": mode,
+            "message": "Подтвердите перенос задачи", "requestedSchema": {"type": "object",
+                                                                           "properties": properties or {}},
+            "_meta": None, **extra}
+
+
+def test_codex_mcp_question_is_a_card_and_refusal_declines(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["allow", "deny"])
+    answer, decision = consent.codex_approval(gate, _ELICIT, _form(), {}, windows=False)
+    assert answer == "accept" and decision.outcome == ALLOW
+    card = shown[0]
+    assert card["title"] == "MCP jira спрашивает" and "Подтвердите перенос задачи" in card["args"]
+    assert card["grant"] is None
+    assert consent.codex_approval(gate, _ELICIT, _form(), {}, windows=False)[0] == "decline"
+
+
+@pytest.mark.parametrize("level,params", [
+    (USER, _form({"name": {"type": "string"}})),              # форма с полями — окна для неё у Meet нет
+    (USER, {**_form(mode="url"), "url": "https://example.com/auth", "elicitationId": "e"}),
+    (READ, _form()), (NONE, _form()),
+])
+def test_codex_mcp_question_without_a_card_is_declined(dirs, level, params):
+    gate = _auto(dirs, level)
+    shown = _cards_answer(gate, ["allow"])
+    assert consent.codex_approval(gate, _ELICIT, params, {}, windows=False)[0] == "decline"
+    assert shown == []

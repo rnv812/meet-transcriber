@@ -11,8 +11,10 @@ JSON-RPC 2.0 построчно по stdio, без поля "jsonrpc" (Codex 0.1
 2. `thread/start` (новый сеанс; системный промпт — в начале первого
    сообщения, как у exec) или `thread/resume` с id из `sessions.json` (те же
    сохранённые сеансы, что у exec);
-3. `turn/start` с политикой по уровню хода (`turn_policy`): NONE и READ —
-   песочница только-чтение без сети и без вопросов (`never`); USER —
+3. `turn/start` с политикой по уровню хода (`turn_policy`): NONE —
+   песочница только-чтение без сети и без вопросов (`never`); READ (❓) —
+   только-чтение, но `on-request` (через одобрения идут вызовы MCP, ворота
+   в этом ходе пропускают только чтение, без карточек); USER —
    `on-request`, проверяющий — человек (`approvalsReviewer: "user"`, без
    автопроверки Codex), песочница в режиме `auto` — запись в рабочие папки
    (`workspaceWrite`), в режиме `confirm` — только чтение: всё сверх чтения
@@ -20,8 +22,11 @@ JSON-RPC 2.0 построчно по stdio, без поля "jsonrpc" (Codex 0.1
 4. запросы `item/commandExecution/requestApproval` и
    `item/fileChange/requestApproval` → `approver` (ворота Meet и карточки,
    `consent.codex_approval`) → `accept` / `acceptForSession` / `decline`;
-   прочие запросы сервера — отказ (MCP-вопросы, вопросы пользователю,
-   расширение прав);
+   `mcpServer/elicitation/request` (одобрение вызова MCP или вопрос
+   MCP-сервера) → те же ворота (`consent.codex_elicitation`; пометка
+   инструмента `readOnlyHint` — из каталога `mcpServerStatus/list`) →
+   `accept` / `decline`; прочие запросы сервера — отказ (вопросы
+   пользователю, расширение прав);
 5. `item/started` / `item/completed` → строки хода работы по мере хода
    (`codex.ToolStream`), решение ворот — событием `gate` в строку вызова;
 6. ответ — текст последнего `agentMessage`, конец — `turn/completed`.
@@ -31,9 +36,13 @@ JSON-RPC 2.0 построчно по stdio, без поля "jsonrpc" (Codex 0.1
 ответа на `initialize`, ошибка протокола, проверяющий не человек) —
 `Unavailable`: вызывающий идёт прежним путём `codex exec`.
 
-MCP-серверы пользователя в этом ходе выключены, как у exec: заглушки `-c
-mcp_servers.<имя>=…` при запуске (`launch_flags`); выключить нельзя — None,
-ход через exec с `--ignore-user-config`. В журналы — ничего из хода."""
+MCP-серверы пользователя (`launch_flags`): в ходе по репликам выключены, как
+у exec, — заглушки `-c mcp_servers.<имя>=…` при запуске; в ходе по просьбе
+(USER, ❓) включены с режимом «спрашивать каждый вызов»
+(`default_tools_approval_mode="prompt"`, `codex.mcp_prompt_args`), так что
+каждый вызов MCP проходит ворота Meet; сервер, которому режим ключом не
+задать, — заглушкой. Выключить нельзя — None, ход через exec с
+`--ignore-user-config`. В журналы — ничего из хода."""
 
 import json
 import os
@@ -55,8 +64,10 @@ _ERR_LIMIT = 500
 _STDERR_TAIL = 64 * 1024
 # Ошибки JSON-RPC, которые значат «протокол не тот»: разбор, нет метода, не те параметры.
 _PROTOCOL = (-32700, -32601, -32602)
+HINTS_TIMEOUT_S = 10.0       # каталог инструментов MCP (`mcpServerStatus/list`) для readOnlyHint
 COMMAND_APPROVAL = "item/commandExecution/requestApproval"
 FILE_APPROVAL = "item/fileChange/requestApproval"
+ELICITATION = "mcpServer/elicitation/request"
 # Тип элемента app-server → тип события `codex exec --json` (`codex.ToolStream`).
 _ITEM_TYPES = {"commandExecution": "command_execution", "fileChange": "file_change",
                "mcpToolCall": "mcp_tool_call", "webSearch": "web_search"}
@@ -87,11 +98,15 @@ def command(exe: str, flags) -> list[str]:
     return [exe, "app-server", *flags]
 
 
-def launch_flags(access: str, servers) -> list[str] | None:
-    """Флаги запуска: MCP-серверы пользователя выключены заглушками
-    (`codex.mcp_stub_args`; выключить нельзя — None), приложения, браузер и
-    управление компьютером — тоже; в ходах NONE и READ — без веб-поиска."""
-    stubs = _codex.mcp_stub_args(servers)
+def launch_flags(access: str, servers, config=None) -> list[str] | None:
+    """Флаги запуска. MCP-серверы пользователя: в ходе по репликам (NONE) —
+    выключены заглушками (`codex.mcp_stub_args`), в ходе по просьбе (USER,
+    ❓ — READ) — включены, и Codex спрашивает о каждом вызове
+    (`codex.mcp_prompt_args`, `config` — `codex.mcp_config()`); не
+    выключить — None. Приложения, браузер и управление компьютером выключены
+    всегда; в ходах NONE и READ — без веб-поиска."""
+    stubs = (_codex.mcp_prompt_args(servers, config) if access in ("user", "read")
+             else _codex.mcp_stub_args(servers))
     if stubs is None:
         return None
     out = list(stubs)
@@ -105,8 +120,13 @@ def launch_flags(access: str, servers) -> list[str] | None:
 def turn_policy(access: str, mode: str, work_dirs=()) -> dict:
     """Песочница и одобрения хода по уровню (`access`) и режиму ассистента
     (`mode`): ключи `approvalPolicy`, `approvalsReviewer`, `sandbox` (режим
-    для `thread/*`), `sandboxPolicy` (для `turn/start`)."""
+    для `thread/*`), `sandboxPolicy` (для `turn/start`). ❓ (READ) —
+    только-чтение, но с одобрениями: через них идут вызовы MCP, а ворота
+    Meet в этом ходе пропускают только чтение, без карточек."""
     read_only = {"type": "readOnly", "networkAccess": False}
+    if access == "read":
+        return {"approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only",
+                "sandboxPolicy": read_only}
     if access != "user":
         return {"approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": "read-only",
                 "sandboxPolicy": read_only}
@@ -257,6 +277,8 @@ class _Turn:
         self.result: dict | None = None
         self.done = threading.Event()
         self.lock = threading.Lock()
+        self.hints: dict[str, dict[str, bool]] = {}           # сервер MCP → {инструмент: readOnlyHint}
+        self.mcp_decisions: list[tuple[str, object]] = []    # решения ворот до `item/started` вызова MCP
 
     def _emit_all(self, events) -> None:
         for event in events:
@@ -275,6 +297,8 @@ class _Turn:
                 self.text = str(item.get("text") or "")
             kind = "item.started" if method == "item/started" else "item.completed"
             self._emit_all(self.tools.item(kind, _exec_shape(item)))
+            if method == "item/started" and item.get("type") == "mcpToolCall" and isinstance(iid, str):
+                self._mcp_gate_row(item, iid)
         elif method == "error":
             err = params.get("error") if isinstance(params.get("error"), dict) else {}
             if not params.get("willRetry") and err.get("message"):
@@ -309,14 +333,84 @@ class _Turn:
                 name = "Bash" if method == COMMAND_APPROVAL else "apply_patch"
                 self.emit(_gate_event(decision, name, iid, "codex"))
             peer.respond(rid, {"decision": answer if answer in ("accept", "acceptForSession") else "decline"})
-        elif method == "mcpServer/elicitation/request":
-            peer.respond(rid, {"action": "decline", "content": None, "_meta": None})
+        elif method == ELICITATION:
+            self._elicitation(peer, rid, params)
         elif method == "item/tool/requestUserInput":
             peer.respond(rid, {"answers": {}})
         elif method in ("execCommandApproval", "applyPatchApproval"):
             peer.respond(rid, {"decision": {"denied": {"rejection": "Meet этот запрос не поддерживает"}}})
         else:
             peer.respond(rid, error={"code": -32601, "message": "Meet этот запрос не поддерживает"})
+
+    def _elicitation(self, peer: "_Peer", rid, params: dict) -> None:
+        """MCP-вопрос: одобрение вызова MCP (`_meta.codex_approval_kind =
+        "mcp_tool_call"`) или вопрос сервера пользователю → `approver` (ворота
+        Meet: `consent.codex_elicitation`, в контексте — `readOnlyHint`
+        инструмента) → `accept` / `decline`. Решение по вызову ляжет в его
+        строку, когда придёт `item/started` (вызов MCP начинается после
+        одобрения)."""
+        from meet.llm import consent
+
+        call = None
+        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        if meta.get("codex_approval_kind") == "mcp_tool_call":
+            call = consent.codex_mcp_call(params)
+        context = {"readOnlyHint": self._read_only(*consent.mcp_parts(call[0])) if call else None}
+        answer, decision = "decline", None
+        if self.approver is not None:
+            try:
+                answer, decision = self.approver(ELICITATION, params, context)
+            except Exception:
+                answer, decision = "decline", None
+        if call is not None and decision is not None:
+            with self.lock:
+                self.mcp_decisions.append((call[0], decision))
+        if answer in ("accept", "acceptForSession"):
+            peer.respond(rid, {"action": "accept", "content": {}, "_meta": None})
+        else:
+            peer.respond(rid, {"action": "decline", "content": None, "_meta": None})
+
+    def _read_only(self, server: str, tool: str) -> bool | None:
+        """`readOnlyHint` инструмента MCP: из элемента вызова, если он уже
+        пришёл, иначе из каталога сервера (`mcpServerStatus/list`, один раз на
+        сервер за ход); неизвестно — None (решают ворота, как без пометки)."""
+        with self.lock:
+            for item in self.items.values():
+                if (item.get("type") == "mcpToolCall" and item.get("server") == server
+                        and item.get("tool") == tool and isinstance(item.get("readOnlyHint"), bool)):
+                    return item["readOnlyHint"]
+            hints = self.hints.get(server)
+        if hints is None:
+            hints = {}
+            peer = self.peer
+            try:
+                result = peer.call("mcpServerStatus/list", {"threadId": self.thread_id, "serverName": server,
+                                                            "detail": "toolsAndAuthOnly"},
+                                   HINTS_TIMEOUT_S) if peer is not None else {}
+            except (_NoAnswer, _RpcError):
+                result = {}
+            for status in result.get("data") or ():
+                if not isinstance(status, dict) or status.get("name") != server:
+                    continue
+                for name, spec in (status.get("tools") or {}).items() if isinstance(status.get("tools"), dict) \
+                        else ():
+                    notes = spec.get("annotations") if isinstance(spec, dict) else None
+                    hint = notes.get("readOnlyHint") if isinstance(notes, dict) else None
+                    if isinstance(hint, bool):
+                        hints[str(spec.get("name") or name)] = hint
+            with self.lock:
+                self.hints[server] = hints
+        return hints.get(tool)
+
+    def _mcp_gate_row(self, item: dict, iid: str) -> None:
+        name = f"mcp__{item.get('server')}__{item.get('tool')}"
+        with self.lock:
+            found = next((k for k, (tool, _d) in enumerate(self.mcp_decisions) if tool == name), None)
+            decision = self.mcp_decisions.pop(found)[1] if found is not None else None
+        if decision is not None:
+            from meet.llm.claude_stream import _gate_event
+
+            self.emit(_gate_event(decision, name, iid, "codex"))
 
     def abort_rows(self) -> None:
         self._emit_all(self.tools.abort())

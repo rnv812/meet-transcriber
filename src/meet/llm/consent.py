@@ -39,7 +39,9 @@
 `permissionDecision: "allow"`: Meet или человек решили), `auto` (хук — `{}`),
 `deny`. Codex через app-server (0.6.2) просит одобрить выход за свою
 песочницу — `codex_approval` переводит запрос в вызов и решает его
-`check(via=CODEX)`: что CLI решил бы сам (`auto`), здесь — карточка. OpenCode
+`check(via=CODEX)`: что CLI решил бы сам (`auto`), здесь — карточка; вызов
+MCP Codex одобряет MCP-вопросом — `codex_elicitation` (инструмент с пометкой
+«только чтение» — сразу, изменение — карточка, как у Claude Code). OpenCode
 и Codex через `codex exec` обратного вызова не имеют: строки `ask` у них —
 отказ (`codex.access_args`, `opencode.permission_for`).
 
@@ -2435,10 +2437,15 @@ class ConsentGate:
             return "local"
         return ""
 
-    def decide(self, tool: str, data=None) -> Decision:
+    def decide(self, tool: str, data=None, *, read_only: bool = False) -> Decision:
+        """Решение без ожидания. `read_only` — MCP-инструмент сам объявил,
+        что только читает (`readOnlyHint`, Codex): он — чтение MCP, какое бы
+        ни было имя (запреты путей и адресов в аргументах — те же)."""
         data = data if isinstance(data, dict) else {}
         tool = str(tool or "")
         kind, what = describe(tool, data)
+        if read_only and kind == "mcp":
+            kind = "mcp-read"
         with self._lock:
             level = self._level
             self.calls += 1
@@ -2648,7 +2655,8 @@ class ConsentGate:
 
     # --- решение с карточкой (ответ CLI)
 
-    def check(self, tool: str, data=None, *, tool_use_id: str | None = None, via: str = "hook") -> Decision:
+    def check(self, tool: str, data=None, *, tool_use_id: str | None = None, via: str = "hook",
+              read_only: bool = False) -> Decision:
         """Ответ на хук PreToolUse (`via="hook"`) или `can_use_tool`.
 
         Хук: `allow` / `auto` / `deny`; `ask` — карточка: ждём решения
@@ -2663,7 +2671,9 @@ class ConsentGate:
         `via=CODEX` (0.6.2) — Codex через app-server просит выйти за свою
         песочницу (`codex_approval`): что Meet пропускает сам (чтение по
         просьбе, разрешение «до конца встречи»), проходит; что отдал бы CLI
-        (`auto`), — карточка: одобренное Codex выполнит без песочницы."""
+        (`auto`), — карточка: одобренное Codex выполнит без песочницы; чтение
+        MCP (у Claude Code его решил бы автомод) — пропускается, как в ходе
+        ❓ и в режиме confirm. `read_only` — см. `decide`."""
         data = data if isinstance(data, dict) else {}
         tool = str(tool or "")
         canonical = _canonical(tool, data)
@@ -2680,10 +2690,12 @@ class ConsentGate:
                     return Decision(ALLOW, what=describe(tool, data)[1], kind="approved", why="confirmed")
                 seen = (tool_use_id in self._seen) if tool_use_id else canonical in self._seen
                 level = self._level
-        decision = self.decide(tool, data)
+        decision = self.decide(tool, data, read_only=read_only)
         if decision.outcome == DENY:
             return decision
         if via == CODEX:
+            if decision.outcome == AUTO and decision.kind in ("mcp-read", "mcp-resource"):
+                return Decision(ALLOW, what=decision.what, kind=decision.kind)
             if decision.outcome == AUTO:
                 if self._granted(tool, data):
                     return Decision(ALLOW, what=decision.what, kind=decision.kind, why="granted")
@@ -2779,6 +2791,7 @@ def denial_line(denials) -> str:
 CODEX = "codex"
 CODEX_COMMAND = "item/commandExecution/requestApproval"
 CODEX_FILE_CHANGE = "item/fileChange/requestApproval"
+CODEX_ELICITATION = "mcpServer/elicitation/request"
 CODEX_UNSANDBOXED = "⚠ Codex выполнит эту команду без своей песочницы"
 _POSIX_QUIET = re.compile(r"^(?:-[lceuxv]+|--login|--noprofile|--norc)$")
 _PS_QUIET = frozenset(("noprofile", "nologo", "noninteractive"))
@@ -2866,13 +2879,16 @@ def codex_calls(method: str, params: dict, item: dict, *, windows: bool) -> list
 def codex_approval(gate: "ConsentGate", method: str, params: dict, item: dict, *,
                    windows: bool) -> tuple[str, Decision]:
     """Ответ на запрос одобрения Codex: (`accept` / `acceptForSession` /
-    `decline`, решение ворот для строки вызова). Каждый вызов запроса
+    `decline`, решение ворот для строки вызова). `mcpServer/elicitation/request`
+    — `codex_elicitation` (`item` — `{"readOnlyHint": …}`). Каждый вызов запроса
     проходит ворота (`check(via=CODEX)`, карточка — в строке `itemId`);
     первый отказ — `decline`. `acceptForSession` — только когда всё покрыто
     разрешением «до конца встречи» (удаление и отправка наружу его не
     получают) и запрос не просит права на целую папку (`grantRoot`: это шире
     разрешения Meet на файл)."""
     params = params if isinstance(params, dict) else {}
+    if method == CODEX_ELICITATION:
+        return codex_elicitation(gate, params, item)
     calls = codex_calls(method, params, item, windows=windows)
     if not calls:
         return "decline", gate._record(Decision(DENY, "", "непонятный запрос Codex", "other", UNPARSED))
@@ -2885,3 +2901,75 @@ def codex_approval(gate: "ConsentGate", method: str, params: dict, item: dict, *
             return "decline", decision
         session = session and decision.why in ("granted", "granted-now") and gate.granted(tool, data)
     return ("acceptForSession" if session else "accept"), decision
+
+
+# --- MCP пользователя у Codex (0.6.2): одобрение вызова и вопрос сервера ---------------------
+#
+# Вызов MCP-инструмента Codex одобряет не отдельным запросом, а MCP-вопросом
+# `mcpServer/elicitation/request` с `_meta.codex_approval_kind = "mcp_tool_call"`
+# (сообщение «Allow the <сервер> MCP server to run tool "<инструмент>"?», в
+# `_meta` — `tool_name`, `tool_params`; форма пустая; codex-cli 0.160.0, по
+# строкам `codex.exe` — живым ходом не проверено). Meet ставит серверам режим
+# «спрашивать каждый вызов» (`codex.mcp_prompt_args`), поэтому сюда приходит
+# каждый вызов MCP хода по просьбе.
+
+_MCP_APPROVAL_TOOL = re.compile(r'run tool "([^"\r\n]+)"\?')
+_MCP_TOOL_NAME = re.compile(r"^[A-Za-z0-9_.\-/]{1,128}$")
+
+
+def codex_mcp_call(params: dict) -> tuple[str, dict] | None:
+    """Одобрение вызова MCP от Codex → (`mcp__<сервер>__<инструмент>`,
+    аргументы) — как вызов MCP у Claude Code; None — понять нельзя."""
+    params = params if isinstance(params, dict) else {}
+    meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+    server = params.get("serverName")
+    if not isinstance(server, str) or not _MCP_TOOL_NAME.match(server.strip()):
+        return None
+    name = meta.get("tool_name")
+    if not isinstance(name, str) or not name.strip():
+        found = _MCP_APPROVAL_TOOL.search(str(params.get("message") or ""))
+        name = found.group(1) if found else ""
+    name = name.strip()
+    if not _MCP_TOOL_NAME.match(name):
+        return None
+    args = meta.get("tool_params")
+    return f"mcp__{server.strip()}__{name}", (args if isinstance(args, dict) else {})
+
+
+def codex_elicitation(gate: "ConsentGate", params: dict, item: dict | None = None) -> tuple[str, Decision | None]:
+    """MCP-вопрос Codex → (`accept` / `decline`, решение для строки вызова).
+    Одобрение вызова MCP — ворота как у вызова MCP Claude Code
+    (`check(via=CODEX)`): инструмент, сам объявивший «только чтение»
+    (`item["readOnlyHint"]`), и чтение по имени проходят по просьбе сразу,
+    изменение — карточка «изменение через MCP» (в ходе ❓ — отказ, по
+    репликам — отказ всегда). Вопрос MCP-сервера пользователю — той же
+    карточкой согласия, только в ходе по просьбе и только без полей (окна
+    для формы, ссылки или проверки устройства у Meet нет): иначе отказ."""
+    params = params if isinstance(params, dict) else {}
+    meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+    if meta.get("codex_approval_kind") == "mcp_tool_call":
+        call = codex_mcp_call(params)
+        if call is None:
+            return "decline", gate._record(Decision(DENY, "", "непонятный вызов MCP от Codex", "mcp", UNPARSED))
+        tool, args = call
+        read_only = isinstance(item, dict) and item.get("readOnlyHint") is True
+        decision = gate.check(tool, args, via=CODEX, read_only=read_only)
+        return ("accept" if decision.allow else "decline"), decision
+    server = str(params.get("serverName") or "").strip() or "?"
+    schema = params.get("requestedSchema")
+    fields = schema.get("properties") if isinstance(schema, dict) else None
+    confirmer = gate.confirmer
+    if gate.level != USER or params.get("mode") != "form" or not isinstance(fields, dict) or fields \
+            or confirmer is None:
+        return "decline", None
+    what = f"вопрос MCP {server}"
+    card = card_for(f"mcp__{server}__elicitation", {"message": str(params.get("message") or "")})
+    card.update(title=f"MCP {server} спрашивает", what=what, grant=None)
+    try:
+        answer = confirmer(card)
+    except Exception as e:  # карточка не показалась — отказ
+        gate._log(f"согласие: карточка не показана ({type(e).__name__})")
+        answer = "cancelled"
+    if answer in (ALLOW, ALLOW_MEETING):
+        return "accept", Decision(ALLOW, what=what, kind="mcp", why="confirmed")
+    return "decline", Decision(DENY, DECLINED.format(what=what), what, "mcp", "declined")

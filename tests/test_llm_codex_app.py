@@ -49,6 +49,8 @@ class Harness:
             return codex.AgentReply(text="через exec", session_id=resume)
 
         monkeypatch.setattr(codex, "_exec", fake_exec)
+        monkeypatch.setattr(codex, "mcp_config", lambda: {})           # config.toml пользователя не читаем
+        self.monkeypatch = monkeypatch
         self.gate = consent.ConsentGate(own_dirs=[self.meeting], work_dirs=[self.kb], sensitive=[],
                                         cwd=self.meeting, confirmer=self._confirm, mode=mode)
 
@@ -82,6 +84,13 @@ class Harness:
 
     def sent(self, method: str) -> list[dict]:
         return [m["params"] for m in self.received() if m.get("method") == method]
+
+    def mcp(self, servers, config=None, tools=None) -> None:
+        """MCP-серверы пользователя: список (`codex mcp list --json`), таблицы config.toml
+        ({имя: [инструменты со своей таблицей]}), аннотации для `mcpServerStatus/list`."""
+        self.monkeypatch.setattr(codex, "mcp_servers", lambda exe=None, env=None, refresh=False: servers)
+        self.monkeypatch.setattr(codex, "mcp_config", lambda: config)
+        self.monkeypatch.setenv("FAKE_CODEX_TOOLS", json.dumps(tools or {}))
 
 
 def _decisions(reply) -> list:
@@ -177,7 +186,9 @@ def test_none_and_read_are_read_only_and_requests_decline_without_a_card(monkeyp
     assert _decisions(reply) == ["decline"] and h.cards == []
     turn = h.sent("turn/start")[0]
     assert turn["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
-    assert turn["approvalPolicy"] == "never"
+    # ❓ — ход по просьбе: одобрения (и вызовы MCP) идут в ворота Meet, а они в нём только читают.
+    assert turn["approvalPolicy"] == ("on-request" if level == consent.READ else "never")
+    assert turn["approvalsReviewer"] == "user"
     assert h.sent("thread/start")[0]["sandbox"] == "read-only"
     argv = h.argv()
     assert "tools.web_search=false" in argv and argv.count("--disable") == len(codex._NONE_FEATURES)
@@ -326,12 +337,13 @@ def test_reviewer_other_than_the_user_falls_back(monkeypatch, tmp_path):
     assert h.exec_calls and h.sent("turn/start") == []
 
 
+@pytest.mark.parametrize("level", [consent.NONE, consent.USER])
 @pytest.mark.parametrize("servers", [None, [{"name": "a.b", "enabled": True, "transport": "stdio"}],
                                      [{"name": "x", "enabled": True, "transport": "sse"}]])
-def test_mcp_that_cannot_be_stubbed_goes_through_exec_without_app_server(monkeypatch, tmp_path, servers):
+def test_mcp_that_cannot_be_stubbed_goes_through_exec_without_app_server(monkeypatch, tmp_path, servers, level):
     h = Harness(monkeypatch, tmp_path)
-    monkeypatch.setattr(codex, "mcp_servers", lambda exe=None, env=None, refresh=False: servers)
-    h.run("проверь")
+    h.mcp(servers, config={})
+    h.run("проверь", level=level)
     assert h.exec_calls and not h.log.exists()
     assert "MCP" in h.lines[0]
 
@@ -346,6 +358,117 @@ def test_mcp_servers_are_stubbed_at_launch(monkeypatch, tmp_path):
     assert 'mcp_servers.jira={enabled=false,command="__meet_disabled_mcp__"}' in argv
     assert 'mcp_servers.atlas={enabled=false,url="http://127.0.0.1:9/__meet_disabled_mcp__"}' in argv
     assert "--ignore-user-config" not in argv
+
+
+# --- MCP пользователя по уровню хода ---------------------------------------------------------------
+
+_SERVERS = [{"name": "jira", "enabled": True, "transport": "stdio"},
+            {"name": "atlas", "enabled": True, "transport": "streamable_http"},
+            {"name": "plug", "enabled": True, "transport": "stdio"},          # сервер плагина: нет в config.toml
+            {"name": "old", "enabled": False, "transport": "stdio"}]
+_CONFIG = {"jira": ["jira_add_comment"], "atlas": [], "old": []}
+
+
+def test_replica_turn_stubs_user_mcp_off(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    h.mcp(_SERVERS, _CONFIG)
+    h.run("проверь", level=consent.NONE)
+    argv = h.argv()
+    assert 'mcp_servers.jira={enabled=false,command="__meet_disabled_mcp__"}' in argv
+    assert 'mcp_servers.atlas={enabled=false,url="http://127.0.0.1:9/__meet_disabled_mcp__"}' in argv
+    assert not any("approval_mode" in a for a in argv) and not any("mcp_servers.old" in a for a in argv)
+
+
+@pytest.mark.parametrize("level", [consent.USER, consent.READ])
+def test_request_turn_enables_user_mcp_and_codex_asks_about_every_call(monkeypatch, tmp_path, level):
+    h = Harness(monkeypatch, tmp_path)
+    h.mcp(_SERVERS, _CONFIG)
+    h.run("проверь", level=level)
+    argv = h.argv()
+    assert 'mcp_servers.jira.default_tools_approval_mode="prompt"' in argv
+    assert 'mcp_servers.jira.tools.jira_add_comment.approval_mode="prompt"' in argv
+    assert 'mcp_servers.atlas.default_tools_approval_mode="prompt"' in argv
+    assert not any(a.startswith(("mcp_servers.jira={", "mcp_servers.atlas={")) for a in argv)
+    # Сервер, которому режим не задать ключом (плагин), выключен заглушкой.
+    assert 'mcp_servers.plug={enabled=false,command="__meet_disabled_mcp__"}' in argv
+    assert not any("mcp_servers.old" in a for a in argv) and "--ignore-user-config" not in argv
+
+
+@pytest.mark.parametrize("config", [None, {"jira": ["bad.name"]}])
+def test_request_turn_stubs_servers_it_cannot_make_ask(monkeypatch, tmp_path, config):
+    h = Harness(monkeypatch, tmp_path)
+    h.mcp(_SERVERS[:1], config)
+    h.run("проверь")
+    argv = h.argv()
+    assert 'mcp_servers.jira={enabled=false,command="__meet_disabled_mcp__"}' in argv
+    assert not any("approval_mode" in a for a in argv)
+
+
+def test_user_mcp_read_only_tool_runs_without_a_card(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    h.mcp(_SERVERS[:2], _CONFIG, tools={"atlas": {"create_page_preview": True}})
+    reply = h.run('MCP atlas create_page_preview {"title": "x"}')
+    assert _decisions(reply) == ["accept"] and h.cards == []
+    assert h.sent("mcpServerStatus/list") == [{"threadId": THREAD, "serverName": "atlas",
+                                               "detail": "toolsAndAuthOnly"}]
+    assert [(e["type"], e.get("decision")) for e in h.events] == [
+        ("tool_use", None), ("gate", "allowed"), ("tool_result", None)]
+    assert h.events[0]["name"] == "mcp__atlas__create_page_preview"
+
+
+def test_user_mcp_change_asks_with_a_card_and_deny_declines(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, answers=["deny"])
+    h.mcp(_SERVERS[:1], _CONFIG, tools={"jira": {"jira_add_comment": False}})
+    reply = h.run('MCP jira jira_add_comment {"issue_key": "ABC-1", "body": "готово"}')
+    assert _decisions(reply) == ["decline"]
+    card = h.cards[0]
+    assert card["tool"] == "mcp__jira__jira_add_comment" and card["kind"] == "mcp" and "готово" in card["args"]
+    assert [(e["type"], e.get("decision")) for e in h.events] == [
+        ("tool_use", None), ("gate", "declined"), ("tool_result", None)]
+    assert h.events[-1]["ok"] is False
+
+
+def test_user_mcp_allow_for_the_meeting_lets_the_same_call_through(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, answers=[consent.ALLOW_MEETING])
+    h.mcp(_SERVERS[:1], _CONFIG)
+    call = 'MCP jira jira_add_comment {"issue_key": "ABC-1", "body": "%s"}'
+    assert _decisions(h.run(call % "a")) == ["accept"]
+    assert _decisions(h.run(call % "b")) == ["accept"] and len(h.cards) == 1
+    assert "mcp:mcp__jira__jira_add_comment:issue_key=ABC-1" in h.gate.grants()
+
+
+def test_explain_turn_reads_mcp_and_refuses_changes_without_a_card(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, answers=["allow"])
+    h.mcp(_SERVERS[:1], _CONFIG)
+    reply = h.run('MCP jira jira_get_issue {"issue_key": "ABC-1"}\n'
+                  'MCP jira jira_add_comment {"issue_key": "ABC-1", "body": "x"}', level=consent.READ)
+    assert _decisions(reply) == ["accept", "decline"] and h.cards == []
+
+
+def test_mcp_question_is_a_card_and_refusal_declines(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, answers=["allow", "deny"])
+    question = json.dumps({"serverName": "jira", "mode": "form", "message": "Перенести задачу?",
+                           "requestedSchema": {"type": "object", "properties": {}}, "_meta": None},
+                          ensure_ascii=False)
+    form = json.dumps({"serverName": "jira", "mode": "form", "message": "Имя?",
+                       "requestedSchema": {"type": "object", "properties": {"n": {"type": "string"}}}})
+    reply = h.run(f"ELICIT {question}\nELICIT {question}\nELICIT {form}")
+    assert [d["action"] for d in _decisions(reply)] == ["accept", "decline", "decline"]
+    assert len(h.cards) == 2 and h.cards[0]["title"] == "MCP jira спрашивает"
+
+
+def test_mcp_messages_match_the_saved_schema(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, answers=["allow"])
+    h.mcp(_SERVERS[:1], _CONFIG, tools={"jira": {"jira_get_issue": True}})
+    question = json.dumps({"serverName": "jira", "mode": "form", "message": "Да?",
+                           "requestedSchema": {"type": "object", "properties": {}}, "_meta": None})
+    h.run(f'MCP jira jira_get_issue {{"issue_key": "A-1"}}\nMCP jira jira_add_comment {{}}\n'
+          f"ELICIT {question}")
+    order = ["mcpServer/elicitation/request"] * 3
+    answered = {f"srv-{n}": method for n, method in enumerate(order, 1)}
+    messages = h.received()
+    assert _check_outgoing(messages, answered) >= 8
+    assert any(m.get("method") == "mcpServerStatus/list" for m in messages)
 
 
 def test_without_a_gate_codex_still_uses_exec(monkeypatch, tmp_path):
@@ -414,5 +537,6 @@ def test_outgoing_messages_match_the_saved_schema(monkeypatch, tmp_path):
 
 def test_schema_excerpt_covers_the_methods_the_client_uses():
     names = {v["properties"]["method"]["enum"][0] for v in SCHEMA["client_request"]["oneOf"]}
-    assert names == {"initialize", "thread/start", "thread/resume", "turn/start", "turn/interrupt"}
+    assert names == {"initialize", "thread/start", "thread/resume", "turn/start", "turn/interrupt",
+                     "mcpServerStatus/list"}
     assert "codex-cli 0.160.0" in SCHEMA["source"]

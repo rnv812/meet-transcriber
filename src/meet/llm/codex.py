@@ -82,9 +82,13 @@ windows.sandbox=…`): без него запись на Windows пропала 
 
 0.6.2 — с воротами согласия (`gate`, агент-участник) ход идёт через `codex
 app-server` (`codex_app`): выход за песочницу спрашивает человека карточкой
-Meet, режим `confirm` не понижается до чтения; MCP выключены теми же
-заглушками (`mcp_stub_args`) при запуске сервера. Сервер не подошёл — ход
-через `codex exec`, как описано выше.
+Meet, режим `confirm` не понижается до чтения. MCP пользователя: в ходе по
+репликам выключены теми же заглушками (`mcp_stub_args`), в ходе по просьбе
+(USER, ❓) включены, и Codex спрашивает о каждом вызове (`mcp_prompt_args`:
+режим `prompt` серверам из config.toml и их инструментам со своей таблицей,
+`mcp_config`), а отвечают ворота Meet: чтение — сразу, изменение — карточкой.
+Сервер не подошёл — ход через `codex exec`, как описано выше (MCP там
+выключены).
 
 Без свободы (`access=None`) — как в 0.3.6: песочница только-чтение, а
 MCP-серверы из `config.toml` пользователя Codex загружает сам (так было и в
@@ -241,6 +245,56 @@ def mcp_stub_args(servers) -> list[str] | None:
         # (и наоборот) ломает ход — «url is not supported for stdio».
         out += ["-c", f"mcp_servers.{name}={{enabled=false,{_MCP_STUBS[kind]}}}"]
     return out
+
+
+def mcp_config() -> dict[str, list[str]] | None:
+    """Таблицы `[mcp_servers.<имя>]` из `$CODEX_HOME/config.toml`: {имя:
+    [инструменты со своей таблицей `tools.<инструмент>`]}. Нет файла — {};
+    файл не разобрался — None. Блокирующее."""
+    import tomllib
+
+    try:
+        with open(_home() / "config.toml", "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    servers = data.get("mcp_servers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict):
+        return {}
+    return {str(name): [str(t) for t in cfg.get("tools")] if isinstance(cfg.get("tools"), dict) else []
+            for name, cfg in servers.items() if isinstance(cfg, dict)}
+
+
+def mcp_prompt_args(servers, config) -> list[str] | None:
+    """Ход по просьбе (0.6.2): MCP-серверы пользователя включены, а Codex
+    спрашивает о каждом их вызове (ответ — ворота Meet, `consent.codex_elicitation`):
+    сервер из config.toml (`mcp_config`) — `default_tools_approval_mode="prompt"`
+    и тот же режим у каждого инструмента со своей таблицей (её
+    `approval_mode = "approve"` у пользователя иначе пропустил бы вызов без
+    вопроса). Сервер не из config.toml (плагин), config.toml не разобрался,
+    имя сервера или инструмента, которое ключом не задать, — сервер выключен
+    заглушкой (`mcp_stub_args`). None — выключить так нельзя."""
+    if servers is None:
+        return None
+    out: list[str] = []
+    off: list = []
+    for server in servers:
+        entry = server if isinstance(server, dict) else {"name": server}
+        if not entry.get("enabled", True):
+            continue
+        name = entry.get("name")
+        tools = config.get(name) if isinstance(config, dict) and isinstance(name, str) else None
+        if (isinstance(name, str) and _MCP_KEY.match(name) and tools is not None
+                and all(_MCP_KEY.match(t) for t in tools)):
+            out += ["-c", f'mcp_servers.{name}.default_tools_approval_mode="prompt"']
+            for tool in tools:
+                out += ["-c", f'mcp_servers.{name}.tools.{tool}.approval_mode="prompt"']
+        else:
+            off.append(server)
+    stubs = mcp_stub_args(off)
+    return None if stubs is None else out + stubs
 
 
 def access_args(access: str | None, servers=(), work_dirs=(), *,
@@ -683,7 +737,8 @@ async def _app_turn(exe: str, env: dict, workdir: str, text: str, images, resume
     from meet.llm import codex_app, consent
 
     servers = await asyncio.to_thread(mcp_servers, exe, env)
-    flags = codex_app.launch_flags(access, servers)
+    config = await asyncio.to_thread(mcp_config) if access != consent.NONE else {}
+    flags = codex_app.launch_flags(access, servers, config)
     if flags is None:
         return None, "MCP-серверы пользователя не выключить заглушками"
     loop = asyncio.get_running_loop()
