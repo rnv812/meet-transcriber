@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from meet import plat
+
 TRANSCRIPT_JSON = "transcript.json"
 # Слова сегментов с таймкодами — отдельно от transcript.json: их много, а
 # транскрипт читают список записей, поиск и окно. Выравнивание — по номеру
@@ -469,9 +471,9 @@ REPLACE_TRIES = 5
 
 def _meta_lock(folder: Path) -> threading.Lock:
     try:
-        key = os.path.normcase(str(Path(folder).resolve()))
+        key = plat.path_key(Path(folder).resolve())
     except OSError:
-        key = os.path.normcase(str(folder))
+        key = plat.path_key(str(folder))
     with _META_LOCKS_GUARD:
         return _META_LOCKS.setdefault(key, threading.Lock())
 
@@ -501,9 +503,9 @@ def _meta_lock_path(folder: Path) -> Path:
     from meet import tempdirs
 
     try:
-        key = os.path.normcase(str(Path(folder).resolve()))
+        key = plat.path_key(Path(folder).resolve())
     except OSError:
-        key = os.path.normcase(str(folder))
+        key = plat.path_key(str(folder))
     digest = hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:20]
     # Общая временная папка, а не своя у задачи: замок делят процессы (meet.tempdirs).
     return tempdirs.system_temp() / "meet-meta-locks" / f"{digest}.lock"

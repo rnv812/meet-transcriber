@@ -21,7 +21,7 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 
-from meet import library
+from meet import library, plat
 
 COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
             "analyze", "title", "improve", "category")
@@ -221,13 +221,13 @@ def _merge_busy(folder: Path, root: Path, merging: Path | None = None) -> str | 
     резидент или она — часть другого незавершённого объединения."""
     from meet import merge
 
-    key = os.path.normcase(str(folder.resolve()))
+    key = plat.path_key(folder.resolve())
     recording = _recording_now(root)
-    if recording is not None and os.path.normcase(str(recording.resolve())) == key:
+    if recording is not None and plat.path_key(recording.resolve()) == key:
         return "запись ещё идёт"
     for job in _resident_jobs():
         try:
-            same = os.path.normcase(str(Path(str(job.get("folder"))).resolve())) == key
+            same = plat.path_key(Path(str(job.get("folder"))).resolve()) == key
         except OSError:
             same = False
         if same and job.get("kind") in _FOLDER_JOBS:
@@ -249,7 +249,7 @@ def _merge(args, cfg) -> None:
     from meet import events, merge
 
     folders = [_recording(a, cfg) for a in args.folders]
-    parents = {os.path.normcase(str(f.resolve().parent)) for f in folders}
+    parents = {plat.path_key(f.resolve().parent) for f in folders}
     if len(parents) > 1:
         raise CliError("Объединять можно только записи из одной папки записей")
     root = folders[0].resolve().parent
@@ -623,7 +623,7 @@ def _resident_root(folder: Path, root: Path) -> bool:
     from meet import control
 
     try:
-        same = os.path.normcase(str(folder.resolve().parent)) == os.path.normcase(str(root.resolve()))
+        same = plat.path_key(folder.resolve().parent) == plat.path_key(root.resolve())
     except OSError:
         return False
     return same and control.alive()

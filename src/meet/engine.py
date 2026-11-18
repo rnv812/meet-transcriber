@@ -384,6 +384,44 @@ def install(flavor: str | None = None, on_line=None, runner=None) -> int:
     return 0
 
 
+# Отметка для Spotlight: папку с ней он не индексирует.
+NEVER_INDEX = ".metadata_never_index"
+TMUTIL_TIMEOUT_S = 30.0
+
+
+def exclude_from_backups(run=None, log=None) -> None:
+    """macOS: движок (`engine/`, ~3 ГБ на версию) и модели (`models/`) — мимо
+    Time Machine (`tmutil addexclusion`: постоянная метка на самой папке, без
+    прав администратора) и Spotlight (`.metadata_never_index` в `engine/`).
+    Записи не трогаем — их в резервной копии оставляем. Движок ставит
+    оболочка, поэтому зовёт резидент при каждом старте: повтор безвреден.
+    Папки, которой ещё нет (модели не скачаны), не создаём — её очередь до
+    следующего старта. Сбой — строка в журнал, не исключение. На Windows —
+    ничего."""
+    if not plat.is_macos():
+        return
+    from meet import paths
+
+    run = run or subprocess.run
+    say = log or (lambda msg: None)
+    engine_dir = paths.engine_dir()
+    for folder in (engine_dir, paths.models_dir()):
+        if not folder.is_dir():
+            continue
+        try:
+            done = run(["tmutil", "addexclusion", str(folder)], capture_output=True,
+                       timeout=TMUTIL_TIMEOUT_S)
+            if done.returncode != 0:
+                say(f"Time Machine: {folder.name} не исключена (код {done.returncode})")
+        except (OSError, subprocess.SubprocessError) as e:
+            say(f"Time Machine: {folder.name} не исключена ({type(e).__name__})")
+    if engine_dir.is_dir():
+        try:
+            (engine_dir / NEVER_INDEX).touch(exist_ok=True)
+        except OSError as e:
+            say(f"Spotlight: отметка в {engine_dir.name} не записана ({type(e).__name__})")
+
+
 def profile_for(gpu: dict) -> str:
     """Профиль зависимостей по снимку `gpu()`: карта видна — cuda, иначе cpu;
     на macOS — всегда «Apple Silicon» (`mac`)."""

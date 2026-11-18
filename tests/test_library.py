@@ -357,3 +357,12 @@ def test_card_reports_sleep_gaps_and_drops_broken_ones(tmp_path):
     library.write_meta(folder, {"sleep_gaps": "не список"})
     assert library.describe(folder).to_raw()["sleep_gaps"] == []
 
+def test_meta_lock_is_shared_across_unicode_forms_and_case_on_mac(monkeypatch, tmp_path):
+    import sys
+    import unicodedata
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    a = tmp_path / unicodedata.normalize("NFC", "Встреча й")
+    b = tmp_path / unicodedata.normalize("NFD", "встреча Й")
+    assert library._meta_lock(a) is library._meta_lock(b)
+    assert library._meta_lock_path(a) == library._meta_lock_path(b)

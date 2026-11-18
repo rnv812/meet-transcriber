@@ -600,3 +600,16 @@ def test_unrelated_notes_are_not_mentioned(tmp_path, vault):
     folder = _recording(tmp_path)
     (vault / "2026-09-29 Планирование спринта.md").write_text("x", encoding="utf-8")
     assert kb_export.export_recording(folder, _cfg(vault))["notes"] == []
+
+
+def test_same_folder_across_unicode_forms_on_mac_only(monkeypatch, tmp_path):
+    import sys
+    import unicodedata
+
+    a = tmp_path / unicodedata.normalize("NFC", "Встречи й")
+    b = tmp_path / unicodedata.normalize("NFD", "встречи Й")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert kb_export._same(a, b)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert not kb_export._same(a, b)  # Windows: как раньше — разные имена
+    assert kb_export._same(a, tmp_path / unicodedata.normalize("NFC", "ВСТРЕЧИ Й"))

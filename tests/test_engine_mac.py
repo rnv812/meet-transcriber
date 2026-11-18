@@ -197,3 +197,68 @@ def test_mac_build_compiles_mlx_constraints_for_macos_14():
     assert '--constraint "$CONSTRAINTS"' in script.split("--extra mlx", 1)[1].split("\n\n", 1)[0]
     assert 'cp "$MLX_CONSTRAINTS" "$RESOURCES/constraints-mac-mlx.txt"' in script
     assert "constraints-mac.txt constraints-mac-mlx.txt; do" in script
+
+
+# --- Time Machine и Spotlight: движок и модели — мимо ---
+
+
+def _storage(monkeypatch, tmp_path, models=True):
+    from meet import paths
+
+    eng, mod, rec = tmp_path / "engine", tmp_path / "models", tmp_path / "recordings"
+    eng.mkdir()
+    rec.mkdir()
+    if models:
+        mod.mkdir()
+    monkeypatch.setattr(paths, "engine_dir", lambda: eng)
+    monkeypatch.setattr(paths, "models_dir", lambda: mod)
+    return eng, mod, rec
+
+
+def _tmutil(code=0, calls=None):
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=code, stdout=b"", stderr=b"")
+    return run
+
+
+def test_mac_engine_and_models_leave_time_machine_and_spotlight(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    eng, mod, rec = _storage(monkeypatch, tmp_path)
+    calls = []
+    engine.exclude_from_backups(run=_tmutil(calls=calls))
+    assert calls == [["tmutil", "addexclusion", str(eng)], ["tmutil", "addexclusion", str(mod)]]
+    assert all(str(rec) not in argv for argv in calls)  # записи остаются в резервной копии
+    assert (eng / ".metadata_never_index").is_file()
+    assert not (rec / ".metadata_never_index").exists()
+
+
+def test_mac_models_not_yet_downloaded_are_skipped(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    eng, mod, _ = _storage(monkeypatch, tmp_path, models=False)
+    calls = []
+    engine.exclude_from_backups(run=_tmutil(calls=calls))
+    assert calls == [["tmutil", "addexclusion", str(eng)]]
+    assert not mod.exists()  # папку моделей не создаём
+
+
+def test_mac_tmutil_failures_are_only_logged(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _storage(monkeypatch, tmp_path)
+    lines = []
+    engine.exclude_from_backups(run=_tmutil(code=1, calls=[]), log=lines.append)
+    assert len(lines) == 2
+
+    def broken(argv, **kwargs):
+        raise OSError("нет tmutil")
+
+    lines.clear()
+    engine.exclude_from_backups(run=broken, log=lines.append)
+    assert len(lines) == 2
+
+
+def test_windows_has_nothing_to_exclude(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    eng, _, _ = _storage(monkeypatch, tmp_path)
+    engine.exclude_from_backups(run=lambda *a, **k: (_ for _ in ()).throw(AssertionError("не Mac")))
+    assert not (eng / ".metadata_never_index").exists()

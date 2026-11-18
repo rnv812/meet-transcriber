@@ -16,7 +16,6 @@ CUDA или ctranslate2 не должно ронять резидента вме
 
 import contextlib
 import json
-import os
 import subprocess
 import sys
 import threading
@@ -25,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from meet import events
+from meet import events, plat
 
 QUEUED = "queued"
 RUNNING = "running"
@@ -352,9 +351,9 @@ def _safe_cwd(folder: str) -> str | None:
 
 def _folder_key(folder: str) -> str:
     try:
-        return os.path.normcase(str(Path(folder).resolve()))
+        return plat.path_key(Path(folder).resolve())
     except (OSError, ValueError):
-        return os.path.normcase(str(folder))
+        return plat.path_key(str(folder))
 
 
 # Строки журнала задачи, которые идут и в журнал резидента: время ступеней

@@ -4,6 +4,7 @@
 
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -226,3 +227,20 @@ def test_cli_puts_app_tools_on_path_first(monkeypatch):
         cli.main(["--help"])
     assert seen == [True]
 
+# --- ключ пути: один путь — один ключ ---
+
+NFC = unicodedata.normalize("NFC", "Recordings/Встреча й ё")
+NFD = unicodedata.normalize("NFD", NFC)
+
+
+def test_path_key_on_mac_ignores_case_and_unicode_form(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert NFD != NFC
+    assert plat.path_key(NFD) == plat.path_key(NFC) == plat.path_key(NFC.upper())
+    assert plat.path_key(Path(NFD)) == plat.path_key(str(Path(NFC)))
+
+
+def test_path_key_on_windows_is_as_before(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    for text in ("C:/Rec/Встреча", NFD, NFC):
+        assert plat.path_key(text) == os.path.normcase(text)

@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 APP_DIR_NAME = "meet"
@@ -153,6 +154,19 @@ def pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def path_key(path) -> str:
+    """Ключ пути для сравнения и словарей (замки папок, «занята ли запись»):
+    один путь — один ключ. macOS: форма Unicode NFC и casefold — APFS по
+    умолчанию не различает регистр, а имена с «й» и «ё» приходят и в
+    разложенной форме (NFD: Finder, архивы, сетевые папки). Windows — как
+    раньше, `os.path.normcase` (нижний регистр, обратные косые). Путь не
+    разрешается: `resolve()` — у вызывающего."""
+    text = os.fspath(path)
+    if is_macos():
+        return unicodedata.normalize("NFC", text).casefold()
+    return os.path.normcase(text)
 
 
 def app_resource_dirs() -> list[Path]:

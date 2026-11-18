@@ -518,3 +518,24 @@ def test_worker_on_mac_starts_with_lowered_priority_and_windows_flags_are_kept(m
     monkeypatch.setattr(jobs.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
     monkeypatch.setattr(jobs.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     assert jobs._creationflags() == 0x08000000 | 0x4000
+
+
+def test_folder_key_is_one_for_both_unicode_forms_on_mac(monkeypatch, tmp_path):
+    import sys
+    import unicodedata
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    nfc = str(tmp_path / unicodedata.normalize("NFC", "Встреча й"))
+    nfd = str(tmp_path / unicodedata.normalize("NFD", "Встреча Й"))
+    assert nfc != nfd
+    assert jobs._folder_key(nfc) == jobs._folder_key(nfd)
+
+
+def test_folder_key_on_windows_is_as_before(monkeypatch, tmp_path):
+    import os
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    folder = str(tmp_path / "Встреча")
+    assert jobs._folder_key(folder) == os.path.normcase(str(Path(folder).resolve()))

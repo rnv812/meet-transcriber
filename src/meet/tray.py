@@ -1091,6 +1091,12 @@ class TrayApp:
             pass
         _drop_command()
         api = self._start_control_api()
+        # macOS: движок и модели — мимо Time Machine и Spotlight (после установки
+        # движка оболочкой первым поднимается резидент). В фоне: tmutil не держит старт.
+        from meet import engine
+
+        threading.Thread(target=engine.exclude_from_backups, kwargs={"log": self.log},
+                         name="meet-backup-exclude", daemon=True).start()
         if parent_pid:
 
             def watch_parent() -> None:

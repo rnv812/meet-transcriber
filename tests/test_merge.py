@@ -441,3 +441,17 @@ def test_real_ffmpeg_concatenates_shifted_parts(tmp_path):
     merge.run(folder)
     for role in ("sys", "mic"):
         assert merge.probe_duration(folder / f"{role}.opus") == pytest.approx(3.0, abs=0.15)
+
+
+def test_cli_merge_busy_sees_the_recording_in_another_form_on_mac(monkeypatch, tmp_path):
+    import sys
+    import unicodedata
+
+    from meet import cli_library
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    folder = tmp_path / unicodedata.normalize("NFC", "Встреча й")
+    monkeypatch.setattr(cli_library, "_recording_now",
+                        lambda root: tmp_path / unicodedata.normalize("NFD", "встреча Й"))
+    monkeypatch.setattr(cli_library, "_resident_jobs", lambda: [])
+    assert cli_library._merge_busy(folder, tmp_path) == "запись ещё идёт"

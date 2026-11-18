@@ -941,3 +941,18 @@ def test_second_cancel_question_is_not_opened(monkeypatch, tmp_path):
     monkeypatch.setattr(tray, "_confirm_cancel", lambda: asked.append(1) or True)
     app._on_cancel_asked()
     assert asked == []
+
+
+def test_headless_start_excludes_engine_from_backups(monkeypatch, tmp_path):
+    from meet import engine
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    called = threading.Event()
+    monkeypatch.setattr(engine, "exclude_from_backups", lambda log=None, **kw: called.set())
+    app = tray.TrayApp(start_now=False)
+    monkeypatch.setattr(app, "_start_control_api", lambda: None)
+    monkeypatch.setattr(app, "_tick", lambda: called.wait(5) and app.request_exit())
+    monkeypatch.setattr(tray, "TICK_S", 0.01)
+    app.run_headless(parent_pid=None)
+    assert called.is_set()

@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from meet import library
+from meet import library, plat
 
 TOKENS = ("date", "time", "year", "month", "day", "title")
 TOKEN_RE = re.compile(r"\{([^{}]*)\}")
@@ -276,7 +276,7 @@ def _write_audio(folder: Path, sources: list[Path], target: Path, mix) -> None:
 
 def _same(a: Path, b: Path) -> bool:
     try:
-        return os.path.normcase(a.resolve()) == os.path.normcase(b.resolve())
+        return plat.path_key(a.resolve()) == plat.path_key(b.resolve())
     except OSError:
         return False
 
