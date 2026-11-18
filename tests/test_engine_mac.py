@@ -74,3 +74,126 @@ def test_pyannote_device_prefers_mps_on_mac(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     assert diarize.pick_device(_Torch(mps=True), use_cuda=False).type == "cpu"
     assert diarize.pick_device(_Torch(mps=True), use_cuda=True).type == "cuda"
+
+
+# --- MLX Whisper: необязательный шаг только для macOS 14+ ---------------------
+
+MLX_CONSTRAINTS = "/r/constraints-mac-mlx.txt"
+
+
+def test_mlx_extra_mirrors_the_packages_and_stays_out_of_the_engine():
+    import tomllib
+
+    extras = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+        encoding="utf-8"))["project"]["optional-dependencies"]
+    assert engine.MLX_PACKAGES == ("mlx>=0.30", "mlx-whisper>=0.4.3")
+    assert extras["mlx"] == [f"{spec}; sys_platform == 'darwin'" for spec in engine.MLX_PACKAGES]
+    for profile in ("engine-mac", "engine-cpu", "engine-cuda", "gigaam"):
+        assert not any(spec.startswith("mlx") for spec in extras[profile])
+
+
+def test_mlx_step_matches_the_fixtures_shared_with_rust():
+    step = engine.uv_mlx_step(**MAC_INPUTS)
+    assert [step] == _fixture("uv_mlx_step_mac.json")
+    assert step[4] == "/env/bin/python" and step[-1].endswith("[mlx]")
+    constrained = engine.uv_mlx_step(constraints=MLX_CONSTRAINTS, **MAC_INPUTS)
+    assert [constrained] == _fixture("uv_mlx_step_mac_constrained.json")
+    assert engine.MLX_CONSTRAINTS_PROFILE == "mac-mlx"  # constraints-mac-mlx.txt
+    # Основные шаги MLX не трогают ни на одном профиле.
+    for profile in ("mac", "cpu", "cuda"):
+        assert not any("mlx" in arg for s in engine.uv_steps(profile=profile, **MAC_INPUTS) for arg in s)
+
+
+def test_mlx_step_is_wanted_only_on_macos_14_or_newer():
+    assert engine.mlx_step_wanted("mac", (14, 0)) is True
+    assert engine.mlx_step_wanted("mac", (15, 3, 1)) is True
+    assert engine.mlx_step_wanted("mac", (13, 6)) is False
+    assert engine.mlx_step_wanted("mac", None) is False
+    assert engine.mlx_step_wanted("cpu", (14, 0)) is False
+    assert engine.mlx_step_wanted("cuda", None) is False
+
+
+def _mac(monkeypatch, tmp_path, version):
+    from meet import mlx_asr
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(mlx_asr, "macos_version", lambda: version)
+    monkeypatch.setattr(engine, "gpu", lambda: {"available": False, "name": None})
+    monkeypatch.setattr(engine.sys, "prefix", str(tmp_path))
+
+
+def _mlx_component(state):
+    return next((c for c in state["components"] if c["module"] == "mlx_whisper"), None)
+
+
+def test_install_steps_add_mlx_after_the_others_on_macos_14(monkeypatch, tmp_path):
+    _mac(monkeypatch, tmp_path, (14, 2))
+    steps = engine.install_steps()
+    assert steps[-1][-len(engine.MLX_PACKAGES):] == list(engine.MLX_PACKAGES)
+    assert steps[-2][-1] == engine.GIGAAM
+    _mac(monkeypatch, tmp_path, (13, 6))
+    assert not any("mlx" in arg for s in engine.install_steps() for arg in s)
+
+
+def test_failed_mlx_step_leaves_the_engine_installed(monkeypatch, tmp_path):
+    _mac(monkeypatch, tmp_path, (14, 2))
+    calls, lines = [], []
+
+    def runner(argv, on_line):
+        calls.append(argv)
+        return 1 if argv[-1] == engine.MLX_PACKAGES[-1] else 0
+
+    assert engine.install(on_line=lines.append, runner=runner) == 0
+    assert len(calls) == 4
+    assert lines[-1].startswith("MLX Whisper не установился")
+    # Сбой GigaAM на 14+ тоже не мешает поставить MLX следующим шагом.
+    calls.clear()
+    assert engine.install(runner=lambda argv, _: calls.append(argv) or (
+        1 if argv[-1] == engine.GIGAAM else 0)) == 0
+    assert len(calls) == 4
+
+
+def test_components_mark_mlx_as_needing_macos_14_on_macos_13(monkeypatch, tmp_path):
+    _mac(monkeypatch, tmp_path, (13, 6))
+    monkeypatch.setattr(engine, "installed", lambda module: module != "mlx_whisper")
+    state = engine.state()
+    mlx = _mlx_component(state)
+    assert mlx["optional"] and not mlx["installed"]
+    assert mlx["note"] == "нужна macOS 14 или новее"
+    assert state["installed"] is True and state["missing"] == []
+
+
+def test_components_show_mlx_install_error_on_macos_14(monkeypatch, tmp_path):
+    _mac(monkeypatch, tmp_path, (14, 2))
+    monkeypatch.setattr(engine, "installed", lambda module: module != "mlx_whisper")
+    mlx = _mlx_component(engine.state())
+    assert mlx["note"] == "не установлен — будет установлен при обновлении движка"
+    (tmp_path / engine.MLX_ERROR_FILE).write_text(
+        "нет связи с PyPI — проверьте подключение или прокси в настройках", encoding="utf-8")
+    assert engine.mlx_install_error(tmp_path) == (
+        "MLX Whisper не установился: нет связи с PyPI — проверьте подключение или прокси в "
+        "настройках — используется Whisper на процессоре")
+    assert _mlx_component(engine.state())["note"].startswith("MLX Whisper не установился: нет связи")
+    monkeypatch.setattr(engine, "installed", lambda module: True)
+    assert "note" not in _mlx_component(engine.state())
+
+
+def test_windows_has_no_mlx_step_or_component(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(engine, "gpu", lambda: {"available": False, "name": None})
+    assert _mlx_component(engine.state()) is None
+    for flavor in ("cpu", "cuda"):
+        assert not any("mlx" in arg for s in engine.install_steps(flavor) for arg in s)
+
+
+def test_mac_build_compiles_mlx_constraints_for_macos_14():
+    """Отдельный файл точных версий: MLX 0.30+ выпускается только под macOS
+    14+, а сборка целится в 13.0; общие пакеты — те же, что у основного."""
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "build_release_macos.sh").read_text(
+        encoding="utf-8")
+    compile_line = next(line for line in script.splitlines() if "--extra mlx" in line)
+    assert compile_line.lstrip().startswith("MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile")
+    assert '--constraint "$CONSTRAINTS"' in script.split("--extra mlx", 1)[1].split("\n\n", 1)[0]
+    assert 'cp "$MLX_CONSTRAINTS" "$RESOURCES/constraints-mac-mlx.txt"' in script
+    assert "constraints-mac.txt constraints-mac-mlx.txt; do" in script

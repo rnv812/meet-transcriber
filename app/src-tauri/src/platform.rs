@@ -67,6 +67,27 @@ pub fn venv_bin() -> &'static str {
     venv_bin_for(current())
 }
 
+/// Основная версия macOS из вывода `sw_vers -productVersion` («14.4.1» → 14).
+pub fn parse_macos_major(product_version: &str) -> Option<u32> {
+    product_version.trim().split('.').next()?.parse().ok()
+}
+
+/// Основная версия macOS этой машины; не macOS или не прочиталась — `None`.
+/// Нужна установке движка: MLX ставится только на macOS 14 и новее.
+pub fn macos_major() -> Option<u32> {
+    if current() != Os::MacOs {
+        return None;
+    }
+    let output = Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_macos_major(&String::from_utf8_lossy(&output.stdout))
+}
+
 /// Профиль движка, который ставится на этой ОС, если видеокарты NVIDIA нет
 /// (на macOS — всегда «Apple Silicon»).
 pub fn engine_profile_for(os: Os, nvidia: bool) -> &'static str {
@@ -420,6 +441,15 @@ mod tests {
         let mac = open_command_for(Os::MacOs, target);
         assert_eq!(mac.get_program(), "open");
         assert_eq!(mac.get_args().collect::<Vec<_>>(), vec!["folder"]);
+    }
+
+    #[test]
+    fn macos_major_is_read_from_the_product_version() {
+        assert_eq!(parse_macos_major("14.4.1\n"), Some(14));
+        assert_eq!(parse_macos_major("13.6"), Some(13));
+        assert_eq!(parse_macos_major("26.0"), Some(26));
+        assert_eq!(parse_macos_major(""), None);
+        assert_eq!(parse_macos_major("нет"), None);
     }
 
     #[cfg(unix)]

@@ -15,7 +15,10 @@
 #     package.json и Cargo.lock с аргументом (проставлять не умеет —
 #     для этого build_release.ps1 -SetVersion).
 #  2. Колесо meet и точные версии движка профиля «Apple Silicon»
-#     (constraints-mac.txt: torch с PyPI, extra engine-mac и gigaam).
+#     (constraints-mac.txt: torch с PyPI, extra engine-mac и gigaam) и
+#     отдельно для необязательного шага MLX на macOS 14+
+#     (constraints-mac-mlx.txt: то же дерево плюс extra mlx, цель macOS 14 —
+#     колёс MLX 0.30+ для 13.0 нет).
 #  3. uv (aarch64) — закреплённый релиз с проверкой SHA-256
 #     (scripts/macos.sha256).
 #  4. ffmpeg — собирается здесь же из закреплённых исходников FFmpeg и Opus
@@ -141,6 +144,17 @@ grep -Eq '^gigaam @ .+#sha256=[0-9a-f]{64}$' "$CONSTRAINTS" \
     || fail "constraints-mac: нет строки gigaam с #sha256"
 grep -Eq '^torch==2\.11\.' "$CONSTRAINTS" || fail "constraints-mac: нет torch 2.11"
 echo "  constraints-mac.txt: $(wc -l < "$CONSTRAINTS" | tr -d ' ') пакетов"
+# MLX Whisper — необязательный шаг установки только на macOS 14+ (engine.rs
+# uv_mlx_step): цель 14.0 вместо общей 13.0, общие пакеты — ровно те же, что в
+# constraints-mac.txt (он же ограничение), сверху — mlx и его зависимости.
+MLX_CONSTRAINTS="$CONSTRAINTS_OUT/constraints-mac-mlx.txt"
+MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile "$ROOT/pyproject.toml" "$TORCH_IN" --extra engine-mac --extra gigaam --extra mlx \
+    --constraint "$CONSTRAINTS" \
+    --python-version 3.12 --python-platform aarch64-apple-darwin \
+    --no-config --no-header --no-annotate --quiet -o "$MLX_CONSTRAINTS"
+grep -Eq '^mlx==' "$MLX_CONSTRAINTS" && grep -Eq '^mlx-whisper==' "$MLX_CONSTRAINTS" \
+    || fail "constraints-mac-mlx: нет mlx или mlx-whisper"
+echo "  constraints-mac-mlx.txt: $(wc -l < "$MLX_CONSTRAINTS" | tr -d ' ') пакетов"
 
 # --- 3. Закреплённые загрузки ----------------------------------------------------
 pinned_hash() {
@@ -270,6 +284,7 @@ cp "$ROOT/LICENSE" "$RESOURCES/LICENSE"
 cp "$ROOT/NOTICE" "$RESOURCES/NOTICE"
 cp "$WHEEL" "$RESOURCES/$WHEEL_NAME"
 cp "$CONSTRAINTS" "$RESOURCES/constraints-mac.txt"
+cp "$MLX_CONSTRAINTS" "$RESOURCES/constraints-mac-mlx.txt"
 chmod 755 "$RESOURCES/uv" "$RESOURCES/ffmpeg" "$RESOURCES/meet-audiotap"
 "$RESOURCES/uv" --version
 ls -l "$RESOURCES"
@@ -285,7 +300,7 @@ step "tauri build (.app, релизный конфиг с ресурсами)"
 # --- 6. Результат ------------------------------------------------------------------------
 APP_BUNDLE="$BUNDLE_DIR/macos/Meet.app"
 [[ -d "$APP_BUNDLE" ]] || fail "tauri build не оставил Meet.app в $BUNDLE_DIR/macos"
-for file in uv ffmpeg meet-audiotap ffmpeg-LICENSE.txt "$WHEEL_NAME" constraints-mac.txt; do
+for file in uv ffmpeg meet-audiotap ffmpeg-LICENSE.txt "$WHEEL_NAME" constraints-mac.txt constraints-mac-mlx.txt; do
     [[ -f "$APP_BUNDLE/Contents/Resources/resources/$file" ]] || fail "в Meet.app нет resources/$file"
 done
 SOURCES="$BUNDLE_DIR/dmg/sources"

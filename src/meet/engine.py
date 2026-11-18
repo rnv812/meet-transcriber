@@ -37,6 +37,15 @@ OPTIONAL_COMPONENTS = {"gigaam": "не установлена — будет у�
 # Причина, по которой необязательный шаг установки GigaAM не прошёл (пишет
 # оболочка, engine.rs GIGAAM_ERROR_FILE) — в окружении движка.
 GIGAAM_ERROR_FILE = "gigaam-install-error.txt"
+# MLX Whisper — распознавание на видеоядрах Apple (mlx_asr); компонент есть
+# только на macOS. Необязательный: без него нерусские встречи распознаёт
+# Whisper на процессоре. На macOS 13 его не поставить (колёса MLX 0.30+ — только
+# macOS 14+), окно показывает это вместо «будет установлен».
+MLX_COMPONENT = ("mlx_whisper", "распознавание на видеоядрах Apple (MLX Whisper)")
+MLX_NOTE = "не установлен — будет установлен при обновлении движка"
+MLX_NEEDS_MACOS = "нужна macOS 14 или новее"
+# Причина сбоя шага MLX (пишет оболочка, engine.rs MLX_ERROR_FILE).
+MLX_ERROR_FILE = "mlx-install-error.txt"
 
 # Индексы колёс torch: CUDA-сборка тяжелее, но без неё расшифровка идёт на CPU
 # и на часовой встрече это часы вместо минут.
@@ -102,6 +111,13 @@ PACKAGES = (
 # оказаться перепакованным (хеш не сойдётся) — движок ставится и без него,
 # расшифровка тогда идёт Whisper.
 OPTIONAL_PACKAGES = (GIGAAM,)
+# MLX Whisper — extra `mlx` (в pyproject.toml с маркером darwin, тест следит за
+# совпадением) и свой необязательный шаг только на macOS 14+ (mlx_step_wanted).
+# Точные версии — свой файл `constraints-mac-mlx.txt` (цель macOS 14, общие
+# пакеты — из constraints-mac.txt), собирает scripts/build_release_macos.sh.
+MLX_PACKAGES = ("mlx>=0.30", "mlx-whisper>=0.4.3")
+MLX_MIN_MACOS = (14, 0)
+MLX_CONSTRAINTS_PROFILE = "mac-mlx"
 CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
 
 # Порядок величин для честного предупреждения: скачивание идёт гигабайтами, и
@@ -237,6 +253,22 @@ def flavor_for(gpu_available: bool) -> str:
     return "cuda" if gpu_available else "cpu"
 
 
+def _mlx_item() -> dict:
+    """Строка MLX Whisper в компонентах (только macOS): необязательная; на
+    macOS 13 — «нужна macOS 14 или новее», на 14+ — причина сбоя шага или
+    «будет установлен»."""
+    from meet import mlx_asr
+
+    module, title = MLX_COMPONENT
+    item = {"module": module, "title": title, "installed": installed(module), "optional": True}
+    if not item["installed"]:
+        if not mlx_step_wanted(MAC_PROFILE, mlx_asr.macos_version()):
+            item["note"] = MLX_NEEDS_MACOS
+        else:
+            item["note"] = mlx_install_error() or MLX_NOTE
+    return item
+
+
 def state() -> dict:
     """Состояние движка для настроек: чего не хватает и куда встанет."""
     components = []
@@ -247,6 +279,8 @@ def state() -> dict:
             if not item["installed"]:
                 item["note"] = gigaam_install_error() or OPTIONAL_COMPONENTS[module]
         components.append(item)
+    if plat.is_macos():
+        components.append(_mlx_item())
     missing = [c["module"] for c in components
                if not c["installed"] and not c.get("optional")]
     card = gpu()
@@ -274,9 +308,12 @@ def state() -> dict:
 def install_steps(flavor: str | None = None) -> list[list[str]]:
     """Команды установки по шагам.
 
-    Два шага, а не один: torch живёт на своём индексе, и смешивать его с
-    остальными пакетами в одной команде — верный способ утянуть не ту сборку.
+    Два основных шага, а не один: torch живёт на своём индексе, и смешивать
+    его с остальными пакетами в одной команде — верный способ утянуть не ту
+    сборку. Дальше — необязательные: GigaAM, на macOS 14+ ещё MLX Whisper.
     """
+    from meet import mlx_asr
+
     flavor = flavor or flavor_for(gpu()["available"])
     pip = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check"]
     index = torch_index(flavor)
@@ -284,7 +321,32 @@ def install_steps(flavor: str | None = None) -> list[list[str]]:
     extras = list(PACKAGES) + (list(CUDA_RUNTIME) if flavor == "cuda" else [])
     steps.append(pip + extras)
     steps.append(pip + list(OPTIONAL_PACKAGES))
+    if mlx_step_wanted(flavor, mlx_asr.macos_version()):
+        steps.append(pip + list(MLX_PACKAGES))
     return steps
+
+
+# Основных шагов в install_steps; остальные необязательны.
+_REQUIRED_STEPS = 2
+
+
+def mlx_step_wanted(profile: str, macos: tuple[int, ...] | None) -> bool:
+    """Ставить ли MLX: профиль Apple Silicon и macOS 14 или новее. Зеркало
+    engine.rs `mlx_step_wanted`."""
+    return profile == MAC_PROFILE and bool(macos) and tuple(macos) >= MLX_MIN_MACOS
+
+
+def mlx_install_error(prefix: Path | None = None) -> str | None:
+    """Почему MLX Whisper не установился («MLX Whisper не установился: … —
+    используется Whisper на процессоре») или None. Причину пишет установщик."""
+    path = Path(prefix or sys.prefix) / MLX_ERROR_FILE
+    try:
+        reason = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not reason:
+        return None
+    return f"MLX Whisper не установился: {reason} — используется Whisper на процессоре"
 
 
 def gigaam_install_error(prefix: Path | None = None) -> str | None:
@@ -303,17 +365,22 @@ def install(flavor: str | None = None, on_line=None, runner=None) -> int:
 
     Прогресса в процентах здесь нет и не будет: pip не сообщает общий объём
     заранее. Показываем, что именно сейчас качается, — это честнее выдуманной
-    шкалы (тот же принцип, что у ступеней расшифровки). Последний шаг
-    (GigaAM) необязателен: его сбой не валит установку.
+    шкалы (тот же принцип, что у ступеней расшифровки). Шаги после основных
+    (GigaAM, MLX Whisper) необязательны: их сбой не валит установку.
     """
     run = runner or _run
     steps = install_steps(flavor)
-    for step in steps[:-1]:
+    for step in steps[:_REQUIRED_STEPS]:
         code = run(step, on_line)
         if code != 0:
             return code
-    if run(steps[-1], on_line) != 0 and on_line:
-        on_line("GigaAM не установилась — расшифровка пойдёт Whisper")
+    for step in steps[_REQUIRED_STEPS:]:
+        if run(step, on_line) != 0 and on_line:
+            if step[-1] == GIGAAM:
+                on_line("GigaAM не установилась — расшифровка пойдёт Whisper")
+            else:
+                on_line("MLX Whisper не установился — нерусские встречи распознаёт "
+                        "Whisper на процессоре")
     return 0
 
 
@@ -365,6 +432,16 @@ def uv_gigaam_step(uv: str, env_dir: str, wheel: str,
     python = python_path(env_dir, profile)
     pinned = ["--constraint", constraints] if constraints else []
     return [uv, "pip", "install", "--python", python, f"{wheel}[gigaam]"] + pinned
+
+
+def uv_mlx_step(uv: str, env_dir: str, wheel: str,
+                constraints: str | None = None, profile: str = MAC_PROFILE) -> list[str]:
+    """Необязательный шаг установщика на macOS 14+ (после GigaAM): extra `mlx`
+    того же колеса; `constraints` — `constraints-mac-mlx.txt`. Зеркало
+    engine.rs `uv_mlx_step` (фикстуры uv_mlx_step_mac*.json)."""
+    python = python_path(env_dir, profile)
+    pinned = ["--constraint", constraints] if constraints else []
+    return [uv, "pip", "install", "--python", python, f"{wheel}[mlx]"] + pinned
 
 
 def _run(argv: list[str], on_line) -> int:

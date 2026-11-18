@@ -182,28 +182,65 @@ pub fn uv_gigaam_step(
     profile: &str,
     constraints: Option<&str>,
 ) -> Vec<String> {
+    uv_extra_step(uv, env_dir, wheel, profile, "gigaam", constraints)
+}
+
+/// Необязательный шаг на macOS 14+ после GigaAM: MLX Whisper (extra `mlx`
+/// колеса meet) — порт `meet.engine.uv_mlx_step`. Колёса MLX 0.30+ выходят
+/// только для macOS 14 и новее, поэтому точные версии — свой файл
+/// `constraints-mac-mlx.txt` (цель macOS 14, `build_release_macos.sh`).
+pub fn uv_mlx_step(
+    uv: &str,
+    env_dir: &str,
+    wheel: &str,
+    profile: &str,
+    constraints: Option<&str>,
+) -> Vec<String> {
+    uv_extra_step(uv, env_dir, wheel, profile, "mlx", constraints)
+}
+
+/// `uv pip install` одного extra колеса meet в окружение движка.
+fn uv_extra_step(
+    uv: &str,
+    env_dir: &str,
+    wheel: &str,
+    profile: &str,
+    extra: &str,
+    constraints: Option<&str>,
+) -> Vec<String> {
     let python = python_path(env_dir, profile);
     let mut argv: Vec<String> = [uv, "pip", "install", "--python", &python]
         .iter()
         .map(|item| item.to_string())
         .collect();
-    argv.push(format!("{wheel}[gigaam]"));
+    argv.push(format!("{wheel}[{extra}]"));
     if let Some(file) = constraints {
         argv.extend(["--constraint".to_string(), file.to_string()]);
     }
     argv
 }
 
+/// MLX ставится с этой основной версии macOS.
+pub const MLX_MIN_MACOS: u32 = 14;
+/// Файл точных версий шага MLX — `constraints-mac-mlx.txt` (`constraints_file`).
+pub const MLX_CONSTRAINTS_PROFILE: &str = "mac-mlx";
+
+/// Ставить ли MLX: профиль Apple Silicon и macOS 14 или новее (версия не
+/// прочиталась — нет). Как `meet.engine.mlx_step_wanted`.
+pub fn mlx_step_wanted(profile: &str, macos_major: Option<u32>) -> bool {
+    profile == MAC_PROFILE && macos_major.is_some_and(|major| major >= MLX_MIN_MACOS)
+}
+
 /// Причина сбоя необязательного шага GigaAM — в окружении движка: её
 /// показывает окно («GigaAM не установилась: … — используется Whisper»).
 pub const GIGAAM_ERROR_FILE: &str = "gigaam-install-error.txt";
+/// То же для шага MLX («MLX Whisper не установился: … — используется Whisper
+/// на процессоре», `meet.engine.MLX_ERROR_FILE`).
+pub const MLX_ERROR_FILE: &str = "mlx-install-error.txt";
 
-/// Короткая причина сбоя установки GigaAM по хвосту вывода uv — по-русски.
-pub fn gigaam_failure_text(tail: &str) -> String {
-    let low = tail.to_lowercase();
-    if low.contains("hash mismatch") || low.contains("hashes do not match") {
-        "архив компонента GigaAM на GitHub изменился — нужна новая версия приложения".into()
-    } else if [
+/// Похож ли хвост вывода uv на сбой сети.
+fn network_failure(low: &str) -> bool {
+    [
         "dns",
         "connect",
         "timed out",
@@ -216,11 +253,89 @@ pub fn gigaam_failure_text(tail: &str) -> String {
     ]
     .iter()
     .any(|needle| low.contains(needle))
-    {
+}
+
+/// Короткая причина сбоя установки GigaAM по хвосту вывода uv — по-русски.
+pub fn gigaam_failure_text(tail: &str) -> String {
+    let low = tail.to_lowercase();
+    if low.contains("hash mismatch") || low.contains("hashes do not match") {
+        "архив компонента GigaAM на GitHub изменился — нужна новая версия приложения".into()
+    } else if network_failure(&low) {
         "нет связи с GitHub — проверьте подключение или прокси в настройках".into()
     } else {
         "ошибка установки, подробности — в журнале logs\\engine-install.log".into()
     }
+}
+
+/// Короткая причина сбоя установки MLX (пакеты с PyPI, только macOS).
+pub fn mlx_failure_text(tail: &str) -> String {
+    if network_failure(&tail.to_lowercase()) {
+        "нет связи с PyPI — проверьте подключение или прокси в настройках".into()
+    } else {
+        "ошибка установки, подробности — в журнале logs/engine-install.log".into()
+    }
+}
+
+/// Необязательный шаг установки: его сбой не валит установку движка, причина
+/// пишется в `error_file` окружения (окно показывает её у компонента).
+pub struct OptionalStep {
+    pub name: &'static str,
+    title: &'static str,
+    done: &'static str,
+    failed: &'static str,
+    fallback: &'static str,
+    pub error_file: &'static str,
+    failure_text: fn(&str) -> String,
+}
+
+pub static GIGAAM_STEP: OptionalStep = OptionalStep {
+    name: "GigaAM",
+    title: "Установка GigaAM (необязательно)",
+    done: "GigaAM установлена",
+    failed: "GigaAM не установилась",
+    fallback: "расшифровка пойдёт Whisper",
+    error_file: GIGAAM_ERROR_FILE,
+    failure_text: gigaam_failure_text,
+};
+
+pub static MLX_STEP: OptionalStep = OptionalStep {
+    name: "MLX Whisper",
+    title: "Установка MLX Whisper (необязательно)",
+    done: "MLX Whisper установлен",
+    failed: "MLX Whisper не установился",
+    fallback: "нерусские встречи распознаёт Whisper на процессоре",
+    error_file: MLX_ERROR_FILE,
+    failure_text: mlx_failure_text,
+};
+
+/// Необязательные шаги после основных, по порядку: GigaAM, на macOS 14+ —
+/// MLX Whisper (на macOS 13 и Windows его нет). Точные версии — из ресурсов
+/// (`resources`), если файлы там есть.
+pub fn optional_steps(
+    uv: &str,
+    env_dir: &str,
+    wheel: &str,
+    profile: &str,
+    resources: Option<&Path>,
+    macos_major: Option<u32>,
+) -> Vec<(&'static OptionalStep, Vec<String>)> {
+    let pinned = |name: &str| {
+        resources
+            .and_then(|dir| constraints_file(dir, name))
+            .map(|file| file.to_string_lossy().into_owned())
+    };
+    let mut steps = vec![(
+        &GIGAAM_STEP,
+        uv_gigaam_step(uv, env_dir, wheel, profile, pinned(profile).as_deref()),
+    )];
+    if mlx_step_wanted(profile, macos_major) {
+        let constraints = pinned(MLX_CONSTRAINTS_PROFILE);
+        steps.push((
+            &MLX_STEP,
+            uv_mlx_step(uv, env_dir, wheel, profile, constraints.as_deref()),
+        ));
+    }
+    steps
 }
 
 /// Файл точных версий профиля в ресурсах; нет (dev, старая сборка) — `None`.
@@ -1406,16 +1521,24 @@ fn run_steps(
             return Err(format!("Установка движка прервалась: {message}"));
         }
     }
-    // Необязательный GigaAM — после основных шагов; его сбой не прерывает
-    // установку (причина — в окружении, окно её покажет).
-    let gigaam = uv_gigaam_step(
+    // Необязательные шаги (GigaAM, на macOS 14+ — MLX Whisper) — после
+    // основных; их сбой не прерывает установку (причина — в окружении, окно
+    // её покажет).
+    let macos = platform::macos_major();
+    if profile == MAC_PROFILE && !mlx_step_wanted(profile, macos) {
+        log.write("MLX Whisper пропущен: нужна macOS 14 или новее");
+    }
+    let optional = optional_steps(
         &uv.to_string_lossy(),
         &env.to_string_lossy(),
         &wheel.to_string_lossy(),
         profile,
-        constraints.as_deref(),
+        uv.parent(),
+        macos,
     );
-    let _ = run_gigaam(app, &gigaam, &envs, &cwd, env, &mut log, (of, of));
+    for (step, argv) in &optional {
+        let _ = run_optional(app, step, argv, &envs, &cwd, env, &mut log, (of, of));
+    }
     let marker = marker_json(version, profile, &logs::utc_now(), wheel_sha256);
     let staged = env.join(format!("{MARKER}.tmp"));
     fs::write(&staged, marker)
@@ -1425,10 +1548,12 @@ fn run_steps(
     Ok(())
 }
 
-/// Шаг GigaAM: успех — причина прежнего сбоя стирается, сбой — записывается
-/// в `GIGAAM_ERROR_FILE` окружения. → Ok или русская причина.
-fn run_gigaam(
+/// Необязательный шаг (GigaAM, MLX Whisper): ход — в окно и журнал, итог —
+/// `settle_optional`. → Ok или русская причина.
+#[allow(clippy::too_many_arguments)]
+fn run_optional(
     app: &AppHandle,
+    optional: &OptionalStep,
     argv: &[String],
     envs: &[(&str, OsString)],
     cwd: &Path,
@@ -1436,14 +1561,17 @@ fn run_gigaam(
     log: &mut InstallLog,
     (step, of): (usize, usize),
 ) -> Result<(), String> {
-    let title = "Установка GigaAM (необязательно)";
-    log.write(&format!("необязательный шаг: {}", argv.join(" ")));
+    log.write(&format!(
+        "необязательный шаг ({}): {}",
+        optional.name,
+        argv.join(" ")
+    ));
     let _ = app.emit(
         PROGRESS_EVENT,
         Progress {
             step,
             of,
-            line: title.to_string(),
+            line: optional.title.to_string(),
         },
     );
     let mut tail = VecDeque::new();
@@ -1451,22 +1579,39 @@ fn run_gigaam(
         log.write(&line);
         push_tail(&mut tail, line);
     });
-    let error_file = env.join(GIGAAM_ERROR_FILE);
+    let result = settle_optional(optional, env, outcome, &Vec::from(tail).join("\n"));
+    match &result {
+        Ok(()) => log.write(optional.done),
+        Err(reason) => {
+            log.write(&format!(
+                "{}: {reason} — {}",
+                optional.failed, optional.fallback
+            ));
+            shell_log!("{}: {reason}", optional.failed);
+        }
+    }
+    result
+}
+
+/// Итог необязательного шага: успех — причина прежнего сбоя стирается, сбой
+/// — записывается в его файл ошибки в окружении движка.
+fn settle_optional(
+    optional: &OptionalStep,
+    env: &Path,
+    outcome: io::Result<Option<i32>>,
+    tail: &str,
+) -> Result<(), String> {
+    let error_file = env.join(optional.error_file);
     let result = match outcome {
         Ok(Some(0)) => Ok(()),
-        Ok(_) => Err(gigaam_failure_text(&Vec::from(tail).join("\n"))),
+        Ok(_) => Err((optional.failure_text)(tail)),
         Err(error) => Err(format!("шаг не запустился: {error}")),
     };
     match &result {
         Ok(()) => {
             let _ = fs::remove_file(&error_file);
-            log.write("GigaAM установлена");
         }
         Err(reason) => {
-            log.write(&format!(
-                "GigaAM не установилась: {reason} — расшифровка пойдёт Whisper"
-            ));
-            shell_log!("GigaAM не установилась: {reason}");
             let _ = fs::write(&error_file, reason);
         }
     }
@@ -1505,8 +1650,9 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
         "--- повторная установка GigaAM в {}",
         env.display()
     ));
-    run_gigaam(
+    run_optional(
         app,
+        &GIGAAM_STEP,
         &argv,
         &envs,
         &engine_root(&home),
@@ -2469,5 +2615,93 @@ mod tests {
         );
         assert!(known_profile(MAC_PROFILE));
         assert_eq!(needs_gb(MAC_PROFILE), needs_gb("cpu"));
+    }
+
+    const MAC_WHEEL: &str = "/w/meet_transcriber-0.1.0-py3-none-any.whl";
+
+    #[test]
+    fn mlx_step_matches_python() {
+        assert_eq!(
+            vec![uv_mlx_step("/r/uv", "/env", MAC_WHEEL, MAC_PROFILE, None)],
+            fixture("uv_mlx_step_mac.json")
+        );
+        assert_eq!(
+            vec![uv_mlx_step(
+                "/r/uv",
+                "/env",
+                MAC_WHEEL,
+                MAC_PROFILE,
+                Some("/r/constraints-mac-mlx.txt")
+            )],
+            fixture("uv_mlx_step_mac_constrained.json")
+        );
+    }
+
+    #[test]
+    fn mlx_step_is_wanted_only_on_macos_14_or_newer() {
+        assert!(mlx_step_wanted(MAC_PROFILE, Some(14)));
+        assert!(mlx_step_wanted(MAC_PROFILE, Some(26)));
+        assert!(!mlx_step_wanted(MAC_PROFILE, Some(13)));
+        assert!(!mlx_step_wanted(MAC_PROFILE, None));
+        assert!(!mlx_step_wanted("cpu", Some(14)));
+        assert!(!mlx_step_wanted("cuda", Some(15)));
+    }
+
+    #[test]
+    fn optional_steps_add_mlx_after_gigaam_only_on_macos_14() {
+        let tree = TempDir::new("optional-steps");
+        let base = tree.file("constraints-mac.txt", "torch==2.11.0\n");
+        let mlx = tree.file("constraints-mac-mlx.txt", "mlx==0.32.4\n");
+        let resources = Some(tree.0.as_path());
+        let names = |steps: &[(&OptionalStep, Vec<String>)]| {
+            steps.iter().map(|(step, _)| step.name).collect::<Vec<_>>()
+        };
+
+        let steps = optional_steps("/r/uv", "/env", MAC_WHEEL, MAC_PROFILE, resources, Some(14));
+        assert_eq!(names(&steps), vec!["GigaAM", "MLX Whisper"]);
+        assert_eq!(
+            steps[0].1.last(),
+            Some(&base.to_string_lossy().into_owned())
+        );
+        assert_eq!(steps[1].1.last(), Some(&mlx.to_string_lossy().into_owned()));
+        assert!(steps[1].1.iter().any(|arg| arg.ends_with("[mlx]")));
+
+        let steps = optional_steps("/r/uv", "/env", MAC_WHEEL, MAC_PROFILE, resources, Some(13));
+        assert_eq!(names(&steps), vec!["GigaAM"], "macOS 13: шага MLX нет");
+
+        let steps = optional_steps("uv.exe", r"C:\env", WHEEL, "cpu", None, None);
+        assert_eq!(names(&steps), vec!["GigaAM"], "Windows: шага MLX нет");
+        assert_eq!(
+            steps[0].1,
+            uv_gigaam_step("uv.exe", r"C:\env", WHEEL, "cpu", None)
+        );
+    }
+
+    #[test]
+    fn failed_optional_step_writes_its_error_file_and_success_clears_it() {
+        let env = TempDir::new("optional-error");
+        let reason = "нет связи с PyPI — проверьте подключение или прокси в настройках";
+        let outcome = settle_optional(
+            &MLX_STEP,
+            &env.0,
+            Ok(Some(1)),
+            "error: Failed to fetch: `https://pypi.org/simple/mlx/`",
+        );
+        assert_eq!(outcome, Err(reason.to_string()));
+        assert_eq!(
+            fs::read_to_string(env.0.join(MLX_ERROR_FILE)).unwrap(),
+            reason
+        );
+        assert!(
+            !env.0.join(GIGAAM_ERROR_FILE).exists(),
+            "чужой файл не тронут"
+        );
+        assert_eq!(settle_optional(&MLX_STEP, &env.0, Ok(Some(0)), ""), Ok(()));
+        assert!(
+            !env.0.join(MLX_ERROR_FILE).exists(),
+            "успех стирает причину"
+        );
+        assert!(mlx_failure_text("что-то иное").contains("engine-install.log"));
+        assert_eq!(MLX_ERROR_FILE, "mlx-install-error.txt");
     }
 }
