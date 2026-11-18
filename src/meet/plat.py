@@ -10,6 +10,7 @@ IMPORTANT: функции читают `sys.platform` при каждом выз
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,10 @@ from pathlib import Path
 APP_DIR_NAME = "meet"
 WINDOWS = "win32"
 MACOS = "darwin"
+# macOS: где лежит приложение и его ресурсы (ffmpeg, помощник meet-audiotap):
+# «Программы» системы, затем «Программы» пользователя.
+SYSTEM_APPLICATIONS = Path("/Applications")
+APP_RESOURCES = Path("Meet.app") / "Contents" / "Resources" / "resources"
 
 
 def is_windows() -> bool:
@@ -148,3 +153,27 @@ def pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def app_resource_dirs() -> list[Path]:
+    """macOS: папки ресурсов установленного Meet.app — в `/Applications`, затем в
+    `~/Applications`. Нужны `meet`, запущенному из Терминала: PATH резидента
+    дополняет оболочка, а у Терминала его нет. На Windows — пусто."""
+    if not is_macos():
+        return []
+    home = Path(os.environ.get("HOME") or Path.home())
+    return [SYSTEM_APPLICATIONS / APP_RESOURCES, home / "Applications" / APP_RESOURCES]
+
+
+def use_app_tools() -> "Path | None":
+    """macOS: ffmpeg не найден в PATH — папка ресурсов Meet.app, где он есть,
+    встаёт в начало PATH этого процесса (и его детей). Возвращает её; ничего не
+    поменялось — None."""
+    if not is_macos() or shutil.which("ffmpeg"):
+        return None
+    for folder in app_resource_dirs():
+        if (folder / "ffmpeg").is_file():
+            current = os.environ.get("PATH", "")
+            os.environ["PATH"] = os.pathsep.join([str(folder), *([current] if current else [])])
+            return folder
+    return None

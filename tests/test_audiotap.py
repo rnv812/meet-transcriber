@@ -1048,3 +1048,60 @@ def test_tap_stream_reports_capture_time_from_its_frame_counter():
     assert adc[1] - adc[0] == pytest.approx(1024 / 48000)
     assert adc[2] - adc[1] == pytest.approx(1024 / 48000)
     assert all(i["current_time"] >= before for i in infos[:3])
+
+
+# --- где искать помощника: внутри Meet.app ---------------------------------------
+
+
+def _bundle(apps: Path, name: str = audiotap.HELPER) -> Path:
+    """Файл в ресурсах Meet.app внутри папки программ `apps`."""
+    res = apps / "Meet.app" / "Contents" / "Resources" / "resources"
+    res.mkdir(parents=True, exist_ok=True)
+    (res / name).write_bytes(b"")
+    return res / name
+
+
+@pytest.fixture
+def no_helper(monkeypatch, tmp_path):
+    """macOS из Терминала: ни MEET_AUDIOTAP, ни помощника в PATH."""
+    from meet import plat
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv(audiotap.ENV_OVERRIDE, raising=False)
+    monkeypatch.setattr(audiotap.shutil, "which", lambda name, *a, **k: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(plat, "SYSTEM_APPLICATIONS", tmp_path / "Applications")
+    return tmp_path
+
+
+def test_helper_found_inside_user_applications(no_helper):
+    helper = _bundle(no_helper / "home" / "Applications")
+    assert audiotap.helper_path() == str(helper)
+
+
+def test_helper_in_system_applications_wins(no_helper):
+    system = _bundle(no_helper / "Applications")
+    _bundle(no_helper / "home" / "Applications")
+    assert audiotap.helper_path() == str(system)
+
+
+def test_no_helper_anywhere_keeps_the_old_answer(no_helper):
+    assert audiotap.helper_path() is None
+    assert audiotap.MISSING_NOTICE.startswith("Не найден помощник записи системного звука")
+
+
+def test_override_and_path_come_before_the_bundle(no_helper, monkeypatch):
+    _bundle(no_helper / "Applications")
+    on_path = str(no_helper / "bin" / audiotap.HELPER)
+    monkeypatch.setattr(audiotap.shutil, "which", lambda name, *a, **k: on_path)
+    assert audiotap.helper_path() == on_path
+    own = no_helper / "own-helper"
+    own.write_bytes(b"")
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(own))
+    assert audiotap.helper_path() == str(own)
+
+
+def test_bundle_is_not_searched_on_windows(no_helper, monkeypatch):
+    _bundle(no_helper / "Applications")
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert audiotap.helper_path() is None

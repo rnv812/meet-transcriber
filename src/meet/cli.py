@@ -331,10 +331,12 @@ def _add_library_parsers(sub) -> None:
 
 
 def main(argv: list[str] | None = None) -> int | None:
-    from meet import models
+    from meet import models, plat
 
     # Кэш моделей Meet (выбранная папка движка и моделей) — до любых загрузок.
     models.use_meet_cache()
+    # macOS, `meet` из Терминала: ffmpeg из Meet.app, если своего в PATH нет.
+    plat.use_app_tools()
     _quiet_known_warnings()
     # Страховка от UnicodeEncodeError: cp866-консоль Windows не кодирует часть
     # Юникода, а падение print не должно ломать пайплайн — лучше '?' в логе.

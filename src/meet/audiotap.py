@@ -116,11 +116,20 @@ def notice_for_exit(code: "int | None", stderr: str = "") -> str:
 
 def helper_path() -> "str | None":
     """Где помощник: `MEET_AUDIOTAP`, затем PATH (оболочка кладёт папку
-    ресурсов — с ffmpeg и помощником — в PATH резидента)."""
+    ресурсов — с ffmpeg и помощником — в PATH резидента), затем ресурсы
+    Meet.app в `/Applications` и `~/Applications` (`meet` из Терминала)."""
+    from meet import plat
+
     override = os.environ.get(ENV_OVERRIDE, "").strip()
     if override:
         return override if Path(override).is_file() else None
-    return shutil.which(HELPER)
+    found = shutil.which(HELPER)
+    if found:
+        return found
+    for folder in plat.app_resource_dirs():
+        if (folder / HELPER).is_file():
+            return str(folder / HELPER)
+    return None
 
 
 def preflight(run=None, timeout: float = PREFLIGHT_TIMEOUT_S) -> bool:

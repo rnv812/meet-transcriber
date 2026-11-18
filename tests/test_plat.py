@@ -164,3 +164,65 @@ def test_low_priority_preexec_on_mac_sets_nice_10_and_throttles_io(monkeypatch):
     # IOPOL_TYPE_DISK=0, IOPOL_SCOPE_PROCESS=0, IOPOL_THROTTLE=3 — не «background»
     assert ("io", 0, 0, 3) in calls
     fn()  # и повторный вызов не падает
+
+# --- ffmpeg и помощник из Meet.app для `meet` из Терминала ---
+
+
+def _bundle(apps: Path, name: str) -> Path:
+    res = apps / "Meet.app" / "Contents" / "Resources" / "resources"
+    res.mkdir(parents=True, exist_ok=True)
+    (res / name).write_bytes(b"")
+    return res
+
+
+@pytest.fixture
+def terminal(mac, monkeypatch, tmp_path):
+    """macOS, `meet` из Терминала: ffmpeg в PATH нет."""
+    monkeypatch.setattr(plat, "SYSTEM_APPLICATIONS", tmp_path / "Applications")
+    monkeypatch.setattr(plat.shutil, "which", lambda name, *a, **k: None)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    return mac
+
+
+def test_app_resource_dirs_on_mac(terminal, tmp_path):
+    assert plat.app_resource_dirs() == [
+        tmp_path / "Applications" / "Meet.app" / "Contents" / "Resources" / "resources",
+        terminal / "Applications" / "Meet.app" / "Contents" / "Resources" / "resources",
+    ]
+
+
+def test_ffmpeg_from_the_app_goes_to_path(terminal):
+    res = _bundle(terminal / "Applications", "ffmpeg")
+    assert plat.use_app_tools() == res
+    assert os.environ["PATH"].split(os.pathsep) == [str(res), "/usr/bin"]
+
+
+def test_ffmpeg_already_on_path_leaves_path_alone(terminal, monkeypatch):
+    _bundle(terminal / "Applications", "ffmpeg")
+    monkeypatch.setattr(plat.shutil, "which", lambda name, *a, **k: "/opt/homebrew/bin/ffmpeg")
+    assert plat.use_app_tools() is None
+    assert os.environ["PATH"] == "/usr/bin"
+
+
+def test_no_app_leaves_path_alone(terminal):
+    assert plat.use_app_tools() is None
+    assert os.environ["PATH"] == "/usr/bin"
+
+
+def test_windows_has_no_app_resource_dirs(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert plat.app_resource_dirs() == []
+    path = os.environ.get("PATH")
+    assert plat.use_app_tools() is None
+    assert os.environ.get("PATH") == path
+
+
+def test_cli_puts_app_tools_on_path_first(monkeypatch):
+    from meet import cli
+
+    seen = []
+    monkeypatch.setattr(plat, "use_app_tools", lambda: seen.append(True))
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert seen == [True]
+
