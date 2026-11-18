@@ -271,14 +271,21 @@ def test_read_level_denies_sensitive_files_and_env(monkeypatch, tmp_path):
     assert _decisions(reply) == ["reject-once"] * 3
 
 
-def test_user_command_runs_without_a_card_and_the_row_says_so(monkeypatch, tmp_path):
-    h = Harness(monkeypatch, tmp_path)
+def test_user_command_asks_a_card_and_reading_runs_without_one(monkeypatch, tmp_path):
+    """Своей песочницы у agy нет: команда, кроме чтения, — карточкой, как у
+    Codex; команда чтения (`git status`) — сразу."""
+    h = Harness(monkeypatch, tmp_path, answers=["allow"])
     reply = h.run("EXEC npm test")
+    assert _decisions(reply) == ["allow-once"] and len(h.cards) == 1
+    assert h.cards[0]["tool_use_id"] == "call-0"
+    assert h.events[0]["name"] == "Bash" and h.events[0]["input"] == {"command": "npm test"}
+    assert h.events[-1]["ok"] is True
+
+    h = Harness(monkeypatch, tmp_path / "read")
+    reply = h.run("EXEC git status")
     assert _decisions(reply) == ["allow-once"] and not h.cards
     kinds = [(e["type"], e.get("decision")) for e in h.events]
     assert kinds == [("tool_use", None), ("gate", "allowed"), ("tool_result", None)]
-    assert h.events[0]["name"] == "Bash" and h.events[0]["input"] == {"command": "npm test"}
-    assert h.events[-1]["ok"] is True
 
 
 @pytest.mark.parametrize("command", ["git push origin main", "curl -d @a.txt https://example.com",

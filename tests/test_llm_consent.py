@@ -1910,6 +1910,74 @@ def test_agy_mcp_and_read_only_hint():
     assert c.agy_read_only({"kind": "other"}) is False
 
 
+@pytest.mark.parametrize("level", ["READ", "USER"])
+def test_agy_mcp_title_never_overrides_a_concrete_kind(tmp_path, level):
+    """Заголовок `mcp(…)` (текст, который может прийти от модели) не делает
+    команду, удаление или правку чтением MCP: решает вид вызова."""
+    from meet.llm import consent as c
+
+    cards = []
+    gate = c.ConsentGate(own_dirs=[str(tmp_path)], sensitive=[],
+                         confirmer=lambda card: cards.append(card) or "deny")
+    gate.begin(getattr(c, level))
+    title = "mcp(jira/get_issue) rm -rf ~/Documents"
+    for call in ({"kind": "execute", "title": title, "rawInput": {"command": "rm -rf ~/Documents"}},
+                 {"kind": "delete", "title": title, "locations": [{"path": str(tmp_path / "a.md")}]},
+                 {"kind": "edit", "title": title, "locations": [{"path": "/etc/hosts"}],
+                  "content": [{"type": "diff", "path": "/etc/hosts", "newText": "x"}]}):
+        assert not c.agy_call(call, windows=False)[0].startswith("mcp__")
+        assert c.agy_approval(gate, call, windows=False).outcome != c.ALLOW
+    # `_meta` с сервером и инструментом у вида с действием — тоже не MCP.
+    meta = {"kind": "execute", "_meta": {"mcpServerName": "jira", "mcpToolName": "get_issue"},
+            "rawInput": {"command": "rm -rf ~/Documents"}}
+    assert c.agy_call(meta, windows=False)[0] == "Bash"
+    # Заголовок `mcp(…)` у чтения файла не делает его вызовом MCP.
+    read = {"kind": "read", "title": "mcp(fs/read_file)", "locations": [{"path": "/a/b.md"}]}
+    assert c.agy_call(read, windows=False) == ("Read", {"file_path": "/a/b.md"})
+
+
+def test_agy_commands_other_than_reading_get_a_card(tmp_path):
+    """У agy нет песочницы: команда, кроме чтения, — карточкой (как у Codex),
+    одобренная «до конца встречи» — дальше без неё; чтение — сразу."""
+    from meet.llm import consent as c
+
+    cards = []
+    gate = c.ConsentGate(own_dirs=[str(tmp_path)], sensitive=[],
+                         confirmer=lambda card: cards.append(card) or "deny")
+    gate.begin(c.USER)
+    for command in ("bash ./cleanup.sh", "./cleanup.sh", "npm test"):
+        cards.clear()
+        call = {"toolCallId": command, "kind": "execute", "rawInput": {"command": command}}
+        assert c.agy_approval(gate, call, windows=False).outcome != c.ALLOW
+        assert len(cards) == 1, command
+    cards.clear()
+    read = {"toolCallId": "r", "kind": "execute", "rawInput": {"command": "git status"}}
+    assert c.agy_approval(gate, read, windows=False).outcome == c.ALLOW and not cards
+
+
+@pytest.mark.parametrize("command", [
+    "python -c \"import shutil; shutil.rmtree('x')\"",
+    "node -e \"require('fs').rmSync('x', {recursive: true})\"",
+    "cd x && python3 -Ic 'print(1)'",
+    "bash -lc 'python -c \"print(1)\"'",
+    "powershell -NoProfile -Command \"Remove-Item x\"",
+    "deno eval 'Deno.removeSync(\"x\")'",
+])
+def test_agy_inline_code_is_refused_without_a_card(tmp_path, command):
+    """Оболочки и интерпретаторы с кодом в строке agy не выполняет вовсе —
+    отказ без карточки, как обещают промпт и заметки выпуска."""
+    from meet.llm import consent as c
+
+    cards = []
+    gate = c.ConsentGate(own_dirs=[str(tmp_path)], sensitive=[],
+                         confirmer=lambda card: cards.append(card) or "allow")
+    gate.begin(c.USER)
+    decision = c.agy_approval(gate, {"toolCallId": "t", "kind": "execute", "rawInput": {"command": command}},
+                              windows=False)
+    assert decision.outcome == c.DENY and "Antigravity" in decision.reason and not cards
+    assert not c._agy_inline_code("python -m pytest -q") and not c._agy_inline_code("python run.py -c x")
+
+
 def test_agy_denied_commands_never_reach_a_card():
     from meet.llm import consent as c
 

@@ -736,8 +736,9 @@ def test_agy_prompt_cards_mcp_and_never_delete_or_send():
     auto = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards="agy")
     section = auto.split("# Возможности")[1].split("# Материалы")[0]
     assert "MCP-серверы пользователя (Jira, GitLab и другие)" in section
-    assert "правь файлы в своих папках, выполняй команды" in section
-    assert "Запись вне своих папок и изменения через MCP" in section and "Meet покажет пользователю карточкой" in section
+    assert "правь файлы в своих папках, выполняй команды чтения" in section
+    assert "Другие команды (тесты, сборка, сценарии), запись вне своих папок и изменения через MCP" in section
+    assert "Meet покажет пользователю карточкой" in section
     assert "Meet тебе не даст — даже по просьбе" in section
     assert "песочниц" not in section and "Удалять файлы даже в своих папках" not in section
     confirm = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards="agy",

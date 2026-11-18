@@ -249,6 +249,23 @@ def test_prepare_in_process_returns_vars(monkeypatch):
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"
 
 
+def test_shell_hf_token_never_reaches_agents(monkeypatch):
+    """Токен HF от оболочки (macOS) — только своим процессам Meet: агенту
+    (CLI модели) его не видно ни через окружение, ни через SDK."""
+    from meet import credentials
+
+    base = {"PATH": "x", credentials.SHELL_ENV: "hf_secret"}
+    assert credentials.SHELL_ENV not in netproxy.child_env("none", base=base, registry=NO_REG)
+    assert netproxy.child_env("none", base=base, registry=NO_REG, keep_shell_token=True)[
+        credentials.SHELL_ENV] == "hf_secret"
+    monkeypatch.setenv(credentials.SHELL_ENV, "hf_secret")
+    assert netproxy.settings_env()[credentials.SHELL_ENV] == "hf_secret"   # свои процессы Meet
+    assert netproxy.prepare("none", registry=NO_REG) == {credentials.SHELL_ENV: ""}
+    assert netproxy.prepare("system", registry=NO_REG)[credentials.SHELL_ENV] == ""
+    monkeypatch.delenv(credentials.SHELL_ENV)
+    assert credentials.SHELL_ENV not in netproxy.prepare("system", registry=NO_REG)
+
+
 # --- описание для окна --------------------------------------------------------
 
 

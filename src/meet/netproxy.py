@@ -336,13 +336,23 @@ def _for_platform(env: Mapping) -> dict[str, str]:
     return {str(k).upper(): v for k, v in env.items()}
 
 
+def _shell_token_var() -> str:
+    from meet.credentials import SHELL_ENV
+
+    return SHELL_ENV
+
+
 def child_env(cfg, base: Mapping | None = None,
-              registry: Registry | None = None) -> dict[str, str]:
+              registry: Registry | None = None, *, keep_shell_token: bool = False) -> dict[str, str]:
     """Полное окружение дочернего процесса: `base` (по умолчанию os.environ)
-    с прокси по настройке; `base` не меняется."""
+    с прокси по настройке; `base` не меняется. Токен HF от оболочки (macOS,
+    `credentials.SHELL_ENV`) остаётся только при `keep_shell_token` — у
+    своих процессов Meet; агентам (CLI моделей) его не видно."""
     base = os.environ if base is None else base
     mode = _mode(cfg)
-    env = {k: v for k, v in base.items() if not (mode == NONE and _is_proxy_var(k))}
+    hidden = "" if keep_shell_token else _shell_token_var().upper()
+    env = {k: v for k, v in base.items()
+           if not (mode == NONE and _is_proxy_var(k)) and str(k).upper() != hidden}
     env = _for_platform(env)
     env.update(_for_platform(proxy_env(mode, base, registry)))
     return env
@@ -357,7 +367,7 @@ def settings_env(base: Mapping | None = None) -> dict[str, str]:
         cfg = settings.load()
     except Exception:  # резидент не должен падать из-за файла настроек
         cfg = None
-    return child_env(cfg, base)
+    return child_env(cfg, base, keep_shell_token=True)
 
 
 def prepare(cfg, registry: Registry | None = None) -> dict[str, str]:
@@ -366,11 +376,14 @@ def prepare(cfg, registry: Registry | None = None) -> dict[str, str]:
     переменные, которые надо добавить. Зовут только процессы, где живёт
     вызов модели (job_worker, meet assist, meet.llm.check, CLI)."""
     mode = _mode(cfg)
+    # Токен HF от оболочки (macOS) нужен этому процессу, но не агенту: SDK
+    # только добавляет переменные, поэтому — пустым значением поверх.
+    hide = {_shell_token_var(): ""} if os.environ.get(_shell_token_var()) else {}
     if mode == NONE:
         for name in [k for k in os.environ if _is_proxy_var(k)]:
             os.environ.pop(name, None)
-        return {}
-    return _for_platform(proxy_env(mode, os.environ, registry))
+        return hide
+    return {**_for_platform(proxy_env(mode, os.environ, registry)), **hide}
 
 
 # --- для окна и ошибок --------------------------------------------------------------

@@ -179,8 +179,11 @@ git не попадают.
   отдельный `agy acp --login --gemini-dir …`) и разовым файлом правил на ход
   (Default mode, `toolPermission: strict`, запреты удаления и отправки, без
   allow-правил; в `~/.gemini` Meet не пишет). `session/request_permission` →
-  `consent.agy_approval`: удаление и отправка — отказ без карточки, остальное —
-  ворота (`via=AGY`). MCP из `~/.gemini/config/mcp_config.json` — только в
+  `consent.agy_approval`: удаление, отправка и код в строке (`python -c`,
+  `bash -c`) — отказ без карточки, остальное — ворота (`via=AGY`): команды,
+  кроме чтения, — карточкой, как у Codex (песочницы у agy нет); заголовок
+  `mcp(…)` делает вызов MCP только у вида `other`. Токен HF от оболочки
+  (`credentials.SHELL_ENV`) агентам не передаётся (`netproxy.child_env`). MCP из `~/.gemini/config/mcp_config.json` — только в
   ходах по просьбе. Нет ACP — `agy -p` (действия с согласием отклоняются,
   строка «отклонено: нужно согласие»). Не в `AUTO_PROVIDERS` и не в
   `VISION_PROVIDERS`; в настройках — предупреждение об условиях

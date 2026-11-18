@@ -291,3 +291,21 @@ def test_track_time_moves_only_mic_times_to_the_raw_track(tmp_path):
     assert track_sync.track_time("mic", 10.0, offset) == pytest.approx(9.6)
     assert track_sync.track_time("sys", 10.0, offset) == pytest.approx(10.0)
     assert track_sync.folder_applied_s(tmp_path / "нет") == 0.0
+
+
+def test_applied_offset_is_reread_when_the_transcript_changes(tmp_path):
+    """Сдвиг кэшируется по времени и размеру транскрипта: перерасшифровка с
+    другим сдвигом и удалённый транскрипт видны сразу."""
+    import os
+
+    from meet import library
+
+    folder = _two_tracks(tmp_path, {"segments": [], track_sync.APPLIED_KEY: 0.4})
+    assert track_sync.folder_applied_s(folder) == pytest.approx(0.4)
+    library.write_transcript(folder, {"segments": [], track_sync.APPLIED_KEY: 0.3})
+    path = library.transcript_path(folder)
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert track_sync.folder_applied_s(folder) == pytest.approx(0.3)
+    path.unlink()
+    assert track_sync.folder_applied_s(folder) == 0.0

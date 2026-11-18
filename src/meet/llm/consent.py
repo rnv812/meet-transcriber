@@ -2680,8 +2680,9 @@ class ConsentGate:
 
         `via=AGY` (0.6.2) — Antigravity CLI спрашивает по ACP
         (`agy_approval`): что CLI решил бы сам (`auto`), agy делает сам, если
-        это команда, правка в рабочих папках, чтение, веб или MCP-чтение
-        (`_AGY_SELF`), иначе — карточка."""
+        это правка в рабочих папках, чтение, веб или MCP-чтение (`_AGY_SELF`);
+        команда (кроме чтения — та проходит раньше) — карточкой, как у Codex:
+        своей песочницы у agy нет; иначе — карточка."""
         data = data if isinstance(data, dict) else {}
         tool = str(tool or "")
         canonical = _canonical(tool, data)
@@ -2705,6 +2706,8 @@ class ConsentGate:
             if decision.outcome == AUTO:
                 if decision.kind in _AGY_SELF:
                     return Decision(ALLOW, what=decision.what, kind=decision.kind)
+                if self._granted(tool, data):
+                    return Decision(ALLOW, what=decision.what, kind=decision.kind, why="granted")
                 decision = Decision(ASK, what=decision.what, kind=decision.kind,
                                     card=card_for(tool, data, self._grant_offer(tool, data)))
             elif decision.outcome != ASK:
@@ -3083,14 +3086,61 @@ AGY_DENIED = ("Meet заблокировал: {what} — удаление, от�
               "в строке ассистент на Antigravity CLI не выполняет. Скажи пользователю, что нужно "
               "сделать, — он сделает это сам.")
 # Что Antigravity в ходе USER (режим auto) делает сам, когда ворота отдают решение CLI (`auto`):
-# команды и правка в рабочих папках, чтение, веб, MCP-чтение (таблица уровней доступа agy).
-_AGY_SELF = frozenset(("shell", "write", "read", "web-search", "web-fetch", "mcp-read", "mcp-resource"))
+# правка в рабочих папках, чтение, веб, MCP-чтение. Команды, кроме чтения, — карточкой: песочницы
+# у agy нет, а интерпретатор или только что написанный сценарий может удалить что угодно.
+_AGY_SELF = frozenset(("write", "read", "web-search", "web-fetch", "mcp-read", "mcp-resource"))
+# Интерпретаторы и флаги кода в строке (`python -c`, `node -e`…): agy их не выполняет вовсе.
+_AGY_CODE_FLAGS = {
+    "python": ("-c",), "python3": ("-c",), "py": ("-c",), "pythonw": ("-c",),
+    "node": ("-e", "--eval", "-p", "--print"), "bun": ("-e", "--eval", "-p", "--print"),
+    "deno": ("eval",), "ruby": ("-e",), "perl": ("-e", "-E"), "php": ("-r",), "lua": ("-e",),
+    "osascript": ("-e",),
+}
+
+
+def _agy_inline_code(command: str) -> bool:
+    """Есть ли в команде оболочка или интерпретатор с кодом в строке
+    (`bash -c …`, `powershell -Command …`, `python -c …`, `node -e …`) — в
+    любой её простой команде, после снятия обёрток (`sudo`, `env`…).
+    Не разобрать — да (в закрытую сторону)."""
+    text = " ".join(str(command or "").split())
+    if not text:
+        return False
+    for tool in ("Bash", "PowerShell"):
+        tokens = _tokens(text, tool)
+        if tokens is None:
+            return True
+        for words in _commands(tokens):
+            words = _strip_wrappers(words)
+            if not words:
+                continue
+            if shell_code(words) is not None:
+                return True
+            flags = _AGY_CODE_FLAGS.get(_program(words[0]))
+            if flags and _code_flag(words[1:], flags):
+                return True
+    return False
+
+
+def _code_flag(args: list[str], flags: tuple[str, ...]) -> bool:
+    """Флаг кода в строке среди флагов до сценария или модуля."""
+    for w in args:
+        low = w.lower()
+        if low in flags or any(f.startswith("--") and low.startswith(f + "=") for f in flags):
+            return True
+        if flags == ("-c",) and low.startswith("-") and not low.startswith("--") \
+                and low[1:].isalpha() and low.endswith("c"):
+            return True                          # слитные флаги: `python -Ic …`
+        if not low.startswith("-") or low == "-m":
+            return False                         # сценарий или модуль — дальше его аргументы
+    return False
 _AGY_COMMAND_KEYS = ("command", "CommandLine", "commandLine", "cmd")
 _AGY_PATH_KEYS = ("path", "file_path", "filePath", "AbsolutePath", "absolutePath", "TargetFile", "targetFile",
                   "target_file", "DirectoryPath", "directoryPath", "SearchPath", "searchPath")
 _AGY_DEST_KEYS = ("destination", "Destination", "newPath", "new_path", "to")
 _AGY_URL_KEYS = ("url", "Url", "URL")
 _AGY_QUERY_KEYS = ("query", "Query", "pattern", "Pattern")
+_AGY_MCP_KINDS = frozenset(("other", "read", "search", "fetch"))
 _AGY_MCP_TITLE = re.compile(r"^\s*mcp\(([^/()\s]+)/([^()\s]+)\)")
 _AGY_MCP_SERVER_KEYS = ("mcpServerName", "serverName", "server")
 _AGY_MCP_TOOL_KEYS = ("mcpToolName", "toolName", "tool")
@@ -3113,15 +3163,17 @@ def _agy_metas(tool_call: dict) -> list[dict]:
     return [meta, *(v for v in meta.values() if isinstance(v, dict))]
 
 
-def agy_mcp(tool_call: dict) -> tuple[str, str] | None:
+def agy_mcp(tool_call: dict, *, title: bool = True) -> tuple[str, str] | None:
     """Вызов MCP в запросе agy → (сервер, инструмент): из `_meta`
-    (`mcpServerName`/`serverName`, `mcpToolName`/`toolName`) или из
-    заголовка вида правил agy `mcp(сервер/инструмент)`; иначе None."""
+    (`mcpServerName`/`serverName`, `mcpToolName`/`toolName`) или — при
+    `title` — из заголовка вида правил agy `mcp(сервер/инструмент)`; иначе None."""
     tool_call = tool_call if isinstance(tool_call, dict) else {}
     for meta in _agy_metas(tool_call):
         server, tool = _agy_str(meta, _AGY_MCP_SERVER_KEYS), _agy_str(meta, _AGY_MCP_TOOL_KEYS)
         if server and tool and _MCP_TOOL_NAME.match(server) and _MCP_TOOL_NAME.match(tool):
             return server, tool
+    if not title:
+        return None
     found = _AGY_MCP_TITLE.match(str(tool_call.get("title") or ""))
     if found and _MCP_TOOL_NAME.match(found.group(1)) and _MCP_TOOL_NAME.match(found.group(2)):
         return found.group(1), found.group(2)
@@ -3166,7 +3218,11 @@ def agy_call(tool_call: dict, *, windows: bool) -> tuple[str, dict] | None:
     tool_call = tool_call if isinstance(tool_call, dict) else {}
     raw = tool_call.get("rawInput") if isinstance(tool_call.get("rawInput"), dict) else {}
     kind = str(tool_call.get("kind") or "other")
-    mcp = agy_mcp(tool_call)
+    # Вызов MCP — только у видов без своего действия: команда, правка,
+    # удаление и перенос решаются по своему виду, что бы ни было в заголовке
+    # или `_meta`. Заголовок (текст, который может прийти от модели) —
+    # только у вида `other`.
+    mcp = agy_mcp(tool_call, title=kind == "other") if kind in _AGY_MCP_KINDS else None
     if mcp is not None:
         return f"mcp__{mcp[0]}__{mcp[1]}", dict(raw)
     if kind == "switch_mode":
@@ -3210,11 +3266,12 @@ def agy_call(tool_call: dict, *, windows: bool) -> tuple[str, dict] | None:
 
 def agy_approval(gate: "ConsentGate", tool_call: dict, *, windows: bool) -> Decision:
     """Ответ на `session/request_permission` agy — решение ворот (`allow` —
-    разрешить один раз, иначе отказ). Команда из `command_denial_patterns`
-    — отказ без карточки в любом ходе (удаление, отправка наружу,
-    публикация: agy их не выполняет, таблица уровней доступа). Остальное —
-    `check(via=AGY)`: что ворота отдали бы CLI (`auto`), agy в ходе USER
-    делает сам — команды, правку в рабочих папках, чтение, веб, MCP-чтение;
+    разрешить один раз, иначе отказ). Оболочка или интерпретатор с кодом в
+    строке и команда из `command_denial_patterns` — отказ без карточки в
+    любом ходе (удаление, отправка наружу, публикация: agy их не
+    выполняет, таблица уровней доступа). Остальное — `check(via=AGY)`: что
+    ворота отдали бы CLI (`auto`), agy в ходе USER делает сам — правку в
+    рабочих папках, чтение, веб, MCP-чтение; команды, кроме чтения, и
     прочее (неизвестный вид) — карточка. Запись вне рабочих папок, изменение
     через MCP, режим confirm — карточка, как у Claude Code."""
     tool_call = tool_call if isinstance(tool_call, dict) else {}
@@ -3225,6 +3282,12 @@ def agy_approval(gate: "ConsentGate", tool_call: dict, *, windows: bool) -> Deci
                 else "непонятный запрос Antigravity")
         return gate._record(Decision(DENY, "", what, "other", UNPARSED))
     tool, data = call
+    raw = tool_call.get("rawInput") if isinstance(tool_call.get("rawInput"), dict) else {}
+    if tool in SHELL and (_agy_inline_code(_agy_str(raw, _AGY_COMMAND_KEYS))
+                          or _agy_inline_code(str(data.get("command") or ""))):
+        kind, what = describe(tool, data)
+        gate._log(f"согласие: отказ (agy, код в строке, {kind})")
+        return gate._record(Decision(DENY, AGY_DENIED.format(what=what), what, kind, "agy-denied"))
     if tool in SHELL and command_denied(str(data.get("command") or "")):
         kind, what = describe(tool, data)
         risk = shell_risk(tool, str(data.get("command") or ""))
