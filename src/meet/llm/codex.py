@@ -103,6 +103,8 @@ from meet.llm.detect import find_codex
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 _ERR_LIMIT = 500
+# Хвост stderr при чтении по ходу вызова: ошибка Codex — в конце.
+_STDERR_TAIL = 64 * 1024
 # Шапка `codex exec` (0.159.0): «session id: 01a112eb-…».
 _SESSION_LINE = re.compile(r"^\s*session id:\s*([0-9a-fA-F-]{36})\s*$", re.MULTILINE)
 # Сохранённого сеанса нет (0.159.0): «thread/resume failed: no rollout found for thread id …».
@@ -273,18 +275,20 @@ def _workdir(allowed_dirs, cwd) -> str:
 def build_command(exe: str, workdir: str, out_file: str, *, effort: str | None = None,
                   images=(), keep_session: bool = False, resume: str | None = None,
                   access: str | None = None, servers=(), work_dirs=(),
-                  model: str | None = None, windows_sandbox: str | None = None) -> list[str]:
+                  model: str | None = None, windows_sandbox: str | None = None,
+                  json_events: bool = False) -> list[str]:
     """Командная строка `codex exec` (prompt — в stdin, `-` последним).
     Продолжение: песочница, папки и автопроверка — до `resume` (у подкоманды
     их нет), остальное — после неё (и `-m model`: он есть у обеих), id
     сеанса — перед `-`. `access` — уровень хода (`access_args`; `servers` —
     MCP-серверы, что выключить; `work_dirs` — рабочие папки хода USER;
     `windows_sandbox` — значение пользователя для запасного пути). `model`
-    уже проверен (`model_error`)."""
+    уже проверен (`model_error`). `json_events` — события JSON и без
+    сохраняемого сеанса (ход работы по ходу вызова)."""
     head = [exe, "exec", *access_args(access, servers, work_dirs, windows_sandbox=windows_sandbox),
             "--skip-git-repo-check"]
     # Сохраняемый сеанс — события JSON (id в thread.started; проверено на 0.159.0).
-    events = ["--json"] if keep_session or resume else []
+    events = ["--json"] if keep_session or resume or json_events else []
     rest = [*events, "--output-last-message", out_file,
             *(["-m", model] if model else []),
             *(["-c", f'model_reasoning_effort="{effort}"'] if effort else []),
@@ -335,60 +339,121 @@ def parse_events(stdout: str) -> tuple[str | None, list[str]]:
     return sid, errors
 
 
+# Вызов, который прервали (отмена хода, таймаут): строка закрывается ошибкой.
+INTERRUPTED = "прервано"
+
+
+def _event_item(line: str) -> tuple[str | None, dict]:
+    """Строка `codex exec --json` → (вид события, элемент); чужая — (None, {})."""
+    line = (line or "").strip()
+    if not line.startswith("{"):
+        return None, {}
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None, {}
+    if not isinstance(event, dict):
+        return None, {}
+    item = event.get("item") if isinstance(event.get("item"), dict) else {}
+    return event.get("type"), item
+
+
+def _item_call(item: dict) -> tuple[str, dict] | None:
+    """Элемент Codex → (имя инструмента, аргументы); не вызов — None."""
+    kind = item.get("type")
+    if kind == "command_execution":
+        return "Bash", {"command": str(item.get("command") or "")}
+    if kind == "file_change":
+        changes = [{"path": str(c.get("path")), "kind": str(c.get("kind") or "")}
+                   for c in item.get("changes") or () if isinstance(c, dict) and c.get("path")]
+        return "apply_patch", {"changes": changes}
+    if kind == "mcp_tool_call":
+        server, tool = str(item.get("server") or "?"), str(item.get("tool") or "?")
+        return f"mcp__{server}__{tool}", item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+    if kind == "web_search":
+        return "WebSearch", {"query": str(item.get("query") or "")}
+    return None
+
+
+def _use_event(iid: str, name: str, data: dict) -> dict:
+    server, tool = (name[5:].split("__", 1) if name.startswith("mcp__") else (None, name))
+    return {"type": "tool_use", "id": iid, "name": name, "server": server, "tool": tool,
+            "input": data, "parent": None}
+
+
+def _result_event(iid: str, ok: bool, output: str) -> dict:
+    return {"type": "tool_result", "id": iid, "ok": ok, "output": output, "truncated": False,
+            "duration_ms": None, "parent": None}
+
+
+def _item_result(item: dict, data: dict) -> tuple[bool, str]:
+    """Законченный элемент → (удался ли, вывод)."""
+    kind = item.get("type")
+    error = item.get("error") if isinstance(item.get("error"), dict) else {}
+    failed = item.get("status") == "failed"
+    if kind == "command_execution":
+        return not failed and item.get("exit_code") in (0, None), str(item.get("aggregated_output") or "")
+    if kind == "file_change":
+        return not failed, "\n".join(f"{c['kind']}: {c['path']}" for c in data.get("changes") or ())
+    if kind == "mcp_tool_call":
+        result = item.get("result")
+        return not failed, str(error.get("message") or "") if failed else (
+            json.dumps(result, ensure_ascii=False) if result is not None else "")
+    return not failed, ""
+
+
+class ToolStream:
+    """Ход работы по ходу вызова (`run(on_event=…)`): строка за строкой
+    `item.started` → `tool_use`, `item.completed` → `tool_result` (без начала —
+    оба сразу). Веб-поиск без запроса в начале (запрос Codex дописывает к
+    концу) — строка при завершении: вызов одной строкой не переписать
+    (`tool_rows` берёт первый `tool_use` по id). `abort` — открытые вызовы
+    закрываются «прервано»."""
+
+    def __init__(self) -> None:
+        self._open: dict[str, None] = {}
+
+    def feed(self, line: str) -> list[dict]:
+        kind, item = _event_item(line)
+        if kind not in ("item.started", "item.completed"):
+            return []
+        iid = str(item.get("id") or "")
+        call = _item_call(item) if iid else None
+        if call is None:
+            return []
+        name, data = call
+        if kind == "item.started":
+            if iid in self._open or (name == "WebSearch" and not data["query"]):
+                return []
+            self._open[iid] = None
+            return [_use_event(iid, name, data)]
+        out = [] if self._open.pop(iid, False) is None else [_use_event(iid, name, data)]
+        return out + [_result_event(iid, *_item_result(item, data))]
+
+    def abort(self) -> list[dict]:
+        out = [_result_event(iid, False, INTERRUPTED) for iid in self._open]
+        self._open.clear()
+        return out
+
+
 def tool_events(stdout: str) -> list[dict]:
     """Ход работы для чата (0.4, `assist.tool_rows`) из событий `codex exec
-    --json`: законченные элементы (`item.completed`) — команды
+    --json` после вызова: законченные элементы (`item.completed`) — команды
     (`command_execution` → Bash), правки файлов (`file_change` →
     `apply_patch`), вызовы MCP (`mcp_tool_call` → `mcp__сервер__инструмент`)
     и веб-поиск (`web_search` → WebSearch) — парами событий `tool_use` и
-    `tool_result`, как у `claude_stream`. Остановить вызов до выполнения Codex
-    не даёт, поэтому строки приходят после вызова. Чужие строки и поля
-    пропускаются."""
+    `tool_result`, как у `claude_stream`. По ходу вызова те же события даёт
+    `ToolStream` (`run(on_event=…)`). Остановить вызов до выполнения Codex не
+    даёт. Чужие строки и поля пропускаются."""
     out: list[dict] = []
     for line in (stdout or "").splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
+        kind, item = _event_item(line)
+        iid = str(item.get("id") or "")
+        call = _item_call(item) if kind == "item.completed" and iid else None
+        if call is None:
             continue
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(event, dict) or event.get("type") != "item.completed":
-            continue
-        item = event.get("item") if isinstance(event.get("item"), dict) else {}
-        kind, iid = item.get("type"), str(item.get("id") or "")
-        if not iid:
-            continue
-        error = item.get("error") if isinstance(item.get("error"), dict) else {}
-        failed = item.get("status") == "failed"
-        if kind == "command_execution":
-            name, data = "Bash", {"command": str(item.get("command") or "")}
-            output = str(item.get("aggregated_output") or "")
-            ok = not failed and item.get("exit_code") in (0, None)
-        elif kind == "file_change":
-            changes = [{"path": str(c.get("path")), "kind": str(c.get("kind") or "")}
-                       for c in item.get("changes") or () if isinstance(c, dict) and c.get("path")]
-            name, data = "apply_patch", {"changes": changes}
-            output = "\n".join(f"{c['kind']}: {c['path']}" for c in changes)
-            ok = not failed
-        elif kind == "mcp_tool_call":
-            server, tool = str(item.get("server") or "?"), str(item.get("tool") or "?")
-            name = f"mcp__{server}__{tool}"
-            data = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
-            result = item.get("result")
-            output = str(error.get("message") or "") if failed else (
-                json.dumps(result, ensure_ascii=False) if result is not None else "")
-            ok = not failed
-        elif kind == "web_search":
-            name, data = "WebSearch", {"query": str(item.get("query") or "")}
-            output, ok = "", not failed
-        else:
-            continue
-        server, tool = (name[5:].split("__", 1) if name.startswith("mcp__") else (None, name))
-        out.append({"type": "tool_use", "id": iid, "name": name, "server": server, "tool": tool,
-                    "input": data, "parent": None})
-        out.append({"type": "tool_result", "id": iid, "ok": ok, "output": output, "truncated": False,
-                    "duration_ms": None, "parent": None})
+        name, data = call
+        out += [_use_event(iid, name, data), _result_event(iid, *_item_result(item, data))]
     return out
 
 
@@ -415,11 +480,95 @@ class _Call:
             _kill_tree(self.proc)
 
 
+def _deliver(loop, on_event):
+    """Событие из потока чтения → `on_event` в цикле событий `loop`; цикл
+    закрыт (ассистент выходит) — событие пропадает. Сбой обработчика ход не
+    роняет."""
+    def handle(event: dict) -> None:
+        try:
+            on_event(event)
+        except Exception:
+            pass
+
+    def emit(event: dict) -> None:
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(handle, event)
+        except RuntimeError:
+            pass
+    return emit
+
+
+def _stream(proc, stdin_text: str, timeout_s: float, emit) -> tuple[str, str] | None:
+    """Вызов с ходом работы по ходу: stdin пишется и закрывается в своём
+    потоке, stdout читается построчно в своём (`ToolStream` → `emit`), от
+    stderr остаётся хвост `_STDERR_TAIL`. Не уложился в `timeout_s` —
+    дерево процессов убито, → None. Убит отменой или таймаутом — открытые
+    вызовы закрываются «прервано». → (stdout, stderr)."""
+    import threading
+
+    lines: list[str] = []
+    err: list[str] = []
+    tools = ToolStream()
+
+    def write_in() -> None:
+        try:
+            proc.stdin.write(stdin_text.encode("utf-8"))
+        except (OSError, ValueError):
+            pass
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+    def read_out() -> None:
+        try:
+            for raw in proc.stdout:
+                text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+                lines.append(text)
+                for event in tools.feed(text):
+                    emit(event)
+        except (OSError, ValueError):
+            pass
+
+    def read_err() -> None:
+        try:
+            for raw in proc.stderr:
+                err.append(raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw))
+                if sum(len(t) for t in err) > _STDERR_TAIL * 2:
+                    err[:] = ["".join(err)[-_STDERR_TAIL:]]
+        except (OSError, ValueError):
+            pass
+
+    threads = [threading.Thread(target=fn, name=f"codex-{fn.__name__}", daemon=True)
+               for fn in (write_in, read_out, read_err)]
+    for t in threads:
+        t.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_tree(proc)
+        try:
+            proc.wait(timeout=10)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    for t in threads:
+        t.join(timeout=10)      # внук мог унаследовать вывод — не ждём его вечно
+    for event in tools.abort():
+        emit(event)
+    if timed_out:
+        return None
+    return "".join(lines), "".join(err)[-_STDERR_TAIL:].strip()
+
+
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
           env: dict | None = None, effort: str | None = None, images=(),
           keep_session: bool = False, resume: str | None = None,
           call: _Call | None = None, access: str | None = None, work_dirs=(),
-          model: str | None = None) -> AgentReply:
+          model: str | None = None, on_event=None, loop=None) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
     # Папка с pid в имени (meet.tempdirs): процесс убили посреди ответа — файл
     # с ответом модели о встрече удалит резидент.
@@ -431,7 +580,7 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
         cmd = build_command(exe, workdir, str(out_file), effort=effort, images=images,
                             keep_session=keep_session, resume=resume, access=access,
                             servers=servers, work_dirs=work_dirs, model=model,
-                            windows_sandbox=sandbox)
+                            windows_sandbox=sandbox, json_events=on_event is not None)
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -443,17 +592,23 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
             call.proc = proc
             if call.cancelled:
                 _kill_tree(proc)
-        try:
-            out, err = proc.communicate(input=stdin_text.encode("utf-8"), timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            _kill_tree(proc)
+        if on_event is not None:
+            got = _stream(proc, stdin_text, timeout_s, _deliver(loop, on_event))
+            if got is None:
+                return AgentReply(text="", error=TIMEOUT_ERROR)
+            stdout, stderr = got
+        else:
             try:
-                proc.communicate(timeout=10)
-            except (subprocess.TimeoutExpired, OSError, ValueError):
-                pass
-            return AgentReply(text="", error=TIMEOUT_ERROR)
-        stderr = (err or b"").decode("utf-8", errors="replace").strip()
-        stdout = (out or b"").decode("utf-8", errors="replace")
+                out, err = proc.communicate(input=stdin_text.encode("utf-8"), timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                try:
+                    proc.communicate(timeout=10)
+                except (subprocess.TimeoutExpired, OSError, ValueError):
+                    pass
+                return AgentReply(text="", error=TIMEOUT_ERROR)
+            stderr = (err or b"").decode("utf-8", errors="replace").strip()
+            stdout = (out or b"").decode("utf-8", errors="replace")
         try:
             text = out_file.read_text(encoding="utf-8").strip()
         except OSError:
@@ -510,6 +665,7 @@ async def run(
     deny_paths=(),
     access: str | None = None,
     work_dirs=(),
+    on_event=None,
 ) -> AgentReply:
     """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
     `llm.proxy`: Codex системный прокси Windows сам не видит.
@@ -528,7 +684,12 @@ async def run(
     рабочая папка — первая из `allowed_dirs` (папка встречи). None — как в
     0.3.6.
 
-    `model` — `-m` (см. модуль); негодное имя — ошибка без запуска Codex."""
+    `model` — `-m` (см. модуль); негодное имя — ошибка без запуска Codex.
+
+    `on_event` — ход работы по ходу вызова: события `tool_use`/`tool_result`
+    (`ToolStream`) приходят в цикл событий вызывающего, пока Codex работает
+    (с `--json`); прерванные вызовы закрываются «прервано». `reply.tools` —
+    те же события после вызова, как и без `on_event`."""
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса Codex: {resume!r}")
     if model_error(model):
@@ -554,6 +715,7 @@ async def run(
         reply = await asyncio.to_thread(
             _exec, exe, workdir, stdin_text, timeout_s, env, effort,
             sent, keep_session, resume, call, access, tuple(work_dirs or ()), model,
+            on_event, asyncio.get_running_loop() if on_event is not None else None,
         )
     except asyncio.CancelledError:
         call.cancel()  # «Стоп»: процесс Codex убит, поток дочитает и выйдет

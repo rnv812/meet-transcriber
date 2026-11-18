@@ -29,6 +29,10 @@ __all__ = ["AUTO_PROVIDERS", "DEFAULT_CLAUDE_MODEL", "LABELS", "NO_VISION_NOTE",
 # локальная модель (решение концепции) — нет: runner параметр `images`
 # принимает и игнорирует, окно показывает NO_VISION_NOTE.
 VISION_PROVIDERS = ("claude-code", "codex")
+# Чьи вызовы инструментов приходят в чат по ходу вызова (`run(on_event=…)`):
+# Codex — построчно из `--json`. OpenCode — после вызова (`AgentReply.tools`);
+# у Claude Code свой поток (`claude_stream`), не runner.
+STREAMING_PROVIDERS = ("codex",)
 # Кто продолжает свой сеанс нативно (v4-design §12): Claude Code `--resume`,
 # Codex `exec resume`, OpenCode `--session`. Локальная модель — только затравкой.
 RESUME_PROVIDERS = ("claude-code", "codex", "opencode")

@@ -740,3 +740,215 @@ def test_user_turn_is_approve_for_me_never_sandbox():
             args = codex.access_args("user", servers, windows_sandbox=sandbox)
             assert "--approve-for-me" in args
             assert not any(a in ("--sandbox", "-s") or a.startswith("--sandbox=") for a in args)
+
+
+# --- строки инструментов по ходу (`on_event`) ---------------------------------------------
+
+
+def _line(obj) -> bytes:
+    return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+CMD_STARTED = {"type": "item.started", "item": {"id": "item_1", "type": "command_execution",
+                                                "command": "npm test", "status": "in_progress"}}
+CMD_DONE = {"type": "item.completed", "item": {"id": "item_1", "type": "command_execution",
+                                               "command": "npm test", "aggregated_output": "ok\n",
+                                               "exit_code": 0, "status": "completed"}}
+
+
+class StreamPopen:
+    """Codex, который пишет события по строке: шаг `"wait"` ждёт `release`,
+    `"hang"` — пока процесс не убьют. stdin пишется и закрывается."""
+
+    calls = []
+    script = []
+    release = None
+    answer = "ответ"
+
+    def __init__(self, cmd, **kw):
+        import io
+        import threading
+
+        self.cmd, self.kw, self.pid, self.returncode = cmd, kw, 5151, None
+        self.killed = threading.Event()
+        self.done = threading.Event()
+        self.stdin = io.BytesIO()
+        self.stdin_closed = False
+        self.stdin.close = self._close_stdin
+        self.stdout = self._out()
+        self.stderr = iter([b"warn\n"])
+        StreamPopen.calls.append(self)
+
+    def _close_stdin(self):
+        self.stdin_closed = True
+
+    def _out(self):
+        try:
+            for step in StreamPopen.script:
+                if step == "wait":
+                    while not StreamPopen.release.wait(0.01):
+                        if self.killed.is_set():
+                            return
+                    continue
+                if step == "hang":
+                    self.killed.wait(10)
+                    return
+                if self.killed.is_set():
+                    return
+                yield _line(step)
+            out = self.cmd[self.cmd.index("--output-last-message") + 1]
+            with open(out, "w", encoding="utf-8") as f:
+                f.write(StreamPopen.answer)
+        finally:
+            self.done.set()
+
+    def wait(self, timeout=None):
+        if not self.done.wait(timeout):
+            raise subprocess.TimeoutExpired(self.cmd, timeout)
+        if self.returncode is None:
+            self.returncode = -9 if self.killed.is_set() else 0
+        return self.returncode
+
+    def communicate(self, input=None, timeout=None):
+        raise AssertionError("потоковый вызов не ждёт communicate")
+
+    def kill(self):
+        self.killed.set()
+
+
+def _stream_setup(monkeypatch, script):
+    import threading
+
+    StreamPopen.calls, StreamPopen.script = [], list(script)
+    StreamPopen.release = threading.Event()
+    monkeypatch.setattr(codex, "find_codex", lambda: "C:/codex.exe")
+    monkeypatch.setattr(codex.subprocess, "Popen", StreamPopen)
+    killed = []
+
+    def fake_kill(proc):
+        killed.append(proc.pid)
+        proc.kill()
+
+    monkeypatch.setattr(codex, "_kill_tree", fake_kill)
+    return killed
+
+
+async def _until(cond, timeout=5.0):
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not cond():
+        assert loop.time() < end, "не дождались"
+        await asyncio.sleep(0.005)
+
+
+def test_tool_row_arrives_while_codex_still_runs(monkeypatch, tmp_path):
+    """`item.started` → вызов, `item.completed` → результат, в цикл событий по
+    ходу; ход ещё идёт, а строка уже есть. Вызов — с `--json`, stdin записан
+    и закрыт; `reply.tools` — как прежде."""
+    _stream_setup(monkeypatch, [{"type": "turn.started"}, CMD_STARTED, "wait", CMD_DONE])
+    events = []
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+
+        def on_event(ev):
+            assert asyncio.get_running_loop() is loop       # в цикле событий, не в потоке чтения
+            events.append(ev)
+
+        task = asyncio.create_task(codex.run("Вопрос?", system_prompt="s", cwd=tmp_path, on_event=on_event))
+        await _until(lambda: events)
+        assert not task.done()
+        assert events == [{"type": "tool_use", "id": "item_1", "name": "Bash", "server": None, "tool": "Bash",
+                           "input": {"command": "npm test"}, "parent": None}]
+        StreamPopen.release.set()
+        return await task
+
+    reply = asyncio.run(scenario())
+    assert reply.text == "ответ" and reply.error is None
+    assert [e["type"] for e in events] == ["tool_use", "tool_result"]
+    assert events[1]["ok"] is True and events[1]["output"] == "ok\n"
+    call = StreamPopen.calls[0]
+    assert "--json" in call.cmd and call.stdin_closed
+    assert call.stdin.getvalue().decode("utf-8") == "s\n\nВопрос?"
+    assert [e["type"] for e in reply.tools] == ["tool_use", "tool_result"]
+
+
+def test_cancel_mid_stream_kills_the_tree_and_closes_open_rows(monkeypatch, tmp_path):
+    killed = _stream_setup(monkeypatch, [CMD_STARTED, "hang"])
+    events = []
+
+    async def scenario():
+        task = asyncio.create_task(codex.run("x", system_prompt="s", cwd=tmp_path, on_event=events.append))
+        await _until(lambda: events)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await _until(lambda: len(events) == 2)
+
+    asyncio.run(scenario())
+    assert killed == [5151]
+    assert events[1] == {"type": "tool_result", "id": "item_1", "ok": False, "output": "прервано",
+                         "truncated": False, "duration_ms": None, "parent": None}
+
+
+def test_timeout_mid_stream_kills_the_tree(monkeypatch, tmp_path):
+    killed = _stream_setup(monkeypatch, [CMD_STARTED, "hang"])
+    events = []
+
+    async def scenario():
+        reply = await codex.run("x", system_prompt="s", cwd=tmp_path, timeout_s=0.3, on_event=events.append)
+        await _until(lambda: len(events) == 2)
+        return reply
+
+    reply = asyncio.run(scenario())
+    assert reply.error == "таймаут вызова модели" and killed == [5151]
+    assert events[1]["ok"] is False and events[1]["output"] == "прервано"
+
+
+def test_streamed_items_of_every_kind(monkeypatch, tmp_path):
+    """Веб-поиск без запроса в начале — строка при завершении (запрос уже
+    есть); завершённый без начала — вызов и результат сразу; чужие элементы
+    (рассуждения, сообщения) — не строки."""
+    _stream_setup(monkeypatch, [
+        {"type": "item.started", "item": {"id": "w1", "type": "web_search", "query": ""}},
+        {"type": "item.completed", "item": {"id": "r1", "type": "reasoning", "text": "думаю"}},
+        {"type": "item.completed", "item": {"id": "w1", "type": "web_search", "query": "codex json"}},
+        {"type": "item.started", "item": {"id": "m1", "type": "mcp_tool_call", "server": "jira", "tool": "get",
+                                          "arguments": {"key": "A-1"}, "status": "in_progress"}},
+        {"type": "item.completed", "item": {"id": "m1", "type": "mcp_tool_call", "server": "jira", "tool": "get",
+                                            "arguments": {"key": "A-1"}, "status": "failed",
+                                            "error": {"message": "нет доступа"}}},
+        {"type": "item.completed", "item": {"id": "f1", "type": "file_change", "status": "completed",
+                                            "changes": [{"path": "a.md", "kind": "update"}]}},
+        {"type": "item.completed", "item": {"id": "a1", "type": "agent_message", "text": "{}"}},
+    ])
+    events = []
+    reply = asyncio.run(codex.run("x", system_prompt="s", cwd=tmp_path, on_event=events.append))
+    assert reply.error is None
+    assert [(e["type"], e["id"]) for e in events] == [
+        ("tool_use", "w1"), ("tool_result", "w1"), ("tool_use", "m1"), ("tool_result", "m1"),
+        ("tool_use", "f1"), ("tool_result", "f1")]
+    assert events[0]["input"] == {"query": "codex json"}
+    assert events[2]["name"] == "mcp__jira__get" and events[3]["ok"] is False and events[3]["output"] == "нет доступа"
+    assert events[4]["name"] == "apply_patch" and events[5]["output"] == "update: a.md"
+
+
+def test_on_event_on_a_closed_loop_is_ignored(monkeypatch, tmp_path):
+    """Цикл событий закрыт (ассистент выходит) — события молча пропадают."""
+    import threading
+
+    _stream_setup(monkeypatch, [CMD_STARTED, CMD_DONE])
+    loop = asyncio.new_event_loop()
+    loop.close()
+    out = []
+    t = threading.Thread(target=lambda: out.append(codex._exec(
+        "C:/codex.exe", str(tmp_path), "x", 30, on_event=lambda e: None, loop=loop)))
+    t.start()
+    t.join(10)
+    assert out and out[0].text == "ответ"
+
+
+def test_without_on_event_the_call_is_as_before(monkeypatch, tmp_path):
+    _setup(monkeypatch)
+    _run(cwd=tmp_path)
+    assert "--json" not in FakePopen.calls[0].cmd

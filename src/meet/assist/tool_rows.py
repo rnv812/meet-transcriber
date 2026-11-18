@@ -2,9 +2,9 @@
 
 Каждый вызов инструмента агента — строка ленты у его хода, по мере
 выполнения. Источник — события `claude_stream` (`send(on_event=…)`:
-`tool_use`, `gate`, `tool_result`, `hook`), у Codex и OpenCode — события их
-вывода после вызова (`codex.tool_events`, `opencode.tool_events`), в том же
-виде.
+`tool_use`, `gate`, `tool_result`, `hook`), у Codex — построчно по ходу
+вызова (`codex.ToolStream`), у OpenCode — события его вывода после вызова
+(`opencode.tool_events`), в том же виде.
 
 Запись журнала — `kind: "tool"`, `event: "call"` (запросы `read` / `search` /
 `list` запасного пути — те же `kind: "tool"`, но `event: request|result`,

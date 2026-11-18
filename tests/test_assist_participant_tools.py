@@ -90,25 +90,6 @@ def test_agents_own_skill_call_in_a_user_turn_goes_auto_and_is_a_skill_row(tmp_p
     assert row["gate"]["label"] == "разрешено автоматически"
 
 
-def test_codex_tools_arrive_after_the_call(tmp_path):
-    reply = AgentReply(text='{"say": "Готово"}', tools=[
-        {"type": "tool_use", "id": "i1", "name": "Bash", "server": None, "tool": "Bash",
-         "input": {"command": "npm test"}, "parent": None},
-        {"type": "tool_result", "id": "i1", "ok": False, "output": "1 failing\n", "truncated": False,
-         "duration_ms": None, "parent": None}])
-    h = _make(tmp_path, provider="codex", runner=FakeRunner([reply]), freedom=True)
-
-    async def main():
-        await h.p.start()
-        await h.p.post_user_message("прогони тесты")
-        await h.p.tick()
-        await h.p.shutdown()
-
-    run(main())
-    (row,) = _rows(h)
-    assert row["status"] == "error" and row["error"] == "1 failing" and row["reply"] == agents(h)[0]["id"]
-
-
 def test_consent_card_carries_its_tool_use_id(tmp_path):
     h = _make(tmp_path, freedom=True)
 
@@ -200,3 +181,81 @@ def test_from_settings_reads_roles_from_the_voices_folder(tmp_path):
     folder.mkdir(parents=True)
     p = from_settings(cfg, TranscriptBus(), folder, "claude-code", None, log=lambda _m: None)
     assert p._roles(["Олег", "Спикер 2"]) == {"Олег": "CTO"}
+
+
+# --- Codex: строки по ходу -------------------------------------------------------------------
+
+USE = {"type": "tool_use", "id": "i1", "name": "Bash", "server": None, "tool": "Bash",
+       "input": {"command": "npm test"}, "parent": None}
+RESULT = {"type": "tool_result", "id": "i1", "ok": False, "output": "1 failing\n", "truncated": False,
+          "duration_ms": None, "parent": None}
+
+
+class StreamRunner:
+    """Codex с `on_event`: строка вызова приходит, пока ход идёт; ответ несёт
+    те же события в `tools` (как настоящий `codex.run`)."""
+
+    def __init__(self, h_ref):
+        self.h_ref = h_ref
+        self.calls = []
+        self.seen_before_return = None
+
+    async def __call__(self, prompt, **kwargs):
+        self.calls.append((prompt, kwargs))
+        on_event = kwargs.get("on_event")
+        if on_event is not None:
+            on_event(dict(USE))
+            h = self.h_ref[0]
+            for _ in range(500):
+                if _rows(h):
+                    break
+                await asyncio.sleep(0.01)
+            self.seen_before_return = [dict(r) for r in _rows(h)]
+            on_event(dict(RESULT))
+        return AgentReply(text='{"say": "Готово"}', tools=[dict(USE), dict(RESULT)])
+
+
+def test_codex_tool_rows_arrive_during_the_call_once(tmp_path):
+    ref = []
+    runner = StreamRunner(ref)
+    h = _make(tmp_path, provider="codex", runner=runner, freedom=True)
+    ref.append(h)
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("прогони тесты")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert callable(runner.calls[0][1].get("on_event"))
+    (early,) = runner.seen_before_return                     # строка — до конца вызова
+    assert early["status"] == "running" and early["summary"] == "npm test"
+    (row,) = _rows(h)                                        # события после хода не проигрываются
+    assert row["status"] == "error" and row["error"] == "1 failing" and row["reply"] == agents(h)[0]["id"]
+    patches = [d for name, d in h.events if name == "chat" and d.get("op") == "patch"
+               and d.get("id") == row["id"]]
+    assert len(patches) <= 1
+
+
+def test_opencode_tools_still_arrive_after_the_call(tmp_path):
+    reply = AgentReply(text='{"say": "Готово"}', tools=[dict(USE), dict(RESULT)])
+    runner = FakeRunner([reply])
+    h = _make(tmp_path, provider="opencode", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("прогони тесты")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert "on_event" not in runner.calls[0][1]
+    (row,) = _rows(h)
+    assert row["status"] == "error" and row["error"] == "1 failing" and row["reply"] == agents(h)[0]["id"]
+
+
+def test_streaming_providers_list():
+    from meet import llm
+
+    assert llm.STREAMING_PROVIDERS == ("codex",)

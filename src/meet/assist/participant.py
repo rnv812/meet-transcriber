@@ -319,6 +319,11 @@ class _RunnerSession:
             # Codex и OpenCode не умеют: в режиме `confirm` просьба — только чтение.
             extra["access"] = consent.READ if level == consent.USER and self._mode != consent.MODE_AUTO else level
             extra["work_dirs"] = self._work
+        from meet import llm
+
+        streams = self._provider in llm.STREAMING_PROVIDERS
+        if streams and on_event is not None:
+            extra["on_event"] = on_event
         reply = await self._runner(text, system_prompt=self._system(), images=list(images or ()),
                                    deny_paths=self._deny, allowed_dirs=self._allowed,
                                    timeout_s=timeout_s, max_turns=12, on_text=on_text,
@@ -328,8 +333,9 @@ class _RunnerSession:
                 self.session_id = None
             elif reply.session_id:
                 self.session_id = reply.session_id
-        # Ход работы Codex и OpenCode виден только после вызова (их события).
-        if on_event is not None:
+        # Ход работы OpenCode виден только после вызова (его события); Codex
+        # прислал их по ходу (`llm.STREAMING_PROVIDERS`) — повтор дал бы лишние патчи.
+        if on_event is not None and not streams:
             for event in getattr(reply, "tools", None) or ():
                 on_event(event)
         return reply
@@ -804,8 +810,9 @@ class Participant:
     def on_tool_event(self, event: dict) -> None:
         """Ход работы в чате (0.4, спец. §3 «как в Claude CLI»): событие вызова
         инструмента (`claude_stream` — `send(on_event=…)` по мере хода: `tool_use`,
-        `gate`, `tool_result`, `hook`; Codex и OpenCode — после вызова, из их
-        событий) → запись журнала `kind: "tool"`, `event: "call"` и её патчи по
+        `gate`, `tool_result`, `hook`; Codex — тоже по ходу, `run(on_event=…)`,
+        `llm.STREAMING_PROVIDERS`; OpenCode — после вызова, из его событий) →
+        запись журнала `kind: "tool"`, `event: "call"` и её патчи по
         id вызова (`tool_rows.ToolRows`), `reply` — реплика агента этого хода.
         Зовётся в цикле событий; журнал пишется в его потоке по порядку
         событий, событие `chat` окну — по готовности. В журнал процесса —
