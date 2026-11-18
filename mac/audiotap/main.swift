@@ -17,7 +17,17 @@
 //       раза в 5 с (со счётчиком пропущенных).
 //   meet-audiotap --mic-users
 //       Одна строка JSON: процессы, которые сейчас слушают микрофон или
-//       играют звук (CoreAudio, macOS 14+; раньше — "supported": false).
+//       играют звук (CoreAudio, macOS 14+; раньше — "supported": false), у
+//       каждого — "input_devices": UID устройств ввода, которые он слушает.
+//   meet-audiotap --watch-devices
+//       Пока открыт stdin: строка JSON сразу и на каждую перемену —
+//       {"meet_audiotap": 1, "watch": "start" | "default" | "devices" | "alive",
+//       "default_input": {"uid", "name", "transport", "alive"} | null,
+//       "inputs": [...]}: устройство ввода по умолчанию и все устройства ввода,
+//       тип подключения ("builtin", "bluetooth", "usb"…). Повод — смена
+//       устройства по умолчанию, списка устройств или «живости» устройства по
+//       умолчанию (AudioObjectAddPropertyListenerBlock); одинаковые строки
+//       подряд не повторяются.
 //   meet-audiotap --self-test
 //       Версия и возможности одной строкой JSON; разрешений не требует (CI).
 //   meet-audiotap --preflight
@@ -148,6 +158,7 @@ func selfTest() -> Never {
         "mic_users": micUsers,
         "exclude_pid": true,
         "permissions": true,
+        "watch_devices": true,
         "format": "s16le",
     ])
     exit(exitOK)
@@ -172,7 +183,6 @@ func processName(_ pid: pid_t) -> String {
     return length > 0 ? String(cString: buffer) : ""
 }
 
-@available(macOS 14.0, *)
 func readUInt32(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
     var address = AudioObjectPropertyAddress(
         mSelector: selector,
@@ -196,10 +206,10 @@ func readPID(_ object: AudioObjectID) -> pid_t? {
     return status == noErr ? value : nil
 }
 
-@available(macOS 14.0, *)
-func readBundleID(_ object: AudioObjectID) -> String {
+/// Свойство-строка объекта CoreAudio (UID, имя, bundle id процесса); нет — "".
+func readString(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String {
     var address = AudioObjectPropertyAddress(
-        mSelector: kAudioProcessPropertyBundleID,
+        mSelector: selector,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
     var value: Unmanaged<CFString>?
@@ -209,21 +219,31 @@ func readBundleID(_ object: AudioObjectID) -> String {
     return text as String
 }
 
-@available(macOS 14.0, *)
-func audioProcesses() -> [[String: Any]]? {
+/// Массив объектов CoreAudio в свойстве (устройства системы, процессы,
+/// устройства процесса); не прочитался — nil.
+func readObjects(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                 scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID]? {
     var address = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyProcessObjectList,
-        mScope: kAudioObjectPropertyScopeGlobal,
+        mSelector: selector,
+        mScope: scope,
         mElement: kAudioObjectPropertyElementMain)
-    let system = AudioObjectID(kAudioObjectSystemObject)
     var size: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else {
+    guard AudioObjectGetPropertyDataSize(object, &address, 0, nil, &size) == noErr else {
         return nil
     }
     let count = Int(size) / MemoryLayout<AudioObjectID>.size
     if count == 0 { return [] }
     var objects = [AudioObjectID](repeating: 0, count: count)
-    guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &objects) == noErr else {
+    guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &objects) == noErr else {
+        return nil
+    }
+    return Array(objects.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
+}
+
+@available(macOS 14.0, *)
+func audioProcesses() -> [[String: Any]]? {
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    guard let objects = readObjects(system, kAudioHardwarePropertyProcessObjectList) else {
         return nil
     }
     var found: [[String: Any]] = []
@@ -231,12 +251,19 @@ func audioProcesses() -> [[String: Any]]? {
         guard let pid = readPID(object) else { continue }
         let input = (readUInt32(object, kAudioProcessPropertyIsRunningInput) ?? 0) != 0
         let output = (readUInt32(object, kAudioProcessPropertyIsRunningOutput) ?? 0) != 0
+        // Какие устройства ввода процесс слушает: резидент так отличает звонок
+        // со встроенного микрофона от звонка с микрофона Bluetooth-наушников.
+        let inputDevices = (readObjects(object, kAudioProcessPropertyDevices,
+                                        scope: kAudioObjectPropertyScopeInput) ?? [])
+            .map { readString($0, kAudioDevicePropertyDeviceUID) }
+            .filter { !$0.isEmpty }
         found.append([
             "pid": Int(pid),
             "name": processName(pid),
-            "bundle": readBundleID(object),
+            "bundle": readString(object, kAudioProcessPropertyBundleID),
             "input": input,
             "output": output,
+            "input_devices": inputDevices,
         ])
     }
     return found
@@ -255,6 +282,152 @@ func micUsers() -> Never {
                    "note": "нужна macOS 14 или новее", "processes": [Any]()])
     }
     exit(exitOK)
+}
+
+// MARK: - --watch-devices
+
+/// Тип подключения устройства (kAudioDevicePropertyTransportType) — словом.
+func transportName(_ device: AudioObjectID) -> String {
+    switch readUInt32(device, kAudioDevicePropertyTransportType) ?? kAudioDeviceTransportTypeUnknown {
+    case kAudioDeviceTransportTypeBuiltIn: return "builtin"
+    case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return "bluetooth"
+    case kAudioDeviceTransportTypeUSB: return "usb"
+    case kAudioDeviceTransportTypeVirtual: return "virtual"
+    case kAudioDeviceTransportTypeAggregate: return "aggregate"
+    case kAudioDeviceTransportTypeAirPlay: return "airplay"
+    case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort: return "display"
+    case kAudioDeviceTransportTypeThunderbolt: return "thunderbolt"
+    case kAudioDeviceTransportTypeUnknown: return "unknown"
+    default: return "other"
+    }
+}
+
+/// Есть ли у устройства потоки ввода (микрофон, BlackHole), а не только вывод.
+func hasInput(_ device: AudioObjectID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyStreams,
+        mScope: kAudioObjectPropertyScopeInput,
+        mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
+}
+
+func deviceInfo(_ device: AudioObjectID) -> [String: Any] {
+    return [
+        "uid": readString(device, kAudioDevicePropertyDeviceUID),
+        "name": readString(device, kAudioObjectPropertyName),
+        "transport": transportName(device),
+        "alive": (readUInt32(device, kAudioDevicePropertyDeviceIsAlive) ?? 0) != 0,
+    ]
+}
+
+func defaultInputDevice() -> AudioObjectID? {
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    guard let device = readUInt32(system, kAudioHardwarePropertyDefaultInputDevice),
+          device != kAudioObjectUnknown
+    else { return nil }
+    return device
+}
+
+/// Слежение за устройствами ввода: все обратные вызовы CoreAudio и печать —
+/// на одной последовательной очереди.
+final class DeviceWatch {
+    private let queue = DispatchQueue(label: "meet-audiotap.devices")
+    private let system = AudioObjectID(kAudioObjectSystemObject)
+    /// Устройство по умолчанию, чью «живость» слушаем, и его подписка.
+    private var aliveDevice = AudioObjectID(kAudioObjectUnknown)
+    private var aliveListener: AudioObjectPropertyListenerBlock?
+    private var lastState: NSDictionary?
+
+    func start() {
+        queue.async {
+            self.listen(kAudioHardwarePropertyDefaultInputDevice, "default")
+            self.listen(kAudioHardwarePropertyDevices, "devices")
+            self.followDefault()
+            self.report("start")
+        }
+    }
+
+    private func listen(_ selector: AudioObjectPropertySelector, _ reason: String) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectAddPropertyListenerBlock(system, &address, queue) { [weak self] _, _ in
+            self?.changed(reason)
+        }
+        if status != noErr {
+            printError("CoreAudio: подписка на устройства не удалась (\(status))")
+        }
+    }
+
+    private func changed(_ reason: String) {
+        followDefault()
+        report(reason)
+    }
+
+    /// Слушать «живость» устройства ввода по умолчанию; сменилось — переподписаться.
+    private func followDefault() {
+        let current = defaultInputDevice() ?? AudioObjectID(kAudioObjectUnknown)
+        guard current != aliveDevice else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        if let block = aliveListener {
+            _ = AudioObjectRemovePropertyListenerBlock(aliveDevice, &address, queue, block)
+        }
+        aliveDevice = current
+        aliveListener = nil
+        guard current != kAudioObjectUnknown else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed("alive") }
+        if AudioObjectAddPropertyListenerBlock(current, &address, queue, block) == noErr {
+            aliveListener = block
+        }
+    }
+
+    /// Строка о текущих устройствах; такая же, как прошлая, — не печатается.
+    private func report(_ reason: String) {
+        let inputs = (readObjects(system, kAudioHardwarePropertyDevices) ?? [])
+            .filter(hasInput).map(deviceInfo)
+        var state: [String: Any] = ["inputs": inputs]
+        if let device = defaultInputDevice() {
+            state["default_input"] = deviceInfo(device)
+        } else {
+            state["default_input"] = NSNull()
+        }
+        let snapshot = NSDictionary(dictionary: state)
+        if let last = lastState, last.isEqual(snapshot) { return }
+        lastState = snapshot
+        state["meet_audiotap"] = protocolVersion
+        state["watch"] = reason
+        printJSON(state)
+    }
+}
+
+var watchHolder: DeviceWatch?
+
+func watchDevices() -> Never {
+    signal(SIGPIPE, SIG_IGN)
+    // Уведомления HAL — на его собственном потоке, а не на главном цикле
+    // событий (у программы командной строки он не крутится).
+    var runLoop: CFRunLoop? = nil
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyRunLoop,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    _ = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+                                   UInt32(MemoryLayout<CFRunLoop?>.size), &runLoop)
+    let watch = DeviceWatch()
+    watchHolder = watch
+    watch.start()
+    // Конец stdin — запись кончилась (или резидент умер): выходим.
+    Thread.detachNewThread {
+        var byte: UInt8 = 0
+        while Darwin.read(STDIN_FILENO, &byte, 1) > 0 {}
+        exit(exitOK)
+    }
+    dispatchMain()
 }
 
 // MARK: - --stream
@@ -518,9 +691,11 @@ case "--request-mic"?:
     requestMic()
 case "--request-screen"?:
     requestScreen()
+case "--watch-devices"?:
+    watchDevices()
 case "--stream"?:
     runStream(arguments)
 default:
-    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] | --mic-users | --preflight | --mic-status | --request-mic | --request-screen | --self-test")
+    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] | --mic-users | --watch-devices | --preflight | --mic-status | --request-mic | --request-screen | --self-test")
     exit(exitUsage)
 }

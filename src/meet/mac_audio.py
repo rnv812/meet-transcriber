@@ -12,6 +12,12 @@ macOS у PortAudio нет loopback'а, а сам PyAudio без Homebrew не с
   отдающий PCM в stdout (`meet.audiotap`). В списке устройств он —
   виртуальное устройство SYSTEM_AUDIO_NAME с индексом TAP_INDEX.
 
+Смену микрофона по умолчанию, пропажу устройства и тип подключения (Bluetooth,
+встроенный) сообщает тот же помощник в режиме `--watch-devices`
+(`DeviceWatcher`): запись по ним переоткрывает дорожку микрофона и не берёт
+микрофон Bluetooth-наушников, которые программа звонка не слушает
+(`bluetooth_substitute`).
+
 Запасной путь для звука собеседников — виртуальное устройство ввода
 (BlackHole): его выбирают в настройках звука как «устройство вывода», и
 дорожка пишется с него как с обычного устройства ввода.
@@ -21,6 +27,7 @@ IMPORTANT: как и у PyAudio, инициализация PortAudio одна �
 `terminate()` и нового `PyAudio()`.
 """
 
+import os
 import queue
 import subprocess
 import threading
@@ -48,8 +55,13 @@ STALL_S = 10.0
 # последние строки — для текста ошибки.
 STDERR_LOG_EVERY_S = 5.0
 STDERR_TAIL = 20
-# Запуск помощника — точка подмены для тестов.
+# Слежение за устройствами (`--watch-devices`): сколько ждать первой строки на
+# старте (по ней — базовая точка смены устройства) и для списка в настройках.
+WATCH_FIRST_S = 0.5
+WATCH_LIST_S = 2.0
+# Запуск помощника — точка подмены для тестов; у слежения за устройствами — своя.
 _popen = subprocess.Popen
+_watch_popen = subprocess.Popen
 
 
 def _sd():
@@ -411,6 +423,104 @@ class TapStream:
             pass
 
 
+class DeviceWatcher:
+    """Устройства ввода по CoreAudio: `meet-audiotap --watch-devices` на время
+    записи. `snapshot` — последняя строка помощника (`audiotap.parse_devices`):
+    устройство ввода по умолчанию, живо ли оно, его тип подключения и все
+    устройства ввода. None — следить нечем: помощника нет, он прежний (режима
+    не знает) или замолчал; тогда запись, как раньше, переоткрывает микрофон
+    только по смерти потока.
+
+    PortAudio смену устройства по умолчанию сам не видит (список у живого
+    инстанса заморожен) — смену сообщает помощник, а переоткрывает дорожку
+    запись (`recorder._MacEndpoints`)."""
+
+    def __init__(self, popen=None, helper: "str | None" = None) -> None:
+        self._popen = popen
+        self._helper = helper
+        self._proc = None
+        self._first = threading.Event()
+        self.snapshot: "dict | None" = None
+        # Помощник закрыл stdout (вышел или не запустился).
+        self.done = False
+
+    def start(self, wait: float = WATCH_FIRST_S) -> None:
+        """Запустить помощника и подождать первую строку не дольше `wait`."""
+        helper = self._helper or audiotap.helper_path()
+        if not helper:
+            self.done = True
+            return
+        try:
+            self._proc = (self._popen or _watch_popen)(
+                audiotap.watch_command(helper),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, ValueError):
+            self.done = True
+            return
+        threading.Thread(target=self._read, name="meet-audiotap-devices", daemon=True).start()
+        self._first.wait(wait)
+
+    def _read(self) -> None:
+        stdout = self._proc.stdout
+        try:
+            while True:
+                raw = stdout.readline()
+                if not raw:
+                    break
+                snap = audiotap.parse_devices(raw.decode("utf-8", errors="replace"))
+                if snap is not None:
+                    self.snapshot = snap
+                    self._first.set()
+        except (OSError, ValueError):
+            pass
+        # Помощник замолчал: о текущих устройствах он больше не знает.
+        self.snapshot = None
+        self.done = True
+        self._first.set()
+
+    def close(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()  # помощник выходит по концу stdin
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=STOP_TIMEOUT_S)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=STOP_TIMEOUT_S)
+            except Exception:
+                pass
+
+
+def bluetooth_substitute(snapshot: "dict | None", current: str, users) -> "str | None":
+    """Встроенный микрофон вместо Bluetooth-наушников — его имя или None.
+
+    Микрофон наушников, открытый записью, переводит их в режим гарнитуры
+    (узкая полоса, моно): собеседники в ушах звучат «как по телефону». Если
+    программа звонка его не слушает, запись берёт встроенный. Условия: `current`
+    (что запись собиралась открыть) — устройство ввода по умолчанию, оно —
+    Bluetooth, встроенный микрофон есть и жив, и никто, кроме записи, не
+    слушает наушники (`users()` — `audiotap.mic_users`, зовётся только тогда)."""
+    if not snapshot:
+        return None
+    default = snapshot.get("default")
+    if (not default or default["transport"] != audiotap.TRANSPORT_BLUETOOTH
+            or default["name"] != current):
+        return None
+    builtin = next((dev for dev in snapshot.get("inputs") or ()
+                    if dev["transport"] == audiotap.TRANSPORT_BUILTIN and dev["alive"]), None)
+    if builtin is None:
+        return None
+    if audiotap.bluetooth_mic_in_use(users(), default["uid"], own_pids={os.getpid()}):
+        return None
+    return builtin["name"]
+
+
 def _time_info(captured: float) -> dict:
     """time_info для callback'а в форме PyAudio, часы — `time.monotonic()`."""
     return {"input_buffer_adc_time": captured, "current_time": time.monotonic(),
@@ -468,7 +578,23 @@ def list_devices(p: PyAudio) -> dict:
             inputs.append(dev["name"])
     outputs = [{"name": SYSTEM_AUDIO_NAME, "default": True}] if audiotap.helper_path() else []
     outputs += [{"name": n, "default": False} for n in inputs]
-    return {
-        "inputs": [{"name": n, "default": n == default_in} for n in inputs],
-        "outputs": outputs,
-    }
+    transports = _transports()
+
+    def item(name: str) -> dict:
+        found = {"name": name, "default": name == default_in}
+        if transports.get(name):
+            found["transport"] = transports[name]
+        return found
+
+    return {"inputs": [item(n) for n in inputs], "outputs": outputs}
+
+
+def _transports() -> dict:
+    """Тип подключения устройств ввода по имени (`bluetooth`, `builtin`…) — один
+    вопрос помощнику `--watch-devices`; ответа нет — пусто: в списке настроек
+    тип просто не указан."""
+    watcher = DeviceWatcher()
+    watcher.start(wait=WATCH_LIST_S)
+    snap = watcher.snapshot
+    watcher.close()
+    return {dev["name"]: dev["transport"] for dev in (snap or {}).get("inputs") or ()}

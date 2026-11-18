@@ -5,6 +5,7 @@
  */
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type * as api from "../../lib/api";
 import { SoundSection } from "./SoundSection";
@@ -51,4 +52,59 @@ test("другое устройство ввода — тихая строка: 
   expect(other()).toHaveTextContent(
     "Это устройство ввода: сюда должен приходить звук звонка (BlackHole и т. п.). Микрофон наушников не подойдёт — выберите «Системный звук».");
   expect(other()).not.toHaveTextContent("ваш микрофон");
+});
+
+/** Системный микрофон — AirPods (Bluetooth), рядом — встроенный. */
+const bluetooth: api.Devices = {
+  ...devices,
+  inputs: [{ name: "AirPods Анны", default: true, transport: "bluetooth" },
+    { name: "Микрофон MacBook", default: false, transport: "builtin" }, { name: "BlackHole 2ch", default: false }],
+};
+
+function Editable({ recording, list = bluetooth, onDraft }: {
+  recording: Record<string, unknown>; list?: api.Devices; onDraft?: (d: Raw) => void;
+}) {
+  const [draft, setDraft] = useState<Raw>({ recording });
+  return (
+    <SoundSection draft={draft} devices={list} endpoint={ep}
+      set={(g, k, v) => setDraft((cur) => {
+        const next = { ...cur, [g]: { ...(cur[g] ?? {}), [k]: v } };
+        onDraft?.(next);
+        return next;
+      })} />
+  );
+}
+
+const mic = () => screen.getByRole("group", { name: "Микрофон" });
+const BT_SWITCH = "Не брать микрофон Bluetooth-наушников";
+
+test("системный микрофон — Bluetooth-наушники: строка, что Meet запишет встроенный", () => {
+  render(<Editable recording={{ mic_device: null }} />);
+  expect(mic()).toHaveTextContent(
+    "«AirPods Анны» — Bluetooth-наушники. Если программа звонка не слушает их микрофон, Meet запишет "
+    + "«Микрофон MacBook»: так звук собеседников в наушниках не станет хуже.");
+  expect(screen.getByRole("switch", { name: BT_SWITCH })).toHaveAttribute("aria-checked", "true");
+});
+
+test("переключатель выключен — предупреждение вместо подмены; включение пишет в черновик", async () => {
+  const drafts: Raw[] = [];
+  render(<Editable recording={{ mic_device: null, skip_bluetooth_mic: false }} onDraft={(d) => drafts.push(d)} />);
+  expect(mic()).toHaveTextContent(
+    "«AirPods Анны» — Bluetooth-наушники: пока Meet пишет их микрофон, собеседники в наушниках могут звучать хуже.");
+  await userEvent.click(screen.getByRole("switch", { name: BT_SWITCH }));
+  expect(drafts.at(-1)?.recording?.skip_bluetooth_mic).toBe(true);
+  expect(mic()).toHaveTextContent("Meet запишет «Микрофон MacBook»");
+});
+
+test("строки нет: микрофон выбран вручную, системный не Bluetooth или встроенного нет", () => {
+  const { unmount } = render(<Editable recording={{ mic_device: { name: "AirPods Анны" } }} />);
+  expect(mic()).not.toHaveTextContent("Bluetooth-наушники");
+  unmount();
+  const wired = { ...bluetooth, inputs: [{ name: "Микрофон MacBook", default: true, transport: "builtin" }] };
+  const second = render(<Editable recording={{ mic_device: null }} list={wired} />);
+  expect(mic()).not.toHaveTextContent("Bluetooth-наушники");
+  second.unmount();
+  const mini = { ...bluetooth, inputs: [{ name: "AirPods Анны", default: true, transport: "bluetooth" }] };
+  render(<Editable recording={{ mic_device: null }} list={mini} />);
+  expect(mic()).not.toHaveTextContent("Meet запишет");
 });

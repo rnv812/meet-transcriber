@@ -349,7 +349,11 @@ export type Processes = {
   known?: string[];
   error?: string;
 };
-export type DeviceItem = { name: string; default: boolean };
+/**
+ * Устройство в списке «Звук». `transport` — тип подключения (только macOS, от помощника
+ * `meet-audiotap`): `bluetooth` — наушники, `builtin` — встроенный микрофон; не знаем — нет поля.
+ */
+export type DeviceItem = { name: string; default: boolean; transport?: string };
 export type Devices = {
   available: boolean;
   system?: { name: string; rate: number };

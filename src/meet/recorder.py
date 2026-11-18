@@ -78,6 +78,11 @@ PREFLIGHT_S = 15.0
 # его не слышно: на macOS так выглядит запрет «Микрофон» (поток открывается и
 # молчит без ошибки). У настоящего микрофона всегда есть шум.
 MIC_SILENT_S = 3.0
+# macOS: поток микрофона без вызовов дольше этого — умер. PortAudio на CoreAudio
+# оставляет поток пропавшего устройства (AirPods ушли к телефону, выдернули USB)
+# «активным», но без вызовов: без этого порога дорожка до конца записи
+# доливалась бы тишиной. Вызовы идут каждые ~20 мс, 3 с без них — не пауза.
+MAC_MIC_DEAD_S = 3.0
 
 
 def new_folder(out_root: Path, now: "datetime | None" = None) -> Path:
@@ -425,16 +430,35 @@ class _DefaultEndpoints:
 
 
 class _MacEndpoints:
-    """macOS: смену устройства по умолчанию не отслеживаем (CoreAudio об этом
-    сообщает, но PortAudio всё равно увидит её только после переоткрытия).
-    Дорожка переоткрывается, если её поток умер, — как при сломанном COM на
-    Windows."""
+    """macOS: устройство ввода по умолчанию — от помощника `meet-audiotap
+    --watch-devices` (`mac_audio.DeviceWatcher`), как COM на Windows: PortAudio
+    смену увидит только после переоткрытия, а заметить её должен кто-то другой.
 
-    def ids(self) -> None:
-        return None
+    ids() → (None, UID устройства ввода по умолчанию): вывод не отслеживается
+    (системный звук пишет помощник ScreenCaptureKit), устройство пропало
+    (`alive` false) или его нет — None, как «устройства этой роли нет». Следить
+    нечем (помощника нет, прежний, замолчал) — ids() None: дорожка, как раньше,
+    переоткрывается по смерти потока."""
+
+    def __init__(self) -> None:
+        from meet import mac_audio
+
+        self.watcher = mac_audio.DeviceWatcher()
+        self.watcher.start()
+
+    def snapshot(self) -> "dict | None":
+        """Последний снимок устройств ввода (`audiotap.parse_devices`) или None."""
+        return self.watcher.snapshot
+
+    def ids(self) -> "tuple | None":
+        snap = self.watcher.snapshot
+        if snap is None:
+            return None
+        default = snap["default"]
+        return (None, default["uid"] if default and default["alive"] else None)
 
     def close(self) -> None:
-        pass
+        self.watcher.close()
 
 
 class _Track:
@@ -491,6 +515,13 @@ class _Track:
         # сообщено ли об этом отрезке (`check_mic_silent`, такт вотчдога).
         self._zero_bytes = 0
         self._mic_silent = False
+        # Последний вызов потока (монотонные часы): на macOS микрофон без
+        # вызовов дольше MAC_MIC_DEAD_S считается умершим (`alive`).
+        self.last_callback = 0.0
+        self._dead_noted = False
+        # Микрофон Bluetooth-наушников, вместо которого пишется встроенный
+        # (`_Picker.bluetooth`): о каждом переходе — строка журнала.
+        self._bluetooth: "str | None" = None
 
     @property
     def follows_default(self) -> bool:
@@ -637,10 +668,23 @@ class _Track:
         )
         return True
 
+    def _note_bluetooth(self) -> None:
+        """macOS: вместо микрофона Bluetooth-наушников пишется встроенный —
+        строка журнала; снова как в системе — тоже. Только на переходах."""
+        bluetooth = getattr(self.pick, "bluetooth", None)
+        if bluetooth == self._bluetooth:
+            return
+        self._bluetooth = bluetooth
+        if bluetooth:
+            self.log(bluetooth_text(bluetooth, self.device_name))
+        else:
+            self.log(f"Микрофон снова как в системе: {self.device_name}")
+
     def _note_fallback(self) -> None:
         """Выбранного в настройках устройства нет — пишем с системного; оно
         вернулось — снова с него. Каждый переход — строка журнала и событие
         для UI (`record.device_fallback` / `record.device_pinned`)."""
+        self._note_bluetooth()
         fallback = bool(getattr(self.pick, "fallback", False))
         if fallback == self._in_fallback:
             return
@@ -657,12 +701,24 @@ class _Track:
                           device=self.device_name)
 
     def alive(self) -> bool:
+        """Поток жив. macOS, микрофон: ещё и вызовы были не дольше
+        MAC_MIC_DEAD_S назад (см. там); вне macOS живой поток без вызовов —
+        штатная тишина (loopback без звука в системе)."""
         if self.stream is None:
             return False
         try:
-            return self.stream.is_active()
+            active = self.stream.is_active()
         except Exception:
             return False
+        if active and _MAC and self.role == 1:
+            quiet = time.monotonic() - self.last_callback
+            if quiet > MAC_MIC_DEAD_S:
+                if not self._dead_noted:
+                    self._dead_noted = True
+                    self._log(f"микрофон не отдаёт звук ~{quiet:.0f} с — "
+                              "считаю поток умершим, переоткрываю")
+                return False
+        return active
 
     def tick_pad(self) -> None:
         """Файл держится у стенных часов даже без переоткрытий: живой, но
@@ -774,6 +830,9 @@ class _Track:
         if hasattr(stream, "before_data"):
             stream.before_data = self._pad_silence
         self._pad_silence()
+        # Отсчёт «без вызовов» — с открытия потока.
+        self.last_callback = time.monotonic()
+        self._dead_noted = False
         stream.start_stream()
         self.device_name = dev["name"]
         self.src_rate, self.src_channels = src_rate, src_ch
@@ -791,7 +850,9 @@ class _Track:
         (паузу догонит такт вотчдога)."""
         def cb(in_data, frame_count, time_info, status):
             try:
-                captured = _captured_at(time_info, time.monotonic())
+                now = time.monotonic()
+                self.last_callback = now
+                captured = _captured_at(time_info, now)
                 data = convert(in_data)
                 if captured is not None:
                     self._pad_silence(captured, over=CAPTURE_PAD_S)
@@ -1072,6 +1133,13 @@ def _is_mic(dev: dict, mic: "dict | None") -> bool:
             and _same_device(dev["name"]) == _same_device(mic["name"]))
 
 
+def bluetooth_text(bluetooth: str, builtin: "str | None") -> str:
+    """Строка журнала: вместо микрофона Bluetooth-наушников — встроенный."""
+    return (f"Системный микрофон — Bluetooth-наушники {bluetooth}: программа звонка "
+            f"их микрофон не слушает, пишу встроенный {builtin} (иначе звук "
+            "собеседников в наушниках стал бы хуже)")
+
+
 def restored_text(kind: str, wanted: str) -> str:
     if kind == "mic":
         return f"Выбранный микрофон {wanted} снова доступен — запись идёт с него"
@@ -1096,13 +1164,18 @@ class _Picker:
     None — системное (дорожка следует за дефолтом Windows и переживает его
     смену); имя — выбранное, а если его нет — системное с пометкой fallback."""
 
-    def __init__(self, kind: str, wanted: "str | None", mic: "str | None | object" = _NO_MIC) -> None:
+    def __init__(self, kind: str, wanted: "str | None", mic: "str | None | object" = _NO_MIC,
+                 substitute=None) -> None:
         self.kind = kind
         self.wanted = wanted or None
         # Дорожка собеседников: какой микрофон у дорожки голоса (None — системный).
         self.mic = mic
         self.fallback = False
         self.reason: "str | None" = None
+        # macOS, микрофон «как в системе»: (p, устройство) → другое устройство
+        # или None (`_Session._instead_of_bluetooth`); подменённое — `bluetooth`.
+        self.substitute = substitute
+        self.bluetooth: "str | None" = None
 
     @property
     def pinned(self) -> bool:
@@ -1114,6 +1187,11 @@ class _Picker:
         if (self.kind == "output" and self.wanted and not self.fallback and self.mic is not _NO_MIC
                 and _is_mic(dev, _mic_in_use(p, self.mic))):
             dev, self.fallback, self.reason = _SYSTEM["output"](p), True, FALLBACK_SAME_AS_MIC
+        self.bluetooth = None
+        if self.kind == "mic" and self.substitute is not None and not self.pinned:
+            other = self.substitute(p, dev)
+            if other is not None:
+                self.bluetooth, dev = dev["name"], other
         return dev
 
 
@@ -1125,7 +1203,8 @@ class _Session:
     terminate → свежий PyAudio → переоткрыть дорожки."""
 
     def __init__(self, out_dir: Path, bus=None, mic_device: "str | None" = None,
-                 output_device: "str | None" = None, pcm_tap=None) -> None:
+                 output_device: "str | None" = None, pcm_tap=None,
+                 skip_bluetooth_mic: bool = True) -> None:
         self.p = None
         self.pcm_tap = pcm_tap
         self.out_dir = out_dir
@@ -1146,9 +1225,20 @@ class _Session:
         self.tracks = (
             _Track("sys.opus", _Picker("output", output_device, mic=mic_device), 0, out_dir,
                    self.log, self.bus, pcm_tap),
-            _Track("mic.opus", _Picker("mic", mic_device), 1, out_dir,
-                   self.log, self.bus, pcm_tap),
+            _Track("mic.opus", _Picker("mic", mic_device, substitute=(
+                       self._instead_of_bluetooth if _MAC and skip_bluetooth_mic else None)),
+                   1, out_dir, self.log, self.bus, pcm_tap),
         )
+
+    def _instead_of_bluetooth(self, p, dev) -> "dict | None":
+        """macOS («Не брать микрофон Bluetooth-наушников»): системный микрофон —
+        наушники, которые программа звонка не слушает, — встроенный микрофон
+        PortAudio (`mac_audio.bluetooth_substitute`); иначе None."""
+        from meet import audiotap, mac_audio
+
+        name = mac_audio.bluetooth_substitute(self.endpoints.snapshot(), dev["name"],
+                                              audiotap.mic_users)
+        return _find_mic(p, name) if name else None
 
     def _new_audio(self):
         """Свежий PyAudio; на macOS — с журналом записи для помощника
@@ -1449,7 +1539,7 @@ class StopEvent(threading.Event):
 
 def record(out_root: str, stop_event: "threading.Event | None" = None,
            bus=None, mic_device=_FROM_SETTINGS, output_device=_FROM_SETTINGS,
-           pcm_tap=None) -> Path:
+           pcm_tap=None, skip_bluetooth_mic=_FROM_SETTINGS) -> Path:
     """Записать встречу двумя дорожками. `bus` — шина событий для UI: без неё
     всё работает как раньше, только события уходят в никуда. `pcm_tap` —
     `meet.pcm_tap.TapHub`: отвод звука для ассистента, включённого посреди
@@ -1458,8 +1548,13 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
     `mic_device` / `output_device` — имена устройств; None — системные (запись
     следит за дефолтами Windows), не переданы — из настроек на момент старта.
     Выбранного нет — пишем с системного и сообщаем в журнал и событием
-    `record.device_fallback`."""
-    if _FROM_SETTINGS in (mic_device, output_device):
+    `record.device_fallback`.
+
+    `skip_bluetooth_mic` — macOS: не брать микрофон Bluetooth-наушников, которые
+    программа звонка не слушает (`recording.skip_bluetooth_mic`), не передан —
+    из настроек; вне macOS не читается."""
+    if _FROM_SETTINGS in (mic_device, output_device) or (
+            _MAC and skip_bluetooth_mic is _FROM_SETTINGS):
         from meet import settings
 
         recording = settings.load().recording
@@ -1467,6 +1562,10 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
             mic_device = recording.mic_device
         if output_device is _FROM_SETTINGS:
             output_device = recording.output_device
+        if skip_bluetooth_mic is _FROM_SETTINGS:
+            skip_bluetooth_mic = recording.skip_bluetooth_mic
+    if skip_bluetooth_mic is _FROM_SETTINGS:
+        skip_bluetooth_mic = True
     out_dir = new_folder(Path(out_root))
     try:
         lock = _acquire_lock(Path(out_root), out_dir)
@@ -1478,7 +1577,8 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
         raise
 
     session = _Session(out_dir, bus, mic_device=mic_device,
-                       output_device=output_device, pcm_tap=pcm_tap)
+                       output_device=output_device, pcm_tap=pcm_tap,
+                       skip_bluetooth_mic=bool(skip_bluetooth_mic))
     # Пока идёт запись, система не засыпает от бездействия; снимается в finally
     # («Стоп», Ctrl+C и сбой старта).
     awake = keepawake.KeepAwake(session.log)

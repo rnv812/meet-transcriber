@@ -584,6 +584,17 @@ def test_session_waits_for_absent_device_then_recovers(tmp_path, monkeypatch):
     assert set(mic.writer.data) == {0}
 
 
+def test_windows_stream_without_callbacks_is_not_reopened(tmp_path, monkeypatch):
+    """Вне macOS живой поток без вызовов — не смерть (loopback без звука в
+    системе молчит штатно): только долив тишиной, без переоткрытия."""
+    s = _session(monkeypatch, tmp_path)
+    for t in s.tracks:
+        t.last_callback = time.monotonic() - 30
+    count = len(_FakePyAudio.streams)
+    s.tick()
+    assert len(_FakePyAudio.streams) == count
+
+
 def test_session_recovers_by_death_when_com_broken(tmp_path, monkeypatch):
     s = _session(monkeypatch, tmp_path)
     _FakeEndpoints.broken = True

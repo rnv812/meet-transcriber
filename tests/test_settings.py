@@ -1096,6 +1096,30 @@ def test_voice_buttons_on_by_default_and_not_written_until_changed(tmp_path):
     assert json.loads(f.read_text(encoding="utf-8"))["assist"]["voice_buttons"] is False
 
 
+def test_skip_bluetooth_mic_on_by_default_and_not_written_until_changed(tmp_path):
+    """macOS: «Не брать микрофон Bluetooth-наушников» — по умолчанию включено,
+    в файл не пишется, пока не меняли; выключенное — пишется и читается."""
+    import json
+
+    assert settings.Settings.from_raw({}).recording.skip_bluetooth_mic is True
+    assert settings.Settings.from_raw(
+        {"recording": {"skip_bluetooth_mic": "false"}}).recording.skip_bluetooth_mic is False
+    f = tmp_path / "config.json"
+    settings.patch({"recording": {"speaker_name": "Анна"}}, f)
+    assert "skip_bluetooth_mic" not in json.loads(f.read_text(encoding="utf-8"))["recording"]
+    settings.patch({"recording": {"skip_bluetooth_mic": True}}, f)
+    assert "skip_bluetooth_mic" not in json.loads(f.read_text(encoding="utf-8"))["recording"]
+    assert settings.patch({"recording": {"skip_bluetooth_mic": False}}, f).recording.skip_bluetooth_mic is False
+    assert json.loads(f.read_text(encoding="utf-8"))["recording"]["skip_bluetooth_mic"] is False
+    # Ключ уже в файле — дальше пишется как обычно, и «вкл» тоже.
+    settings.patch({"recording": {"skip_bluetooth_mic": True}}, f)
+    assert json.loads(f.read_text(encoding="utf-8"))["recording"]["skip_bluetooth_mic"] is True
+    # Сброс раздела «Звук» возвращает «вкл».
+    settings.patch({"recording": {"skip_bluetooth_mic": False}}, f)
+    assert settings.defaults_for(["recording.skip_bluetooth_mic"], f) == {
+        "defaults": {"recording": {"skip_bluetooth_mic": True}}, "changed": ["recording.skip_bluetooth_mic"]}
+
+
 def test_effort_defaults_empty_round_trips_and_garbage_is_default(tmp_path):
     """0.5: уровень рассуждений Claude Code и Codex; пусто — «по умолчанию» (как было)."""
     cfg = settings.Settings.from_raw({})

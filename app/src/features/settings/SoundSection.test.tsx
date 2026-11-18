@@ -145,3 +145,8 @@ test("«Мой голос» — не здесь: ссылка ведёт в «С
   await userEvent.click(screen.getByRole("button", { name: "«Спикеры»" }));
   expect(go).toHaveBeenCalled();
 });
+
+test("на Windows переключателя про Bluetooth-наушники нет", () => {
+  render(<Harness initial={{ recording }} />);
+  expect(screen.queryByRole("switch", { name: "Не брать микрофон Bluetooth-наушников" })).toBeNull();
+});

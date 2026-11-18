@@ -12,7 +12,14 @@
   "s16le"}`), дальше — сырой PCM s16le до закрытия stdin или SIGTERM;
 * `meet-audiotap --mic-users` — одна строка JSON: процессы, которые сейчас
   слушают микрофон (и играют звук), по CoreAudio (macOS 14+; раньше —
-  `supported: false`);
+  `supported: false`); у каждого — `input_devices`, UID устройств ввода,
+  которые он слушает (прежний помощник их не сообщает);
+* `meet-audiotap --watch-devices` — пока открыт stdin: строка JSON сразу и на
+  каждую перемену — устройство ввода по умолчанию (`default_input`: uid, имя,
+  тип подключения `transport`, `alive`) и все устройства ввода (`inputs`).
+  Повод — `watch`: `start`, `default` (сменилось по умолчанию), `devices`
+  (список), `alive` (устройство по умолчанию пропало или вернулось). Запись
+  следит по нему за системным микрофоном (`mac_audio.DeviceWatcher`);
 * `meet-audiotap --self-test` — версия и возможности, без разрешений (CI);
 * `meet-audiotap --preflight` — дано ли разрешение «Запись экрана» (код 0 или
   77), без захвата и без системного запроса: его дёшево спрашивать посреди
@@ -66,6 +73,13 @@ MIC_STATES = (MIC_GRANTED, MIC_DENIED, MIC_NOT_DETERMINED, MIC_RESTRICTED)
 SCREEN_GRANTED = "granted"
 SCREEN_DENIED = "denied"
 SCREEN_STATES = (SCREEN_GRANTED, SCREEN_DENIED)
+# Тип подключения устройства (`transport` в `--watch-devices`), как его
+# называет помощник по kAudioDevicePropertyTransportType. Запись различает
+# только эти два: Bluetooth-наушники и встроенный микрофон.
+TRANSPORT_BLUETOOTH = "bluetooth"
+TRANSPORT_BUILTIN = "builtin"
+# Поводы строк `--watch-devices`.
+WATCH_EVENTS = ("start", "default", "devices", "alive")
 
 # Почему помощник не дал звук (`TapError.kind`). От этого зависит, что делает
 # запись дальше: «permission» — ждать разрешения (`preflight`), «helper» и
@@ -220,14 +234,76 @@ def parse_mic_users(text: str) -> "list[dict] | None":
             pid = int(item.get("pid", 0))
         except (TypeError, ValueError):
             pid = 0
-        found.append({
+        user = {
             "pid": pid,
             "name": str(item.get("name") or ""),
             "bundle": str(item.get("bundle") or ""),
             "input": bool(item.get("input")),
             "output": bool(item.get("output")),
-        })
+        }
+        devices = item.get("input_devices")
+        if isinstance(devices, list):
+            user["input_devices"] = [str(uid) for uid in devices if isinstance(uid, str)]
+        found.append(user)
     return found
+
+
+def bluetooth_mic_in_use(users: "list[dict] | None", uid: str,
+                         own_pids: "set[int] | frozenset[int]" = frozenset()) -> bool:
+    """Слушает ли кто-то, кроме самой записи (`own_pids`), микрофон с этим UID.
+
+    Процесс без `input_devices` (прежний помощник) слушает, считаем, системный
+    — то есть этот. `users` None — узнать нечем (macOS 13, сбой помощника):
+    тоже «слушает» — запись остаётся на системном, как раньше."""
+    if users is None:
+        return True
+    for user in users:
+        if not user.get("input") or user.get("pid") in own_pids:
+            continue
+        devices = user.get("input_devices")
+        if devices is None or uid in devices:
+            return True
+    return False
+
+
+def watch_command(helper: str) -> list[str]:
+    return [helper, "--watch-devices"]
+
+
+def _device_of(item) -> "dict | None":
+    """Устройство из строки `--watch-devices` → {uid, name, transport, alive}
+    или None (не по протоколу)."""
+    if not isinstance(item, dict):
+        return None
+    uid, name = item.get("uid"), item.get("name")
+    if not isinstance(uid, str) or not uid or not isinstance(name, str):
+        return None
+    transport = item.get("transport")
+    return {"uid": uid, "name": name,
+            "transport": transport if isinstance(transport, str) else "",
+            "alive": item.get("alive") is not False}
+
+
+def parse_devices(text: str) -> "dict | None":
+    """Строка `--watch-devices` → {"event", "default": устройство | None,
+    "inputs": [устройство]} или None: не по протоколу (шум в stdout,
+    рукопожатие другого режима, другая версия)."""
+    try:
+        data = json.loads((text or "").strip())
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("meet_audiotap") != PROTOCOL:
+        return None
+    event, raw_default, raw_inputs = data.get("watch"), data.get("default_input"), data.get("inputs")
+    if event not in WATCH_EVENTS or not isinstance(raw_inputs, list):
+        return None
+    default = None
+    if raw_default is not None:
+        default = _device_of(raw_default)
+        if default is None:
+            return None
+    inputs = [dev for dev in map(_device_of, raw_inputs) if dev is not None]
+    return {"event": event, "default": default, "inputs": inputs}
 
 
 def mic_users(run=None, timeout: float = MIC_USERS_TIMEOUT_S) -> "list[dict] | None":

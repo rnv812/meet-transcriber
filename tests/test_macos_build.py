@@ -125,6 +125,34 @@ def test_helper_speaks_the_python_protocol():
     assert "private let errorEvery = 5.0" in swift
 
 
+def test_device_watch_speaks_the_python_protocol():
+    """`--watch-devices`: те же ключи, поводы и типы подключения, что разбирает
+    `audiotap.parse_devices`; подписка — на смену устройства по умолчанию, списка
+    и «живости» выбранного; `--mic-users` — с устройствами ввода процесса."""
+    swift = (ROOT / "mac" / "audiotap" / "main.swift").read_text(encoding="utf-8")
+    assert '"--watch-devices"' in swift
+    assert '"watch_devices": true' in swift  # --self-test
+    for key in ('state["meet_audiotap"] = protocolVersion', 'state["watch"] = reason', '"default_input"',
+                '"inputs"', '"uid"', '"name"', '"transport"', '"alive"'):
+        assert key in swift, key
+    for event in audiotap.WATCH_EVENTS:
+        assert f'"{event}"' in swift, event
+    for transport in (audiotap.TRANSPORT_BLUETOOTH, audiotap.TRANSPORT_BUILTIN):
+        assert f'return "{transport}"' in swift, transport
+    for name in ("AudioObjectAddPropertyListenerBlock", "AudioObjectRemovePropertyListenerBlock",
+                 "kAudioHardwarePropertyDefaultInputDevice", "kAudioHardwarePropertyDevices",
+                 "kAudioDevicePropertyDeviceIsAlive", "kAudioDevicePropertyTransportType",
+                 "kAudioDeviceTransportTypeBluetooth", "kAudioDeviceTransportTypeBluetoothLE",
+                 "kAudioDeviceTransportTypeBuiltIn"):
+        assert name in swift, name
+    # Кто какой микрофон слушает: Python сверяет UID с устройством по умолчанию.
+    assert '"input_devices": inputDevices' in swift
+    assert "kAudioProcessPropertyDevices" in swift
+    # Выход по концу stdin — как у --stream: резидент закрывает его в конце записи.
+    watch = swift[swift.index("func watchDevices()"):]
+    assert "Darwin.read(STDIN_FILENO" in watch[:watch.index("\n}\n")]
+
+
 def test_workflow_dry_run_skips_windows_and_publishing():
     assert "workflow_dispatch:" in WORKFLOW
     assert re.search(r"macos_only:\n\s+description: .+\n\s+type: boolean\n\s+default: true", WORKFLOW)

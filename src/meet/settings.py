@@ -713,6 +713,11 @@ class Recording:
     # их смену. Закреплённого нет — пишем с системного (см. recorder).
     mic_device: str | None = None
     output_device: str | None = None
+    # macOS: системный микрофон — Bluetooth-наушники, которые программа звонка
+    # не слушает, — писать встроенный (открытый записью микрофон перевёл бы
+    # наушники в режим гарнитуры, и собеседники звучали бы «как по телефону»).
+    # Значение по умолчанию в файл не пишется (`_keep_default_recording_unset`).
+    skip_bluetooth_mic: bool = True
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Recording":
@@ -728,6 +733,7 @@ class Recording:
             auto_transcribe=as_flag(raw.get("auto_transcribe"), True),
             mic_device=as_device(raw.get("mic_device")),
             output_device=as_device(raw.get("output_device")),
+            skip_bluetooth_mic=as_flag(raw.get("skip_bluetooth_mic"), True),
         )
 
     def to_raw(self) -> dict:
@@ -739,6 +745,7 @@ class Recording:
             "auto_transcribe": self.auto_transcribe,
             "mic_device": {"name": self.mic_device} if self.mic_device else None,
             "output_device": {"name": self.output_device} if self.output_device else None,
+            "skip_bluetooth_mic": self.skip_bluetooth_mic,
         }
 
     @property
@@ -1990,6 +1997,7 @@ def save(settings: Settings, path: Path | None = None) -> None:
         merged.update(settings.to_raw())
         _keep_default_participant_unset(merged, before)
         _keep_default_terms_unset(merged, before)
+        _keep_default_recording_unset(merged, before)
         # Integrations.to_raw токена не содержит: запасная копия токена
         # (диспетчер недоступен) приходит из файла выше и так и сохраняется.
         # post_record_hook больше не читается (его место — hooks.post_record), но
@@ -2018,6 +2026,26 @@ def _keep_default_participant_unset(merged: dict, before: dict) -> None:
         value = assist.get(key)
         if type(value) is type(default) and value == default and key not in had:
             assist.pop(key, None)
+
+
+# Флаги записи, чьё значение по умолчанию в файл не пишется.
+_UNSET_RECORDING_DEFAULTS = ("skip_bluetooth_mic",)
+
+
+def _keep_default_recording_unset(merged: dict, before: dict) -> None:
+    """`recording.skip_bluetooth_mic` по умолчанию в файл не пишется, пока его
+    там нет: сохранение любой настройки записи иначе добавляло бы новый ключ
+    тому, кто ничего не менял. Ключ, который в файле уже есть, и значение не по
+    умолчанию пишутся как обычно."""
+    recording = merged.get("recording")
+    had = before.get("recording") if isinstance(before.get("recording"), dict) else {}
+    if not isinstance(recording, dict):
+        return
+    for key in _UNSET_RECORDING_DEFAULTS:
+        default = getattr(Recording, key)
+        value = recording.get(key)
+        if type(value) is type(default) and value == default and key not in had:
+            recording.pop(key, None)
 
 
 def _keep_default_terms_unset(merged: dict, before: dict) -> None:

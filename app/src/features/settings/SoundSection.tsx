@@ -10,6 +10,11 @@
  * показывает пиковый уровень; проверяется выбор из черновика, ещё не сохранённый.
  *
  * «Мой голос» (образец голоса владельца) — в «Спикерах» (0.4); микрофон для него — отсюда.
+ *
+ * macOS: «Не брать микрофон Bluetooth-наушников» (`recording.skip_bluetooth_mic`, по умолчанию
+ * вкл.) — системный микрофон — наушники, которые программа звонка не слушает: запись пишет
+ * встроенный, иначе наушники уйдут в режим гарнитуры и собеседники зазвучат «как по телефону».
+ * Под «Микрофоном» — строка об этом (`bluetoothNote`).
  */
 
 import { useState, type ReactNode } from "react";
@@ -19,7 +24,10 @@ import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Select, type SelectOption } from "../../ui/Select";
-import { Row, SeeAlso, SettingsCard, type Raw, type SetFn } from "./Section";
+import { Row, SeeAlso, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+
+/** Переключатель macOS: не брать микрофон Bluetooth-наушников (`recording.skip_bluetooth_mic`). */
+export const SKIP_BLUETOOTH_LABEL = "Не брать микрофон Bluetooth-наушников";
 
 /** Ниже этого пика считаем, что звука не было (шум тишины, а не речь). */
 const SILENCE = 0.02;
@@ -141,6 +149,25 @@ function otherSideNote(output: string | null, mic: string | null, system: string
     + `Микрофон наушников не подойдёт — выберите «${system ?? "Системный звук"}».` };
 }
 
+/**
+ * macOS, микрофон «Как в системе», а системный — Bluetooth-наушники: что запишется.
+ * Настройка включена и встроенный микрофон есть — Meet возьмёт его, пока программа звонка не
+ * слушает наушники (recorder, `bluetooth_substitute`); выключена — предупреждение.
+ */
+function bluetoothNote(items: DeviceItem[], picked: string | null, skip: boolean): DeviceNote | null {
+  if (!IS_MAC || picked !== null) return null;
+  const system = items.find((d) => d.default);
+  if (system?.transport !== "bluetooth") return null;
+  if (!skip) {
+    return { warn: true, text: `«${system.name}» — Bluetooth-наушники: пока Meet пишет их микрофон, `
+      + "собеседники в наушниках могут звучать хуже." };
+  }
+  const builtin = items.find((d) => d.transport === "builtin");
+  if (!builtin) return null;
+  return { warn: false, text: `«${system.name}» — Bluetooth-наушники. Если программа звонка не слушает их `
+    + `микрофон, Meet запишет «${builtin.name}»: так звук собеседников в наушниках не станет хуже.` };
+}
+
 export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: {
   draft: Raw; set: SetFn; devices: Devices | null; endpoint: Endpoint;
   /** Перейти в «Спикеры» (образец голоса); без него ссылки нет. */
@@ -150,6 +177,8 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
   const choose = (key: string) => (name: string | null) => set("recording", key, name ? { name } : null);
   const micInUse = v("mic_device") ?? devices?.inputs?.find((d) => d.default)?.name ?? null;
   const note = otherSideNote(v("output_device"), micInUse, devices?.outputs?.find((d) => d.default)?.name);
+  const skipBluetooth = draft.recording?.skip_bluetooth_mic !== false;
+  const micNote = bluetoothNote(devices?.inputs ?? [], v("mic_device"), skipBluetooth);
   return (
     <>
       {onOpenSpeakers && (
@@ -167,7 +196,12 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
         )}
         <DeviceRow id="sound-mic" kind="mic" label="Микрофон" endpoint={endpoint}
           hint={`Ваш голос. «Как в системе» — микрофон ${OS_TEXT.systemName} по умолчанию`}
-          items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} />
+          items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} note={micNote} />
+        {IS_MAC && (
+          <Switch label={SKIP_BLUETOOTH_LABEL} value={skipBluetooth}
+            hint="Если программа звонка не слушает микрофон наушников, Meet пишет встроенный"
+            onChange={(on) => set("recording", "skip_bluetooth_mic", on)} />
+        )}
         <DeviceRow id="sound-output" kind="output" label={OS_TEXT.otherSide} endpoint={endpoint} note={note}
           hint={IS_MAC
             ? "Системный звук (ScreenCaptureKit) или виртуальное устройство, например BlackHole"

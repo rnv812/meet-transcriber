@@ -7,6 +7,8 @@ sounddevice — фейковым модулем. Проверяется то, ч
 
 import io
 import json
+import os
+import queue
 import subprocess
 import sys
 import threading
@@ -383,6 +385,9 @@ def mac_recorder(monkeypatch, tmp_path):
     monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(helper))
     FakeRawInputStream.instances = []
     FakeHelper.instances = []
+    # Слежение за устройствами (`--watch-devices`): по умолчанию помощник
+    # молчит — как прежний, который режима не знает.
+    monkeypatch.setattr(mac_audio, "_watch_popen", lambda argv, **kw: _WatchProc(_LineFeed(ended=True)))
     return SimpleNamespace(sd=sd, helper=helper)
 
 
@@ -1217,3 +1222,365 @@ def test_bundle_is_not_searched_on_windows(no_helper, monkeypatch):
     _bundle(no_helper / "Applications")
     monkeypatch.setattr(sys, "platform", "win32")
     assert audiotap.helper_path() is None
+
+
+# --- устройства ввода: `--watch-devices`, Bluetooth, микрофон без вызовов ------------
+
+
+BUILTIN = {"uid": "BuiltInMicrophoneDevice", "name": "Микрофон MacBook Pro",
+           "transport": "builtin", "alive": True}
+AIRPODS = {"uid": "70-3C-AA:input", "name": "AirPods Анны", "transport": "bluetooth", "alive": True}
+USB_MIC = {"uid": "usb-mic", "name": "Микрофон USB", "transport": "usb", "alive": True}
+# Устройства sounddevice с наушниками и USB-микрофоном (индексы 3 и 4).
+MORE_DEVICES = DEVICES + [
+    {"index": 3, "name": "AirPods Анны", "max_input_channels": 1,
+     "max_output_channels": 2, "default_samplerate": 24000.0, "hostapi": 0},
+    {"index": 4, "name": "Микрофон USB", "max_input_channels": 1,
+     "max_output_channels": 0, "default_samplerate": 48000.0, "hostapi": 0},
+]
+
+
+def _watch_line(default, *others, event="default") -> dict:
+    inputs = [default, *others] if default else list(others)
+    return {"meet_audiotap": 1, "watch": event, "default_input": default, "inputs": inputs}
+
+
+class _LineFeed:
+    """stdout помощника `--watch-devices`: строки по одной, пока его не закроют."""
+
+    def __init__(self, ended: bool = False) -> None:
+        self.lines: "queue.Queue[bytes]" = queue.Queue()
+        if ended:
+            self.end()
+
+    def push(self, obj) -> None:
+        text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
+        self.lines.put((text + "\n").encode("utf-8"))
+
+    def end(self) -> None:
+        self.lines.put(b"")
+
+    def readline(self) -> bytes:
+        try:
+            return self.lines.get(timeout=5.0)
+        except queue.Empty:
+            return b""
+
+
+class _WatchProc:
+    instances: list = []
+
+    def __init__(self, feed: _LineFeed) -> None:
+        self.stdout = feed
+        self.stdin = io.BytesIO()
+        self.killed = False
+        _WatchProc.instances.append(self)
+
+    def poll(self):
+        return 0 if (self.stdin.closed or self.killed) else None
+
+    def wait(self, timeout=None):
+        self.stdout.end()
+        return 0
+
+    def kill(self):
+        self.killed = True
+        self.stdout.end()
+
+
+def _watch(monkeypatch, *lines) -> "tuple[_LineFeed, list]":
+    """Помощник `--watch-devices` с управляемым stdout; `lines` — уже напечатанное."""
+    feed = _LineFeed()
+    for line in lines:
+        feed.push(line)
+    calls = []
+
+    def popen(argv, **kwargs):
+        calls.append(argv)
+        return _WatchProc(feed)
+
+    monkeypatch.setattr(mac_audio, "_watch_popen", popen)
+    return feed, calls
+
+
+def _wait_for(check, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not check():
+        if time.monotonic() > deadline:
+            raise AssertionError("не дождался")
+        time.sleep(0.01)
+
+
+def _devices(sd, default_index: int) -> None:
+    sd.query_devices = lambda index=None: list(MORE_DEVICES) if index is None else MORE_DEVICES[index]
+    sd.default.device = (default_index, 1)
+
+
+def test_watch_devices_lines_are_parsed():
+    lines = (FIXTURES / "watch_devices.jsonl").read_text(encoding="utf-8").splitlines()
+    first, second = (audiotap.parse_devices(line) for line in lines)
+    assert first["event"] == "start"
+    assert first["default"] == BUILTIN
+    assert [d["name"] for d in first["inputs"]] == ["Микрофон MacBook Pro", "BlackHole 2ch"]
+    assert second["event"] == "default"
+    assert second["default"]["transport"] == audiotap.TRANSPORT_BLUETOOTH
+    assert second["default"]["uid"] == "70-3C-AA:input"
+    # Нет устройства ввода по умолчанию — None, список остаётся.
+    none = audiotap.parse_devices(json.dumps(_watch_line(None, BUILTIN)))
+    assert none["default"] is None and none["inputs"] == [BUILTIN]
+    assert audiotap.watch_command("/r/meet-audiotap") == ["/r/meet-audiotap", "--watch-devices"]
+
+
+@pytest.mark.parametrize("text", [
+    "", "мусор", "[]", HANDSHAKE.decode(), '{"meet_audiotap": 2, "watch": "start", "inputs": []}',
+    '{"meet_audiotap": 1, "watch": "start", "default_input": 5, "inputs": []}',
+    '{"meet_audiotap": 1, "watch": "start", "default_input": null, "inputs": 3}',
+])
+def test_watch_line_out_of_protocol_is_skipped(text):
+    assert audiotap.parse_devices(text) is None
+
+
+def test_mic_users_carry_input_devices_when_the_helper_knows_them():
+    users = audiotap.parse_mic_users((FIXTURES / "mic_users_devices.json").read_text(encoding="utf-8"))
+    assert users[0]["input_devices"] == ["BuiltInMicrophoneDevice"]
+    # Прежний помощник устройств не сообщает — ключа нет, как раньше.
+    old = audiotap.parse_mic_users((FIXTURES / "mic_users.json").read_text(encoding="utf-8"))
+    assert "input_devices" not in old[0]
+
+
+def test_who_listens_to_the_bluetooth_mic():
+    uid = AIRPODS["uid"]
+
+    def user(pid=501, input=True, devices=None):
+        found = {"pid": pid, "name": "zoom.us", "bundle": "", "input": input, "output": True}
+        if devices is not None:
+            found["input_devices"] = devices
+        return found
+
+    in_use = audiotap.bluetooth_mic_in_use
+    assert in_use([user(devices=[uid])], uid) is True
+    assert in_use([user(devices=[BUILTIN["uid"]])], uid) is False  # звонок — со встроенного
+    assert in_use([user(input=False, devices=[uid])], uid) is False
+    assert in_use([], uid) is False  # микрофон никто не слушает
+    # Устройств процесса помощник не знает — считаем, что слушают системный.
+    assert in_use([user()], uid) is True
+    # Сама запись Meet — не программа звонка.
+    assert in_use([user(pid=os.getpid(), devices=[uid])], uid, own_pids={os.getpid()}) is False
+    # Узнать нечем (macOS 13, сбой помощника) — как раньше: не подменяем.
+    assert in_use(None, uid) is True
+
+
+def test_builtin_mic_instead_of_bluetooth_headphones():
+    snap = audiotap.parse_devices(json.dumps(_watch_line(AIRPODS, BUILTIN)))
+    nobody = lambda: []  # noqa: E731
+    assert mac_audio.bluetooth_substitute(snap, "AirPods Анны", nobody) == "Микрофон MacBook Pro"
+    # Звонок слушает наушники — их и пишем.
+    calling = lambda: [{"pid": 501, "input": True, "input_devices": [AIRPODS["uid"]]}]  # noqa: E731
+    assert mac_audio.bluetooth_substitute(snap, "AirPods Анны", calling) is None
+    # Системный — не Bluetooth, или пишется не он, или встроенного нет (Mac mini) — не трогаем.
+    usb = audiotap.parse_devices(json.dumps(_watch_line(USB_MIC, BUILTIN)))
+    assert mac_audio.bluetooth_substitute(usb, "Микрофон USB", nobody) is None
+    assert mac_audio.bluetooth_substitute(snap, "Микрофон USB", nobody) is None
+    alone = audiotap.parse_devices(json.dumps(_watch_line(AIRPODS)))
+    assert mac_audio.bluetooth_substitute(alone, "AirPods Анны", nobody) is None
+    assert mac_audio.bluetooth_substitute(None, "AirPods Анны", nobody) is None
+
+
+def test_watcher_keeps_the_last_snapshot_and_stops_with_the_recording(mac_recorder, monkeypatch):
+    feed, calls = _watch(monkeypatch, _watch_line(BUILTIN, event="start"))
+    watcher = mac_audio.DeviceWatcher()
+    watcher.start()
+    assert calls == [[str(mac_recorder.helper), "--watch-devices"]]
+    assert watcher.snapshot["default"] == BUILTIN  # первая строка — ещё до записи
+    feed.push("шум в stdout")
+    feed.push(_watch_line(AIRPODS, BUILTIN))
+    _wait_for(lambda: watcher.snapshot["default"] == AIRPODS)
+    watcher.close()
+    assert _WatchProc.instances[-1].stdin.closed  # помощник выходит по концу stdin
+
+
+def test_watcher_without_answers_knows_nothing(mac_recorder, monkeypatch, tmp_path):
+    watcher = mac_audio.DeviceWatcher()
+    watcher.start()
+    _wait_for(lambda: watcher.done)
+    assert watcher.snapshot is None
+    watcher.close()
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    missing = mac_audio.DeviceWatcher()
+    missing.start()
+    assert missing.snapshot is None
+    missing.close()
+
+
+def test_mac_endpoints_report_the_default_input_and_its_liveness(mac_recorder, monkeypatch):
+    feed, _ = _watch(monkeypatch, _watch_line(BUILTIN, event="start"))
+    endpoints = recorder._MacEndpoints()
+    assert endpoints.ids() == (None, BUILTIN["uid"])
+    feed.push(_watch_line({**USB_MIC, "alive": False}, BUILTIN, event="alive"))
+    _wait_for(lambda: endpoints.ids() == (None, None))  # устройство пропало
+    feed.push(_watch_line(None, BUILTIN, event="devices"))
+    _wait_for(lambda: endpoints.snapshot()["default"] is None)
+    assert endpoints.ids() == (None, None)
+    endpoints.close()
+    quiet = recorder._MacEndpoints()  # помощник прежний: следить нечем
+    assert quiet.ids() is None
+    quiet.close()
+
+
+def _mac_session(monkeypatch, tmp_path, **kw):
+    popen, calls = _popen_factory(HANDSHAKE + _pcm(48000))
+    monkeypatch.setattr(mac_audio, "_popen", popen)
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    s = recorder._Session(tmp_path, bus, mic_device=kw.pop("mic_device", None),
+                          output_device=None, **kw)
+    s.start()
+    return s, seen, calls
+
+
+def _log(tmp_path) -> str:
+    return (tmp_path / "record.log").read_text(encoding="utf-8")
+
+
+def test_default_input_change_from_the_helper_reopens_the_mic(mac_recorder, monkeypatch, tmp_path):
+    """Помощник сообщил: сменилось устройство ввода по умолчанию — дорожка
+    микрофона переоткрыта на новом, помощник системного звука не тронут."""
+    feed, _ = _watch(monkeypatch, _watch_line(BUILTIN, event="start"))
+    s, _, calls = _mac_session(monkeypatch, tmp_path)
+    mic = s.tracks[1]
+    assert mic.device_name == "Микрофон MacBook Pro"
+    spawned = len(calls)
+    s.tick()
+    assert len(FakeRawInputStream.instances) == 1  # без смены — без перезапуска
+    _devices(mac_recorder.sd, 4)
+    feed.push(_watch_line(USB_MIC, BUILTIN))
+    _wait_for(lambda: s.endpoints.ids() == (None, USB_MIC["uid"]))
+    s.tick()
+    assert mic.device_name == "Микрофон USB"
+    assert FakeRawInputStream.instances[-1].device == 4
+    assert len(calls) == spawned  # системный звук не перезапускался
+    s.close()
+    assert _WatchProc.instances[-1].stdin.closed
+    assert "сменилось дефолтное аудио-устройство" in _log(tmp_path)
+
+
+def test_mac_mic_without_callbacks_for_3_5_s_is_reopened(mac_recorder, monkeypatch, tmp_path):
+    """PortAudio на CoreAudio оставляет поток пропавшего устройства «активным»
+    без вызовов: на Mac это смерть потока — переоткрыть."""
+    s, _, _ = _mac_session(monkeypatch, tmp_path)
+    mic = s.tracks[1]
+    first = mic.stream
+    mic.last_callback = time.monotonic() - 2.5
+    s.tick()
+    assert mic.stream is first  # 2,5 с — ещё жив
+    mic.last_callback = time.monotonic() - 3.5
+    s.tick()
+    assert mic.stream is not first and mic.stream is not None
+    assert len(FakeRawInputStream.instances) == 2
+    assert "микрофон не отдаёт звук" in _log(tmp_path)
+    # Новый поток считает время без вызовов заново.
+    s.tick()
+    assert len(FakeRawInputStream.instances) == 2
+    s.close()
+
+
+def test_mac_mic_callbacks_keep_it_alive(mac_recorder, monkeypatch, tmp_path):
+    s, _, _ = _mac_session(monkeypatch, tmp_path)
+    mic = s.tracks[1]
+    mic.last_callback = time.monotonic() - 10
+    FakeRawInputStream.instances[0].feed(_pcm(1024))
+    s.tick()
+    assert len(FakeRawInputStream.instances) == 1
+    s.close()
+
+
+def _bluetooth_session(mac_recorder, monkeypatch, tmp_path, users, **kw):
+    _watch(monkeypatch, _watch_line(AIRPODS, BUILTIN, event="start"))
+    _devices(mac_recorder.sd, 3)
+    asked = []
+
+    def mic_users(*a, **k):
+        asked.append(1)
+        return users
+
+    monkeypatch.setattr(audiotap, "mic_users", mic_users)
+    s, seen, _ = _mac_session(monkeypatch, tmp_path, **kw)
+    return s, seen, asked
+
+
+def test_bluetooth_mic_the_call_does_not_use_records_the_builtin_one(mac_recorder, monkeypatch, tmp_path):
+    """Системный ввод — AirPods, программа звонка слушает встроенный микрофон:
+    запись берёт встроенный (иначе наушники ушли бы в режим гарнитуры), в журнале — строка."""
+    zoom = [{"pid": 501, "name": "zoom.us", "bundle": "", "input": True, "output": True,
+             "input_devices": [BUILTIN["uid"]]}]
+    s, _, asked = _bluetooth_session(mac_recorder, monkeypatch, tmp_path, zoom)
+    mic = s.tracks[1]
+    assert mic.device_name == "Микрофон MacBook Pro"
+    assert FakeRawInputStream.instances[-1].device == 0
+    assert asked
+    assert mic.follows_default  # смена системного по-прежнему переоткрывает дорожку
+    s.close()
+    assert recorder.bluetooth_text("AirPods Анны", "Микрофон MacBook Pro") in _log(tmp_path)
+
+
+@pytest.mark.parametrize("users", [
+    # Звонок слушает наушники — они уже в режиме гарнитуры, пишем их.
+    [{"pid": 501, "name": "zoom.us", "bundle": "", "input": True, "output": True,
+      "input_devices": [AIRPODS["uid"]]}],
+    None,  # узнать нечем — как раньше
+])
+def test_bluetooth_mic_stays_when_the_call_uses_it_or_nobody_knows(mac_recorder, monkeypatch, tmp_path, users):
+    s, _, _ = _bluetooth_session(mac_recorder, monkeypatch, tmp_path, users)
+    assert s.tracks[1].device_name == "AirPods Анны"
+    s.close()
+    assert "Bluetooth" not in _log(tmp_path)
+
+
+def test_bluetooth_mic_is_taken_when_the_setting_is_off(mac_recorder, monkeypatch, tmp_path):
+    s, _, asked = _bluetooth_session(mac_recorder, monkeypatch, tmp_path, [], skip_bluetooth_mic=False)
+    assert s.tracks[1].device_name == "AirPods Анны"
+    assert not asked  # без настройки помощника не спрашиваем
+    s.close()
+
+
+def test_pinned_bluetooth_mic_is_respected(mac_recorder, monkeypatch, tmp_path):
+    s, _, asked = _bluetooth_session(mac_recorder, monkeypatch, tmp_path, [], mic_device="AirPods Анны")
+    assert s.tracks[1].device_name == "AirPods Анны"
+    assert not asked
+    s.close()
+
+
+def test_record_takes_the_bluetooth_choice_from_settings(monkeypatch, tmp_path):
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(recorder, "_MAC", True)
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def session(out_dir, bus, **kw):
+        seen.append(kw)
+        raise Stop
+
+    monkeypatch.setattr(recorder, "_Session", session)
+    with pytest.raises(Stop):
+        recorder.record(str(tmp_path / "rec"), mic_device=None, output_device=None)
+    assert seen[-1]["skip_bluetooth_mic"] is True  # по умолчанию — не брать
+    settings.patch({"recording": {"skip_bluetooth_mic": False}})
+    with pytest.raises(Stop):
+        recorder.record(str(tmp_path / "rec2"), mic_device=None, output_device=None)
+    assert seen[-1]["skip_bluetooth_mic"] is False
+
+
+def test_mac_device_list_marks_bluetooth_and_builtin_inputs(mac_recorder, monkeypatch):
+    _watch(monkeypatch, _watch_line(AIRPODS, BUILTIN, event="start"))
+    _devices(mac_recorder.sd, 3)
+    devices = recorder.list_devices(mac_audio.PyAudio())
+    by_name = {d["name"]: d for d in devices["inputs"]}
+    assert by_name["AirPods Анны"] == {"name": "AirPods Анны", "default": True, "transport": "bluetooth"}
+    assert by_name["Микрофон MacBook Pro"]["transport"] == "builtin"
+    assert "transport" not in by_name["Микрофон USB"]  # помощник его не назвал
+    assert _WatchProc.instances[-1].stdin.closed  # спросили один раз и закрыли
