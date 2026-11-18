@@ -381,6 +381,15 @@ def _creationflags() -> int:
     )
 
 
+def _priority_kwargs() -> dict:
+    """Пониженный приоритет задачи вне Windows: на macOS — `preexec_fn`
+    (nice 10 и приглушённый ввод-вывод), на Windows — флаги запуска выше."""
+    from meet import plat
+
+    preexec = plat.low_priority_preexec()
+    return {"preexec_fn": preexec} if preexec is not None else {}
+
+
 class JobQueue:
     """Последовательная очередь на один слот.
 
@@ -682,6 +691,7 @@ class JobQueue:
                 bufsize=1,
                 cwd=_safe_cwd(job.folder),
                 creationflags=creationflags,
+                **_priority_kwargs(),
             )
         except OSError as e:
             job.error = f"не удалось запустить задачу: {e}"
@@ -749,6 +759,7 @@ class JobQueue:
             errors="replace",
             bufsize=1,
             creationflags=_creationflags(),
+            **_priority_kwargs(),
         )
 
     def _host_gone(self, host) -> int:

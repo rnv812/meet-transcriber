@@ -398,10 +398,17 @@ def _model_for(device: str, model_name: str | None) -> str:
 
 
 def _whisper_kwargs(device: str) -> dict:
-    """На CPU — все ядра, кроме одного: встреча и UI должны оставаться живыми."""
+    """На CPU — все ядра, кроме одного: встреча и UI должны оставаться живыми.
+    На Mac — производительные ядра: энергоэффективные только тормозят."""
     if device != "cpu":
         return {}
     import os
+
+    from meet import plat
+
+    perf = plat.mac_perf_cores()
+    if perf:
+        return {"cpu_threads": perf}
 
     return {"cpu_threads": max(1, (os.cpu_count() or 2) - 1)}
 

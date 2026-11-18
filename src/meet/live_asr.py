@@ -308,6 +308,13 @@ CPU_THREADS = 8
 
 
 def _default_threads() -> int:
+    """Потоки живого распознавания: на Apple Silicon — производительные ядра
+    минус 2 (звонок идёт рядом), но не меньше 2; иначе — CPU_THREADS."""
+    from meet import plat
+
+    perf = plat.mac_perf_cores()
+    if perf:
+        return max(2, perf - 2)
     return max(1, min(CPU_THREADS, os.cpu_count() or CPU_THREADS))
 
 
@@ -315,7 +322,7 @@ def _limit_cpu_threads() -> None:
     try:
         import torch
 
-        torch.set_num_threads(max(1, min(CPU_THREADS, torch.get_num_threads())))
+        torch.set_num_threads(max(1, min(_default_threads(), torch.get_num_threads())))
     except Exception:
         pass
 

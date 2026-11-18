@@ -107,3 +107,60 @@ def test_pid_alive_unknown_exit_code_counts_as_alive(monkeypatch):
 
     monkeypatch.setattr(ctypes.windll, "kernel32", Kernel32())
     assert plat.pid_alive(os.getpid()) is True
+
+
+# --- перф-ядра и пониженный приоритет ----------------------------------------
+
+
+def test_perf_cores_on_mac_reads_performance_cores(monkeypatch):
+    import types
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    asked = []
+
+    def run(argv, **kw):
+        asked.append(argv)
+        return types.SimpleNamespace(returncode=0, stdout="6\n")
+
+    assert plat.perf_cores(run=run) == 6
+    assert asked == [["sysctl", "-n", "hw.perflevel0.physicalcpu"]]
+
+
+def test_perf_cores_falls_back_to_cpu_count(monkeypatch):
+    import types
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 10)
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    bad = lambda argv, **kw: types.SimpleNamespace(returncode=1, stdout="")  # noqa: E731
+    assert plat.perf_cores(run=bad) == 10  # Intel: ключа нет
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    assert plat.perf_cores() == 10
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    assert plat.perf_cores() == 1
+
+
+def test_low_priority_preexec_only_on_mac(monkeypatch):
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    assert plat.low_priority_preexec() is None
+
+
+def test_low_priority_preexec_on_mac_sets_nice_10_and_throttles_io(monkeypatch):
+    calls = []
+
+    class Libc:
+        def setiopolicy_np(self, which, scope, policy):
+            calls.append(("io", which, scope, policy))
+            return 0
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    monkeypatch.setattr(plat, "_libc", lambda: Libc())
+    monkeypatch.setattr(os, "setpriority", lambda which, who, prio: calls.append(("nice", prio)),
+                        raising=False)
+    monkeypatch.setattr(os, "PRIO_PROCESS", 0, raising=False)
+    fn = plat.low_priority_preexec()
+    assert fn is not None
+    fn()
+    assert ("nice", 10) in calls
+    # IOPOL_TYPE_DISK=0, IOPOL_SCOPE_PROCESS=0, IOPOL_THROTTLE=3 — не «background»
+    assert ("io", 0, 0, 3) in calls
+    fn()  # и повторный вызов не падает

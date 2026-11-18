@@ -689,3 +689,11 @@ def test_real_model_loads_offline_and_fast_embeddings_match(monkeypatch, tmp_pat
                        for s, _, label in r.speaker_diarization.itertracks(yield_label=True)]
     assert turns(fast) == turns(stock) and turns(stock)
     np.testing.assert_allclose(fast.speaker_embeddings, stock.speaker_embeddings, rtol=1e-4, atol=1e-5)
+
+
+def test_diarize_cpu_threads_reuse_the_shared_perf_cores_helper(monkeypatch):
+    from meet import plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    monkeypatch.setattr(plat, "mac_perf_cores", lambda run=None: 7)
+    assert diarize.cpu_threads() == 7

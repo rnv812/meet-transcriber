@@ -352,17 +352,9 @@ def cpu_threads(run=None) -> int | None:
     CPU_THREADS_MAX. Не знаем — None (torch решает сам)."""
     from meet import plat
 
-    if plat.is_macos():
-        import subprocess
-
-        run = run or subprocess.run
-        try:
-            out = run(["sysctl", "-n", "hw.perflevel0.physicalcpu"], capture_output=True, text=True,
-                      timeout=5)
-            if out.returncode == 0 and int(out.stdout.strip()) > 0:
-                return int(out.stdout.strip())
-        except (OSError, subprocess.SubprocessError, ValueError):
-            pass
+    perf = plat.mac_perf_cores(run)
+    if perf:
+        return perf
     try:
         import psutil
 

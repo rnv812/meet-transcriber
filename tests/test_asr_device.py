@@ -65,3 +65,15 @@ def test_explicit_model_name_wins_on_cpu(monkeypatch, tmp_path):
     monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
     asr.transcribe_wav(tmp_path / "a.wav", model_name="chosen")
     assert created[0]["name"] == "chosen"
+
+
+def test_whisper_threads_on_mac_are_performance_cores(monkeypatch):
+    from meet import plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    monkeypatch.setattr(plat, "mac_perf_cores", lambda run=None: 6)
+    assert asr._whisper_kwargs("cpu") == {"cpu_threads": 6}
+    monkeypatch.setattr(plat, "mac_perf_cores", lambda run=None: None)
+    monkeypatch.setattr("os.cpu_count", lambda: 8)
+    assert asr._whisper_kwargs("cpu") == {"cpu_threads": 7}  # Windows: как раньше
+    assert asr._whisper_kwargs("cuda") == {}

@@ -153,10 +153,11 @@ class PcmReader:
     @staticmethod
     def _spawn(argv: list[str]):
         # Фоновая работа: ниже обычного приоритета, как задачи расшифровки
-        # (вне Windows приоритет наследуется от ассистента, см. assist.app).
+        # (на macOS — nice и приглушённый ввод-вывод через plat).
         flags = plat.no_window() | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
         return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, creationflags=flags)
+                                stderr=subprocess.DEVNULL, creationflags=flags,
+                                preexec_fn=plat.low_priority_preexec())
 
     def read(self, seconds: float):
         """До `seconds` секунд звука (меньше — у конца куска); конец — пустой

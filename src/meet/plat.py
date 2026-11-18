@@ -44,6 +44,71 @@ def no_window() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0) if is_windows() else 0
 
 
+def mac_perf_cores(run=None) -> int | None:
+    """Число производительных ядер Apple Silicon (`hw.perflevel0.physicalcpu`,
+    8 у M1 Pro); не macOS, Intel-Mac без этого ключа или сбой — None."""
+    if not is_macos():
+        return None
+    run = run or subprocess.run
+    try:
+        out = run(["sysctl", "-n", "hw.perflevel0.physicalcpu"], capture_output=True,
+                  text=True, timeout=5)
+        if out.returncode == 0 and int(out.stdout.strip()) > 0:
+            return int(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return None
+
+
+def perf_cores(run=None) -> int:
+    """Сколько потоков считать «полноценными»: на Apple Silicon — число
+    производительных ядер (работа не уходит на энергоэффективные), иначе —
+    `os.cpu_count()`; не знаем — 1."""
+    return mac_perf_cores(run) or os.cpu_count() or 1
+
+
+_IOPOL_TYPE_DISK = 0
+_IOPOL_SCOPE_PROCESS = 0
+_IOPOL_THROTTLE = 3
+_NICE_BACKGROUND_JOB = 10
+
+
+def _libc():
+    import ctypes
+
+    return ctypes.CDLL(None, use_errno=True)
+
+
+def low_priority_preexec():
+    """`preexec_fn` для тяжёлой фоновой работы на macOS: `nice` 10 и
+    приглушённый ввод-вывод (`IOPOL_THROTTLE`). Не класс «background»: он сажает
+    процесс только на энергоэффективные ядра и сильно замедляет его. На
+    Windows (там приоритет задают флаги запуска) и без libc — None.
+
+    Библиотека грузится заранее, в родителе: в самом `preexec_fn` — только
+    два вызова, без импортов и выделений."""
+    if not is_macos():
+        return None
+    try:
+        libc = _libc()
+        throttle = libc.setiopolicy_np
+    except (OSError, AttributeError):
+        throttle = None
+
+    def lower() -> None:
+        try:
+            os.setpriority(os.PRIO_PROCESS, 0, _NICE_BACKGROUND_JOB)
+        except (OSError, AttributeError):
+            pass
+        if throttle is not None:
+            try:
+                throttle(_IOPOL_TYPE_DISK, _IOPOL_SCOPE_PROCESS, _IOPOL_THROTTLE)
+            except Exception:
+                pass
+
+    return lower
+
+
 def pid_alive(pid: int) -> bool:
     """Жив ли процесс.
 

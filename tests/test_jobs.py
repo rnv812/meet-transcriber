@@ -504,3 +504,17 @@ def test_worker_argv_of_owner_voice_derive(tmp_path):
                    options={"derive": True, "recordings": str(tmp_path / "-записи")})
     assert jobs.worker_argv(job)[-4:] == [
         "owner_voice", str(tmp_path / "voices"), "--derive", f"--recordings={tmp_path / '-записи'}"]
+
+
+def test_worker_on_mac_starts_with_lowered_priority_and_windows_flags_are_kept(monkeypatch):
+    from meet import plat
+
+    marker = object()
+    monkeypatch.setattr(plat, "low_priority_preexec", lambda: marker)
+    assert jobs._priority_kwargs() == {"preexec_fn": marker}
+    monkeypatch.setattr(plat, "low_priority_preexec", lambda: None)
+    assert jobs._priority_kwargs() == {}
+    # Windows: флаги те же, что были
+    monkeypatch.setattr(jobs.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
+    monkeypatch.setattr(jobs.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    assert jobs._creationflags() == 0x08000000 | 0x4000

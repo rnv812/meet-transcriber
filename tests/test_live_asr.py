@@ -289,3 +289,15 @@ def test_gigaam_not_downloaded_log_names_the_new_place(whisper, monkeypatch):
     logs = []
     pick(_cfg(), log=logs.append)
     assert any("«Распознавание» → «Модели распознавания»" in line for line in logs)
+
+
+def test_live_threads_on_mac_are_perf_cores_minus_two_but_at_least_two(monkeypatch):
+    from meet import live_asr, plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    for perf, want in ((8, 6), (4, 2), (2, 2), (1, 2)):
+        monkeypatch.setattr(plat, "mac_perf_cores", lambda run=None, p=perf: p)
+        assert live_asr._default_threads() == want
+    monkeypatch.setattr(plat, "mac_perf_cores", lambda run=None: None)
+    monkeypatch.setattr("os.cpu_count", lambda: 20)
+    assert live_asr._default_threads() == 8  # Windows: как раньше

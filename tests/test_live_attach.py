@@ -709,3 +709,19 @@ def test_attached_child_starts_at_normal_priority(monkeypatch):
     live_control._spawn_process(["x"], None, {live_control.TAP_TOKEN_ENV: "t"})
     below = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
     assert all(flags & below == 0 for flags in seen) or below == 0
+
+
+def test_catchup_reader_spawn_lowers_priority_on_mac(monkeypatch):
+    from meet import plat
+
+    marker = object()
+    monkeypatch.setattr(plat, "low_priority_preexec", lambda: marker)
+    seen = {}
+    monkeypatch.setattr(live_catchup.subprocess, "Popen",
+                        lambda argv, **kw: seen.update(kw) or object())
+    live_catchup.PcmReader._spawn(["ffmpeg"])
+    assert seen["preexec_fn"] is marker
+    monkeypatch.setattr(plat, "low_priority_preexec", lambda: None)
+    seen.clear()
+    live_catchup.PcmReader._spawn(["ffmpeg"])
+    assert seen["preexec_fn"] is None
