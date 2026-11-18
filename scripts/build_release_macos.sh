@@ -70,7 +70,7 @@ STARTED=$(date +%s)
 step() { printf '\n==> %s\n' "$*"; }
 fail() { echo "ошибка: $*" >&2; exit 1; }
 
-# pkg-config нужен configure ffmpeg (libopus). Он есть в образе macos-14;
+# pkg-config нужен configure ffmpeg (libopus). Он есть в образе macos-15;
 # ставить его на лету (brew — незакреплённая загрузка) не будем.
 for tool in uv npm npx cargo swiftc shasum curl tar make clang python3 pkg-config; do
     command -v "$tool" >/dev/null || fail "$tool не найден в PATH"
