@@ -73,6 +73,26 @@ def test_serve_syncs_proxy_and_forgets_hf_token_between_jobs(monkeypatch, capsys
     assert seen == [("http://new:2", None), (None, None)]
 
 
+def test_shell_hf_token_follows_the_resident_into_the_job_host(monkeypatch, tmp_path):
+    """macOS: токен от оболочки живёт в окружении резидента и меняется по ходу
+    (сохранили или удалили в окне). Процесс задач запущен раньше — текущий
+    токен приходит с каждой задачей, удалённый у задачи пропадает."""
+    from meet import credentials
+
+    job = jobs.Job(id="a", kind=jobs.TRANSCRIBE, folder=str(tmp_path))
+    monkeypatch.setenv(credentials.SHELL_ENV, "hf_shell_now")
+    assert json.loads(jobs._host_request(job))["env"][credentials.SHELL_ENV] == "hf_shell_now"
+    monkeypatch.delenv(credentials.SHELL_ENV)
+    assert credentials.SHELL_ENV not in json.loads(jobs._host_request(job))["env"]
+
+    monkeypatch.setenv(credentials.SHELL_ENV, "hf_shell_at_start")
+    seen = []
+    stdin = io.StringIO(json.dumps({"argv": ["x"], "env": {credentials.SHELL_ENV: "hf_new"}}) + "\n"
+                        + json.dumps({"argv": ["y"], "env": {}}) + "\n")
+    job_worker.serve(stdin, run=lambda argv: seen.append(os.environ.get(credentials.SHELL_ENV)) or 0)
+    assert seen == ["hf_new", None]
+
+
 # --- очередь: процесс-заглушка с тем же протоколом -------------------------------------
 
 FAKE_HOST = textwrap.dedent('''

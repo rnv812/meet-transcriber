@@ -16,6 +16,7 @@ CUDA или ctranslate2 не должно ронять резидента вме
 
 import contextlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -301,7 +302,14 @@ def _host_request(job: Job) -> str:
     модуля), рабочая папка и прокси из настроек — как у отдельного процесса."""
     from meet import netproxy
 
+    from meet import credentials
+
     proxy = {k: v for k, v in netproxy.settings_env().items() if netproxy._is_proxy_var(k)}
+    # macOS: токен от оболочки меняется по ходу (сохранили или удалили в
+    # окне), а процесс задач запущен раньше — текущий идёт с задачей.
+    shell_token = os.environ.get(credentials.SHELL_ENV)
+    if shell_token:
+        proxy[credentials.SHELL_ENV] = shell_token
     return json.dumps({"argv": worker_argv(job)[3:], "cwd": _safe_cwd(job.folder), "env": proxy},
                       ensure_ascii=False) + "\n"
 

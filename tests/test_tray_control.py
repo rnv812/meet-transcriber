@@ -1490,6 +1490,28 @@ def test_hf_token_saved_only_when_check_passes(control_state, monkeypatch, memor
     assert HF not in json.dumps(status)
 
 
+def test_hf_token_kept_by_shell_does_not_touch_keyring(control_state, monkeypatch, memory_keyring):
+    """macOS: токен хранит оболочка (связка ключей от имени Meet.app). Резидент
+    проверяет его и держит в своём окружении для задач — в keyring Python не
+    пишет и в журнал значение не кладёт."""
+    from meet import credentials, models
+
+    monkeypatch.delenv(credentials.SHELL_ENV, raising=False)
+    lines = []
+    monkeypatch.setattr(control_state.tray, "log", lines.append)
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: BAD)
+    assert control_state.set_hf_token({"token": HF, "store": "shell"}) == BAD
+    assert control_state.hf_status()["configured"] is False
+
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: OK)
+    assert control_state.set_hf_token({"token": HF, "store": "shell"}) == OK
+    assert memory_keyring.store == {}
+    assert control_state.hf_status() == {"configured": True, "source": "shell", "check": OK}
+    control_state.clear_hf_token()
+    assert control_state.hf_status()["configured"] is False
+    assert lines and all(HF not in line for line in lines)
+
+
 def test_hf_token_empty_is_bad_request(control_state):
     from meet import control
 

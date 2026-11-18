@@ -23,6 +23,9 @@ const LONG_TIMEOUT: Duration = Duration::from_secs(70);
 /// устройства (до 10 с, `tray_control.LIVE_RECORD_WAIT_S`), и обрывает хвост
 /// прошлого ассистента (до 5 + 5 с) — в худшем случае около 22 с.
 const LIVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// `/hf/token`: резидент проверяет токен на huggingface.co (до 12 с), а на
+/// macOS удаление ждёт keyring Python (до 5 с).
+const HF_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 pub enum Error {
@@ -103,6 +106,7 @@ fn timeout_for(path: &str) -> Duration {
         "/shutdown" | "/recording/stop" | "/recording/cancel" => LONG_TIMEOUT,
         // Запись с ассистентом и «Включить ассистента»: см. LIVE_TIMEOUT.
         "/live/start" | "/live/attach" => LIVE_TIMEOUT,
+        "/hf/token" => HF_TIMEOUT,
         _ => TIMEOUT,
     }
 }
@@ -260,5 +264,12 @@ mod tests {
         // ассистента (до 5 + 5 с): вместе с проверкой провайдера — около 22 с.
         assert_eq!(timeout_for("/live/start"), Duration::from_secs(30));
         assert_eq!(timeout_for("/live/attach"), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn hf_token_outlasts_the_check_and_the_keyring_wait() {
+        // Проверка на huggingface.co — до 12 с; удаление на macOS ждёт keyring
+        // Python до 5 с. Окно ждёт ответа 15 с — оболочка не раньше его.
+        assert!(timeout_for("/hf/token") >= Duration::from_secs(15));
     }
 }

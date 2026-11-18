@@ -24,6 +24,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::api;
 use crate::engine;
+use crate::hf_token;
 use crate::logs::{self, shell_log};
 use crate::platform;
 use crate::tray::{self, Notice};
@@ -886,6 +887,9 @@ impl Supervisor {
         generation: u64,
         engine: &EngineContext,
     ) -> Option<(u32, bool)> {
+        // macOS: токен HF из связки ключей Meet.app — резиденту переменной,
+        // чтобы Python не спрашивал связку ключей от своего имени.
+        let hf_token = hf_token::for_launch();
         for candidate in list {
             let (program, arguments) = launch(candidate, std::process::id());
             let mut command = Command::new(&program);
@@ -897,6 +901,7 @@ impl Supervisor {
                 // потеряться в буфере умирающего процесса).
                 .env("PYTHONIOENCODING", "utf-8")
                 .env("PYTHONUNBUFFERED", "1");
+            hf_token::set_launch_env(&mut command, hf_token.as_deref());
             let from_engine = engine.owns(candidate);
             // ffmpeg установленного приложения лежит в ресурсах, а не в PATH
             // пользователя: резидент (и его задачи) находят его по PATH.

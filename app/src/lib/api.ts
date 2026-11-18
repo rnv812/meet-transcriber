@@ -8,6 +8,7 @@
  * не умеют ставить заголовки. Сервер это поддерживает намеренно (см. control.py).
  */
 
+import { IS_MAC } from "./platform";
 import { inTauri, invoke } from "./shell";
 import type { SegmentWords } from "./words";
 import type {
@@ -510,7 +511,8 @@ export type HfCheck = {
 /** Токен в ответ не уходит никогда — только где он лежит и итог последней проверки. */
 export type HfStatus = {
   configured: boolean;
-  source: "keyring" | "env" | "config" | null;
+  /** "shell" — macOS: в связке ключей от имени Meet.app (хранит оболочка). */
+  source: "shell" | "keyring" | "env" | "config" | null;
   check: HfCheck | null;
 };
 
@@ -533,9 +535,19 @@ async function hfCheck(ep: Endpoint, path: string, data: unknown): Promise<HfChe
   }
 }
 
+/**
+ * macOS: токен хранит оболочка в связке ключей от имени Meet.app — доступ к
+ * записи переживает обновления движка (из Python связка ключей спрашивала бы
+ * «python хочет доступ…» после каждого). Сохранение и удаление идут через
+ * неё; проверку делает резидент, его ответ оболочка и возвращает.
+ */
+const hfViaShell = () => IS_MAC && inTauri();
+
 /** Проверить токен и сохранить, только если доступ есть. */
-export const setHfToken = (ep: Endpoint, token: string) => hfCheck(ep, "/hf/token", { token });
-export const deleteHfToken = (ep: Endpoint) => json<HfStatus>(ep, "/hf/token", { method: "DELETE" });
+export const setHfToken = (ep: Endpoint, token: string) =>
+  hfViaShell() ? invoke<HfCheck>("hf_token_save", { token }) : hfCheck(ep, "/hf/token", { token });
+export const deleteHfToken = (ep: Endpoint) =>
+  hfViaShell() ? invoke<HfStatus>("hf_token_delete") : json<HfStatus>(ep, "/hf/token", { method: "DELETE" });
 /** Перепроверить сохранённый токен (условия модели могли принять с тех пор). */
 export const recheckHf = (ep: Endpoint) => hfCheck(ep, "/hf/check", {});
 

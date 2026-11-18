@@ -940,14 +940,17 @@ def _private_stdin():
 
 
 def _sync_env(env: dict, own: dict) -> None:
-    """Прокси — ровно как в запросе (настройки могли смениться), токен HF —
-    как при старте процесса: задача возьмёт его из диспетчера заново."""
+    """Прокси и токен от оболочки (macOS) — ровно как в запросе (могли
+    смениться), токен HF — как при старте процесса: задача возьмёт его из
+    диспетчера заново."""
     import os
 
-    from meet import netproxy
+    from meet import credentials, netproxy
 
     for name in [k for k in os.environ if netproxy._is_proxy_var(k) and k not in env]:
         os.environ.pop(name, None)
+    if credentials.SHELL_ENV not in env:
+        os.environ.pop(credentials.SHELL_ENV, None)
     os.environ.update({str(k): str(v) for k, v in env.items()})
     for name, value in own.items():
         if value is None:

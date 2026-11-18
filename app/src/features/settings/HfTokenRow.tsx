@@ -16,6 +16,7 @@ import { CheckFailure, HfTokenForm } from "../hf/HfTokenForm";
 import { DiarizationTip, HfTokenTip } from "./tips";
 
 const SOURCE: Record<string, string> = {
+  shell: `сохранён в ${OS_TEXT.keyring}`,
   keyring: `сохранён в ${OS_TEXT.keyring}`,
   config: "сохранён в файле настроек",
   env: "из переменной среды HF_TOKEN",

@@ -17,6 +17,7 @@ mod appearance;
 mod autostart;
 mod close_guard;
 mod engine;
+mod hf_token;
 mod install_wait;
 mod live_panel;
 mod logs;
@@ -172,6 +173,9 @@ fn main() {
             engine::reinstall_engine,
             engine::retry_gigaam_install,
             engine::gpu_info,
+            // macOS: токен Hugging Face в связке ключей от имени Meet.app.
+            hf_token::hf_token_save,
+            hf_token::hf_token_delete,
             // «Где хранить движок и модели»: проверка, перенос, отмена,
             // «Вернуть на системный диск» при отключённом диске.
             storage_app::storage_status,

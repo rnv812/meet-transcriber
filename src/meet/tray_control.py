@@ -3426,7 +3426,11 @@ class TrayControl:
                 "check": self._hf_check}
 
     def set_hf_token(self, body: dict | None) -> dict:
-        """Проверить токен и сохранить его, только если доступ есть."""
+        """Проверить токен и сохранить его, только если доступ есть.
+
+        `"store": "shell"` — macOS: токен хранит оболочка в связке ключей от
+        имени Meet.app (сохранит после успешной проверки); резидент только
+        держит его для себя и задач до перезапуска (`use_shell_token`)."""
         from meet import credentials, models as models_module
 
         token = (body or {}).get("token") if isinstance(body, dict) else None
@@ -3435,7 +3439,11 @@ class TrayControl:
         token = token.strip()
         result = models_module.check_hf_access(token)
         if result.get("ok"):
-            where = credentials.set_hf_token(token)
+            if body.get("store") == credentials.SHELL:
+                credentials.use_shell_token(token)
+                where = credentials.SHELL
+            else:
+                where = credentials.set_hf_token(token)
             # Кэш — о сохранённом токене: меняется только вместе с ним.
             # Неудачная проверка нового токена старый не трогает.
             self._hf_check = result

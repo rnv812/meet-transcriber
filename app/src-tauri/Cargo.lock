@@ -2116,6 +2116,7 @@ dependencies = [
  "plist",
  "portable-pty",
  "rfd",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
