@@ -222,28 +222,185 @@ pub fn login_shell(shell_var: Option<&str>) -> String {
         .to_string()
 }
 
+/// Файл кэша PATH оболочки входа в папке данных.
+#[cfg_attr(not(unix), allow(dead_code))]
+const PATH_CACHE_FILE: &str = "login-path.txt";
+/// В фоне ждём дольше: окна уже открыты, торопиться некуда.
+#[cfg_attr(not(unix), allow(dead_code))]
+const LOGIN_PATH_BACKGROUND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// Программы агентов: нашлась любая — интерактивная оболочка не нужна.
+#[cfg_attr(not(unix), allow(dead_code))]
+const AGENT_PROGRAMS: [&str; 2] = ["claude", "codex"];
+
+/// Кэш PATH: первая строка файла. Нет файла, не UTF-8, пусто или нет ни
+/// одной абсолютной папки — как будто кэша нет.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn read_path_cache(file: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(file).ok()?;
+    let line = text.lines().next()?.trim();
+    line.split(':')
+        .any(|dir| dir.starts_with('/'))
+        .then(|| line.to_string())
+}
+
+/// Записать кэш PATH (создаёт папку данных, если её ещё нет).
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn write_path_cache(file: &Path, path: &str) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(file, format!("{path}\n"))
+}
+
+/// Нужна ли интерактивная оболочка (`-i`): ни claude, ни codex не найдены ни
+/// в одной папке PATH (nvm, conda и подобное настраивают `.zshrc`).
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn needs_interactive_refresh(path: &str, exists: impl Fn(&Path) -> bool) -> bool {
+    !path.split(':').filter(|dir| !dir.is_empty()).any(|dir| {
+        AGENT_PROGRAMS
+            .iter()
+            .any(|name| exists(&Path::new(dir).join(name)))
+    })
+}
+
+/// Аргументы оболочки: `-lc` (профили входа), `-ilc` — ещё и `.zshrc`.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn shell_args(interactive: bool, script: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if interactive {
+        args.push("-i".to_string());
+    }
+    args.extend(["-l".to_string(), "-c".to_string(), script.to_string()]);
+    args
+}
+
+/// Итог обновления PATH.
+#[cfg_attr(not(unix), allow(dead_code))]
+#[derive(Debug, PartialEq, Eq)]
+pub struct RefreshOutcome {
+    /// PATH оболочки входа — его и кладём в кэш.
+    pub login: String,
+    /// Понадобилась интерактивная оболочка и она ответила.
+    pub interactive: bool,
+}
+
+/// Сначала `read(false)` (`-lc`); claude и codex не нашлись ни в `current`, ни
+/// в ответе — `read(true)` (`-ilc`). Сбой интерактивной не отменяет ответ
+/// `-lc`; сбой `-lc` — ошибка (кэш не трогаем).
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn refresh_login_path(
+    current: &str,
+    mut read: impl FnMut(bool) -> Result<String, String>,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<RefreshOutcome, String> {
+    let plain = read(false)?;
+    let (merged, _) = merged_path(current, &plain);
+    if !needs_interactive_refresh(&merged, &exists) {
+        return Ok(RefreshOutcome {
+            login: plain,
+            interactive: false,
+        });
+    }
+    Ok(match read(true) {
+        Ok(login) => RefreshOutcome {
+            login,
+            interactive: true,
+        },
+        Err(_) => RefreshOutcome {
+            login: plain,
+            interactive: false,
+        },
+    })
+}
+
 /// macOS: дополнить PATH процесса PATH-ом оболочки входа. Приложение из
 /// Finder, Dock или автозапуска получает PATH launchd
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`), и ни резидент, ни агент в терминале не
 /// видят `~/.local/bin/claude`, `/opt/homebrew/bin/codex`, node от npm.
-/// Спрашиваем `$SHELL -ilc` (как Терминал: профиль и rc) и дописываем его
-/// папки в конец; прежние остаются. Вызывать в начале `main`, до потоков:
-/// резидент, задания и агенты наследуют окружение. Не вышло — только строка
-/// в журнале.
+/// До создания окон оболочку не ждём: есть кэш в папке данных — берём PATH
+/// из него, а обновляем в фоне; кэша нет (первый запуск) — один `-lc` без `-i`
+/// (профили входа, без `.zshrc`, который будит запросы доступа к папкам).
+/// `-ilc` — в фоне и только если claude и codex не нашлись. Вызывать в начале
+/// `main`, до потоков: резидент, задания и агенты наследуют окружение. Не
+/// вышло — только строка в журнале.
 #[cfg(unix)]
 pub fn adopt_login_path() {
     let shell = login_shell(std::env::var("SHELL").ok().as_deref());
-    match read_login_path(&shell, LOGIN_PATH_TIMEOUT) {
+    let cache_file = crate::resident::data_dir().join(PATH_CACHE_FILE);
+    let current = std::env::var("PATH").unwrap_or_default();
+    if let Some(cached) = read_path_cache(&cache_file) {
+        apply_login_path(&current, &cached, "кэш");
+        std::thread::spawn(move || {
+            let result = refresh_login_path(
+                &current,
+                |interactive| read_login_path(&shell, interactive, LOGIN_PATH_BACKGROUND_TIMEOUT),
+                Path::exists,
+            );
+            finish_background_refresh(&shell, &cache_file, Some(&cached), result);
+        });
+        return;
+    }
+    match read_login_path(&shell, false, LOGIN_PATH_TIMEOUT) {
         Ok(login) => {
-            let current = std::env::var("PATH").unwrap_or_default();
-            let (path, added) = merged_path(&current, &login);
-            if added > 0 {
-                std::env::set_var("PATH", &path);
+            apply_login_path(&current, &login, "оболочка входа");
+            if let Err(error) = write_path_cache(&cache_file, &login) {
+                crate::logs::shell_log!("кэш PATH не записан: {error}");
             }
-            crate::logs::shell_log!("PATH из оболочки входа ({shell}): добавлено папок {added}");
+            let (merged, _) = merged_path(&current, &login);
+            if needs_interactive_refresh(&merged, Path::exists) {
+                std::thread::spawn(move || {
+                    let result =
+                        read_login_path(&shell, true, LOGIN_PATH_BACKGROUND_TIMEOUT).map(|login| {
+                            RefreshOutcome {
+                                login,
+                                interactive: true,
+                            }
+                        });
+                    finish_background_refresh(&shell, &cache_file, None, result);
+                });
+            }
         }
         Err(error) => {
             crate::logs::shell_log!("PATH оболочки входа ({shell}) не получен: {error}");
+        }
+    }
+}
+
+/// Дописать папки `login` в PATH процесса.
+#[cfg(unix)]
+fn apply_login_path(current: &str, login: &str, source: &str) {
+    let (path, added) = merged_path(current, login);
+    if added > 0 {
+        std::env::set_var("PATH", &path);
+    }
+    crate::logs::shell_log!("PATH ({source}): добавлено папок {added}");
+}
+
+/// Конец фонового обновления: новый PATH — в кэш и в окружение процесса
+/// (дети, запущенные дальше, увидят его), сбой — строка в журнале.
+#[cfg(unix)]
+fn finish_background_refresh(
+    shell: &str,
+    cache_file: &Path,
+    cached: Option<&str>,
+    result: Result<RefreshOutcome, String>,
+) {
+    match result {
+        Ok(outcome) => {
+            if cached != Some(outcome.login.as_str()) {
+                if let Err(error) = write_path_cache(cache_file, &outcome.login) {
+                    crate::logs::shell_log!("кэш PATH не записан: {error}");
+                }
+                let current = std::env::var("PATH").unwrap_or_default();
+                apply_login_path(&current, &outcome.login, "обновление в фоне");
+            }
+            crate::logs::shell_log!(
+                "PATH обновлён в фоне ({shell}), интерактивная оболочка: {}",
+                outcome.interactive
+            );
+        }
+        Err(error) => {
+            crate::logs::shell_log!("PATH оболочки входа ({shell}) не обновлён: {error}");
         }
     }
 }
@@ -253,7 +410,11 @@ pub fn adopt_login_path() {
 /// профиля (ssh-agent и т. п.) может держать вывод открытым и после выхода
 /// оболочки. Не уложилась в `timeout` — гасим её группу.
 #[cfg(unix)]
-fn read_login_path(shell: &str, timeout: std::time::Duration) -> Result<String, String> {
+fn read_login_path(
+    shell: &str,
+    interactive: bool,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
     use std::io::Read;
     use std::process::Stdio;
     use std::sync::mpsc;
@@ -261,7 +422,7 @@ fn read_login_path(shell: &str, timeout: std::time::Duration) -> Result<String, 
     let script = format!("printf '%s%s%s' '{LOGIN_PATH_BEGIN}' \"$PATH\" '{LOGIN_PATH_END}'");
     let mut command = Command::new(shell);
     command
-        .args(["-i", "-l", "-c", &script])
+        .args(shell_args(interactive, &script))
         // Как у VS Code: тяжёлый профиль может пропустить лишнее для нас.
         .env("MEET_RESOLVING_ENVIRONMENT", "1")
         .stdin(Stdio::null())
@@ -356,6 +517,127 @@ mod tests {
         assert_eq!(merged_path("/a", "$PATH:bin:/b"), ("/a:/b".to_string(), 1));
     }
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("meet-path-cache-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn path_cache_roundtrips_and_ignores_garbage() {
+        let dir = temp_dir("roundtrip");
+        let file = dir.join(PATH_CACHE_FILE);
+        assert_eq!(read_path_cache(&file), None, "файла нет");
+        write_path_cache(&file, "/opt/homebrew/bin:/usr/bin").unwrap();
+        assert_eq!(
+            read_path_cache(&file).as_deref(),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+        // Пустой, без абсолютных папок или повреждённый кэш — как отсутствие.
+        std::fs::write(
+            &file, "  
+",
+        )
+        .unwrap();
+        assert_eq!(read_path_cache(&file), None);
+        std::fs::write(&file, "$PATH:bin").unwrap();
+        assert_eq!(read_path_cache(&file), None);
+        std::fs::write(&file, [0xff, 0xfe, 0x00]).unwrap();
+        assert_eq!(read_path_cache(&file), None);
+        // Запись создаёт недостающую папку данных.
+        let nested = dir.join("a").join(PATH_CACHE_FILE);
+        write_path_cache(&nested, "/x").unwrap();
+        assert_eq!(read_path_cache(&nested).as_deref(), Some("/x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn interactive_refresh_only_when_agents_are_missing() {
+        let has =
+            |dirs: &'static [&'static str]| move |p: &Path| dirs.iter().any(|d| p.starts_with(d));
+        // claude нашёлся — интерактивная оболочка не нужна.
+        assert!(!needs_interactive_refresh(
+            "/usr/bin:/Users/u/.local/bin",
+            has(&["/Users/u/.local/bin"])
+        ));
+        // codex нашёлся — тоже.
+        assert!(!needs_interactive_refresh(
+            "/opt/homebrew/bin:/usr/bin",
+            has(&["/opt/homebrew/bin"])
+        ));
+        // Ни того ни другого — нужна (nvm и подобное живут в .zshrc).
+        assert!(needs_interactive_refresh("/usr/bin:/bin", has(&[])));
+        assert!(needs_interactive_refresh("", has(&["/usr/bin"])));
+    }
+
+    #[test]
+    fn refresh_tries_plain_login_shell_first() {
+        let mut calls: Vec<bool> = Vec::new();
+        let exists = |p: &Path| p.starts_with("/Users/u/.local/bin");
+        let outcome = refresh_login_path(
+            "/usr/bin:/bin",
+            |interactive| {
+                calls.push(interactive);
+                Ok("/Users/u/.local/bin:/usr/bin".to_string())
+            },
+            exists,
+        )
+        .unwrap();
+        assert_eq!(calls, vec![false], "-ilc не нужен: claude нашёлся");
+        assert_eq!(outcome.login, "/Users/u/.local/bin:/usr/bin");
+        assert!(!outcome.interactive);
+    }
+
+    #[test]
+    fn refresh_falls_back_to_interactive_shell_and_keeps_its_path() {
+        let mut calls: Vec<bool> = Vec::new();
+        let exists = |p: &Path| p.starts_with("/Users/u/.nvm/bin");
+        let outcome = refresh_login_path(
+            "/usr/bin:/bin",
+            |interactive| {
+                calls.push(interactive);
+                Ok(if interactive {
+                    "/Users/u/.nvm/bin:/usr/bin".to_string()
+                } else {
+                    "/usr/bin".to_string()
+                })
+            },
+            exists,
+        )
+        .unwrap();
+        assert_eq!(calls, vec![false, true]);
+        assert_eq!(outcome.login, "/Users/u/.nvm/bin:/usr/bin");
+        assert!(outcome.interactive);
+    }
+
+    #[test]
+    fn refresh_survives_a_failed_interactive_shell() {
+        let outcome = refresh_login_path(
+            "/usr/bin",
+            |interactive| {
+                if interactive {
+                    Err("таймаут".to_string())
+                } else {
+                    Ok("/opt/x/bin".to_string())
+                }
+            },
+            |_| false,
+        )
+        .unwrap();
+        assert_eq!(outcome.login, "/opt/x/bin", "берём то, что дал -lc");
+        // Если и -lc не ответила, это ошибка: кэш не трогаем.
+        assert!(refresh_login_path("/usr/bin", |_| Err("нет".into()), |_| false).is_err());
+    }
+
+    #[test]
+    fn shell_arguments_drop_i_unless_asked() {
+        let script = "echo";
+        assert_eq!(shell_args(false, script), ["-l", "-c", script]);
+        assert_eq!(shell_args(true, script), ["-i", "-l", "-c", script]);
+    }
+
     #[test]
     fn login_shell_defaults_to_zsh() {
         assert_eq!(
@@ -370,7 +652,7 @@ mod tests {
     #[test]
     fn login_path_comes_from_a_real_shell() {
         // /bin/sh: без профилей пользователя, но метки и PATH — настоящие.
-        let path = read_login_path("/bin/sh", LOGIN_PATH_TIMEOUT).unwrap();
+        let path = read_login_path("/bin/sh", false, LOGIN_PATH_TIMEOUT).unwrap();
         assert!(!path.is_empty());
     }
 
@@ -387,6 +669,7 @@ mod tests {
         let started = std::time::Instant::now();
         let result = read_login_path(
             shell.to_str().unwrap(),
+            false,
             std::time::Duration::from_millis(300),
         );
         let took = started.elapsed();
