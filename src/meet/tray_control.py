@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths,
-                  settings, temp_meeting, watch)
+                  settings, temp_meeting, track_sync, watch)
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
 # зависеть от модуля, который тянет pystray, — наоборот, tray импортирует их
@@ -2268,7 +2268,43 @@ class TrayControl:
         jira = self._jira_refs(folder, raw["transcript"])
         if jira is not None:
             raw["jira"] = jira
+        offset = library.read_meta(folder).get(track_sync.META_KEY)
+        if offset is not None:
+            raw["track_offset"] = offset
+        else:
+            self._estimate_offset(folder)
         return raw
+
+    def _estimate_offset(self, folder: Path) -> None:
+        """Сдвиг дорожек старой записи (meet.track_sync) — фоном, один раз: по
+        длительностям дорожек и журналу, без декодирования звука. Идущую запись и
+        запись, чьи дорожки сейчас подменяет обрезка хвоста, не трогаем: у первой
+        ещё нет штатного стопа, и отказ запомнился бы навсегда. Готово — окно
+        перечитывает карточку."""
+        if not track_sync.needs_estimate(folder) or self._processing_now(folder):
+            return
+        key = self._key(folder)
+        if key in self._busy_now():
+            return
+        lock = self.__dict__.setdefault("_offset_lock", threading.Lock())
+        running = self.__dict__.setdefault("_offset_running", set())
+        with lock:
+            if key in running:
+                return
+            running.add(key)
+
+        def work() -> None:
+            try:
+                got = track_sync.ensure(folder)
+                if got is not None and track_sync.META_KEY in library.read_meta(folder):
+                    self._updated(folder)
+            except Exception as e:  # noqa: BLE001 — оценка необязательна, карточка важнее
+                self.tray.log(f"сдвиг дорожек не оценён ({folder.name}): {type(e).__name__}")
+            finally:
+                with lock:
+                    running.discard(key)
+
+        self._background(work, "meet-track-sync")
 
     def _jira_refs(self, folder: Path, transcript: dict | None) -> dict | None:
         """Задачи Jira, названные во встрече (meet.jira_refs): ссылки по

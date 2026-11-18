@@ -2417,3 +2417,76 @@ def test_opencode_session_mark_has_no_id(control_state, tmp_path, monkeypatch):
     assert library.read_meta(folder)["agent_sessions"]["opencode"]["id"] is None
     assert control_state.agent_files(folder.name)["sessions"] == ["opencode"]
     assert "session" not in control_state.agent_context(folder.name, {"provider": "opencode", "resume": True})
+
+
+# --- сдвиг дорожек старой записи: оценка при открытии карточки -------------------
+
+
+def _clean_journal(folder) -> None:
+    t0 = 1_700_000_000.0
+    lines = [
+        {"kind": "log", "at": t0, "text": "запись начата 2026-08-18, pid 1"},
+        {"kind": "log", "at": t0 + 0.5, "text": "mic.opus: Микрофон (48000 Hz, 1 ch)"},
+        {"kind": "log", "at": t0 + 3600, "text": "запись остановлена штатно"},
+    ]
+    (folder / "events.jsonl").write_text(
+        "\n".join(json.dumps(e, ensure_ascii=False) for e in lines) + "\n", encoding="utf-8")
+
+
+@pytest.fixture
+def probe(monkeypatch):
+    """Длительности дорожек без ffprobe: sys на 0,3 с длиннее mic."""
+    from meet import track_sync
+
+    calls = []
+
+    def fake(path):
+        calls.append(path.name)
+        return {"sys": 3600.4, "mic": 3600.1}[path.stem]
+
+    monkeypatch.setattr(track_sync, "probe_duration", fake)
+    return calls
+
+
+def test_opening_a_two_track_card_estimates_the_offset_once(with_recordings, app, probe):
+    from meet import track_sync
+
+    _clean_journal(with_recordings)
+    state = tray_control.TrayControl(app)
+    state._background = lambda fn, name=None: fn()
+    updated = []
+    app.bus.subscribe(lambda e: updated.append(e) if e.kind == tray_control.RECORDING_UPDATED else None)
+    state.recording(with_recordings.name)
+    stored = library.read_meta(with_recordings)[track_sync.META_KEY]
+    assert stored["mic_s"] == pytest.approx(0.3) and stored["method"] == "durations"
+    assert [e.data["id"] for e in updated] == [with_recordings.name]
+    # Карточка знает об оценке; повторное открытие её не повторяет.
+    got = state.recording(with_recordings.name)
+    assert got["track_offset"] == stored
+    assert sorted(probe) == ["mic.opus", "sys.opus"]
+
+
+def test_card_of_a_recording_in_progress_is_not_estimated(with_recordings, app, probe, monkeypatch):
+    from meet import track_sync
+
+    _clean_journal(with_recordings)
+    state = tray_control.TrayControl(app)
+    state._background = lambda fn, name=None: fn()
+    app.recording = True
+    monkeypatch.setattr(app, "_current_folder", lambda: str(with_recordings))
+    got = state.recording(with_recordings.name)
+    assert "track_offset" not in got
+    assert track_sync.META_KEY not in library.read_meta(with_recordings)
+    assert probe == []
+
+
+def test_card_whose_tracks_are_being_trimmed_is_not_estimated(with_recordings, app, probe):
+    from meet import track_sync
+
+    _clean_journal(with_recordings)
+    state = tray_control.TrayControl(app)
+    state._background = lambda fn, name=None: fn()
+    state._set_processing(with_recordings, True)
+    state.recording(with_recordings.name)
+    assert track_sync.META_KEY not in library.read_meta(with_recordings)
+    assert probe == []
