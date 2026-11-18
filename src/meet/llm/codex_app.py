@@ -605,15 +605,15 @@ def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, images, re
     return AgentReply(text="", error=message[-_ERR_LIMIT:], session_id=sid)
 
 
-def _close(peer: _Peer, proc) -> None:
-    """Конец хода: stdin закрыт — сервер выходит сам; не вышел за
-    CLOSE_GRACE_S — дерево процессов гасится."""
+def _close(peer: _Peer, proc, grace: float = CLOSE_GRACE_S) -> None:
+    """Конец хода: stdin закрыт — сервер выходит сам; не вышел за `grace`
+    секунд — дерево процессов гасится."""
     try:
         proc.stdin.close()
     except (OSError, ValueError):
         pass
     try:
-        proc.wait(timeout=CLOSE_GRACE_S)
+        proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         kill_tree(proc)
         try:

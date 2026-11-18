@@ -114,9 +114,27 @@ def applied_s(transcript: dict | None) -> float:
     return float(value)
 
 
+# Применённый сдвиг по папке: путь транскрипта → ((mtime_ns, размер), сдвиг).
+# Плеер спрашивает его на каждый запрос диапазона звука, а транскрипт длинной
+# встречи — мегабайты JSON.
+_APPLIED_CACHE: dict[str, tuple[tuple[int, int], float]] = {}
+
+
 def folder_applied_s(folder: Path) -> float:
-    """Применённый сдвиг микрофона записи — из её транскрипта (нет — 0)."""
-    return applied_s(library.read_transcript(Path(folder)))
+    """Применённый сдвиг микрофона записи — из её транскрипта (нет — 0).
+    Перечитывается, только когда транскрипт изменился."""
+    path = library.transcript_path(Path(folder))
+    try:
+        st = path.stat()
+    except OSError:
+        return 0.0
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _APPLIED_CACHE.get(str(path))
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    value = applied_s(library.read_transcript(Path(folder)))
+    _APPLIED_CACHE[str(path)] = (stamp, value)
+    return value
 
 
 def track_time(stem: str, t: float, offset: float) -> float:

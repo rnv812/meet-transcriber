@@ -520,24 +520,9 @@ class _Stopper:
         self.peer.notify_params("session/cancel", {"sessionId": self.turn.session_id})
 
 
-class _Call:
-    """Вызов для остановки из цикла событий (поток to_thread не отменить)."""
-
-    def __init__(self) -> None:
-        self.proc = None
-        self.cancelled = False
-        self.stop = None
-
-    def cancel(self) -> None:
-        self.cancelled = True
-        if self.stop is not None:
-            self.stop()
-        elif self.proc is not None:
-            kill_tree(self.proc)
-
-
-def _left(deadline: float, cap: float) -> float:
-    return max(0.0, min(cap, deadline - time.monotonic()))
+# Вызов для остановки из цикла событий и остаток срока — те же, что у Codex.
+_Call = codex_app._codex._Call
+_left = codex_app._left
 
 
 def _auth_error(err: "codex_app._RpcError") -> bool:
@@ -713,19 +698,7 @@ def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, resume, ke
 def _close(peer: _Peer, proc) -> None:
     """Конец хода: stdin закрыт — agy выходит сам; не вышел за CLOSE_GRACE_S —
     дерево процессов гасится."""
-    try:
-        proc.stdin.close()
-    except (OSError, ValueError):
-        pass
-    try:
-        proc.wait(timeout=CLOSE_GRACE_S)
-    except subprocess.TimeoutExpired:
-        kill_tree(proc)
-        try:
-            proc.wait(timeout=10)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-    peer.join(timeout=5)
+    codex_app._close(peer, proc, grace=CLOSE_GRACE_S)
 
 
 # --- ворота -------------------------------------------------------------------------------

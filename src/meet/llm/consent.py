@@ -2916,6 +2916,20 @@ def _ps_quote(path: str) -> str:
     return "'" + str(path).replace("'", "''") + "'"
 
 
+def _delete_call(path: str, windows: bool) -> tuple[str, dict]:
+    """Удаление файла агентом → команда удаления для ворот (риск — как у неё)."""
+    if windows:
+        return "PowerShell", {"command": f"Remove-Item -LiteralPath {_ps_quote(path)}"}
+    return "Bash", {"command": f"rm -- {shlex.quote(path)}"}
+
+
+def _move_call(path: str, dest: str, windows: bool) -> tuple[str, dict]:
+    """Перенос файла агентом → команда переноса для ворот."""
+    if windows:
+        return "PowerShell", {"command": f"Move-Item -LiteralPath {_ps_quote(path)} -Destination {_ps_quote(dest)}"}
+    return "Bash", {"command": f"mv -- {shlex.quote(path)} {shlex.quote(dest)}"}
+
+
 def codex_calls(method: str, params: dict, item: dict, *, windows: bool) -> list[tuple[str, dict]]:
     """Запрос одобрения Codex → вызовы для ворот; пусто — понять нельзя
     (отказ). Команда — `codex_command`. Правка файлов — по изменениям из
@@ -2944,12 +2958,9 @@ def codex_calls(method: str, params: dict, item: dict, *, windows: bool) -> list
         kind_type = kind.get("type") if isinstance(kind, dict) else kind
         move = kind.get("move_path") if isinstance(kind, dict) else None
         if kind_type == "delete":
-            out.append(("PowerShell", {"command": f"Remove-Item -LiteralPath {_ps_quote(path)}"}) if windows
-                       else ("Bash", {"command": f"rm -- {shlex.quote(path)}"}))
+            out.append(_delete_call(path, windows))
         elif kind_type == "update" and isinstance(move, str) and move.strip():
-            out.append(("PowerShell", {"command": f"Move-Item -LiteralPath {_ps_quote(path)} "
-                                                  f"-Destination {_ps_quote(move)}"}) if windows
-                       else ("Bash", {"command": f"mv -- {shlex.quote(path)} {shlex.quote(move)}"}))
+            out.append(_move_call(path, move, windows))
         elif kind_type in ("add", "update"):
             out.append(("Write", {"file_path": path, "content": str(change.get("diff") or "")}))
         else:
@@ -3181,15 +3192,12 @@ def agy_call(tool_call: dict, *, windows: bool) -> tuple[str, dict] | None:
     if kind == "delete":
         if not path:
             return None
-        return (("PowerShell", {"command": f"Remove-Item -LiteralPath {_ps_quote(path)}"}) if windows
-                else ("Bash", {"command": f"rm -- {shlex.quote(path)}"}))
+        return _delete_call(path, windows)
     if kind == "move":
         dest = _agy_str(raw, _AGY_DEST_KEYS)
         if not path or not dest:
             return None
-        return (("PowerShell", {"command": f"Move-Item -LiteralPath {_ps_quote(path)} "
-                                           f"-Destination {_ps_quote(dest)}"}) if windows
-                else ("Bash", {"command": f"mv -- {shlex.quote(path)} {shlex.quote(dest)}"}))
+        return _move_call(path, dest, windows)
     if kind == "fetch":
         url = _agy_str(raw, _AGY_URL_KEYS)
         if url:

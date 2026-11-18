@@ -284,9 +284,9 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
 
     name = valid_name(name)
     for folder in reversed(library.recording_folders(recordings)):
-        if library.final_transcript(folder) is None:
-            continue
         data = library.read_transcript_full(folder)
+        if data is None or library.is_text_phase(data):
+            continue
         turns = _turns(data, name)
         found = speakers.pick_samples(turns, 1)
         if found:

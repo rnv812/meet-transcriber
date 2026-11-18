@@ -244,3 +244,5 @@ def test_path_key_on_windows_is_as_before(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     for text in ("C:/Rec/Встреча", NFD, NFC):
         assert plat.path_key(text) == os.path.normcase(text)
+    if os.name == "nt":
+        assert plat.path_key("C:/Rec/Встреча") == r"c:\rec\встреча"
