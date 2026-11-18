@@ -274,7 +274,7 @@ jobs:
   test-python-macos:
     permissions:
       contents: read
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     continue-on-error: true
     strategy:
@@ -340,7 +340,7 @@ jobs:
     # Без права записи: ни на теге, ни в пробном прогоне.
     permissions:
       contents: read
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     defaults:
       run:
