@@ -577,6 +577,8 @@ def diarize_wav(
     finally:
         threads.restore()
     clock.stop()
+    if device.type == "mps":  # кэш видеоядер — не держать между задачами
+        memory.release(torch)
     diar = _to_diarization(result, exclusive=exclusive)
     diar.device = used
     diar.timings = clock.result()

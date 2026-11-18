@@ -41,7 +41,7 @@ def _capped(call):
 def _embedder_device() -> str:
     """cuda — когда torch видит видеокарту (`asr.torch_device`: не профиль
     CPU, не «Процессор» в настройках, без сбоя CUDA у torch), чем бы ни
-    распознавался текст; иначе cpu (на macOS — тоже cpu)."""
+    распознавался текст; mps — на Mac с видеоядрами; иначе cpu."""
     from meet import asr
 
     return asr.torch_device()
@@ -58,7 +58,7 @@ def _build_embedder(device: str):
 
     def embed(audio: np.ndarray) -> np.ndarray:
         wav = torch.from_numpy(audio).float()[None, None, :]
-        out = model(wav) if device == "cuda" else _capped(lambda: model(wav))
+        out = model(wav) if device in ("cuda", "mps") else _capped(lambda: model(wav))
         return np.asarray(out[0])
 
     return embed
@@ -79,34 +79,41 @@ def _model_on_disk() -> bool:
 def _load_embedder():
     """Реальный эмбеддер: np.float32 16 кГц -> np.ndarray (256,). Видеокарта,
     если она рабочая; не нашлись библиотеки CUDA — один повтор на процессоре.
+    MPS (Mac) — так же: сбой операции на видеоядрах (`memory.mps_failed`) —
+    процессор, на пробе и на живом сегменте.
 
     torch грузит cuDNN лениво, на первой свёртке: поэтому на видеокарте сразу
     пробный эмбеддинг секунды тишины, а если библиотека всё же отвалится на
     живом сегменте — эмбеддер один раз переезжает на процессор там же."""
-    from meet import asr
+    from meet import asr, memory
 
     device = _embedder_device()
-    try:
-        embed = _build_embedder(device)
-        if device == "cuda":
-            embed(np.zeros(SAMPLE_RATE, dtype=np.float32))
-    except Exception as e:
+    def to_cpu(e) -> bool:
+        """Сбой видеокарты или видеоядер, после которого считаем на процессоре."""
         if device == "cuda" and asr.missing_cuda_library(e):
             asr.torch_cuda_failed(e)
+            return True
+        return device == "mps" and memory.mps_failed(e, "Голоса")
+
+    try:
+        embed = _build_embedder(device)
+        if device != "cpu":
+            embed(np.zeros(SAMPLE_RATE, dtype=np.float32))
+    except Exception as e:
+        if to_cpu(e):
             return _build_embedder("cpu")
         raise
-    if device != "cuda":
+    if device == "cpu":
         return embed
-    current = {"embed": embed, "on_cuda": True}
+    current = {"embed": embed, "on_gpu": True}
 
     def guarded(audio: np.ndarray) -> np.ndarray:
         try:
             return current["embed"](audio)
         except Exception as e:
-            if not (current["on_cuda"] and asr.missing_cuda_library(e)):
+            if not (current["on_gpu"] and to_cpu(e)):
                 raise
-            asr.torch_cuda_failed(e)
-            current["on_cuda"] = False
+            current["on_gpu"] = False
             current["embed"] = _build_embedder("cpu")
             return current["embed"](audio)
 

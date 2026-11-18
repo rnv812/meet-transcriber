@@ -320,15 +320,23 @@ def torch_device(setting: str | None = None) -> str:
     распознавался текст: ctranslate2 без библиотек CUDA (GigaAM/Whisper на
     процессоре) — не повод гнать диаризацию часовой встречи процессором, там
     она в десятки раз дольше. Движок профиля CPU (torch процессорный), сбой
-    CUDA у torch в этом процессе, torch не импортируется — процессор. MPS на
-    macOS решает `diarize.pick_device`."""
-    if _torch_failure is not None or engine_profile() in CPU_PROFILES:
+    CUDA у torch в этом процессе, torch не импортируется — процессор. Профиль
+    mac (Apple Silicon): MPS, если torch его видит — GigaAM, выравнивание и
+    голоса; сбой операции на MPS повторяется на процессоре у самого шага
+    (`memory.mps_failed`). Диаризацию на MPS ведёт `diarize.pick_device`."""
+    if _torch_failure is not None or device_setting(setting) == "cpu":
         return "cpu"
-    if device_setting(setting) == "cpu":
-        return "cpu"
+    profile = engine_profile()
     try:
         import torch
 
+        if profile == "mac":
+            if not torch.backends.mps.is_available():
+                return "cpu"
+            os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+            return "mps"
+        if profile in CPU_PROFILES:
+            return "cpu"
         return "cuda" if torch.cuda.is_available() else "cpu"
     except Exception:
         return "cpu"
@@ -895,8 +903,10 @@ def transcribe_wav(
 
         _add_nvidia_dll_dirs()
         extra = {"on_chunk": lambda done, total: on_progress(done / total if total else 1.0)} if on_progress else {}
+        # На Mac GigaAM — на видеоядрах (MPS); сбой там gigaam_asr повторяет на процессоре.
+        device = "mps" if choice.device == "cpu" and torch_device() == "mps" else choice.device
         return gigaam_asr.transcribe(
-            path, model_name=choice.gigaam_model or gigaam_asr.MODEL_NAME, device=choice.device, **extra)
+            path, model_name=choice.gigaam_model or gigaam_asr.MODEL_NAME, device=device, **extra)
     _add_nvidia_dll_dirs()
     _apply_hf_token()
     from faster_whisper import WhisperModel

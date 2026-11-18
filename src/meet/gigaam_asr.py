@@ -796,6 +796,29 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
                regions=None, model=None, on_chunk=None) -> list:
     """Распознать mono 16 кГц wav (выход to_wav16k) → list[asr.Segment].
 
+    На MPS (Apple Silicon) не все операции есть: сбой NotImplementedError или
+    RuntimeError — весь проход заново на процессоре (причина — в журнал, без
+    текста встречи). Свою модель (`model`) не меняет: устройство у неё чужое.
+
+    Разбор и параметры — в `_transcribe`."""
+    if device != "mps" or model is not None:
+        return _transcribe(path, model_name=model_name, device=device, regions=regions,
+                           model=model, on_chunk=on_chunk)
+    try:
+        return _transcribe(path, model_name=model_name, device=device, regions=regions,
+                           model=model, on_chunk=on_chunk)
+    except Exception as e:
+        if not memory.mps_failed(e, "Распознавание GigaAM"):
+            raise
+        memory.release(sys.modules.get("torch"))
+    return _transcribe(path, model_name=model_name, device="cpu", regions=regions,
+                       model=model, on_chunk=on_chunk)
+
+
+def _transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
+                regions=None, model=None, on_chunk=None) -> list:
+    """Распознать mono 16 кГц wav (выход to_wav16k) → list[asr.Segment].
+
     `regions` и `model` подменяются в тестах; `on_chunk(done, total)` — ход
     в секундах звука кусков (длинный кусок весит больше короткого): первое
     `on_chunk(0, total)` — куски нарезаны, распознавание началось.
@@ -858,11 +881,6 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
     finally:
         if own:
             del model
-            if device == "cuda":
-                try:
-                    import torch
-
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
+            if device in ("cuda", "mps"):
+                memory.release(sys.modules.get("torch"))
     return to_segments(words)

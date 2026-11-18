@@ -37,7 +37,8 @@ def error_text(error: BaseException) -> str:
 
 
 def release(torch=None) -> None:
-    """Отдать что можно перед повтором: мусор Python и кэш видеопамяти torch."""
+    """Отдать что можно между задачами и перед повтором: мусор Python и кэш
+    видеопамяти torch — CUDA (Windows) или MPS (Mac)."""
     gc.collect()
     cuda = getattr(torch, "cuda", None)
     try:
@@ -45,3 +46,20 @@ def release(torch=None) -> None:
             cuda.empty_cache()
     except Exception:
         pass
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    try:
+        if mps is not None and mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
+
+
+def mps_failed(error: BaseException, what: str) -> bool:
+    """Операция упала на MPS (Apple Silicon): не все операции torch там есть
+    (NotImplementedError), остальное — RuntimeError самого MPS. True — шаг
+    стоит повторить на процессоре; в журнал — только класс ошибки, без текста
+    (в нём могут быть слова встречи)."""
+    if not isinstance(error, (NotImplementedError, RuntimeError)):
+        return False
+    print(f"{what} на MPS не прошло ({type(error).__name__}) — повторяю на процессоре")
+    return True

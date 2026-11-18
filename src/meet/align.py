@@ -9,7 +9,7 @@
 whisperX для русского. Модуль самодостаточный, в основной пайплайн НЕ вплетён:
 экспериментальный шаг, вызывается явно.
 """
-from meet import asr
+from meet import asr, memory
 from meet.asr import Segment, Word
 
 ALIGN_MODEL = "jonatasgrosman/wav2vec2-large-xlsr-53-russian"
@@ -87,14 +87,27 @@ def align_segments(segments, wav_path, device=None, on_progress=None):
     wav_path — mono 16 kHz wav (выход to_wav16k). Текст и границы сегментов
     не меняются, только word.start/word.end внутри них.
 
-    `on_progress(доля)` — ход 0…1 по сегментам, с весом их длительности."""
+    `on_progress(доля)` — ход 0…1 по сегментам, с весом их длительности.
+
+    Сбой на MPS (Apple Silicon) — весь проход заново на процессоре."""
+    device = device or _align_device()
+    if device != "mps":
+        return _align(segments, wav_path, device, on_progress)
+    try:
+        return _align(segments, wav_path, device, on_progress)
+    except Exception as e:
+        if not memory.mps_failed(e, "Выравнивание слов"):
+            raise
+    return _align(segments, wav_path, "cpu", on_progress)
+
+
+def _align(segments, wav_path, device, on_progress):
     import wave
 
     import numpy as np
     import torch
     import torchaudio.functional as AF
 
-    device = device or _align_device()
     with wave.open(str(wav_path), "rb") as wf:
         sr = wf.getframerate()
         audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
@@ -145,7 +158,7 @@ def align_segments(segments, wav_path, device=None, on_progress=None):
             aligned += 1
     finally:
         del model
-        torch.cuda.empty_cache()
+        memory.release(torch)
     if on_progress is not None:
         on_progress(1.0)
     print(f"forced alignment: выровнено {aligned}/{len(segments)} сегментов")
