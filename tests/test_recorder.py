@@ -1016,3 +1016,85 @@ def test_pinned_output_loopback_ignores_instance_number(monkeypatch):
     dev, fell_back = recorder.resolve_device(p, "output", "Наушники (2- WF)")
     p.terminate()
     assert dev["name"] == "Наушники (WF) [Loopback]" and fell_back is False
+
+
+# --- общий ноль времени у дорожек ---
+
+
+def _slow_first_pick(session, delay_s):
+    """Выбор устройства первой дорожки занимает `delay_s` с (опрос устройств,
+    тёплый старт): вторая дорожка открывается заметно позже."""
+    first = session.tracks[0]
+    real = first.pick
+
+    def slow(p):
+        time.sleep(delay_s)
+        return real(p)
+
+    first.pick = slow
+
+
+def test_both_tracks_count_time_from_one_session_start(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    t0 = time.monotonic()
+    monkeypatch.setattr(recorder, "_clock", lambda: t0)
+    s = recorder._Session(tmp_path, None, mic_device=None, output_device=None)
+    _slow_first_pick(s, 0.3)
+    s.start()
+    sys_track, mic = s.tracks
+    assert sys_track.started == mic.started == t0
+
+
+def test_late_mic_gets_silence_for_the_time_before_its_open(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    s = recorder._Session(tmp_path, None, mic_device=None, output_device=None)
+    _slow_first_pick(s, 0.4)
+    s.start()
+    sys_track, mic = s.tracks
+    assert mic.started == sys_track.started
+    mic._pad_silence()
+    padded_s = len(_DummyWriter.instances[1].data) / (2 * 16000)
+    assert 0.3 <= padded_s <= 0.6  # время выбора устройства — тишиной перед звуком
+
+
+def test_reopen_keeps_the_shared_start(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path)
+    before = [t.started for t in s.tracks]
+    assert before[0] == before[1]
+    _FakePyAudio.devices["capture"] = _dev("Наушники")
+    s.tick()
+    assert [t.started for t in s.tracks] == before
+
+
+def test_failed_helper_branch_takes_the_shared_start(tmp_path, monkeypatch):
+    from meet import audiotap
+
+    monkeypatch.setattr(recorder, "_MAC", True)
+    monkeypatch.setattr(recorder, "OpusWriter", _DummyWriter)
+    t0 = time.monotonic() - 2.0
+    monkeypatch.setattr(recorder, "_clock", lambda: t0 + 99.0)  # не должен понадобиться
+
+    def refuse(p):
+        raise audiotap.TapError("помощник отказал")
+
+    track = recorder._Track("sys.opus", refuse, 0, tmp_path, log=lambda m: None)
+    track.first_open(object(), t0)
+    assert track.missing and track.started == t0
+    assert track.bytes_written == 0
+    track.tick_pad()  # долив идёт от того же нуля
+    padded_s = len(_DummyWriter.instances[-1].data) / (2 * track.rate)
+    assert 1.8 <= padded_s <= 2.5  # тишина за время до открытия
+
+
+def test_duration_counts_from_the_shared_start(tmp_path, monkeypatch):
+    seen = []
+    bus = events.EventBus()
+    bus.subscribe(seen.append)
+    _fake_audio(monkeypatch)
+    s = recorder._Session(tmp_path, bus, mic_device=None, output_device=None)
+    _slow_first_pick(s, 0.3)
+    s.start()
+    t0 = s.tracks[0].started
+    s.close(until=t0 + 10.0)
+    stopped = next(e for e in seen if e.kind == events.RECORD_STOPPED)
+    assert stopped.data["duration_s"] == 10.0

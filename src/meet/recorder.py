@@ -46,6 +46,9 @@ RESTART_MIN_S = 2.0  # анти-шторм: перезапуск дорожек 
 RETRY_S = 5.0  # первый повтор, пока дорожка ждёт устройство
 RETRY_MAX_S = 60.0  # потолок backoff'а повторов
 MIN_GAP_S = 0.05  # паузы короче не заполняем: латентность захвата, не обрыв
+# Часы начала сессии и дорожек (подменяются в тестах); остальной код записи
+# считает время по `time.monotonic()` напрямую.
+_clock = time.monotonic
 TICK_PAD_S = 1.0  # живой стрим без данных дольше этого — доливать тишину
 # macOS, системный звук (помощник ScreenCaptureKit): своя пауза между
 # перезапусками помощника — 2, 4, 8 … 60 с; продержался TAP_STABLE_S —
@@ -442,8 +445,12 @@ class _Track:
         (и найденная) — нет: смена системного её не касается."""
         return not getattr(self.pick, "pinned", False)
 
-    def first_open(self, p) -> None:
+    def first_open(self, p, t0: float | None = None) -> None:
         """Первый запуск: устройство обязано существовать (иначе исключение).
+
+        `t0` — общий ноль сессии (момент начала записи, `_Session.start`): обе
+        дорожки считают время от него, поэтому медленное открытие устройства
+        одной не сдвигает её относительно другой. Без него — «сейчас».
 
         macOS: системный звук не открылся (помощник ScreenCaptureKit отказал)
         — запись не отменяется: дорожка собеседников пишет тишину, микрофон —
@@ -459,10 +466,10 @@ class _Track:
 
             dev = mac_audio.tap_device()
             self.is_tap = True
-            self._start_writer(dev)
+            self._start_writer(dev, t0)
             self._mark_missing(e)
             return
-        self._start_writer(dev)
+        self._start_writer(dev, t0)
         try:
             self._open(p, dev)
         except Exception as e:
@@ -472,11 +479,11 @@ class _Track:
             return
         self._note_fallback()
 
-    def _start_writer(self, dev) -> None:
+    def _start_writer(self, dev, t0: float | None = None) -> None:
         self.rate = int(dev["defaultSampleRate"])
         self.channels = min(2, max(1, int(dev["maxInputChannels"])))
         self.writer = OpusWriter(self.path, self.channels, self.rate)
-        self.started = time.monotonic()
+        self.started = _clock() if t0 is None else t0
         if self.pcm_tap is not None:
             try:
                 self.pcm_tap.configure(self.role, self.fname, self.rate, self.channels)
@@ -1043,8 +1050,11 @@ class _Session:
         self.ids = self.endpoints.ids()
         if self.ids is None and not _MAC:
             self.log("COM недоступен — смену дефолтного устройства не отслеживаю")
+        # Общий ноль: обе дорожки считают время от одного момента, даже если
+        # устройство второй открывается заметно позже первой.
+        t0 = _clock()
         for t in self.tracks:
-            t.first_open(self.p)
+            t.first_open(self.p, t0)
             self.log(
                 f"{t.fname}: {t.device_name} "
                 f"({t.src_rate} Hz, {t.src_channels} ch)"
