@@ -623,6 +623,16 @@ def test_freedom_prompts_require_an_explicit_result_at_the_end():
     assert "всегда заверши явным итогом" not in pp._FREEDOM_FILES   # только чтение — итог не нужен
 
 
+def test_runner_prompt_lets_codex_read_outside_its_folders_on_request():
+    """Codex/OpenCode по просьбе пользователя читают файлы вне своих папок сразу;
+    промпт не внушает, что спросить пользователя нельзя, а секреты по-прежнему закрыты."""
+    runner = pp._FREEDOM_RUNNER
+    assert "спросить пользователя о твоём вызове Meet не может" not in runner
+    assert "Читать файлы вне своих папок" in runner and "по просьбе пользователя" in runner
+    assert "Закрытые папки, ключи, пароли и настройки программ не открывай никогда." in runner
+    assert "Удалять файлы, писать вне своих папок и отправлять что-то наружу" in runner
+
+
 def test_claude_prompts_name_the_meet_tools_and_runners_do_not():
     for mode in ("auto", "confirm"):
         text = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, mode=mode)
