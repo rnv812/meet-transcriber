@@ -4,10 +4,11 @@
  * собеседников. Подпись без «(вывод)», под списком — что выбрано на самом деле. Данные выдуманные.
  */
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import type * as api from "../../lib/api";
+import * as api from "../../lib/api";
+import * as shell from "../../lib/shell";
 import { SoundSection } from "./SoundSection";
 import type { Raw } from "./Section";
 
@@ -15,6 +16,18 @@ vi.mock("../../lib/platform", async (orig) => {
   const real = await orig<typeof import("../../lib/platform")>();
   return { ...real, OS: "macos", IS_MAC: true, OS_TEXT: real.osTexts("macos") };
 });
+
+vi.mock("../../lib/api", async (orig) => ({
+  ...(await orig<typeof import("../../lib/api")>()),
+  checkProcessTap: vi.fn(),
+}));
+
+vi.mock("../../lib/shell", async (orig) => ({
+  ...(await orig<typeof import("../../lib/shell")>()),
+  openPrivacyPane: vi.fn(async () => {}),
+}));
+
+beforeEach(() => vi.clearAllMocks());
 
 const ep = { base: "/api", token: null };
 const devices: api.Devices = {
@@ -107,4 +120,70 @@ test("строки нет: микрофон выбран вручную, сис�
   const mini = { ...bluetooth, inputs: [{ name: "AirPods Анны", default: true, transport: "bluetooth" }] };
   render(<Editable recording={{ mic_device: null }} list={mini} />);
   expect(mic()).not.toHaveTextContent("Meet запишет");
+});
+
+/** macOS 14.4+: резидент разрешает выбрать process tap. */
+const tapReady: api.Devices = { ...devices, process_tap: true };
+const TAP_SWITCH = "Записывать звук собеседников без «Записи экрана»";
+const tapCheck = () => screen.getByRole("group", { name: "Проверка записи системного звука" });
+
+test("macOS старше 14.4 (резидент не разрешает process tap) — выключателя нет", () => {
+  render(<Editable recording={{}} list={devices} />);
+  expect(screen.queryByRole("switch", { name: TAP_SWITCH })).not.toBeInTheDocument();
+});
+
+test("включение — сначала проверка: звук есть — выключатель включён, в черновике process_tap", async () => {
+  vi.mocked(api.checkProcessTap).mockResolvedValue(
+    { ok: true, result: "sound", notice: "Звук есть — Meet будет писать звук собеседников без «Записи экрана».", pane: null });
+  const drafts: Raw[] = [];
+  render(<Editable recording={{}} list={tapReady} onDraft={(d) => drafts.push(d)} />);
+  const toggle = screen.getByRole("switch", { name: TAP_SWITCH });
+  expect(toggle).toHaveAttribute("aria-checked", "false");
+  await userEvent.click(toggle);
+  // Сам по себе выключатель не включается: просим включить звук и проверить.
+  expect(drafts).toEqual([]);
+  expect(toggle).toHaveAttribute("aria-checked", "false");
+  expect(tapCheck()).toHaveTextContent("Включите любой звук (например, видео) и нажмите «Проверить»");
+  await userEvent.click(within(tapCheck()).getByRole("button", { name: "Проверить" }));
+  expect(api.checkProcessTap).toHaveBeenCalledTimes(1);
+  expect(drafts.at(-1)?.recording?.mac_capture).toBe("process_tap");
+  expect(screen.getByRole("switch", { name: TAP_SWITCH })).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByText(/Звук есть/)).toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Проверка записи системного звука" })).not.toBeInTheDocument();
+});
+
+test("проверка услышала только нули — выключатель выключен, подсказка открывает «Запись системного звука»", async () => {
+  vi.mocked(api.checkProcessTap).mockResolvedValue({
+    ok: false, result: "silence", pane: "system_audio",
+    notice: "Meet услышал только тишину. Если звук играл — разрешите Meet «Запись системного звука».",
+  });
+  const drafts: Raw[] = [];
+  render(<Editable recording={{}} list={tapReady} onDraft={(d) => drafts.push(d)} />);
+  await userEvent.click(screen.getByRole("switch", { name: TAP_SWITCH }));
+  await userEvent.click(within(tapCheck()).getByRole("button", { name: "Проверить" }));
+  expect(drafts).toEqual([]);
+  expect(screen.getByRole("switch", { name: TAP_SWITCH })).toHaveAttribute("aria-checked", "false");
+  expect(tapCheck()).toHaveTextContent("«Запись системного звука»");
+  await userEvent.click(within(tapCheck()).getByRole("button", { name: "Открыть «Запись системного звука»" }));
+  expect(shell.openPrivacyPane).toHaveBeenCalledWith("system_audio");
+});
+
+test("сбой проверки — текст ошибки, выключатель выключен", async () => {
+  vi.mocked(api.checkProcessTap).mockRejectedValue(new Error("Проверка уже идёт"));
+  const drafts: Raw[] = [];
+  render(<Editable recording={{}} list={tapReady} onDraft={(d) => drafts.push(d)} />);
+  await userEvent.click(screen.getByRole("switch", { name: TAP_SWITCH }));
+  await userEvent.click(within(tapCheck()).getByRole("button", { name: "Проверить" }));
+  expect(tapCheck()).toHaveTextContent("Проверка уже идёт");
+  expect(drafts).toEqual([]);
+});
+
+test("выключение — сразу, без проверки: обратно на ScreenCaptureKit", async () => {
+  const drafts: Raw[] = [];
+  render(<Editable recording={{ mac_capture: "process_tap" }} list={tapReady} onDraft={(d) => drafts.push(d)} />);
+  const toggle = screen.getByRole("switch", { name: TAP_SWITCH });
+  expect(toggle).toHaveAttribute("aria-checked", "true");
+  await userEvent.click(toggle);
+  expect(api.checkProcessTap).not.toHaveBeenCalled();
+  expect(drafts.at(-1)?.recording?.mac_capture).toBe("screencapturekit");
 });

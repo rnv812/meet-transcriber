@@ -37,6 +37,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     test_device(body) -> dict            ~2 с с устройства → пик (409 при записи)
     permissions() -> dict                macOS: «Микрофон» и «Запись экрана» (supported: False — не macOS)
     request_permission(body) -> dict     системный вопрос {"kind"} → {"kind", "state", …}
+    check_process_tap() -> dict          macOS 14.4+: 5 с process tap → {"ok", "result", "notice", "pane"}
     recordings(limit, q, filters) -> dict  библиотека записей (q — поиск, filters — library_filter)
     search(q, limit, filters) -> dict    поиск по тексту встреч с фрагментами
     groups(q, filters) / create_group / patch_group / delete_group / order_groups /
@@ -815,6 +816,9 @@ _ROUTES = {
     ("GET", "/permissions"): lambda h, p: _server_of(h).state.permissions(),
     ("POST", "/permissions/request"): lambda h, p: _server_of(h).state.request_permission(
         h._body()),
+    # macOS 14.4+: включение process tap — 5 с записи системного звука; ненулевой
+    # звук → {"ok": true}, одни нули → подсказка про «Запись системного звука».
+    ("POST", "/permissions/process-tap"): lambda h, p: _server_of(h).state.check_process_tap(),
     # Образец голоса владельца: что записано и ход записи; записать (~25 с с
     # микрофона, разбор задачей); удалить образец — в _PATTERNS.
     ("GET", "/owner-voice"): lambda h, p: _server_of(h).state.owner_voice(),

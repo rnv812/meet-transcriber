@@ -184,6 +184,9 @@ DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
 # Уровни уведомлений оболочки: всё; только важное (автозапись началась, ошибка
 # расшифровки, сервис записи не запускается); ничего.
 NOTIFICATION_LEVELS = ("all", "important", "off")
+# macOS: источник системного звука (`recording.mac_capture`), как
+# `audiotap.SOURCES`: ScreenCaptureKit или Core Audio process tap.
+MAC_CAPTURES = ("screencapturekit", "process_tap")
 # Оформление окна (0.4, Atlas Aurora): тема, палитра сияния, его вид.
 UI_THEMES = ("system", "dark", "light")
 AURORA_PALETTES = ("violet", "green", "blue", "red", "amber")
@@ -718,6 +721,12 @@ class Recording:
     # наушники в режим гарнитуры, и собеседники звучали бы «как по телефону»).
     # Значение по умолчанию в файл не пишется (`_keep_default_recording_unset`).
     skip_bluetooth_mic: bool = True
+    # macOS: чем писать системный звук — ScreenCaptureKit (по умолчанию,
+    # разрешение «Запись экрана») или Core Audio process tap (macOS 14.4+,
+    # разрешение «Запись системного звука»; окно включает его только после
+    # проверки звуком). Значения — `audiotap.SOURCES`; умолчание в файл не
+    # пишется (`_keep_default_recording_unset`).
+    mac_capture: str = "screencapturekit"
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Recording":
@@ -734,6 +743,7 @@ class Recording:
             mic_device=as_device(raw.get("mic_device")),
             output_device=as_device(raw.get("output_device")),
             skip_bluetooth_mic=as_flag(raw.get("skip_bluetooth_mic"), True),
+            mac_capture=as_choice(raw.get("mac_capture"), MAC_CAPTURES, "screencapturekit"),
         )
 
     def to_raw(self) -> dict:
@@ -746,6 +756,7 @@ class Recording:
             "mic_device": {"name": self.mic_device} if self.mic_device else None,
             "output_device": {"name": self.output_device} if self.output_device else None,
             "skip_bluetooth_mic": self.skip_bluetooth_mic,
+            "mac_capture": self.mac_capture,
         }
 
     @property
@@ -2029,12 +2040,12 @@ def _keep_default_participant_unset(merged: dict, before: dict) -> None:
 
 
 # Флаги записи, чьё значение по умолчанию в файл не пишется.
-_UNSET_RECORDING_DEFAULTS = ("skip_bluetooth_mic",)
+_UNSET_RECORDING_DEFAULTS = ("skip_bluetooth_mic", "mac_capture")
 
 
 def _keep_default_recording_unset(merged: dict, before: dict) -> None:
-    """`recording.skip_bluetooth_mic` по умолчанию в файл не пишется, пока его
-    там нет: сохранение любой настройки записи иначе добавляло бы новый ключ
+    """`recording.skip_bluetooth_mic` и `recording.mac_capture` по умолчанию в
+    файл не пишутся, пока их там нет: сохранение любой настройки записи иначе добавляло бы новый ключ
     тому, кто ничего не менял. Ключ, который в файле уже есть, и значение не по
     умолчанию пишутся как обычно."""
     recording = merged.get("recording")

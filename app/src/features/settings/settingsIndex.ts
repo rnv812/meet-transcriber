@@ -11,7 +11,7 @@
 
 import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { FREEDOM_LABEL, PARTICIPANT_LABEL } from "./ParticipantRows";
-import { SKIP_BLUETOOTH_LABEL } from "./SoundSection";
+import { PROCESS_TAP_LABEL, SKIP_BLUETOOTH_LABEL } from "./SoundSection";
 
 export type SectionId =
   | "app" | "sound" | "auto" | "asr" | "speakers" | "dictionary"
@@ -96,6 +96,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "sound", label: OS_TEXT.otherSide, keys: ["recording.output_device"], hint: "Откуда записывается звук звонка", keywords: ["динамики", "наушники", "loopback"] },
   // Строка только на macOS.
   ...(IS_MAC ? [{ section: "sound" as const, label: SKIP_BLUETOOTH_LABEL, keys: ["recording.skip_bluetooth_mic"], hint: "Встроенный микрофон вместо наушников", keywords: ["airpods", "bluetooth", "гарнитура", "наушники"] }] : []),
+  // macOS 14.4+ (на более старой выключателя в разделе нет).
+  ...(IS_MAC ? [{ section: "sound" as const, label: PROCESS_TAP_LABEL, keys: ["recording.mac_capture"], hint: "Core Audio вместо ScreenCaptureKit", keywords: ["process tap", "screencapturekit", "запись экрана", "системный звук"] }] : []),
   { section: "auto", label: "Записывать звонки автоматически", keywords: ["автозапись"] },
   { section: "auto", label: "Программы звонков", keys: ["auto_record.processes"], hint: "Zoom, Teams, Telegram и свои", keywords: ["zoom", "teams", "telegram", "мессенджеры"] },
   { section: "auto", label: "Звонки в браузере", keys: ["auto_record.browsers"], hint: "Браузеры, в которых вы созваниваетесь", keywords: ["chrome", "edge", "firefox", "яндекс"] },

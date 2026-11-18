@@ -363,6 +363,8 @@ export type Devices = {
   outputs?: DeviceItem[];
   /** Можно ли выбрать устройство (recording.mic_device / output_device). */
   pinning: boolean;
+  /** macOS 14.4+: можно писать звук собеседников через process tap (`recording.mac_capture`); нет — выбор скрыт. */
+  process_tap?: boolean;
   error?: string;
 };
 export type DeviceKind = "mic" | "output";
@@ -497,6 +499,17 @@ export const getPermissions = (ep: Endpoint) => json<Permissions>(ep, "/permissi
  */
 export const requestPermission = (ep: Endpoint, kind: PermissionKind) =>
   json<Permissions & { kind: PermissionKind; state: string | null }>(ep, "/permissions/request", body("POST", { kind }));
+/**
+ * macOS 14.4+: проверка process tap при включении — резидент пишет 5 с системного звука.
+ * `ok` — звук не нулевой (выключатель можно включить); `pane` — раздел «Системных настроек» для подсказки.
+ */
+export type ProcessTapCheck = {
+  ok: boolean; result: "sound" | "silence" | "denied" | "unsupported" | "failed"; notice: string; pane: PrivacyPaneKind | null;
+};
+/** Разделы «Системных настроек», которые называет резидент (подмножество `shell.PrivacyPane`). */
+export type PrivacyPaneKind = "system_audio";
+export const checkProcessTap = (ep: Endpoint) =>
+  json<ProcessTapCheck>(ep, "/permissions/process-tap", body("POST", {}));
 /** ~2 с записи с устройства (null — системное) → пиковый уровень; 409 во время записи. */
 export const testDevice = (ep: Endpoint, kind: DeviceKind, name: string | null) =>
   json<DeviceCheck>(ep, "/devices/test", body("POST", { kind, name }));

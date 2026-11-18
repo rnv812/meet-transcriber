@@ -554,6 +554,15 @@ def permissions_notice(missing: list[str]) -> str:
             "Выдать — Настройки Meet → Диагностика")
 
 
+def _process_tap_supported() -> bool:
+    """macOS 14.4+ с помощником: выбор process tap в «Звуке» показывается."""
+    if not plat.is_macos():
+        return False
+    from meet import audiotap
+
+    return audiotap.process_tap_supported()
+
+
 def _in_worker(fn, timeout: float):
     """Вызвать `fn` в отдельном потоке и дождаться не дольше `timeout`:
     подпроцесс помощника не держит вызывающий поток сверх своего таймаута.
@@ -750,6 +759,8 @@ class TrayControl:
         # Системный вопрос о разрешении — по одному за раз: второй открылся бы
         # поверх первого, и ответ на него человек дал бы не глядя.
         self._permission_ask = threading.Lock()
+        # Проверка process tap (5 с записи помощником): по одной.
+        self._tap_check = threading.Lock()
         # Последняя проверка доступа к Hugging Face (без токена): окно рисует
         # её по GET /hf/status, не дёргая сеть на каждый показ.
         self._hf_check: dict | None = None
@@ -2023,6 +2034,8 @@ class TrayControl:
             return self._devices_cache
         data = (probe or _probe_devices)()
         data["pinning"] = True
+        # macOS 14.4+: можно выбрать process tap (иначе выключатель в окне скрыт).
+        data["process_tap"] = _process_tap_supported()
         # Кэшируем только успех: иначе мгновенный сбой подпроцесса залипал бы на
         # 15 с, и «Сбросить» не помогал бы, пока TTL не истёк.
         if data.get("available"):
@@ -2096,6 +2109,29 @@ class TrayControl:
         finally:
             self._permission_ask.release()
         return {"kind": kind, "state": state, **self.permissions()}
+
+    def check_process_tap(self) -> dict:
+        """Включение process tap («Звук» → «Записывать без «Записи экрана»»):
+        помощник пишет `audiotap.CHECK_SECONDS` с, пока человек включил любой
+        звук, → {"ok", "result", "notice", "pane"} (`audiotap.check_process_tap`).
+        `ok` — только при ненулевом звуке: тогда окно включает выключатель;
+        нули или отказ — выключатель остаётся выключенным, `pane` — раздел
+        «Запись системного звука» для подсказки. Идёт в отдельном потоке и не
+        дольше таймаута помощника; вторая проверка, пока идёт первая, — 409.
+        macOS старше 14.4 — `unsupported`, помощник не запускается."""
+        if not plat.is_macos():
+            raise _bad_request("Запись системного звука проверяется только на macOS")
+        from meet import audiotap
+
+        if not audiotap.process_tap_supported():
+            return audiotap.check_result(audiotap.CHECK_UNSUPPORTED)
+        if not self._tap_check.acquire(blocking=False):
+            raise _conflict("Проверка уже идёт")
+        try:
+            got = _in_worker(audiotap.check_process_tap, audiotap.CHECK_TIMEOUT_S + 5.0)
+        finally:
+            self._tap_check.release()
+        return got if isinstance(got, dict) else audiotap.check_result(audiotap.CHECK_FAILED)
 
     # --- библиотека и задачи --------------------------------------------
 

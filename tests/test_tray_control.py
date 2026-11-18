@@ -2810,6 +2810,93 @@ def test_permission_request_is_checked(control_state, monkeypatch):
         control_state.request_permission({"kind": "microphone"})
 
 
+# --- process tap: проверка разрешения «Запись системного звука» при включении ------
+
+
+@pytest.fixture
+def tap_ok(monkeypatch, on_mac):
+    from meet import audiotap
+
+    monkeypatch.setattr(audiotap, "process_tap_supported", lambda: True)
+
+
+def test_process_tap_check_with_sound_turns_the_switch_on(control_state, monkeypatch, tap_ok):
+    import threading
+
+    from meet import audiotap
+
+    threads = []
+
+    def check():
+        threads.append(threading.current_thread())
+        return {"ok": True, "result": audiotap.CHECK_SOUND, "notice": "Звук есть", "pane": None}
+
+    monkeypatch.setattr(audiotap, "check_process_tap", check)
+    got = control_state.check_process_tap()
+    assert got == {"ok": True, "result": "sound", "notice": "Звук есть", "pane": None}
+    # Пять секунд записи — не в потоке HTTP-сервера.
+    assert threads and threads[0] is not threading.current_thread()
+
+
+def test_process_tap_check_with_zeros_keeps_the_switch_off(control_state, monkeypatch, tap_ok):
+    from meet import audiotap
+
+    monkeypatch.setattr(audiotap, "check_process_tap", lambda: {
+        "ok": False, "result": audiotap.CHECK_SILENCE, "notice": audiotap.CHECK_SILENCE_NOTICE,
+        "pane": "system_audio"})
+    got = control_state.check_process_tap()
+    assert got["ok"] is False and got["pane"] == "system_audio"
+    assert "Запись системного звука" in got["notice"]
+
+
+def test_process_tap_check_without_an_answer_fails(control_state, monkeypatch, tap_ok):
+    from meet import audiotap, tray_control as tc
+
+    monkeypatch.setattr(tc, "_in_worker", lambda fn, timeout: None)
+    got = control_state.check_process_tap()
+    assert got["ok"] is False and got["result"] == audiotap.CHECK_FAILED and got["notice"]
+
+
+def test_process_tap_check_on_older_macos_is_not_run(control_state, monkeypatch, on_mac):
+    from meet import audiotap
+
+    monkeypatch.setattr(audiotap, "process_tap_supported", lambda: False)
+    monkeypatch.setattr(audiotap, "check_process_tap", lambda: pytest.fail("macOS 14.3 — не проверяем"))
+    got = control_state.check_process_tap()
+    assert got["ok"] is False and got["result"] == audiotap.CHECK_UNSUPPORTED
+
+
+def test_process_tap_check_is_macos_only_and_one_at_a_time(control_state, monkeypatch, tap_ok):
+    from meet import audiotap, plat
+    from meet.control import BadRequest, Conflict
+
+    assert control_state._tap_check.acquire(blocking=False)
+    try:
+        monkeypatch.setattr(audiotap, "check_process_tap", lambda: pytest.fail("проверка уже идёт"))
+        with pytest.raises(Conflict):
+            control_state.check_process_tap()
+    finally:
+        control_state._tap_check.release()
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    with pytest.raises(BadRequest):
+        control_state.check_process_tap()
+
+
+def test_devices_say_whether_process_tap_can_be_chosen(control_state, monkeypatch, on_mac):
+    from meet import audiotap, plat
+
+    probe = lambda: {"available": True, "inputs": [], "outputs": []}  # noqa: E731
+    monkeypatch.setattr(audiotap, "process_tap_supported", lambda: True)
+    assert control_state.devices(probe=probe)["process_tap"] is True
+    control_state._devices_cache = None
+    monkeypatch.setattr(audiotap, "process_tap_supported", lambda: False)
+    assert control_state.devices(probe=probe)["process_tap"] is False
+    control_state._devices_cache = None
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    monkeypatch.setattr(audiotap, "process_tap_supported", lambda: pytest.fail("не macOS"))
+    assert control_state.devices(probe=probe)["process_tap"] is False
+
+
 def _auto_recording(app, source=tray.AUTO):
     app.recording = True
     app.source = source

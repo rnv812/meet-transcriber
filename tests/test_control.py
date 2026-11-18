@@ -105,6 +105,10 @@ class FakeState:
         return {"kind": kind, "state": "granted", "supported": True,
                 "microphone": "granted", "screen": "denied"}
 
+    def check_process_tap(self) -> dict:
+        self.calls.append(("process-tap-check",))
+        return {"ok": True, "result": "sound", "notice": "Звук есть", "pane": None}
+
     def test_device(self, body):
         if body.get("name") == "сломан":
             raise control.Unavailable("Не удалось проверить устройство: Устройство не ответило")
@@ -928,6 +932,12 @@ def test_permission_request_endpoint(server):
     assert got["state"] == "granted" and got["microphone"] == "granted"
     assert ("permission", "microphone") in server.state.calls
     _post(server, "/permissions/request", {"kind": "camera"}, expect=400)
+
+
+def test_process_tap_check_endpoint(server):
+    got = _post(server, "/permissions/process-tap", {})
+    assert got == {"ok": True, "result": "sound", "notice": "Звук есть", "pane": None}
+    assert ("process-tap-check",) in server.state.calls
 
 
 def test_device_test_refused_while_recording(server):

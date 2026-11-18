@@ -43,6 +43,7 @@ VALUES = {
     ("recording", "voices_dir"): str(Path("D:/meet-test/voices")),
     ("recording", "mic_device"): {"name": "Микрофон (USB Audio)"},
     ("recording", "output_device"): {"name": "Динамики (Realtek)"},
+    ("recording", "mac_capture"): "process_tap",
     ("assist", "vault"): str(Path("D:/meet-test/vault")),
     ("assistant", "knowledge_dir"): str(Path("D:/meet-test/kb")),
     ("assistant", "notes_dir"): str(Path("D:/meet-test/notes")),

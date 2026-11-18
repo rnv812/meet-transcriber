@@ -15,12 +15,21 @@
  * вкл.) — системный микрофон — наушники, которые программа звонка не слушает: запись пишет
  * встроенный, иначе наушники уйдут в режим гарнитуры и собеседники зазвучат «как по телефону».
  * Под «Микрофоном» — строка об этом (`bluetoothNote`).
+ *
+ * macOS 14.4+ (`devices.process_tap`): «Записывать звук собеседников без «Записи экрана»»
+ * (`recording.mac_capture` = "process_tap", по умолчанию "screencapturekit") — Core Audio process tap
+ * вместо ScreenCaptureKit. Включается только после проверки звуком (`ProcessTapSwitch`); на более
+ * старой macOS выключателя нет.
  */
 
 import { useState, type ReactNode } from "react";
-import { type DeviceCheck, type DeviceItem, type DeviceKind, type Devices, type Endpoint, testDevice } from "../../lib/api";
+import {
+  type DeviceCheck, type DeviceItem, type DeviceKind, type Devices, type Endpoint, type ProcessTapCheck, checkProcessTap,
+  testDevice,
+} from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { IS_MAC, OS_TEXT } from "../../lib/platform";
+import { openPrivacyPane } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Select, type SelectOption } from "../../ui/Select";
@@ -28,6 +37,9 @@ import { Row, SeeAlso, SettingsCard, Switch, type Raw, type SetFn } from "./Sect
 
 /** Переключатель macOS: не брать микрофон Bluetooth-наушников (`recording.skip_bluetooth_mic`). */
 export const SKIP_BLUETOOTH_LABEL = "Не брать микрофон Bluetooth-наушников";
+
+/** Переключатель macOS 14.4+: звук собеседников через process tap (`recording.mac_capture`). */
+export const PROCESS_TAP_LABEL = "Записывать звук собеседников без «Записи экрана»";
 
 /** Ниже этого пика считаем, что звука не было (шум тишины, а не речь). */
 const SILENCE = 0.02;
@@ -168,6 +180,75 @@ function bluetoothNote(items: DeviceItem[], picked: string | null, skip: boolean
     + `микрофон, Meet запишет «${builtin.name}»: так звук собеседников в наушниках не станет хуже.` };
 }
 
+/**
+ * process tap включается через проверку: API, чтобы узнать разрешение «Запись системного звука»,
+ * у macOS нет, а без него звук приходит нулями. Человек включает любой звук и жмёт «Проверить» —
+ * резидент пишет 5 с (`POST /permissions/process-tap`): звук есть — выключатель включается
+ * (черновик, как у остальных настроек), одни нули или отказ — остаётся выключенным, с кнопкой в
+ * «Запись системного звука». Выключение — сразу, без проверки.
+ */
+function ProcessTapSwitch({ on, set, endpoint }: { on: boolean; set: SetFn; endpoint: Endpoint }) {
+  const [asking, setAsking] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [failed, setFailed] = useState<ProcessTapCheck | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [passed, setPassed] = useState<string | null>(null);
+
+  const toggle = (next: boolean) => {
+    setFailed(null);
+    setError(null);
+    setPassed(null);
+    setAsking(next);
+    if (!next) set("recording", "mac_capture", "screencapturekit");
+  };
+  const run = async () => {
+    setChecking(true);
+    setFailed(null);
+    setError(null);
+    try {
+      const got = await checkProcessTap(endpoint);
+      if (got.ok) {
+        setAsking(false);
+        setPassed(got.notice);
+        set("recording", "mac_capture", "process_tap");
+      } else {
+        setFailed(got);
+      }
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setChecking(false);
+    }
+  };
+  const pane = failed?.pane;
+  return (
+    <>
+      <Switch label={PROCESS_TAP_LABEL} value={on} onChange={toggle}
+        hint="Core Audio вместо ScreenCaptureKit: нужно разрешение «Запись системного звука», без значка записи экрана" />
+      {asking && (
+        <div role="group" aria-label="Проверка записи системного звука" className="sound__tap">
+          <span className="muted">
+            Включите любой звук (например, видео) и нажмите «Проверить»: Meet запишет 5 секунд системного звука.
+            Если macOS спросит про «Запись системного звука» — разрешите.
+          </span>
+          <Button onClick={() => void run()} busy={checking}>Проверить</Button>
+          <span aria-live="polite">
+            {failed && <span className="error">{failed.notice}</span>}
+            {error && <span className="error">{error}</span>}
+          </span>
+          {pane && (
+            <Button variant="link"
+              onClick={() => void openPrivacyPane(pane).catch((cause) => console.warn("open_privacy_pane:", cause))}>
+              Открыть «Запись системного звука»
+            </Button>
+          )}
+        </div>
+      )}
+      {passed && !asking && <span className="sound__tap notice" aria-live="polite">{passed}</span>}
+    </>
+  );
+}
+
 export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: {
   draft: Raw; set: SetFn; devices: Devices | null; endpoint: Endpoint;
   /** Перейти в «Спикеры» (образец голоса); без него ссылки нет. */
@@ -179,6 +260,7 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
   const note = otherSideNote(v("output_device"), micInUse, devices?.outputs?.find((d) => d.default)?.name);
   const skipBluetooth = draft.recording?.skip_bluetooth_mic !== false;
   const micNote = bluetoothNote(devices?.inputs ?? [], v("mic_device"), skipBluetooth);
+  const processTap = draft.recording?.mac_capture === "process_tap";
   return (
     <>
       {onOpenSpeakers && (
@@ -231,6 +313,7 @@ export function SoundSection({ draft, set, devices, endpoint, onOpenSpeakers }: 
             </HelpTip>
           )}
           items={devices?.outputs ?? []} value={v("output_device")} onChange={choose("output_device")} />
+        {IS_MAC && devices?.process_tap && <ProcessTapSwitch on={processTap} set={set} endpoint={endpoint} />}
       </SettingsCard>
     </>
   );

@@ -5,11 +5,21 @@
 маленькая программа на Swift (`mac/audiotap/main.swift`), которая лежит в
 ресурсах приложения рядом с ffmpeg:
 
-* `meet-audiotap --stream --rate 48000 --channels 1 [--exclude-pid N]` —
-  ScreenCaptureKit (macOS 13+, разрешение «Запись экрана»), только звук, без
-  звука приложения с процессом N (оболочка Meet). Первая строка stdout —
-  рукопожатие JSON (`{"meet_audiotap": 1, "rate", "channels", "format":
-  "s16le"}`), дальше — сырой PCM s16le до закрытия stdin или SIGTERM;
+* `meet-audiotap --stream --rate 48000 --channels 1 [--exclude-pid N]
+  [--source process_tap]` — ScreenCaptureKit (macOS 13+, разрешение «Запись
+  экрана»), только звук, без звука приложения с процессом N (оболочка Meet).
+  С `--source process_tap` (macOS 14.4+, выключатель `recording.mac_capture`)
+  — Core Audio process tap: глобальный перехват без процессов Meet в частном
+  aggregate-устройстве на встроенном выходе, разрешение «Запись системного
+  звука», без значка записи экрана. Первая строка stdout — рукопожатие JSON
+  (`{"meet_audiotap": 1, "rate", "channels", "format": "s16le"}`), дальше —
+  сырой PCM s16le до закрытия stdin или SIGTERM, у обоих источников одинаково;
+* `meet-audiotap --check-tap --seconds 5 [--exclude-pid N]` — проверка
+  process tap при включении выключателя: 5 с записи и одна строка JSON
+  `{"meet_audiotap": 1, "check": "process_tap", "frames", "peak"}` (пик —
+  по модулю s16). API проверки разрешения у macOS нет, а без разрешения
+  буферы приходят нулями, поэтому решает Python (`check_process_tap`):
+  ненулевой пик — звук есть, одни нули — разрешения, вероятно, нет;
 * `meet-audiotap --mic-users` — одна строка JSON: процессы, которые сейчас
   слушают микрофон (и играют звук), по CoreAudio (macOS 14+; раньше —
   `supported: false`); у каждого — `input_devices`, UID устройств ввода,
@@ -56,6 +66,43 @@ EXIT_USAGE = 64  # EX_USAGE
 EXIT_UNSUPPORTED = 69  # EX_UNAVAILABLE: macOS старше 13 — ScreenCaptureKit нет
 EXIT_FAILED = 70  # EX_SOFTWARE
 EXIT_PERMISSION = 77  # EX_NOPERM: нет разрешения «Запись экрана»
+
+# Источник системного звука (`recording.mac_capture`, `--source`).
+SOURCE_SCREEN = "screencapturekit"
+SOURCE_PROCESS_TAP = "process_tap"
+SOURCES = (SOURCE_SCREEN, SOURCE_PROCESS_TAP)
+# Process tap — с macOS 14.2, надёжно — с 14.4 (раньше выбор скрыт).
+PROCESS_TAP_MIN_MACOS = (14, 4)
+
+# Проверка process tap (`--check-tap`): сколько секунд пишет помощник и сколько
+# ждать его целиком (старт перехвата и системный вопрос о разрешении — сверху).
+CHECK_SECONDS = 5
+CHECK_TIMEOUT_S = 20.0
+# Итог проверки (`check_process_tap()["result"]`).
+CHECK_SOUND = "sound"  # ненулевой звук — разрешение есть, выключатель включается
+CHECK_SILENCE = "silence"  # одни нули — разрешения, вероятно, нет (или звук не играл)
+CHECK_DENIED = "denied"  # CoreAudio отказал сразу
+CHECK_UNSUPPORTED = "unsupported"  # macOS старше 14.4 или прежний помощник
+CHECK_FAILED = "failed"  # помощника нет, завис, ответил не по протоколу
+# Раздел «Системных настроек», который окно открывает подсказкой
+# (`open_privacy_pane` оболочки).
+SYSTEM_AUDIO_PANE = "system_audio"
+CHECK_SOUND_NOTICE = "Звук есть — Meet будет писать звук собеседников без «Записи экрана»."
+CHECK_SILENCE_NOTICE = (
+    "Meet услышал только тишину. Включите любой звук (например, видео) и проверьте ещё раз. "
+    "Если звук играл — разрешите Meet «Запись системного звука»: Системные настройки → "
+    "Конфиденциальность и безопасность → Запись системного звука."
+)
+CHECK_DENIED_NOTICE = (
+    "macOS не дала записать системный звук. Разрешите Meet «Запись системного звука»: "
+    "Системные настройки → Конфиденциальность и безопасность → Запись системного звука."
+)
+CHECK_UNSUPPORTED_NOTICE = "Запись без «Записи экрана» требует macOS 14.4 или новее."
+CHECK_FAILED_NOTICE = "Не удалось проверить запись системного звука — попробуйте ещё раз."
+
+# Нули во время записи process tap: столько секунд подряд — строка в журнал
+# (только счётчик; запись не откатывается и помощника не перезапускает).
+ZERO_LOG_S = 5.0
 
 MIC_USERS_TIMEOUT_S = 3.0
 PREFLIGHT_TIMEOUT_S = 5.0
@@ -208,13 +255,148 @@ def parse_handshake(line: bytes) -> dict:
 
 
 def stream_command(helper: str, rate: int, channels: int,
-                   exclude_pid: "int | None" = None) -> list[str]:
+                   exclude_pid: "int | None" = None, source: str = SOURCE_SCREEN) -> list[str]:
     """`exclude_pid` — приложение, чей звук не писать (оболочка Meet с плеером, 0.5);
-    прежний помощник незнакомый ключ пропускает."""
+    прежний помощник незнакомый ключ пропускает. `source` — SOURCE_*: ключ
+    `--source` только у process tap, ScreenCaptureKit запускается как раньше."""
     argv = [helper, "--stream", "--rate", str(int(rate)), "--channels", str(int(channels))]
     if exclude_pid:
         argv += ["--exclude-pid", str(int(exclude_pid))]
+    if source == SOURCE_PROCESS_TAP:
+        argv += ["--source", SOURCE_PROCESS_TAP]
     return argv
+
+
+def macos_version() -> "str | None":
+    """Версия macOS строкой («14.4.1»); не macOS или не узнать — None."""
+    import platform
+
+    try:
+        return platform.mac_ver()[0] or None
+    except Exception:
+        return None
+
+
+def _version_tuple(text: "str | None") -> "tuple[int, ...] | None":
+    try:
+        return tuple(int(part) for part in str(text).split("."))
+    except (TypeError, ValueError):
+        return None
+
+
+def process_tap_supported() -> bool:
+    """Можно ли выбрать process tap: macOS 14.4+ и помощник на месте. Иначе
+    выбор в окне скрыт, а запись пишет через ScreenCaptureKit."""
+    from meet import plat
+
+    if not plat.is_macos():
+        return False
+    version = _version_tuple(macos_version())
+    if version is None or version < PROCESS_TAP_MIN_MACOS:
+        return False
+    return helper_path() is not None
+
+
+def effective_source(choice: "str | None") -> str:
+    """Источник, которым запись пишет на самом деле: process tap — только где
+    он поддерживается, иначе ScreenCaptureKit."""
+    if choice == SOURCE_PROCESS_TAP and process_tap_supported():
+        return SOURCE_PROCESS_TAP
+    return SOURCE_SCREEN
+
+
+class ZeroRuns:
+    """Серии сплошных нулей в PCM process tap — только для журнала.
+
+    Без разрешения «Запись системного звука» перехват отдаёт нули, но нули
+    неотличимы от тишины (автозапись до звонка), поэтому запись по ним ничего
+    не меняет. `feed` → строка для журнала, когда серия дошла до
+    `threshold_s` (один раз на серию) и когда после такой серии вернулся звук;
+    иначе None. В строках — только числа."""
+
+    def __init__(self, rate: int, channels: int, threshold_s: float = ZERO_LOG_S) -> None:
+        self._frame_bytes = 2 * max(1, int(channels))
+        self._rate = max(1, int(rate))
+        self._threshold = threshold_s
+        self._zero_s = 0.0
+        self._logged = False
+        self.runs = 0
+
+    def feed(self, data: bytes) -> "str | None":
+        seconds = len(data) // self._frame_bytes / self._rate
+        if not data or data.count(0) != len(data):
+            line = None
+            if self._logged:
+                line = f"process tap: звук после {self._zero_s:.0f} с нулей"
+            self._zero_s, self._logged = 0.0, False
+            return line
+        self._zero_s += seconds
+        if self._logged or self._zero_s < self._threshold:
+            return None
+        self._logged = True
+        self.runs += 1
+        return (f"process tap: одни нули {self._zero_s:.0f} с подряд (серия {self.runs}) — "
+                "пишу как есть")
+
+
+def check_command(helper: str, seconds: int = CHECK_SECONDS,
+                  exclude_pid: "int | None" = None) -> list[str]:
+    argv = [helper, "--check-tap", "--seconds", str(int(seconds))]
+    if exclude_pid:
+        argv += ["--exclude-pid", str(int(exclude_pid))]
+    return argv
+
+
+def parse_check(text: str) -> "dict | None":
+    """Строка `--check-tap` → {"frames", "peak"} или None (не по протоколу)."""
+    try:
+        data = json.loads((text or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
+    if (not isinstance(data, dict) or data.get("meet_audiotap") != PROTOCOL
+            or data.get("check") != SOURCE_PROCESS_TAP):
+        return None
+    frames, peak = data.get("frames"), data.get("peak")
+    if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in (frames, peak)):
+        return None
+    return {"frames": frames, "peak": peak}
+
+
+def check_result(result: str) -> dict:
+    """Ответ проверки process tap по итогу CHECK_*: {"ok", "result", "notice", "pane"}."""
+    notices = {CHECK_SOUND: CHECK_SOUND_NOTICE, CHECK_SILENCE: CHECK_SILENCE_NOTICE,
+               CHECK_DENIED: CHECK_DENIED_NOTICE, CHECK_UNSUPPORTED: CHECK_UNSUPPORTED_NOTICE,
+               CHECK_FAILED: CHECK_FAILED_NOTICE}
+    pane = SYSTEM_AUDIO_PANE if result in (CHECK_SILENCE, CHECK_DENIED) else None
+    return {"ok": result == CHECK_SOUND, "result": result, "notice": notices[result], "pane": pane}
+
+
+def check_process_tap(run=None, timeout: float = CHECK_TIMEOUT_S) -> dict:
+    """Проверка при включении process tap: помощник пишет CHECK_SECONDS с и
+    сообщает пик. → {"ok", "result": CHECK_*, "notice": текст человеку,
+    "pane": раздел настроек для подсказки или None}. `ok` (выключатель можно
+    включить) — только при ненулевом звуке; нули, отказ, сбой — выключатель
+    остаётся выключенным."""
+    helper = helper_path()
+    if not helper:
+        return check_result(CHECK_FAILED)
+    from meet import process_loopback
+
+    run = run or subprocess.run
+    argv = check_command(helper, CHECK_SECONDS, exclude_pid=process_loopback.exclude_target())
+    try:
+        out = run(argv, capture_output=True, text=True, encoding="utf-8",
+                  errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return check_result(CHECK_FAILED)
+    if out.returncode == EXIT_PERMISSION:
+        return check_result(CHECK_DENIED)
+    if out.returncode in (EXIT_UNSUPPORTED, EXIT_USAGE):
+        return check_result(CHECK_UNSUPPORTED)
+    found = parse_check(out.stdout) if out.returncode == EXIT_OK else None
+    if found is None or found["frames"] == 0:
+        return check_result(CHECK_FAILED)
+    return check_result(CHECK_SOUND if found["peak"] > 0 else CHECK_SILENCE)
 
 
 def parse_mic_users(text: str) -> "list[dict] | None":

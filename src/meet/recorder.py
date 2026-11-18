@@ -1204,12 +1204,20 @@ class _Session:
 
     def __init__(self, out_dir: Path, bus=None, mic_device: "str | None" = None,
                  output_device: "str | None" = None, pcm_tap=None,
-                 skip_bluetooth_mic: bool = True) -> None:
+                 skip_bluetooth_mic: bool = True, mac_capture: "str | None" = None) -> None:
         self.p = None
         self.pcm_tap = pcm_tap
         self.out_dir = out_dir
         self.bus = bus if bus is not None else events.EventBus()
         self.log = _RecordLog(out_dir, self.bus)
+        # macOS: чем помощник пишет системный звук (`recording.mac_capture`):
+        # process tap — только на macOS 14.4+, иначе ScreenCaptureKit.
+        self.mac_capture = mac_capture
+        self.tap_source = None
+        if _MAC:
+            from meet import audiotap
+
+            self.tap_source = audiotap.effective_source(mac_capture)
         self.endpoints = _MacEndpoints() if _MAC else _DefaultEndpoints()
         self.ids = None  # ID дефолтных endpoint'ов на момент последнего запуска
         self.last_restart = 0.0
@@ -1240,16 +1248,30 @@ class _Session:
                                               audiotap.mic_users)
         return _find_mic(p, name) if name else None
 
+    def _log_tap_source(self) -> None:
+        """macOS: строка в журнал, если выбран process tap, — пишет ли им запись."""
+        from meet import audiotap
+
+        if not _MAC or self.mac_capture != audiotap.SOURCE_PROCESS_TAP:
+            return
+        if self.tap_source == audiotap.SOURCE_PROCESS_TAP:
+            self.log("системный звук — process tap (без «Записи экрана»)")
+        else:
+            self.log("process tap здесь недоступен (нужна macOS 14.4+) — системный звук через "
+                     "ScreenCaptureKit")
+
     def _new_audio(self):
         """Свежий PyAudio; на macOS — с журналом записи для помощника
         системного звука (его stderr и «завис — перезапускаю»)."""
         p = pyaudio.PyAudio()
         if _MAC:
             p.log = self.log
+            p.tap_source = self.tap_source
         return p
 
     def start(self) -> None:
         self.log(f"запись начата {datetime.now():%Y-%m-%d}, pid {os.getpid()}")
+        self._log_tap_source()
         if self.pcm_tap is not None:
             try:
                 # Сторона записи этой сессии: поток прошлой записи, если он
@@ -1539,7 +1561,8 @@ class StopEvent(threading.Event):
 
 def record(out_root: str, stop_event: "threading.Event | None" = None,
            bus=None, mic_device=_FROM_SETTINGS, output_device=_FROM_SETTINGS,
-           pcm_tap=None, skip_bluetooth_mic=_FROM_SETTINGS) -> Path:
+           pcm_tap=None, skip_bluetooth_mic=_FROM_SETTINGS,
+           mac_capture=_FROM_SETTINGS) -> Path:
     """Записать встречу двумя дорожками. `bus` — шина событий для UI: без неё
     всё работает как раньше, только события уходят в никуда. `pcm_tap` —
     `meet.pcm_tap.TapHub`: отвод звука для ассистента, включённого посреди
@@ -1552,9 +1575,12 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
 
     `skip_bluetooth_mic` — macOS: не брать микрофон Bluetooth-наушников, которые
     программа звонка не слушает (`recording.skip_bluetooth_mic`), не передан —
-    из настроек; вне macOS не читается."""
+    из настроек; вне macOS не читается.
+
+    `mac_capture` — macOS: источник системного звука (`recording.mac_capture`:
+    ScreenCaptureKit или process tap), не передан — из настроек."""
     if _FROM_SETTINGS in (mic_device, output_device) or (
-            _MAC and skip_bluetooth_mic is _FROM_SETTINGS):
+            _MAC and _FROM_SETTINGS in (skip_bluetooth_mic, mac_capture)):
         from meet import settings
 
         recording = settings.load().recording
@@ -1564,8 +1590,12 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
             output_device = recording.output_device
         if skip_bluetooth_mic is _FROM_SETTINGS:
             skip_bluetooth_mic = recording.skip_bluetooth_mic
+        if mac_capture is _FROM_SETTINGS:
+            mac_capture = recording.mac_capture
     if skip_bluetooth_mic is _FROM_SETTINGS:
         skip_bluetooth_mic = True
+    if mac_capture is _FROM_SETTINGS:
+        mac_capture = None
     out_dir = new_folder(Path(out_root))
     try:
         lock = _acquire_lock(Path(out_root), out_dir)
@@ -1578,7 +1608,7 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
 
     session = _Session(out_dir, bus, mic_device=mic_device,
                        output_device=output_device, pcm_tap=pcm_tap,
-                       skip_bluetooth_mic=bool(skip_bluetooth_mic))
+                       skip_bluetooth_mic=bool(skip_bluetooth_mic), mac_capture=mac_capture)
     # Пока идёт запись, система не засыпает от бездействия; снимается в finally
     # («Стоп», Ctrl+C и сбой старта).
     awake = keepawake.KeepAwake(session.log)

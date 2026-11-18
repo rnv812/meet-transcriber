@@ -20,6 +20,18 @@
 //       захват пересобирается внутри процесса, без нового рукопожатия (пока его
 //       нет, дописывается тишина). Выход с кодом 77 — только если отозвали
 //       разрешение.
+//   meet-audiotap --stream ... --source process_tap
+//       Core Audio process tap (macOS 14.4+; по выбору в настройках «Звук»):
+//       глобальный перехват без процессов Meet (дерево --exclude-pid и службы,
+//       за которые оно отвечает) в частном aggregate-устройстве на встроенном
+//       выходе. То же рукопожатие и тот же PCM; разрешение — «Запись системного
+//       звука», без значка записи экрана. Без разрешения буферы приходят
+//       нулями — это не ошибка (нули считает резидент); перехват не
+//       запустился — код 70.
+//   meet-audiotap --check-tap [--seconds 5] [--exclude-pid N]
+//       Проверка process tap при включении: столько секунд записи и одна
+//       строка JSON {"meet_audiotap": 1, "check": "process_tap", "frames",
+//       "peak"} (пик по модулю s16). Отказ CoreAudio сразу — код 77.
 //   meet-audiotap --mic-users
 //       Одна строка JSON: процессы, которые сейчас слушают микрофон или
 //       играют звук (CoreAudio, macOS 14+; раньше — "supported": false), у
@@ -51,8 +63,10 @@
 //   Помощника запускает цепочка Meet.app → резидент, поэтому запросы macOS
 //   относит к Meet (текст — NSMicrophoneUsageDescription приложения).
 //
-// Коды выхода: 0 — штатно, 64 — неверные аргументы, 69 — macOS старше 13,
-// 70 — сбой захвата, 77 — нет разрешения «Запись экрана».
+// Коды выхода: 0 — штатно, 64 — неверные аргументы, 69 — macOS старше 13 (у
+// process tap — старше 14.4),
+// 70 — сбой захвата, 77 — нет разрешения «Запись экрана» (у --check-tap —
+// отказ CoreAudio в записи системного звука).
 //
 // Сборка (CI, scripts/build_release_macos.sh):
 //   swiftc -O -swift-version 5 -target arm64-apple-macos13.0 \
@@ -157,8 +171,10 @@ func selfTest() -> Never {
     let os = ProcessInfo.processInfo.operatingSystemVersion
     var stream = false
     var micUsers = false
+    var processTap = false
     if #available(macOS 13.0, *) { stream = true }
     if #available(macOS 14.0, *) { micUsers = true }
+    if #available(macOS 14.4, *) { processTap = true }
     printJSON([
         "meet_audiotap": protocolVersion,
         "version": helperVersion,
@@ -168,6 +184,7 @@ func selfTest() -> Never {
         "exclude_pid": true,
         "permissions": true,
         "watch_devices": true,
+        "process_tap": processTap,
         "format": "s16le",
     ])
     exit(exitOK)
@@ -441,6 +458,55 @@ func watchDevices() -> Never {
 
 // MARK: - --stream
 
+/// Рукопожатие `--stream` — у обоих источников одно: первая строка stdout,
+/// дальше — PCM.
+func printHandshake(rate: Int, channels: Int) {
+    printJSON(["meet_audiotap": protocolVersion, "rate": rate, "channels": channels,
+               "format": "s16le"])
+}
+
+func int16Sample(_ value: Float32) -> Int16 {
+    let clipped = max(-1, min(1, value))
+    return Int16(clipped * 32767).littleEndian
+}
+
+/// Float32 (по буферу на канал или чередованием) → s16le с нужным числом
+/// каналов: лишние каналы усредняются в моно. Общая для ScreenCaptureKit и
+/// process tap — PCM у обоих источников один.
+func appendPCM16(_ list: UnsafeMutableAudioBufferListPointer, channels: Int,
+                 into samples: inout [Int16]) {
+    var planes: [UnsafeBufferPointer<Float32>] = []
+    var interleaved = 1
+    for buffer in list {
+        guard let data = buffer.mData else { continue }
+        let count = Int(buffer.mDataByteSize) / MemoryLayout<Float32>.size
+        planes.append(UnsafeBufferPointer(
+            start: data.assumingMemoryBound(to: Float32.self), count: count))
+        interleaved = max(1, Int(buffer.mNumberChannels))
+    }
+    guard let first = planes.first else { return }
+    let sourceChannels = planes.count > 1 ? planes.count : interleaved
+    let frames = planes.count > 1 ? first.count : first.count / interleaved
+    if frames == 0 { return }
+    func sample(_ frame: Int, _ channel: Int) -> Float32 {
+        if planes.count > 1 {
+            let plane = planes[min(channel, planes.count - 1)]
+            return frame < plane.count ? plane[frame] : 0
+        }
+        return first[frame * interleaved + min(channel, interleaved - 1)]
+    }
+    samples.reserveCapacity(samples.count + frames * channels)
+    for frame in 0..<frames {
+        if channels == 1 {
+            var sum: Float32 = 0
+            for channel in 0..<sourceChannels { sum += sample(frame, channel) }
+            samples.append(int16Sample(sum / Float32(sourceChannels)))
+        } else {
+            for channel in 0..<channels { samples.append(int16Sample(sample(frame, channel))) }
+        }
+    }
+}
+
 @available(macOS 13.0, *)
 final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     let rate: Int
@@ -498,8 +564,7 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
             self.displayID = display
         }
         audioQueue.sync {
-            printJSON(["meet_audiotap": protocolVersion, "rate": rate, "channels": channels,
-                       "format": "s16le"])
+            printHandshake(rate: rate, channels: channels)
             ready = true
             lastWrite = DispatchTime.now()
         }
@@ -676,47 +741,12 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    /// Float32 (по буферу на канал или чередованием) → s16le с нужным числом
-    /// каналов: лишние каналы усредняются в моно.
     func convert(_ list: UnsafeMutableAudioBufferListPointer) {
-        var planes: [UnsafeBufferPointer<Float32>] = []
-        var interleaved = 1
-        for buffer in list {
-            guard let data = buffer.mData else { continue }
-            let count = Int(buffer.mDataByteSize) / MemoryLayout<Float32>.size
-            planes.append(UnsafeBufferPointer(
-                start: data.assumingMemoryBound(to: Float32.self), count: count))
-            interleaved = max(1, Int(buffer.mNumberChannels))
-        }
-        guard let first = planes.first else { return }
-        let sourceChannels = planes.count > 1 ? planes.count : interleaved
-        let frames = planes.count > 1 ? first.count : first.count / interleaved
-        if frames == 0 { return }
-        func sample(_ frame: Int, _ channel: Int) -> Float32 {
-            if planes.count > 1 {
-                let plane = planes[min(channel, planes.count - 1)]
-                return frame < plane.count ? plane[frame] : 0
-            }
-            return first[frame * interleaved + min(channel, interleaved - 1)]
-        }
         samples.removeAll(keepingCapacity: true)
-        samples.reserveCapacity(frames * channels)
-        for frame in 0..<frames {
-            if channels == 1 {
-                var sum: Float32 = 0
-                for channel in 0..<sourceChannels { sum += sample(frame, channel) }
-                samples.append(AudioTap.int16(sum / Float32(sourceChannels)))
-            } else {
-                for channel in 0..<channels { samples.append(AudioTap.int16(sample(frame, channel))) }
-            }
-        }
+        appendPCM16(list, channels: channels, into: &samples)
+        if samples.isEmpty { return }
         samples.withUnsafeBytes { writeAll($0) }
         lastWrite = DispatchTime.now()
-    }
-
-    static func int16(_ value: Float32) -> Int16 {
-        let clipped = max(-1, min(1, value))
-        return Int16(clipped * 32767).littleEndian
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -750,6 +780,438 @@ func displayReconfigured(_ display: CGDirectDisplayID, _ flags: CGDisplayChangeS
     }
 }
 
+// MARK: - --stream --source process_tap, --check-tap
+
+let screenSource = "screencapturekit"
+let processTapSource = "process_tap"
+
+struct CoreAudioError: LocalizedError {
+    let call: String
+    let status: OSStatus
+    var errorDescription: String? { "\(call): \(status)" }
+}
+
+struct TapFormatError: LocalizedError {
+    var errorDescription: String? { "перехват отдаёт не Float32 PCM" }
+}
+
+func require(_ status: OSStatus, _ call: String) throws {
+    if status != noErr { throw CoreAudioError(call: call, status: status) }
+}
+
+/// Отказ CoreAudio вместо нулей в буферах — так macOS отвечает и без
+/// разрешения «Запись системного звука» ('nope' или 'what').
+func deniedByCoreAudio(_ error: Error) -> Bool {
+    guard let status = (error as? CoreAudioError)?.status else { return false }
+    return Int(status) == Int(kAudioHardwareIllegalOperationError)
+        || Int(status) == Int(kAudioHardwareUnspecifiedError)
+}
+
+func hasOutput(_ device: AudioObjectID) -> Bool {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyStreams,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
+}
+
+/// UID встроенного выхода (динамики, разъём наушников). Aggregate-устройство
+/// перехвата держится на нём, а не на выходе по умолчанию: тот меняется при
+/// подключении Bluetooth-наушников.
+func builtInOutputUID() -> String? {
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    for device in readObjects(system, kAudioHardwarePropertyDevices) ?? [] {
+        guard hasOutput(device),
+              readUInt32(device, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeBuiltIn
+        else { continue }
+        let uid = readString(device, kAudioDevicePropertyDeviceUID)
+        if !uid.isEmpty { return uid }
+    }
+    return nil
+}
+
+/// Встроенного выхода нет (Mac без динамиков) — выход по умолчанию.
+func defaultOutputUID() -> String? {
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    guard let device = readUInt32(system, kAudioHardwarePropertyDefaultOutputDevice),
+          device != AudioObjectID(kAudioObjectUnknown)
+    else { return nil }
+    let uid = readString(device, kAudioDevicePropertyDeviceUID)
+    return uid.isEmpty ? nil : uid
+}
+
+func parentPID(_ pid: pid_t) -> pid_t? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+    return pid_t(info.pbi_ppid)
+}
+
+/// responsibility_get_pid_responsible_for_pid (libsystem, без заголовка): кто
+/// «отвечает» за процесс. Звук окна Meet играет служба WebKit — её родитель
+/// launchd, а отвечает за неё оболочка Meet. Функции нет — nil.
+let responsibleFor: (@convention(c) (pid_t) -> pid_t)? = {
+    guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2),
+                             "responsibility_get_pid_responsible_for_pid")
+    else { return nil }
+    return unsafeBitCast(symbol, to: (@convention(c) (pid_t) -> pid_t).self)
+}()
+
+/// Процесс из дерева `root` (сам он, его потомки) или тот, за кого он отвечает.
+func belongsTo(_ pid: pid_t, root: pid_t) -> Bool {
+    if let responsible = responsibleFor, responsible(pid) == root { return true }
+    var current = pid
+    for _ in 0..<64 {
+        if current == root { return true }
+        guard current > 1, let parent = parentPID(current), parent != current else { return false }
+        current = parent
+    }
+    return false
+}
+
+/// Процессы CoreAudio, чей звук перехват не пишет: процессы Meet (дерево
+/// `--exclude-pid` и службы, за которые оно отвечает) и сам помощник.
+@available(macOS 14.2, *)
+func excludedProcesses(root: Int) -> [AudioObjectID] {
+    let system = AudioObjectID(kAudioObjectSystemObject)
+    let me = getpid()
+    return (readObjects(system, kAudioHardwarePropertyProcessObjectList) ?? []).filter { object in
+        guard let pid = readPID(object) else { return false }
+        return pid == me || (root > 0 && belongsTo(pid, root: pid_t(root)))
+    }
+}
+
+/// Линейная передискретизация s16 (выход перехвата не на запрошенной частоте,
+/// например 44,1 кГц): для речи довольно. Кадр перед куском помнится, шов
+/// между кусками не щёлкает.
+struct LinearResampler {
+    let step: Double
+    let channels: Int
+    private var position = 0.0
+    private var last: [Int16]
+
+    init(from source: Double, to target: Double, channels: Int) {
+        step = source / target
+        self.channels = channels
+        last = [Int16](repeating: 0, count: channels)
+    }
+
+    mutating func run(_ input: [Int16], into output: inout [Int16]) {
+        let frames = input.count / channels
+        guard frames > 0 else { return }
+        let previous = last
+        let width = channels
+        func value(_ frame: Int, _ channel: Int) -> Double {
+            frame < 0 ? Double(previous[channel]) : Double(input[frame * width + channel])
+        }
+        while position <= Double(frames - 1) {
+            let index = Int(position.rounded(.down))
+            let frac = position - Double(index)
+            for channel in 0..<channels {
+                let a = value(index, channel)
+                let b = index + 1 < frames ? value(index + 1, channel) : a
+                output.append(Int16(max(-32768, min(32767, (a + (b - a) * frac).rounded()))))
+            }
+            position += step
+        }
+        position -= Double(frames)
+        for channel in 0..<channels { last[channel] = input[(frames - 1) * channels + channel] }
+    }
+}
+
+/// Core Audio process tap (macOS 14.2+, Meet включает с 14.4): глобальный
+/// перехват системного звука без процессов Meet в частном aggregate-устройстве
+/// на встроенном выходе. Разрешение — «Запись системного звука»; API, чтобы
+/// узнать его, нет: без него вызовы проходят, а буферы приходят нулями.
+/// Буферы → s16le на `rate`/`channels` → `sink` на очереди `queue`.
+@available(macOS 14.2, *)
+final class ProcessTap {
+    let rate: Int
+    let channels: Int
+    /// Процесс Meet, чьё дерево не писать (0 — писать всё, кроме помощника).
+    let excludePid: Int
+    /// Очередь звука: на ней приходят буферы, зовётся sink и меняется список
+    /// исключённых процессов.
+    let queue = DispatchQueue(label: "meet-audiotap.tap")
+    private let sink: ([Int16]) -> Void
+    private var tapID = AudioObjectID(kAudioObjectUnknown)
+    private var aggregateID = AudioObjectID(kAudioObjectUnknown)
+    private var procID: AudioDeviceIOProcID?
+    private var description: CATapDescription?
+    private var excluded: [AudioObjectID] = []
+    private var processListener: AudioObjectPropertyListenerBlock?
+    private var resampler: LinearResampler?
+    private var samples: [Int16] = []
+    private var resampled: [Int16] = []
+
+    init(rate: Int, channels: Int, excludePid: Int, sink: @escaping ([Int16]) -> Void) {
+        self.rate = rate
+        self.channels = channels
+        self.excludePid = excludePid
+        self.sink = sink
+    }
+
+    /// Перехват, aggregate-устройство, IOProc и запуск. Сбой — исключение,
+    /// созданное до него уже убрано. Системный вопрос о разрешении macOS
+    /// задаёт на AudioDeviceStart.
+    func start() throws {
+        let processes = excludedProcesses(root: excludePid)
+        let tap = CATapDescription(stereoGlobalTapButExcludeProcesses: processes)
+        tap.uuid = UUID()
+        tap.name = "Meet"
+        tap.isPrivate = true
+        tap.muteBehavior = .unmuted
+        excluded = processes
+        description = tap
+        do {
+            try require(AudioHardwareCreateProcessTap(tap, &tapID), "AudioHardwareCreateProcessTap")
+            guard let output = builtInOutputUID() ?? defaultOutputUID() else {
+                throw CoreAudioError(call: "нет устройства вывода", status: 0)
+            }
+            let aggregate: [String: Any] = [
+                kAudioAggregateDeviceNameKey: "Meet — системный звук",
+                kAudioAggregateDeviceUIDKey: UUID().uuidString,
+                kAudioAggregateDeviceMainSubDeviceKey: output,
+                kAudioAggregateDeviceIsPrivateKey: true,
+                kAudioAggregateDeviceIsStackedKey: false,
+                kAudioAggregateDeviceTapAutoStartKey: true,
+                kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: output]],
+                kAudioAggregateDeviceTapListKey: [[kAudioSubTapDriftCompensationKey: true,
+                                                   kAudioSubTapUIDKey: tap.uuid.uuidString] as [String: Any]],
+            ]
+            try require(AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID),
+                        "AudioHardwareCreateAggregateDevice")
+            let format = try tapFormat()
+            if Int(format.mSampleRate.rounded()) != rate {
+                resampler = LinearResampler(from: format.mSampleRate, to: Double(rate), channels: channels)
+            }
+            try require(AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) {
+                [weak self] _, input, _, _, _ in self?.received(input)
+            }, "AudioDeviceCreateIOProcIDWithBlock")
+            try require(AudioDeviceStart(aggregateID, procID), "AudioDeviceStart")
+        } catch {
+            stop()
+            throw error
+        }
+        listenForProcesses()
+    }
+
+    private func tapFormat() throws -> AudioStreamBasicDescription {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var format = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        try require(AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &format),
+                    "kAudioTapPropertyFormat")
+        guard format.mFormatID == kAudioFormatLinearPCM,
+              (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
+              format.mBitsPerChannel == 32, format.mSampleRate > 0
+        else { throw TapFormatError() }
+        return format
+    }
+
+    /// Буфер aggregate-устройства (очередь `queue`) → s16le → sink.
+    private func received(_ input: UnsafePointer<AudioBufferList>) {
+        let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+        samples.removeAll(keepingCapacity: true)
+        appendPCM16(list, channels: channels, into: &samples)
+        if samples.isEmpty { return }
+        guard var converter = resampler else {
+            sink(samples)
+            return
+        }
+        resampled.removeAll(keepingCapacity: true)
+        converter.run(samples, into: &resampled)
+        resampler = converter
+        if !resampled.isEmpty { sink(resampled) }
+    }
+
+    /// Процесс Meet, начавший звук после старта (плеер записи), тоже мимо
+    /// перехвата: список процессов CoreAudio сменился — обновить исключения.
+    private func listenForProcesses() {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.processesChanged() }
+        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                               queue, block) == noErr {
+            processListener = block
+        }
+    }
+
+    private func processesChanged() {
+        guard let tap = description, tapID != AudioObjectID(kAudioObjectUnknown) else { return }
+        let current = excludedProcesses(root: excludePid)
+        guard Set(current) != Set(excluded) else { return }
+        excluded = current
+        tap.processes = current
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyDescription,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value = tap
+        let target = tapID
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectSetPropertyData(target, &address, 0, nil,
+                                       UInt32(MemoryLayout<CATapDescription>.size), pointer)
+        }
+        if status != noErr {
+            printError("process tap: исключения не обновлены (\(status))")
+        }
+    }
+
+    /// Остановить и убрать всё созданное: у каждого create — парный destroy.
+    func stop() {
+        if let block = processListener {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyProcessObjectList,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                                                       &address, queue, block)
+            processListener = nil
+        }
+        if let proc = procID {
+            _ = AudioDeviceStop(aggregateID, proc)
+            _ = AudioDeviceDestroyIOProcID(aggregateID, proc)
+            procID = nil
+        }
+        if aggregateID != AudioObjectID(kAudioObjectUnknown) {
+            _ = AudioHardwareDestroyAggregateDevice(aggregateID)
+            aggregateID = AudioObjectID(kAudioObjectUnknown)
+        }
+        if tapID != AudioObjectID(kAudioObjectUnknown) {
+            _ = AudioHardwareDestroyProcessTap(tapID)
+            tapID = AudioObjectID(kAudioObjectUnknown)
+        }
+    }
+}
+
+/// `--stream --source process_tap`: то же рукопожатие и тот же PCM, что у
+/// ScreenCaptureKit, тишина дописывается так же. Нули в буферах (нет
+/// разрешения или тишина) — не повод выходить: их считает резидент.
+@available(macOS 14.4, *)
+final class ProcessTapStream {
+    let rate: Int
+    let channels: Int
+    private var tap: ProcessTap!
+    private var ready = false
+    private var lastWrite = DispatchTime.now()
+    private var heartbeat: DispatchSourceTimer?
+    /// Как у AudioTap: меньше порога резидента (recorder.TICK_PAD_S = 1 с).
+    private let silenceAfter = 0.5
+    private let fillLimit = 0.75
+
+    init(rate: Int, channels: Int, excludePid: Int) {
+        self.rate = rate
+        self.channels = channels
+        tap = ProcessTap(rate: rate, channels: channels, excludePid: excludePid) { [weak self] samples in
+            self?.write(samples)
+        }
+    }
+
+    /// Главная очередь. Перехват не запустился — выход с кодом 70: резидент
+    /// повторит с нарастающей паузой.
+    func start() {
+        do {
+            try tap.start()
+        } catch {
+            printError("process tap: \(error.localizedDescription)")
+            exit(exitFailed)
+        }
+        tap.queue.sync {
+            printHandshake(rate: rate, channels: channels)
+            ready = true
+            lastWrite = DispatchTime.now()
+        }
+        let timer = DispatchSource.makeTimerSource(queue: tap.queue)
+        timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+        timer.setEventHandler { [weak self] in self?.fillSilence() }
+        timer.resume()
+        heartbeat = timer
+    }
+
+    private func write(_ samples: [Int16]) {
+        guard ready else { return }
+        samples.withUnsafeBytes { writeAll($0) }
+        lastWrite = DispatchTime.now()
+    }
+
+    /// Как AudioTap.fillSilence: буферов нет дольше silenceAfter — нули за
+    /// прошедшее время, длинная пауза — резиденту.
+    private func fillSilence() {
+        guard ready else { return }
+        let now = DispatchTime.now()
+        let gap = Double(now.uptimeNanoseconds - lastWrite.uptimeNanoseconds) / 1e9
+        guard gap > silenceAfter else { return }
+        lastWrite = now
+        guard gap <= fillLimit else { return }
+        let zeros = [Int16](repeating: 0, count: Int(gap * Double(rate)) * channels)
+        zeros.withUnsafeBytes { writeAll($0) }
+    }
+
+    func stop() {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { exit(exitOK) }
+        heartbeat?.cancel()
+        tap.stop()
+        exit(exitOK)
+    }
+}
+
+var checkHolder: AnyObject?
+
+/// `--check-tap [--seconds 5] [--exclude-pid N]`: проверка при включении
+/// process tap. Пишет столько секунд (человек включил любой звук) и печатает
+/// {"meet_audiotap", "check": "process_tap", "frames", "peak"} — пик по модулю
+/// s16. Есть ли разрешение, решает резидент по пику: без него буферы — нули.
+/// Отказ CoreAudio сразу — код 77, macOS старше 14.4 — 69.
+func checkTap(_ args: [String]) -> Never {
+    let seconds = option("--seconds", in: args, default: 5)
+    let excludePid = option("--exclude-pid", in: args, default: 0)
+    guard (1...30).contains(seconds) else {
+        printError("--seconds: от 1 до 30")
+        exit(exitUsage)
+    }
+    guard #available(macOS 14.4, *) else {
+        printError("process tap: нужна macOS 14.4 или новее")
+        exit(exitUnsupported)
+    }
+    var frames = 0
+    var peak = 0
+    let tap = ProcessTap(rate: 48000, channels: 1, excludePid: excludePid) { samples in
+        frames += samples.count
+        for sample in samples { peak = max(peak, abs(Int(sample))) }
+    }
+    checkHolder = tap
+    do {
+        try tap.start()
+    } catch {
+        printError("process tap: \(error.localizedDescription)")
+        exit(deniedByCoreAudio(error) ? exitPermission : exitFailed)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds)) {
+        tap.stop()
+        let (count, loudest) = tap.queue.sync { (frames, peak) }
+        printJSON(["meet_audiotap": protocolVersion, "check": "process_tap", "frames": count,
+                   "peak": loudest])
+        exit(exitOK)
+    }
+    dispatchMain()
+}
+
+func stringOption(_ name: String, in args: [String], default value: String) -> String {
+    guard let index = args.firstIndex(of: name) else { return value }
+    guard index + 1 < args.count else {
+        printError("\(name): нужно значение")
+        exit(exitUsage)
+    }
+    return args[index + 1]
+}
+
 func option(_ name: String, in args: [String], default value: Int) -> Int {
     guard let index = args.firstIndex(of: name) else { return value }
     guard index + 1 < args.count, let parsed = Int(args[index + 1]) else {
@@ -766,28 +1228,49 @@ func runStream(_ args: [String]) -> Never {
     let rate = option("--rate", in: args, default: 48000)
     let channels = option("--channels", in: args, default: 1)
     let excludePid = option("--exclude-pid", in: args, default: 0)
+    let capture = stringOption("--source", in: args, default: screenSource)
     guard [8000, 16000, 24000, 48000].contains(rate), channels == 1 || channels == 2 else {
         printError("поддерживаются частоты 8000/16000/24000/48000 и 1–2 канала")
         exit(exitUsage)
     }
-    guard #available(macOS 13.0, *) else {
-        printError("нужна macOS 13 или новее")
-        exit(exitUnsupported)
+    guard capture == screenSource || capture == processTapSource else {
+        printError("--source: \(screenSource) или \(processTapSource)")
+        exit(exitUsage)
     }
-    // Разрешения нет — попросить (macOS покажет запрос и откроет настройки)
-    // и выйти с кодом 77: резидент скажет человеку, что делать.
-    if !CGPreflightScreenCaptureAccess() {
-        _ = CGRequestScreenCaptureAccess()
-        printError("нет разрешения «Запись экрана»")
-        exit(exitPermission)
+    let stop: () -> Void
+    let begin: () -> Void
+    if capture == processTapSource {
+        // Process tap: разрешение «Запись экрана» не нужно и не проверяется.
+        guard #available(macOS 14.4, *) else {
+            printError("process tap: нужна macOS 14.4 или новее")
+            exit(exitUnsupported)
+        }
+        let tap = ProcessTapStream(rate: rate, channels: channels, excludePid: excludePid)
+        tapHolder = tap
+        stop = { tap.stop() }
+        begin = { tap.start() }
+    } else {
+        guard #available(macOS 13.0, *) else {
+            printError("нужна macOS 13 или новее")
+            exit(exitUnsupported)
+        }
+        // Разрешения нет — попросить (macOS покажет запрос и откроет настройки)
+        // и выйти с кодом 77: резидент скажет человеку, что делать.
+        if !CGPreflightScreenCaptureAccess() {
+            _ = CGRequestScreenCaptureAccess()
+            printError("нет разрешения «Запись экрана»")
+            exit(exitPermission)
+        }
+        let tap = AudioTap(rate: rate, channels: channels, excludePid: excludePid)
+        tapHolder = tap
+        stop = { tap.stop() }
+        begin = { _ = Task { await tap.start() } }
     }
     signal(SIGPIPE, SIG_IGN)
-    let tap = AudioTap(rate: rate, channels: channels, excludePid: excludePid)
-    tapHolder = tap
     for sig in [SIGTERM, SIGINT] {
         signal(sig, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-        source.setEventHandler { tap.stop() }
+        source.setEventHandler { stop() }
         source.resume()
         signalSources.append(source)
     }
@@ -795,9 +1278,9 @@ func runStream(_ args: [String]) -> Never {
     Thread.detachNewThread {
         var byte: UInt8 = 0
         while Darwin.read(STDIN_FILENO, &byte, 1) > 0 {}
-        DispatchQueue.main.async { tap.stop() }
+        DispatchQueue.main.async { stop() }
     }
-    Task { await tap.start() }
+    DispatchQueue.main.async { begin() }
     // Главный цикл событий, а не dispatchMain: через него приходят обратные
     // вызовы смены дисплеев, им же крутится главная очередь (сигналы, конец
     // stdin, пересборка). Порт держит цикл, пока не выйдем сами.
@@ -827,7 +1310,9 @@ case "--watch-devices"?:
     watchDevices()
 case "--stream"?:
     runStream(arguments)
+case "--check-tap"?:
+    checkTap(arguments)
 default:
-    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] | --mic-users | --watch-devices | --preflight | --mic-status | --request-mic | --request-screen | --self-test")
+    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] [--source screencapturekit|process_tap] | --check-tap [--seconds 5] [--exclude-pid N] | --mic-users | --watch-devices | --preflight | --mic-status | --request-mic | --request-screen | --self-test")
     exit(exitUsage)
 }

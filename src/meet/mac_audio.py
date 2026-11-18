@@ -8,7 +8,8 @@ macOS у PortAudio нет loopback'а, а сам PyAudio без Homebrew не с
 
 * микрофон и любые устройства ввода — sounddevice (колесо несёт PortAudio
   для macOS);
-* системный звук — помощник `meet-audiotap` (ScreenCaptureKit), подпроцесс,
+* системный звук — помощник `meet-audiotap` (ScreenCaptureKit или, по выбору
+  на macOS 14.4+, Core Audio process tap — `PyAudio.tap_source`), подпроцесс,
   отдающий PCM в stdout (`meet.audiotap`). В списке устройств он —
   виртуальное устройство SYSTEM_AUDIO_NAME с индексом TAP_INDEX.
 
@@ -107,6 +108,9 @@ class PyAudio:
         # Журнал записи (`recorder._RecordLog`): сюда помощник системного звука
         # пишет свои сообщения и «завис — перезапускаю». Задаёт recorder.
         self.log = None
+        # Источник системного звука помощника (`audiotap.SOURCE_*`): process tap
+        # задаёт recorder по `recording.mac_capture`, где он поддерживается.
+        self.tap_source = audiotap.SOURCE_SCREEN
         # Первый экземпляр: sounddevice уже инициализировал PortAudio при
         # импорте. Следующие — холодный старт после terminate(): свежий список.
         if not PyAudio._first:
@@ -150,7 +154,7 @@ class PyAudio:
             raise ValueError("поддерживается только ввод int16 с callback")
         if input_device_index == TAP_INDEX:
             stream = TapStream(int(rate), int(channels), stream_callback,
-                               int(frames_per_buffer), log=self.log)
+                               int(frames_per_buffer), log=self.log, source=self.tap_source)
         else:
             stream = DeviceStream(self._sd, input_device_index, int(rate),
                                   int(channels), stream_callback, int(frames_per_buffer))
@@ -216,16 +220,25 @@ class TapStream:
 
     Помощник жив, а звука нет дольше STALL_S (он сам дописывает тишину, когда
     системный звук молчит, — поток не пустеет) — `is_active()` отвечает False:
-    вотчдог записи перезапустит помощника, в журнале — STALL_NOTICE."""
+    вотчдог записи перезапустит помощника, в журнале — STALL_NOTICE.
+
+    `source` — process tap (`audiotap.SOURCE_PROCESS_TAP`): помощник
+    запускается с `--source process_tap`, а серии сплошных нулей только
+    считаются в журнале (`audiotap.ZeroRuns`) — без разрешения перехват
+    отдаёт нули, но они неотличимы от тишины, поэтому ни отката на
+    ScreenCaptureKit, ни перезапуска по ним нет."""
 
     def __init__(self, rate: int, channels: int, callback, frames: int,
-                 popen=None, helper: "str | None" = None, log=None) -> None:
+                 popen=None, helper: "str | None" = None, log=None,
+                 source: str = audiotap.SOURCE_SCREEN) -> None:
         self.rate, self.channels = rate, channels
         self._callback = callback
         self._frames = max(1, frames)
         self._popen = popen or _popen
         self._helper = helper
         self._log = log
+        self.source = source
+        self._zeros: "audiotap.ZeroRuns | None" = None
         self._proc = None
         self._reader = None
         self._drainer = None
@@ -256,7 +269,8 @@ class TapStream:
 
         self._proc = self._popen(
             audiotap.stream_command(helper, self.rate, self.channels,
-                                    exclude_pid=process_loopback.exclude_target()),
+                                    exclude_pid=process_loopback.exclude_target(),
+                                    source=self.source),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         self._drainer = threading.Thread(target=self._drain, name="meet-audiotap-stderr",
@@ -280,6 +294,8 @@ class TapStream:
         self._t0 = time.monotonic()
         self._frames_in = 0
         self._last_data = time.monotonic()
+        self._zeros = (audiotap.ZeroRuns(self.rate, self.channels)
+                       if self.source == audiotap.SOURCE_PROCESS_TAP else None)
         self._reader = threading.Thread(target=self._pump, name="meet-audiotap",
                                         daemon=True)
         self._reader.start()
@@ -363,6 +379,8 @@ class TapStream:
             frames = len(data) // (2 * self.channels)
             info = _time_info(self._t0 + self._frames_in / self.rate)
             self._frames_in += frames
+            if self._zeros is not None:
+                self._note(self._zeros.feed(data))
             try:
                 result = self._callback(data, frames, info, 0)
             except Exception:
@@ -376,6 +394,14 @@ class TapStream:
             if code is not None:
                 self.exit_code = code
                 self.notice = audiotap.notice_for_exit(code, " ".join(self.stderr_tail))
+
+    def _note(self, line: "str | None") -> None:
+        if line is None or self._log is None:
+            return
+        try:
+            self._log(line)
+        except Exception:
+            pass
 
     def is_active(self) -> bool:
         if not (self._proc is not None and self._proc.poll() is None

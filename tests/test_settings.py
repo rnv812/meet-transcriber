@@ -1120,6 +1120,30 @@ def test_skip_bluetooth_mic_on_by_default_and_not_written_until_changed(tmp_path
         "defaults": {"recording": {"skip_bluetooth_mic": True}}, "changed": ["recording.skip_bluetooth_mic"]}
 
 
+def test_mac_capture_defaults_to_screencapturekit_and_is_not_written_until_changed(tmp_path):
+    """macOS: источник системного звука — ScreenCaptureKit по умолчанию,
+    process tap — по выбору; умолчание в файл не пишется, мусор — умолчание."""
+    import json
+
+    from meet import audiotap
+
+    assert settings.MAC_CAPTURES == audiotap.SOURCES
+    assert settings.Settings.from_raw({}).recording.mac_capture == audiotap.SOURCE_SCREEN
+    assert settings.Settings.from_raw(
+        {"recording": {"mac_capture": "process_tap"}}).recording.mac_capture == "process_tap"
+    assert settings.Settings.from_raw(
+        {"recording": {"mac_capture": "blackhole"}}).recording.mac_capture == "screencapturekit"
+    f = tmp_path / "config.json"
+    settings.patch({"recording": {"speaker_name": "Анна"}}, f)
+    assert "mac_capture" not in json.loads(f.read_text(encoding="utf-8"))["recording"]
+    settings.patch({"recording": {"mac_capture": "screencapturekit"}}, f)
+    assert "mac_capture" not in json.loads(f.read_text(encoding="utf-8"))["recording"]
+    assert settings.patch({"recording": {"mac_capture": "process_tap"}}, f).recording.mac_capture == "process_tap"
+    assert json.loads(f.read_text(encoding="utf-8"))["recording"]["mac_capture"] == "process_tap"
+    assert settings.defaults_for(["recording.mac_capture"], f) == {
+        "defaults": {"recording": {"mac_capture": "screencapturekit"}}, "changed": ["recording.mac_capture"]}
+
+
 def test_effort_defaults_empty_round_trips_and_garbage_is_default(tmp_path):
     """0.5: уровень рассуждений Claude Code и Codex; пусто — «по умолчанию» (как было)."""
     cfg = settings.Settings.from_raw({})

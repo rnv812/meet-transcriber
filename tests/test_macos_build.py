@@ -138,7 +138,7 @@ def test_capture_follows_the_main_display_without_a_new_handshake():
     assert swift.count('"meet_audiotap": protocolVersion, "rate": rate') == 1
     start = swift[swift.index("    func start() async {"):]
     start = start[:start.index("\n    }\n")]
-    assert '"meet_audiotap": protocolVersion, "rate": rate' in start
+    assert "printHandshake(rate: rate, channels: channels)" in start
     rebuild = swift[swift.index("    private func rebuild() async {"):]
     rebuild = rebuild[:rebuild.index("\n    }\n")]
     assert "makeStream()" in rebuild and "meet_audiotap" not in rebuild
@@ -150,6 +150,62 @@ def test_capture_follows_the_main_display_without_a_new_handshake():
     run = swift[swift.index("func runStream("):]
     run = run[:run.index("\n}\n")]
     assert "RunLoop.main.run()" in run and "dispatchMain()" not in run
+
+
+def _block(swift: str, head: str, end: str = "\n}\n") -> str:
+    part = swift[swift.index(head):]
+    return part[:part.index(end)]
+
+
+def test_process_tap_speaks_the_python_protocol():
+    """Process tap (macOS 14.4+): тот же `--stream` с `--source process_tap` — то же
+    рукопожатие и PCM s16le; глобальный перехват без процессов Meet (`--exclude-pid`)
+    в частном aggregate-устройстве на встроенном выходе; `--check-tap` — 5 с записи
+    и строка {"check", "frames", "peak"}, которую разбирает `audiotap.parse_check`."""
+    swift = (ROOT / "mac" / "audiotap" / "main.swift").read_text(encoding="utf-8")
+    assert f'"{audiotap.SOURCE_PROCESS_TAP}"' in swift
+    for flag in ('"--source"', '"--check-tap"', '"--seconds"'):
+        assert flag in swift, flag
+    assert '"process_tap": processTap' in swift  # --self-test
+    for name in ("AudioHardwareCreateProcessTap", "AudioHardwareDestroyProcessTap",
+                 "AudioHardwareCreateAggregateDevice", "AudioHardwareDestroyAggregateDevice",
+                 "CATapDescription(stereoGlobalTapButExcludeProcesses:",
+                 "kAudioAggregateDeviceIsPrivateKey: true", "kAudioAggregateDeviceTapListKey",
+                 "kAudioSubTapUIDKey", "kAudioTapPropertyFormat",
+                 "AudioDeviceCreateIOProcIDWithBlock", "AudioDeviceStart", "AudioDeviceStop",
+                 "AudioDeviceDestroyIOProcID"):
+        assert name in swift, name
+    # Выход для aggregate — встроенный, а не системный: тот меняется с наушниками.
+    output = _block(swift, "func builtInOutputUID()")
+    assert "kAudioDeviceTransportTypeBuiltIn" in output
+    assert "kAudioHardwarePropertyDefaultOutputDevice" not in output
+    # Процессы Meet (дерево --exclude-pid и службы WebKit, за которые оно отвечает) —
+    # мимо перехвата, и начавшие звук позже — тоже.
+    assert "kAudioHardwarePropertyProcessObjectList" in _block(swift, "func excludedProcesses(")
+    assert "responsibility_get_pid_responsible_for_pid" in swift
+    assert "kAudioTapPropertyDescription" in swift
+    # Версия: 14.4+ (с 14.2 API есть, но ненадёжно), иначе — код «не поддерживается».
+    assert swift.count("#available(macOS 14.4, *)") >= 3
+    run = _block(swift, "func runStream(")
+    assert 'stringOption("--source"' in run and "== processTapSource" in run
+    # Рукопожатие — одна функция на оба источника, печатается один раз за запуск.
+    handshake = _block(swift, "func printHandshake(")
+    assert '"meet_audiotap": protocolVersion, "rate": rate' in handshake
+    assert swift.count("printHandshake(rate: rate, channels: channels)") == 2
+    stream = _block(swift, "final class ProcessTapStream", "\n}\n")
+    assert "printHandshake(rate: rate, channels: channels)" in stream
+    assert "exitPermission" not in stream  # нули и сбой — не «нет разрешения»
+    # Тот же PCM: Float32 → s16le общей функцией.
+    assert swift.count("appendPCM16(") >= 3
+    # Нули во время записи — не повод выходить: process tap не проверяет «Запись экрана».
+    tap = _block(swift, "final class ProcessTap", "\n}\n")
+    assert "CGPreflightScreenCaptureAccess" not in tap and "exitPermission" not in tap
+    # --check-tap: та же строка, что разбирает Python; отказ CoreAudio 'what' — код 77.
+    check = _block(swift, "func checkTap(")
+    for key in ('"meet_audiotap": protocolVersion', '"check": "process_tap"', '"frames"', '"peak"'):
+        assert key in check, key
+    assert "kAudioHardwareIllegalOperationError" in swift and "exitPermission" in check
+    assert f"default: {audiotap.CHECK_SECONDS})" in check
 
 
 def test_device_watch_speaks_the_python_protocol():

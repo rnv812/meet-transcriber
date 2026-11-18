@@ -1584,3 +1584,239 @@ def test_mac_device_list_marks_bluetooth_and_builtin_inputs(mac_recorder, monkey
     assert by_name["Микрофон MacBook Pro"]["transport"] == "builtin"
     assert "transport" not in by_name["Микрофон USB"]  # помощник его не назвал
     assert _WatchProc.instances[-1].stdin.closed  # спросили один раз и закрыли
+
+
+# --- process tap (macOS 14.4+): системный звук без «Записи экрана» ---------------
+
+
+def test_stream_command_names_the_source_only_for_process_tap():
+    base = ["/r/meet-audiotap", "--stream", "--rate", "48000", "--channels", "1"]
+    assert audiotap.stream_command("/r/meet-audiotap", 48000, 1, source=audiotap.SOURCE_SCREEN) == base
+    assert audiotap.stream_command("/r/meet-audiotap", 48000, 1, exclude_pid=4242,
+                                   source=audiotap.SOURCE_PROCESS_TAP) == [
+        *base, "--exclude-pid", "4242", "--source", "process_tap"]
+
+
+@pytest.mark.parametrize("version,supported", [
+    ("13.6.1", False), ("14.2", False), ("14.3.1", False), ("14.4", True), ("14.4.1", True),
+    ("15.0", True), ("26.1", True), ("", False), ("мусор", False), (None, False),
+])
+def test_process_tap_needs_macos_14_4(monkeypatch, tmp_path, version, supported):
+    from meet import plat
+
+    helper = tmp_path / "meet-audiotap"
+    helper.write_bytes(b"")
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(helper))
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    monkeypatch.setattr(audiotap, "macos_version", lambda: version)
+    assert audiotap.process_tap_supported() is supported
+
+
+def test_process_tap_is_unavailable_off_macos_or_without_the_helper(monkeypatch, tmp_path):
+    from meet import plat
+
+    monkeypatch.setattr(audiotap, "macos_version", lambda: "15.0")
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    assert audiotap.process_tap_supported() is False
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    assert audiotap.process_tap_supported() is False
+
+
+def test_tap_stream_runs_the_helper_in_its_source():
+    popen, calls = _popen_factory(HANDSHAKE)
+    stream = mac_audio.TapStream(48000, 1, lambda *a: (None, mac_audio.paContinue), 1024,
+                                 popen=popen, helper="/r/meet-audiotap",
+                                 source=audiotap.SOURCE_PROCESS_TAP)
+    stream.start_stream()
+    stream.close()
+    assert calls[0][-2:] == ["--source", "process_tap"]
+
+
+def _tap_session(mac_recorder, monkeypatch, tmp_path, version, **kw):
+    from meet import plat
+
+    monkeypatch.setattr(audiotap, "macos_version", lambda: version)
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    return _mac_session(monkeypatch, tmp_path, **kw)
+
+
+def test_process_tap_setting_starts_the_helper_in_that_mode(mac_recorder, monkeypatch, tmp_path):
+    s, _, calls = _tap_session(mac_recorder, monkeypatch, tmp_path, "14.4",
+                               mac_capture=audiotap.SOURCE_PROCESS_TAP)
+    s.close()
+    assert calls[0][-2:] == ["--source", "process_tap"]
+    assert "process tap" in _log(tmp_path)
+
+
+def test_process_tap_on_older_macos_records_with_screencapturekit(mac_recorder, monkeypatch, tmp_path):
+    s, _, calls = _tap_session(mac_recorder, monkeypatch, tmp_path, "14.3",
+                               mac_capture=audiotap.SOURCE_PROCESS_TAP)
+    s.close()
+    assert "--source" not in calls[0]
+    assert "ScreenCaptureKit" in _log(tmp_path)
+
+
+def test_default_capture_is_screencapturekit(mac_recorder, monkeypatch, tmp_path):
+    s, _, calls = _tap_session(mac_recorder, monkeypatch, tmp_path, "15.0")
+    s.close()
+    assert "--source" not in calls[0]
+    assert "process tap" not in _log(tmp_path)
+
+
+def test_record_takes_the_capture_mode_from_settings(monkeypatch, tmp_path):
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(recorder, "_MAC", True)
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def session(out_dir, bus, **kw):
+        seen.append(kw)
+        raise Stop
+
+    monkeypatch.setattr(recorder, "_Session", session)
+    with pytest.raises(Stop):
+        recorder.record(str(tmp_path / "rec"), mic_device=None, output_device=None)
+    assert seen[-1]["mac_capture"] == audiotap.SOURCE_SCREEN
+    settings.patch({"recording": {"mac_capture": "process_tap"}})
+    with pytest.raises(Stop):
+        recorder.record(str(tmp_path / "rec2"), mic_device=None, output_device=None)
+    assert seen[-1]["mac_capture"] == audiotap.SOURCE_PROCESS_TAP
+
+
+class _ZeroHelper(_HungHelper):
+    """Помощник process tap без разрешения: рукопожатие и сплошные нули, дальше ждёт."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__()
+        self.stdout = _BlockingOut(_pcm(int(48000 * seconds), value=0))
+        self.stdin = _ClosingIn(self.stdout.closed)
+
+
+def _zero_stream(source, seconds=6.0):
+    lines = []
+    got = []
+    helper = _ZeroHelper(seconds)
+
+    def callback(data, *_):
+        got.append(len(data))
+        return (None, mac_audio.paContinue)
+
+    stream = mac_audio.TapStream(48000, 1, callback, 1024, popen=lambda argv, **kw: helper,
+                                 helper="meet-audiotap", log=lines.append, source=source)
+    stream.start_stream()
+    _wait_for(lambda: sum(got) >= int(48000 * seconds) * 2 - 2048)
+    return stream, helper, lines
+
+
+def test_zeros_during_process_tap_recording_are_only_counted():
+    """Нули неотличимы от тишины до звонка: запись не откатывается на
+    ScreenCaptureKit и не перезапускает помощника — только строка-счётчик."""
+    stream, helper, lines = _zero_stream(audiotap.SOURCE_PROCESS_TAP)
+    assert stream.is_active()  # поток жив: отката нет
+    zero_lines = [line for line in lines if "нули" in line]
+    assert len(zero_lines) == 1
+    assert "5 с" in zero_lines[0] and "серия 1" in zero_lines[0]
+    helper.stdout.closed.set()
+    stream.close()
+
+
+def test_zeros_from_screencapturekit_are_not_counted():
+    stream, helper, lines = _zero_stream(audiotap.SOURCE_SCREEN)
+    assert not [line for line in lines if "нули" in line]
+    helper.stdout.closed.set()
+    stream.close()
+
+
+def test_zero_runs_count_each_run_once_and_note_the_sound_back():
+    runs = audiotap.ZeroRuns(rate=1000, channels=1)
+    zeros, sound = b"\x00\x00" * 1000, (5).to_bytes(2, "little", signed=True) * 1000
+    assert [runs.feed(zeros) for _ in range(4)] == [None] * 4
+    first = runs.feed(zeros)
+    assert first is not None and "5 с" in first and "серия 1" in first
+    assert runs.feed(zeros) is None  # та же серия — не повторяется
+    back = runs.feed(sound)
+    assert back is not None and "6 с" in back
+    assert runs.feed(sound) is None
+    for _ in range(4):
+        runs.feed(zeros)
+    second = runs.feed(zeros)
+    assert second is not None and "серия 2" in second
+    assert runs.runs == 2
+    # Короткая пауза не считается серией.
+    quiet = audiotap.ZeroRuns(rate=1000, channels=1)
+    assert [quiet.feed(z) for z in (zeros, zeros, sound)] == [None, None, None]
+    assert quiet.runs == 0
+
+
+# --- проверка разрешения при включении (`--check-tap`) ------------------------------
+
+
+def _check_run(code=0, stdout="", seen=None):
+    def run(argv, **kwargs):
+        if seen is not None:
+            seen.append((argv[1:], kwargs["timeout"]))
+        return SimpleNamespace(returncode=code, stdout=stdout)
+
+    return run
+
+
+@pytest.fixture
+def tap_helper(monkeypatch, tmp_path):
+    helper = tmp_path / "meet-audiotap"
+    helper.write_bytes(b"")
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(helper))
+    monkeypatch.setenv("MEET_EXCLUDE_PID", "4242")
+    monkeypatch.delenv("MEET_PROCESS_LOOPBACK", raising=False)
+    return helper
+
+
+def test_check_with_sound_turns_the_switch_on(tap_helper):
+    seen = []
+    line = '{"meet_audiotap": 1, "check": "process_tap", "frames": 240000, "peak": 1200}\n'
+    got = audiotap.check_process_tap(run=_check_run(0, line, seen))
+    assert got["result"] == audiotap.CHECK_SOUND and got["ok"] is True
+    assert seen == [(["--check-tap", "--seconds", "5", "--exclude-pid", "4242"],
+                     audiotap.CHECK_TIMEOUT_S)]
+    assert audiotap.CHECK_TIMEOUT_S > audiotap.CHECK_SECONDS
+
+
+def test_check_with_only_zeros_keeps_the_switch_off_with_a_hint(tap_helper):
+    line = '{"meet_audiotap": 1, "check": "process_tap", "frames": 240000, "peak": 0}\n'
+    got = audiotap.check_process_tap(run=_check_run(0, line))
+    assert got["result"] == audiotap.CHECK_SILENCE and got["ok"] is False
+    assert "Запись системного звука" in got["notice"]
+    assert got["pane"] == "system_audio"
+
+
+@pytest.mark.parametrize("code,stdout,result", [
+    (audiotap.EXIT_PERMISSION, "", audiotap.CHECK_DENIED),
+    (audiotap.EXIT_UNSUPPORTED, "", audiotap.CHECK_UNSUPPORTED),
+    (audiotap.EXIT_USAGE, "", audiotap.CHECK_UNSUPPORTED),  # прежний помощник режима не знает
+    (audiotap.EXIT_FAILED, "", audiotap.CHECK_FAILED),
+    (0, "мусор\n", audiotap.CHECK_FAILED),
+    (0, '{"meet_audiotap": 1, "check": "process_tap", "frames": 0, "peak": 0}\n', audiotap.CHECK_FAILED),
+])
+def test_check_without_sound_never_turns_the_switch_on(tap_helper, code, stdout, result):
+    got = audiotap.check_process_tap(run=_check_run(code, stdout))
+    assert got["result"] == result and got["ok"] is False
+    assert got["notice"]
+
+
+def test_check_denied_points_to_system_audio_recording(tap_helper):
+    got = audiotap.check_process_tap(run=_check_run(audiotap.EXIT_PERMISSION))
+    assert "Запись системного звука" in got["notice"] and got["pane"] == "system_audio"
+
+
+def test_check_hung_or_without_helper_fails(tap_helper, monkeypatch, tmp_path):
+    def hung(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    assert audiotap.check_process_tap(run=hung)["result"] == audiotap.CHECK_FAILED
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    got = audiotap.check_process_tap(run=lambda *a, **k: pytest.fail("помощника нет"))
+    assert got["result"] == audiotap.CHECK_FAILED
