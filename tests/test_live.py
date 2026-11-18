@@ -587,6 +587,9 @@ def _fake_audio(monkeypatch):
         def is_active(self):
             return True
 
+        def start_stream(self):
+            pass
+
         def stop_stream(self):
             pass
 
@@ -1003,6 +1006,10 @@ def _switchable_audio(monkeypatch):
         "channels": {},
         "closed": [],
         "at_start": [],  # сколько байт было в файлах на момент start_stream()
+        "on_open": None,  # (kw) -> None при каждом открытии стрима
+        # Индексы устройств, чей стрим медленно стартует и зовёт крючок
+        # «перед первыми данными» (как TapStream помощника на macOS).
+        "hooked": set(),
     }
 
     class Stream:
@@ -1011,6 +1018,8 @@ def _switchable_audio(monkeypatch):
             self.started = kw.get("start", True)
             self.active = self.started
             self.closed = False
+            if kw["input_device_index"] in world["hooked"]:
+                self.before_data = None
 
         def is_active(self):
             return self.active
@@ -1028,8 +1037,8 @@ def _switchable_audio(monkeypatch):
         def close(self):
             self.closed = True
 
-        def feed(self, data: bytes):
-            return self.kw["stream_callback"](data, 0, None, 0)
+        def feed(self, data: bytes, time_info=None):
+            return self.kw["stream_callback"](data, 0, time_info, 0)
 
     class PA:
         def __init__(self):
@@ -1039,6 +1048,8 @@ def _switchable_audio(monkeypatch):
                 world["on_init"]()
 
         def open(self, **kw):
+            if world["on_open"] is not None:
+                world["on_open"](kw)
             if kw["input_device_index"] in world["fail_open"]:
                 raise OSError("устройство не открылось")
             stream = Stream(kw)
@@ -1366,8 +1377,110 @@ def test_restart_pause_is_padded_before_the_stream_resumes(tmp_path, monkeypatch
         assert _wait(lambda: _open_on(world, 7))
         stream = _open_on(world, 7)[0]
         assert stream.kw["start"] is False and stream.active
-        at_start = world["at_start"][0]  # первый переоткрытый стрим — sys
+        at_start = world["at_start"][2]  # после первых sys и mic — переоткрытый sys
         assert at_start["sys.opus"] >= int(0.15 * 48000) * 4
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_slow_open_of_one_track_is_leading_silence_of_the_other(tmp_path, monkeypatch):
+    """Дорожки отсчитывают время от одного начала захвата: открытие системного
+    звука заняло 1,2 с — у микрофона, открытого после, в начале те же 1,2 с
+    тишины, а не звук со сдвигом к началу файла."""
+    world = _switchable_audio(monkeypatch)
+    monkeypatch.setattr(WallClockWriter, "PAD_GAP_S", 3600.0)  # тикер не доливает
+    clock = _Clock()
+
+    def slow_sys(kw):
+        if kw["input_device_index"] == 0:
+            clock.now += 1.2
+
+    world["on_open"] = slow_sys
+    engine = _live(tmp_path, [], clock=clock)
+    engine.start()
+    try:
+        sys_track, mic_track = engine._capture
+        assert sys_track.writer._started == mic_track.writer._started == 100.0
+        sys_at, mic_at = world["at_start"][:2]  # первые старты: sys, потом mic
+        assert sys_at["sys.opus"] == round(1.2 * 48000) * 4
+        assert mic_at["mic.opus"] == round(1.2 * 16000) * 2
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_first_open_pads_before_the_stream_starts(tmp_path, monkeypatch):
+    """Первое открытие — как переоткрытие: стрим открывается без старта, пауза
+    до часов доливается, потом старт; медленный поток (помощник на macOS)
+    доливает время своего старта крючком перед первыми данными."""
+    world = _switchable_audio(monkeypatch)
+    monkeypatch.setattr(WallClockWriter, "PAD_GAP_S", 3600.0)
+    world["hooked"] = {0}
+    clock = _Clock()
+    world["on_open"] = lambda kw: setattr(clock, "now", clock.now + 0.5)
+    engine = _live(tmp_path, [], clock=clock)
+    engine.start()
+    try:
+        sys_stream, mic_stream = world["streams"][:2]
+        assert sys_stream.kw["start"] is False and mic_stream.kw["start"] is False
+        assert sys_stream.active and mic_stream.active
+        assert world["at_start"][0]["sys.opus"] == round(0.5 * 48000) * 4
+        assert world["at_start"][1]["mic.opus"] == round(1.0 * 16000) * 2
+        assert not hasattr(mic_stream, "before_data")  # обычному потоку не нужен
+        clock.now += 2.0  # рукопожатие помощника
+        sys_stream.before_data()
+        sound = b"\x01\x00" * 2 * 480
+        sys_stream.feed(sound)
+        data = b"".join(world["written"]["sys.opus"])
+        assert data[-len(sound):] == sound
+        assert len(data) - len(sound) == round(3.0 * 48000) * 4  # тишина — до звука
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_live_callback_pads_by_buffer_capture_time(tmp_path, monkeypatch):
+    """Звук после тишины встаёт на момент своего захвата (time_info), а не
+    сразу за предыдущим: дефицит больше 0,2 с доливается перед буфером."""
+    world = _switchable_audio(monkeypatch)
+    clock = _Clock()
+    engine = _live(tmp_path, [], clock=clock)
+    engine.start()
+    try:
+        stream = _open_on(world, 0)[0]
+        first = b"\x01\x00" * 2 * 24000  # 0,5 с стерео, захвачены с начала
+        clock.now = 100.5
+        stream.feed(first, {"input_buffer_adc_time": 50.0, "current_time": 50.5})
+        second = b"\x02\x00" * 2 * 4800  # 0,1 с, захвачены на 1,0 с
+        clock.now = 101.4
+        stream.feed(second, {"input_buffer_adc_time": 10.0, "current_time": 10.4})
+        data = b"".join(world["written"]["sys.opus"])
+        assert data[:len(first)] == first
+        assert data[-len(second):] == second
+        gap = data[len(first):-len(second)]
+        assert len(gap) == round(0.5 * 48000) * 4 and set(gap) == {0}
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_capture_restart_keeps_the_timeline(tmp_path, monkeypatch):
+    """Перезапуск захвата после смены устройства не сдвигает ленту: к старту
+    переоткрытого стрима файл дорожки ровно той длины, сколько прошло от
+    начала захвата."""
+    world = _switchable_audio(monkeypatch)
+    clock = _Clock()
+    engine = _live(tmp_path, [], clock=clock)
+    engine.start()
+    try:
+        _open_on(world, 0)[0].feed(b"\x01\x00" * 2 * 24000)  # 0,5 с звука
+        clock.now = 103.0
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7) and len(world["at_start"]) >= 4)
+        reopened = world["at_start"][2]  # после первых sys и mic — переоткрытый sys
+        assert reopened["sys.opus"] == round(3.0 * 48000) * 4
+        assert world["at_start"][3]["mic.opus"] == round(3.0 * 16000) * 2
     finally:
         engine.stop()
 
@@ -1623,6 +1736,53 @@ def test_catch_up_pads_a_pause_shorter_than_the_gap():
     assert len(sink.data) == 600 * 2 and set(sink.data) == {0}
     w.write(b"\x01\x00" * 100)
     assert sink.data[600 * 2:] == b"\x01\x00" * 100  # звук — сразу за паузой
+
+
+def test_writer_counts_from_the_origin_it_is_given():
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock, started=98.8)
+    w.catch_up()
+    assert len(sink.data) == 1200 * 2 and set(sink.data) == {0}
+
+
+def test_audio_after_a_short_silence_lands_at_its_capture_time():
+    """Пауза короче PAD_GAP_S, но больше 0,2 с: звук после неё встаёт на момент
+    своего захвата, а не сразу за предыдущим буфером."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    clock.now = 101.0
+    w.write(b"\x01\x00" * 1000, captured=100.0)
+    clock.now = 101.9
+    w.write(b"\x02\x00" * 100, captured=101.5)
+    data = sink.data
+    assert data[:2000] == b"\x01\x00" * 1000
+    assert set(data[2000:3000]) == {0} and len(data) == 3000 + 200
+    clock.now = 102.1
+    w.write(b"\x03\x00" * 100, captured=101.75)  # дефицит 0,15 с — не доливается
+    assert sink.data[3200:] == b"\x03\x00" * 100
+
+
+def test_late_burst_with_early_capture_times_gets_no_silence():
+    """Запоздавший callback отдаёт накопленный звук пачкой: моменты захвата
+    ранние, и доливка по времени прихода сдвинула бы дорожку навсегда."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    clock.now = 101.5  # первый буфер пришёл на 1,5 с позже захвата
+    chunk = b"\x01\x00" * 100
+    for i in range(15):
+        w.write(chunk, captured=100.0 + i * 0.1)
+    assert sink.data == chunk * 15
+
+
+def test_tick_pads_in_chunks_of_at_most_0_2_s():
+    """Расхождение часов устройства не вставляет секунду тишины посреди звука
+    одним куском: тикер пишет по 0,2 с и отпускает замок между кусками."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    clock.now += 3.0
+    w.tick()
+    assert len(sink.data) == 3000 * 2
+    assert max(map(len, sink.chunks)) <= 200 * 2
 
 
 def test_writer_ignores_a_late_callback_after_close():

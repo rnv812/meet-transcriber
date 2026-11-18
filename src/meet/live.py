@@ -143,6 +143,12 @@ class TrackBuffer:
 # Такт тикера доливки живого режима: файл отстаёт от часов не больше чем на
 # PAD_GAP_S + такт, и callback'у остаётся доливать не больше этого.
 PAD_TICK_S = 0.5
+# Перед буфером доливается дефицит больше этого относительно момента захвата
+# буфера (`time_info`), как у записи (`recorder.CAPTURE_PAD_S`).
+CAPTURE_PAD_S = 0.2
+# Тикер пишет тишину кусками не длиннее этого и отпускает замок между ними:
+# расхождение часов устройства не вставляет секунду тишины посреди звука.
+PAD_CHUNK_S = 0.2
 
 
 class WallClockWriter:
@@ -153,14 +159,23 @@ class WallClockWriter:
     расшифровка записи падала на ffmpeg), а после паузы реплики уезжали к
     началу дорожки — interleave sys/mic по абсолютным таймкодам врал. Тот же
     приём, что у `recorder._Track.tick_pad()`: паузу доливает тикер движка
-    (`tick()` раз в PAD_TICK_S, кусками ≤1 с), а не аудио-callback — тот
-    доливает перед возобновившимися данными только остаток не больше
+    (`tick()` раз в PAD_TICK_S, кусками ≤PAD_CHUNK_S), а не аудио-callback —
+    тот доливает перед возобновившимися данными только остаток не больше
     MAX_INLINE_PAD_S (минуты нулей в пайп ffmpeg из callback'а PortAudio
     рвали бы звук). close() дописывает лишь последний миг.
 
+    `started` — начало координат дорожки: у всех дорожек захвата оно одно
+    (момент начала захвата), иначе дорожка, открытая позже соседней, теряла бы
+    время открытия соседней и звучала бы раньше неё.
+
+    Остаток перед буфером считается по моменту его захвата (`captured`, из
+    `time_info` callback'а): дефицит больше CAPTURE_PAD_S доливается, и звук
+    после тишины встаёт на своё место, а пачка запоздавших буферов с ранними
+    моментами захвата тишины не получает. Без момента захвата — по времени
+    прихода с порогом PAD_GAP_S (точность после паузы — до него).
+
     `buffer` (TrackBuffer окна расшифровки) получает тот же поток: звук и
-    доливку, в том же порядке. Точность после паузы — до PAD_GAP_S, как у
-    записи.
+    доливку, в том же порядке.
     """
 
     PAD_GAP_S = 1.0  # пауза короче — латентность/джиттер callback'а, не тишина
@@ -168,43 +183,52 @@ class WallClockWriter:
     MAX_INLINE_PAD_S = 2.0  # больше callback не доливает (тикер не успел)
 
     def __init__(self, writer, channels: int, rate: int, clock=time.monotonic,
-                 buffer: "TrackBuffer | None" = None) -> None:
+                 buffer: "TrackBuffer | None" = None,
+                 started: float | None = None) -> None:
         self._writer = writer
         self._buffer = buffer
         self._frame = 2 * max(1, int(channels))
         self._rate = int(rate)
         self._clock = clock
-        self._started = clock()
+        self._started = clock() if started is None else started
         self._written = 0
         self._closed = False
         self._lock = threading.Lock()
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes, captured: float | None = None) -> None:
+        """Дописать буфер; `captured` — момент захвата его первого кадра в
+        часах писателя (None — неизвестен)."""
         with self._lock:
             if self._closed:
                 return  # callback стрима, запоздавший к остановке
-            self._pad(len(data) / (self._frame * self._rate), self.PAD_GAP_S,
-                      limit_s=self.MAX_INLINE_PAD_S)
+            if captured is not None:
+                self._pad(self._clock() - captured, CAPTURE_PAD_S,
+                          limit_s=self.MAX_INLINE_PAD_S)
+            else:
+                self._pad(len(data) / (self._frame * self._rate), self.PAD_GAP_S,
+                          limit_s=self.MAX_INLINE_PAD_S)
             self._writer.write(data)
             self._written += len(data)
             if self._buffer is not None:
                 self._buffer.push(data)
 
     def tick(self) -> None:
-        """Долить паузу до часов (поток тикера). Кусками ≤1 с, лок — на кусок:
-        возобновившийся callback не ждёт всю доливку целиком."""
+        """Долить паузу до часов (поток тикера). Кусками ≤PAD_CHUNK_S, лок — на
+        кусок: возобновившийся callback не ждёт всю доливку целиком."""
         with self._lock:
             if self._closed or self._gap(0.0) <= self.PAD_GAP_S:
                 return
         while True:
             with self._lock:
-                if self._closed or not self._pad(0.0, self.TAIL_GAP_S, limit_s=1.0):
+                if self._closed or not self._pad(0.0, self.TAIL_GAP_S,
+                                                  limit_s=PAD_CHUNK_S):
                     return
 
     def catch_up(self) -> None:
-        """Долить всю паузу до часов сейчас — перед стартом переоткрытого
-        стрима. Перезапуск короче PAD_GAP_S ни callback, ни тикер не долили
-        бы: дорожка с непрерывным звуком осталась бы сдвинутой на его длину."""
+        """Долить всю паузу до часов сейчас — перед стартом стрима (первым и
+        переоткрытым) и в крючке «перед первыми данными» медленного потока.
+        Пауза короче PAD_GAP_S ни callback, ни тикер не долили бы: дорожка с
+        непрерывным звуком осталась бы сдвинутой на её длину."""
         with self._lock:
             if not self._closed:
                 self._pad(0.0, self.TAIL_GAP_S)
@@ -223,9 +247,9 @@ class WallClockWriter:
 
     def _pad(self, incoming_s: float, min_gap: float,
              limit_s: float | None = None) -> bool:
-        """Тишина до момента, с которого начинаются `incoming_s` секунд данных
-        (не больше `limit_s`). Кусками ≤1 с: ffmpeg читает из пайпа. True —
-        что-то дописано."""
+        """Тишина до момента за `incoming_s` секунд до часов (с него начинаются
+        данные), если её больше `min_gap`; не больше `limit_s`. Кусками ≤1 с:
+        ffmpeg читает из пайпа. True — что-то дописано."""
         gap = self._gap(incoming_s)
         if gap <= min_gap:
             return False
@@ -1050,7 +1074,8 @@ class LiveEngine:
                 self.devices_fallback.append(item)
             picked.append(dev)
         self._retry_wait = recorder.RETRY_S
-        # Начало координат ленты — старт захвата, как и у дорожек на диске.
+        # Начало координат ленты — старт захвата, как и у дорожек на диске:
+        # одно на все дорожки (время открытия первой — тишина в начале второй).
         self._t0 = self._clock()
         for (track, normalize, identify), dev in zip(tracks, picked):
             fname = track.fname
@@ -1064,7 +1089,8 @@ class LiveEngine:
             track.writer = WallClockWriter(
                 OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
                            track.channels, track.rate),
-                track.channels, track.rate, buffer=self._tracks[fname]["buffer"])
+                track.channels, track.rate, clock=self._clock,
+                buffer=self._tracks[fname]["buffer"], started=self._t0)
             self._capture.append(track)  # до открытия: сбой старта закроет и файл
             src_rate, src_ch = self._open_stream(track, dev)
             print(f"  {fname}: {dev['name']} ({src_rate} Hz, {src_ch} ch)")
@@ -1423,20 +1449,27 @@ class LiveEngine:
         finally:
             endpoints.close()
 
-    def _open_stream(self, track: _CaptureTrack, dev: dict,
-                     resume: bool = False) -> tuple[int, int]:
+    def _open_stream(self, track: _CaptureTrack, dev: dict) -> tuple[int, int]:
         """Стрим устройства `dev` в дорожку; → (частота, каналы) устройства.
-        `resume` — переоткрытие посреди записи: пауза перезапуска доливается
-        тишиной до старта стрима, иначе она выпала бы из таймлайна дорожки."""
+        Первое открытие и переоткрытие посреди записи — одинаково: стрим
+        открывается без старта, время открытия (или перезапуска) доливается
+        тишиной до старта, иначе оно выпало бы из таймлайна дорожки. Медленный
+        поток (помощник системного звука на macOS, `TapStream`) доливает время
+        своего старта крючком «перед первыми данными». Callback передаёт
+        писателю момент захвата буфера (`recorder._captured_at`)."""
+        from meet import recorder
+
         pyaudio = self._backend
         src_rate = int(dev["defaultSampleRate"])
         src_ch = max(1, int(dev["maxInputChannels"]))
         convert = _track_converter(src_rate, src_ch, track.rate, track.channels)
         writer = track.writer
+        clock = self._clock
 
         def cb(in_data, frame_count, time_info, status):
             try:
-                writer.write(convert(in_data))
+                writer.write(convert(in_data),
+                             captured=recorder._captured_at(time_info, clock()))
             except Exception as e:
                 self._say(f"{track.fname}: ошибка в аудио-callback: {e!r} — "
                           "стрим будет переоткрыт")
@@ -1452,19 +1485,18 @@ class LiveEngine:
             frames_per_buffer=1024,
             stream_callback=cb,
         )
-        if resume:
-            stream = self._p.open(start=False, **params)
+        stream = self._p.open(start=False, **params)
+        try:
+            if hasattr(stream, "before_data"):
+                stream.before_data = writer.catch_up
+            writer.catch_up()
+            stream.start_stream()
+        except Exception:
             try:
-                writer.catch_up()
-                stream.start_stream()
+                stream.close()
             except Exception:
-                try:
-                    stream.close()
-                except Exception:
-                    pass
-                raise
-        else:
-            stream = self._p.open(**params)
+                pass
+            raise
         track.stream = stream
         track.device = dev["name"]
         return src_rate, src_ch
@@ -1548,7 +1580,7 @@ class LiveEngine:
 
         try:
             dev = track.pick(self._p)
-            src_rate, src_ch = self._open_stream(track, dev, resume=True)
+            src_rate, src_ch = self._open_stream(track, dev)
         except Exception as e:
             if not track.waiting:
                 track.waiting = True
