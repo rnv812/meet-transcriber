@@ -1553,3 +1553,132 @@ def test_the_process_log_has_no_call_text(dirs):
     gate = _auto(dirs, NONE, log=lines.append)
     gate.decide("Bash", {"command": "cat /secret/plan-launch.txt"})
     assert lines and all("plan-launch" not in line for line in lines)
+
+
+# --- Codex через app-server (0.6.2): запросы одобрения → ворота Meet --------------------------
+
+_CMD = consent.CODEX_COMMAND
+_FILE = consent.CODEX_FILE_CHANGE
+
+
+def _codex(gate, method, params, item=None, *, windows=False):
+    return consent.codex_approval(gate, method, {"itemId": "i1", **params}, item or {}, windows=windows)
+
+
+def _cards_answer(gate, answers):
+    shown = []
+
+    def confirm(card):
+        shown.append(card)
+        return answers.pop(0) if answers else "deny"
+    gate.confirmer = confirm
+    return shown
+
+
+@pytest.mark.parametrize("command, tool, code", [
+    ("/bin/bash -lc 'rm -rf /tmp/x'", "Bash", "rm -rf /tmp/x"),
+    ("bash -c 'git status'", "Bash", "git status"),
+    ('powershell.exe -NoProfile -Command "Get-ChildItem"', "PowerShell", "Get-ChildItem"),
+    ("pwsh -Command 'Remove-Item x'", "PowerShell", "Remove-Item x"),
+    ("bash -lc 'cat x' 'rm -rf y'", "Bash", "bash -lc 'cat x' 'rm -rf y'"),     # лишний аргумент — не обёртка
+    ("bash -lc 'cat x' ; rm -rf y", "Bash", "bash -lc 'cat x' ; rm -rf y"),
+    ("npm test", "Bash", "npm test"),
+])
+def test_codex_command_unwraps_only_a_whole_shell_wrapper(command, tool, code):
+    assert consent.codex_command(command, windows=False) == (tool, code)
+
+
+def test_codex_command_default_tool_follows_the_platform():
+    assert consent.codex_command("dir", windows=True) == ("PowerShell", "dir")
+    assert consent.codex_command("ls", windows=False) == ("Bash", "ls")
+
+
+def test_codex_read_command_passes_on_request_without_a_card(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, [])
+    answer, decision = _codex(gate, _CMD, {"kind": "command", "command": "git status"})
+    assert answer == "accept" and decision.outcome == ALLOW and shown == []
+
+
+def test_codex_ordinary_command_asks_because_it_leaves_the_sandbox(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["allow"])
+    answer, decision = _codex(gate, _CMD, {"kind": "command", "command": "npm test"})
+    assert answer == "accept" and decision.why == "confirmed"
+    assert shown[0]["tool_use_id"] == "i1" and consent.CODEX_UNSANDBOXED in shown[0]["warnings"]
+    assert shown[0]["grant"]["key"] == "shell:Bash:npm test"
+
+
+def test_codex_grant_for_the_meeting_is_accept_for_session_and_covers_the_repeat(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, [consent.ALLOW_MEETING])
+    assert _codex(gate, _CMD, {"command": "npm test"})[0] == "acceptForSession"
+    answer, decision = _codex(gate, _CMD, {"command": "npm test"})
+    assert answer == "acceptForSession" and decision.why == "granted" and len(shown) == 1
+
+
+def test_codex_delete_and_send_are_never_for_the_session(dirs):
+    gate = _gate(dirs, CONFIRM)
+    shown = _cards_answer(gate, [consent.ALLOW_MEETING, consent.ALLOW_MEETING])
+    assert _codex(gate, _CMD, {"command": "rm -rf /tmp/x"})[0] == "accept"
+    assert _codex(gate, _CMD, {"command": "git push"})[0] == "accept"
+    assert [c["grant"] for c in shown] == [None, None] and not gate.grants()
+
+
+@pytest.mark.parametrize("level", [NONE, READ])
+def test_codex_requests_beyond_reading_decline_without_a_card_outside_user(dirs, level):
+    gate = _gate(dirs, level)
+    shown = _cards_answer(gate, ["allow"])
+    answer, decision = _codex(gate, _CMD, {"command": "npm test"})
+    assert answer == "decline" and decision.outcome == DENY and shown == []
+
+
+def test_codex_write_stdin_and_unknown_requests_decline(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["allow"])
+    assert _codex(gate, _CMD, {"kind": "writeStdin", "command": "y"})[0] == "decline"
+    assert _codex(gate, _CMD, {"command": ""})[0] == "decline"
+    assert _codex(gate, _FILE, {}, {"changes": []})[0] == "decline"
+    assert _codex(gate, "item/permissions/requestApproval", {})[0] == "decline"
+    assert shown == []
+
+
+def test_codex_file_change_outside_is_an_outside_card_with_the_patch(dirs):
+    gate = _auto(dirs)
+    shown = _cards_answer(gate, ["allow"])
+    path = str(dirs["downloads"] / "n.txt")
+    answer, _ = _codex(gate, _FILE, {}, {"changes": [{"path": path, "kind": {"type": "add"}, "diff": "+строка\n"}]})
+    assert answer == "accept" and "+строка" in shown[0]["args"]
+    assert gate.decide("Write", {"file_path": path, "content": "x"}).why == "outside"
+
+
+def test_codex_file_grant_with_grant_root_is_never_for_the_session(dirs):
+    """`grantRoot` + acceptForSession дали бы Codex запись во всю папку — шире разрешения Meet на файл."""
+    gate = _gate(dirs, CONFIRM)
+    _cards_answer(gate, [consent.ALLOW_MEETING])
+    change = {"changes": [{"path": str(dirs["kb"] / "План.md"), "kind": {"type": "update", "move_path": None},
+                           "diff": "-a\n+b\n"}]}
+    assert _codex(gate, _FILE, {"grantRoot": str(dirs["kb"])}, change)[0] == "accept"
+    assert _codex(gate, _FILE, {}, change)[0] == "acceptForSession"
+
+
+def test_codex_file_delete_and_move_are_judged_as_commands(dirs):
+    gate = _gate(dirs, CONFIRM)
+    shown = _cards_answer(gate, ["allow", "deny"])
+    old = str(dirs["kb"] / "old.md")
+    assert _codex(gate, _FILE, {}, {"changes": [{"path": old, "kind": {"type": "delete"}, "diff": ""}]})[0] == "accept"
+    assert shown[0]["args"].startswith("rm -- ") and shown[0]["grant"] is None
+    moved = {"changes": [{"path": old, "kind": {"type": "update", "move_path": str(dirs["kb"] / "new.md")},
+                          "diff": ""}]}
+    assert _codex(gate, _FILE, {}, moved)[0] == "decline"
+    assert shown[1]["args"].startswith("mv -- ")
+    win = _codex(gate, _FILE, {}, {"changes": [{"path": old, "kind": {"type": "delete"}, "diff": ""}]},
+                 windows=True)
+    assert win[0] == "decline"           # ответов больше нет — отказ
+
+
+def test_codex_file_change_with_several_files_stops_at_the_first_refusal(dirs):
+    gate = _gate(dirs, CONFIRM)
+    shown = _cards_answer(gate, ["deny", "allow"])
+    changes = [{"path": str(dirs["kb"] / f"{n}.md"), "kind": {"type": "add"}, "diff": "+x\n"} for n in "ab"]
+    assert _codex(gate, _FILE, {}, {"changes": changes})[0] == "decline" and len(shown) == 1

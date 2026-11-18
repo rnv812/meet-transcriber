@@ -80,6 +80,12 @@ workspace-write по умолчанию выключена. Песочницу �
 `--ignore-user-config` значение пользователя передаётся явно (`-c
 windows.sandbox=…`): без него запись на Windows пропала бы и у настроенного.
 
+0.6.2 — с воротами согласия (`gate`, агент-участник) ход идёт через `codex
+app-server` (`codex_app`): выход за песочницу спрашивает человека карточкой
+Meet, режим `confirm` не понижается до чтения; MCP выключены теми же
+заглушками (`mcp_stub_args`) при запуске сервера. Сервер не подошёл — ход
+через `codex exec`, как описано выше.
+
 Без свободы (`access=None`) — как в 0.3.6: песочница только-чтение, а
 MCP-серверы из `config.toml` пользователя Codex загружает сам (так было и в
 0.3.6).
@@ -214,6 +220,29 @@ def _mcp_list_json(exe: str, env: dict | None) -> str:
     return out.decode("utf-8", errors="replace")
 
 
+_MCP_STUBS = {"stdio": 'command="__meet_disabled_mcp__"',
+              "streamable_http": 'url="http://127.0.0.1:9/__meet_disabled_mcp__"'}
+
+
+def mcp_stub_args(servers) -> list[str] | None:
+    """Флаги `-c mcp_servers.<имя>={enabled=false,…}` — выключить включённые
+    MCP-серверы пользователя (`mcp_servers()`); их понимают и `codex exec`, и
+    `codex app-server`. None — выключить так нельзя: список не прочитался,
+    имя, которое ключом не задать, или неизвестный вид транспорта."""
+    if servers is None:
+        return None
+    entries = [(s.get("name"), s.get("transport")) if isinstance(s, dict) else (s, None)
+               for s in servers if not isinstance(s, dict) or s.get("enabled", True)]
+    if any(not (isinstance(n, str) and _MCP_KEY.match(n) and t in _MCP_STUBS) for n, t in entries):
+        return None
+    out: list[str] = []
+    for name, kind in entries:
+        # Заглушка того же транспорта, что у сервера: команда в таблице с url
+        # (и наоборот) ломает ход — «url is not supported for stdio».
+        out += ["-c", f"mcp_servers.{name}={{enabled=false,{_MCP_STUBS[kind]}}}"]
+    return out
+
+
 def access_args(access: str | None, servers=(), work_dirs=(), *,
                 windows_sandbox: str | None = None) -> list[str]:
     """Флаги exec для свободы (до подкоманды `resume`). None — как в 0.3.6
@@ -235,23 +264,14 @@ def access_args(access: str | None, servers=(), work_dirs=(), *,
                 out += ["--add-dir", str(d)]
     else:
         out = ["--sandbox", "read-only"]
-    enabled = [s for s in servers or () if not isinstance(s, dict) or s.get("enabled", True)] \
-        if servers is not None else None
-    stubs = {"stdio": 'command="__meet_disabled_mcp__"',
-             "streamable_http": 'url="http://127.0.0.1:9/__meet_disabled_mcp__"'}
-    entries = [(s.get("name"), s.get("transport")) if isinstance(s, dict) else (s, None)
-               for s in enabled or ()]
-    if enabled is None or any(not (isinstance(n, str) and _MCP_KEY.match(n) and t in stubs)
-                              for n, t in entries):
+    stubs = mcp_stub_args(servers)
+    if stubs is None:
         out.append("--ignore-user-config")     # в закрытую сторону: без config.toml — без MCP
         if windows_sandbox and _SANDBOX_VALUE.fullmatch(windows_sandbox):
             # Без config.toml пропал бы и `[windows] sandbox`: запись на Windows — только с ним.
             out += ["-c", f'windows.sandbox="{windows_sandbox}"']
     else:
-        for name, kind in entries:
-            # Заглушка того же транспорта, что у сервера: команда в таблице с url
-            # (и наоборот) ломает ход — «url is not supported for stdio».
-            out += ["-c", f"mcp_servers.{name}={{enabled=false,{stubs[kind]}}}"]
+        out += stubs
     for feature in _NONE_FEATURES:
         out += ["--disable", feature]
     if access != "user":
@@ -412,7 +432,11 @@ class ToolStream:
         self._open: dict[str, None] = {}
 
     def feed(self, line: str) -> list[dict]:
-        kind, item = _event_item(line)
+        return self.item(*_event_item(line))
+
+    def item(self, kind: str | None, item: dict) -> list[dict]:
+        """Элемент в виде событий `codex exec --json` (`item.started` /
+        `item.completed`) → события хода работы."""
         if kind not in ("item.started", "item.completed"):
             return []
         iid = str(item.get("id") or "")
@@ -471,10 +495,14 @@ class _Call:
     def __init__(self) -> None:
         self.proc = None
         self.cancelled = False
+        # Своя остановка вызова (app-server: `turn/interrupt`, затем дерево процессов).
+        self.stop = None
 
     def cancel(self) -> None:
         self.cancelled = True
-        if self.proc is not None:
+        if self.stop is not None:
+            self.stop()
+        elif self.proc is not None:
             _kill_tree(self.proc)
 
 
@@ -644,6 +672,38 @@ def _reply(proc, stdout: str, stderr: str, text: str, event_sid, event_errors, k
     return AgentReply(text=text, session_id=sid)
 
 
+async def _app_turn(exe: str, env: dict, workdir: str, text: str, images, resume, keep_session: bool,
+                    access: str, work_dirs: tuple, model, effort, gate, on_event,
+                    timeout_s: float) -> tuple[AgentReply | None, str]:
+    """Ход через `codex app-server` (`codex_app.run_turn`, в потоке) → (ответ,
+    ""); не подошёл до начала хода — (None, причина). «Стоп» (отмена задачи) —
+    `turn/interrupt`, затем дерево процессов."""
+    from functools import partial
+
+    from meet.llm import codex_app, consent
+
+    servers = await asyncio.to_thread(mcp_servers, exe, env)
+    flags = codex_app.launch_flags(access, servers)
+    if flags is None:
+        return None, "MCP-серверы пользователя не выключить заглушками"
+    loop = asyncio.get_running_loop()
+    call = _Call()
+    try:
+        reply = await asyncio.to_thread(
+            codex_app.run_turn, codex_app.command(exe, flags), env=env, cwd=workdir, text=text,
+            images=images, resume=resume, keep_session=keep_session,
+            policy=codex_app.turn_policy(access, gate.mode, work_dirs), model=model, effort=effort,
+            approver=partial(consent.codex_approval, gate, windows=_ON_WINDOWS),
+            emit=_deliver(loop, on_event) if on_event is not None else None,
+            timeout_s=timeout_s, call=call)
+    except codex_app.Unavailable as e:
+        return None, e.reason
+    except asyncio.CancelledError:
+        call.cancel()
+        raise
+    return reply, ""
+
+
 async def run(
     prompt: str,
     *,
@@ -664,6 +724,8 @@ async def run(
     access: str | None = None,
     work_dirs=(),
     on_event=None,
+    gate=None,
+    log=None,
 ) -> AgentReply:
     """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
     `llm.proxy`: Codex системный прокси Windows сам не видит.
@@ -687,7 +749,15 @@ async def run(
     `on_event` — ход работы по ходу вызова: события `tool_use`/`tool_result`
     (`ToolStream`) приходят в цикл событий вызывающего, пока Codex работает
     (с `--json`); прерванные вызовы закрываются «прервано». `reply.tools` —
-    те же события после вызова, как и без `on_event`."""
+    те же события после вызова, как и без `on_event`.
+
+    `gate` (0.6.2, `consent.ConsentGate` агента-участника, вместе с
+    `access`) — ход через `codex app-server` (`codex_app`): выход за
+    песочницу Codex спрашивает ворота и карточки Meet, режим `confirm` не
+    понижается до чтения. `app-server` не запустился, протокол не сошёлся
+    или MCP-серверы не выключить заглушками — ход через `codex exec`, как
+    раньше (в режиме `confirm` просьба — только чтение: exec спросить не
+    умеет), а в `log` — одна строка с причиной (без текста встречи)."""
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса Codex: {resume!r}")
     if model_error(model):
@@ -708,6 +778,23 @@ async def run(
         workdir = str(allowed_dirs[0])   # ход без согласия: рабочая папка — встреча
     env = netproxy.child_env(proxy)
     drop_session_markers(env)  # сеанс сам по себе, не «вложенный» (llm.base)
+    if gate is not None and access is not None:
+        reply, reason = await _app_turn(exe, env, workdir, stdin_text, sent, resume, keep_session, access,
+                                        tuple(work_dirs or ()), model, effort, gate, on_event, timeout_s)
+        if reply is not None:
+            reply.error = netproxy.with_hint(reply.error)
+            reply.dropped_images = [path for path, _ in dropped]
+            reply.notes = notes
+            return reply
+        if log is not None:
+            try:
+                log(f"Codex: app-server не подошёл ({reason}) — ход через codex exec")
+            except Exception:
+                pass
+        from meet.llm import consent
+
+        if access == consent.USER and gate.mode != consent.MODE_AUTO:
+            access = consent.READ        # exec спросить человека не умеет — просьба только читает
     call = _Call()
     try:
         reply = await asyncio.to_thread(

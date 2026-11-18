@@ -681,3 +681,29 @@ def test_system_says_speaker_labels_are_provisional():
     text = build_system()
     assert "«Собеседник», «Собеседник N» и «Спикер N» предварительные" in text
     assert "Meet уточнил говорящих" in text
+
+
+def test_codex_prompt_says_meet_asks_with_a_card():
+    """Codex через app-server (0.6.2): рискованное и выход за песочницу — карточкой Meet;
+    в `confirm` — каждое действие сверх чтения; MCP у Codex пока нет."""
+    auto = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards=True)
+    section = auto.split("# Возможности")[1].split("# Материалы")[0]
+    assert "правь файлы в своих папках, выполняй команды" in section
+    assert "Meet покажет пользователю карточкой" in section and "ассистент на Claude Code" not in section
+    assert "Удалять файлы даже в своих папках" in section
+    assert "MCP-серверов пользователя у тебя нет" in section and "сервер meet" not in section
+    assert "всегда заверши явным итогом" in section
+    confirm = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards=True,
+                              mode="confirm")
+    section = confirm.split("# Возможности")[1].split("# Материалы")[0]
+    assert "Meet показывает пользователю карточкой" in section
+    assert "MCP, веб и команды тебе недоступны" not in section and "действуй сам" not in section
+    assert "Твоя кнопка («Да, сделай») — только знак" in section
+
+
+def test_cards_flag_changes_nothing_for_claude_or_without_freedom():
+    base = {"folders": {"Эта встреча": "D:/m"}}
+    assert pp.build_system(**base, freedom=True, cards=True) == pp.build_system(**base, freedom=True)
+    assert pp.build_system(**base, actions=False, cards=True) == pp.build_system(**base, actions=False)
+    personal = pp.build_system(**base, freedom=True, actions=False, cards=True, profile=pp.PERSONAL)
+    assert "Meet покажет пользователю карточкой" in personal

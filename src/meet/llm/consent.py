@@ -37,7 +37,10 @@
 вызов — проверено на claude 2.1.292 без модели) и на `can_use_tool` (вопрос
 самого CLI — в ходе USER всегда карточка). Исходы `check`: `allow` (хук —
 `permissionDecision: "allow"`: Meet или человек решили), `auto` (хук — `{}`),
-`deny`. Codex и OpenCode обратного вызова не имеют: строки `ask` у них —
+`deny`. Codex через app-server (0.6.2) просит одобрить выход за свою
+песочницу — `codex_approval` переводит запрос в вызов и решает его
+`check(via=CODEX)`: что CLI решил бы сам (`auto`), здесь — карточка. OpenCode
+и Codex через `codex exec` обратного вызова не имеют: строки `ask` у них —
 отказ (`codex.access_args`, `opencode.permission_for`).
 
 Модуль — только stdlib.
@@ -2180,6 +2183,10 @@ class ConsentGate:
     def _inside_work(self, path: str) -> bool:
         return self._writable(self._resolve(path))
 
+    def granted(self, tool: str, data) -> bool:
+        """Вызов покрыт разрешением «до конца встречи»."""
+        return self._granted(str(tool or ""), data if isinstance(data, dict) else {})
+
     def _granted(self, tool: str, data: dict) -> bool:
         with self._lock:
             grants = dict(self._grants)
@@ -2520,13 +2527,18 @@ class ConsentGate:
         отказал, правило `ask`, защищённый путь, Manual без автомода) — в
         ходе USER всегда карточка, если хук этот вызов видел; не видел — отказ
         `unseen` (дыра в проверке), кроме того, что Meet пропускает сам. В
-        ходах NONE и READ карточек нет: `allow` или отказ."""
+        ходах NONE и READ карточек нет: `allow` или отказ.
+
+        `via=CODEX` (0.6.2) — Codex через app-server просит выйти за свою
+        песочницу (`codex_approval`): что Meet пропускает сам (чтение по
+        просьбе, разрешение «до конца встречи»), проходит; что отдал бы CLI
+        (`auto`), — карточка: одобренное Codex выполнит без песочницы."""
         data = data if isinstance(data, dict) else {}
         tool = str(tool or "")
         canonical = _canonical(tool, data)
         key = tool_use_id or canonical
         with self._lock:
-            if via == "hook":
+            if via in ("hook", CODEX):
                 self._seen.update(k for k in (tool_use_id, canonical) if k)
             else:
                 keys = {key, canonical}
@@ -2540,7 +2552,15 @@ class ConsentGate:
         decision = self.decide(tool, data)
         if decision.outcome == DENY:
             return decision
-        if via != "hook":
+        if via == CODEX:
+            if decision.outcome == AUTO:
+                if self._granted(tool, data):
+                    return Decision(ALLOW, what=decision.what, kind=decision.kind, why="granted")
+                decision = Decision(ASK, what=decision.what, kind=decision.kind, why="sandbox",
+                                    card=card_for(tool, data, self._grant_offer(tool, data)))
+            elif decision.outcome != ASK:
+                return decision
+        elif via != "hook":
             if level != USER:
                 if decision.outcome == ALLOW:
                     return decision
@@ -2563,6 +2583,8 @@ class ConsentGate:
         card_shown = dict(decision.card or card_for(tool, data))
         if tool_use_id:
             card_shown["tool_use_id"] = str(tool_use_id)   # кнопки — в строке этого вызова в чате
+        if via == CODEX and tool in SHELL:
+            card_shown["warnings"] = [*(card_shown.get("warnings") or []), CODEX_UNSANDBOXED]
         try:
             answer = confirmer(card_shown)
         except Exception as e:  # карточка не показалась — отказ
@@ -2612,3 +2634,122 @@ def denial_line(denials) -> str:
            else "закрытые данные" if whys <= {"sensitive"}
            else "в фоне" if whys == {"background"} else "без согласия")
     return f"Ассистент хотел {why}: {shown} — запрос заблокирован"
+
+
+# --- Codex через app-server (0.6.2): запрос одобрения → вызов «как у Claude Code» ---------------
+#
+# Codex просит одобрения, когда хочет выйти за свою песочницу: команда без
+# песочницы (или с сетью) — `item/commandExecution/requestApproval`, правка
+# файлов вне разрешённых для записи папок — `item/fileChange/requestApproval`.
+# Meet переводит запрос в вызов, который понимают ворота, и решает его
+# `ConsentGate.check(via=CODEX)`: те же категории, карточки и разрешения «до
+# конца встречи», что у Claude Code.
+
+CODEX = "codex"
+CODEX_COMMAND = "item/commandExecution/requestApproval"
+CODEX_FILE_CHANGE = "item/fileChange/requestApproval"
+CODEX_UNSANDBOXED = "⚠ Codex выполнит эту команду без своей песочницы"
+_POSIX_SHELLS = frozenset(("bash", "sh", "zsh", "dash"))
+_POSIX_SHELL_FLAGS = frozenset(("-c", "-lc", "-l"))
+_PS_SHELLS = frozenset(("powershell", "pwsh"))
+_PS_QUIET = frozenset(("-noprofile", "-nologo", "-noninteractive"))
+
+
+def codex_command(command: str, *, windows: bool) -> tuple[str, str]:
+    """Команда из запроса Codex → (инструмент, код) для ворот. Обёртка
+    оболочки целиком (`bash -lc '<код>'`, `powershell -NoProfile -Command
+    "<код>"`) снимается: ворота судят по коду внутри. Что-то сверх одной
+    обёртки с одним кодом — команда как есть (её разберёт `shell_risk`);
+    инструмент тогда — по системе (PowerShell на Windows, иначе Bash)."""
+    text = str(command or "")
+    try:
+        words = shlex.split(text, posix=False)
+    except ValueError:
+        words = []
+    if len(words) >= 3:
+        prog = _program(words[0].strip("\"'"))
+        if prog in _PS_SHELLS and words[-2].lower() in ("-command", "-c") \
+                and all(w.lower() in _PS_QUIET for w in words[1:-2]):
+            code = words[-1]
+            if len(code) >= 2 and code[0] == code[-1] and code[0] in "'\"":
+                code = code[1:-1]
+            return "PowerShell", code
+        if prog in _POSIX_SHELLS:
+            try:
+                posix = shlex.split(text)
+            except ValueError:
+                posix = []
+            flags = posix[1:-1]
+            if len(posix) >= 3 and flags and all(w in _POSIX_SHELL_FLAGS for w in flags) \
+                    and any("c" in w for w in flags):
+                return "Bash", posix[-1]
+    return ("PowerShell" if windows else "Bash"), text
+
+
+def _ps_quote(path: str) -> str:
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def codex_calls(method: str, params: dict, item: dict, *, windows: bool) -> list[tuple[str, dict]]:
+    """Запрос одобрения Codex → вызовы для ворот; пусто — понять нельзя
+    (отказ). Команда — `codex_command`. Правка файлов — по изменениям из
+    `item/started` (в самом запросе путей нет): добавление и правка — Write
+    с путём и правкой (её видно в карточке), удаление — команда удаления,
+    перенос — команда переноса (их категории — как у таких команд Claude
+    Code). `writeStdin` и прочие запросы — пусто."""
+    params = params if isinstance(params, dict) else {}
+    item = item if isinstance(item, dict) else {}
+    if method == CODEX_COMMAND:
+        if params.get("kind") not in (None, "command"):
+            return []
+        command = params.get("command") if isinstance(params.get("command"), str) else item.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return []
+        tool, code = codex_command(command, windows=windows)
+        return [(tool, {"command": code})]
+    if method != CODEX_FILE_CHANGE:
+        return []
+    out: list[tuple[str, dict]] = []
+    for change in item.get("changes") or ():
+        if not isinstance(change, dict) or not isinstance(change.get("path"), str) or not change["path"].strip():
+            return []
+        path = change["path"]
+        kind = change.get("kind")
+        kind_type = kind.get("type") if isinstance(kind, dict) else kind
+        move = kind.get("move_path") if isinstance(kind, dict) else None
+        if kind_type == "delete":
+            out.append(("PowerShell", {"command": f"Remove-Item -LiteralPath {_ps_quote(path)}"}) if windows
+                       else ("Bash", {"command": f"rm -- {shlex.quote(path)}"}))
+        elif kind_type == "update" and isinstance(move, str) and move.strip():
+            out.append(("PowerShell", {"command": f"Move-Item -LiteralPath {_ps_quote(path)} "
+                                                  f"-Destination {_ps_quote(move)}"}) if windows
+                       else ("Bash", {"command": f"mv -- {shlex.quote(path)} {shlex.quote(move)}"}))
+        elif kind_type in ("add", "update"):
+            out.append(("Write", {"file_path": path, "content": str(change.get("diff") or "")}))
+        else:
+            return []
+    return out
+
+
+def codex_approval(gate: "ConsentGate", method: str, params: dict, item: dict, *,
+                   windows: bool) -> tuple[str, Decision]:
+    """Ответ на запрос одобрения Codex: (`accept` / `acceptForSession` /
+    `decline`, решение ворот для строки вызова). Каждый вызов запроса
+    проходит ворота (`check(via=CODEX)`, карточка — в строке `itemId`);
+    первый отказ — `decline`. `acceptForSession` — только когда всё покрыто
+    разрешением «до конца встречи» (удаление и отправка наружу его не
+    получают) и запрос не просит права на целую папку (`grantRoot`: это шире
+    разрешения Meet на файл)."""
+    params = params if isinstance(params, dict) else {}
+    calls = codex_calls(method, params, item, windows=windows)
+    if not calls:
+        return "decline", gate._record(Decision(DENY, "", "непонятный запрос Codex", "other", UNPARSED))
+    item_id = params.get("itemId") if isinstance(params.get("itemId"), str) else None
+    session = not params.get("grantRoot")
+    decision = None
+    for tool, data in calls:
+        decision = gate.check(tool, data, tool_use_id=item_id, via=CODEX)
+        if not decision.allow:
+            return "decline", decision
+        session = session and decision.why in ("granted", "granted-now") and gate.granted(tool, data)
+    return ("acceptForSession" if session else "accept"), decision

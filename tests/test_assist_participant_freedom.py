@@ -395,11 +395,32 @@ def test_local_model_never_gets_freedom(tmp_path):
     assert h.p.freedom is False and h.p.view()["can"]["mode"] == "meet"
 
 
-# --- Codex: только чтение файлов -------------------------------------------------------------
+# --- Codex: ход через app-server с воротами Meet (0.6.2) ------------------------------------
 
 
-def test_codex_with_freedom_acts_on_request_and_says_so(tmp_path):
-    runner = FakeRunner([SILENT, SILENT])
+class GateRunner(FakeRunner):
+    """Codex через app-server: в ходе спрашивает ворота так же, как
+    `codex_app` (из своего потока), и запоминает уровень ворот на время хода."""
+
+    def __init__(self, replies, requests=()):
+        super().__init__(replies)
+        self.requests = list(requests)
+        self.levels = []
+        self.answers = []
+
+    async def __call__(self, prompt, **kwargs):
+        gate = kwargs.get("gate")
+        self.levels.append(gate.level if gate is not None else None)
+        if gate is not None and self.requests:
+            command = self.requests.pop(0)
+            self.answers.append(await asyncio.to_thread(
+                consent.codex_approval, gate, consent.CODEX_COMMAND, {"itemId": "it-1", "command": command}, {},
+                windows=False))
+        return await super().__call__(prompt, **kwargs)
+
+
+def test_codex_with_freedom_gets_the_gate_and_acts_on_request(tmp_path):
+    runner = GateRunner([SILENT, SILENT])
     h = _make(tmp_path, provider="codex", runner=runner, freedom=True)
 
     async def main():
@@ -413,17 +434,92 @@ def test_codex_with_freedom_acts_on_request_and_says_so(tmp_path):
 
     run(main())
     assert [kw["access"] for _p, kw in runner.calls] == [consent.NONE, consent.USER]
+    assert runner.levels == [consent.NONE, consent.USER]          # ворота знают уровень хода
+    gate = runner.calls[0][1]["gate"]
+    assert isinstance(gate, consent.ConsentGate) and gate is runner.calls[1][1]["gate"]
+    assert gate.level == consent.NONE                              # после хода согласие снято
+    assert callable(runner.calls[0][1]["log"])
     assert runner.calls[0][1]["allowed_dirs"][0] == str(h.folder)
     assert list(runner.calls[1][1]["work_dirs"]) == [str(h.folder)]
-    assert h.p.view()["can"] == {"mode": "act", "mcp": None, "agent_mode": "auto"}
+    assert h.p.view()["can"] == {"mode": "consent", "mcp": None, "agent_mode": "auto", "auto": None}
     system = runner.calls[0][1]["system_prompt"]
-    assert "ассистент на Claude Code" in system and "карточкой" not in system
+    assert "Meet покажет пользователю карточкой" in system and "ассистент на Claude Code" not in system
 
 
-def test_codex_in_confirm_mode_only_reads_on_request(tmp_path):
-    """«Спрашивать каждое действие»: спросить Codex не умеет — просьба = только чтение (0.3.7)."""
-    runner = FakeRunner([SILENT])
+def test_codex_in_confirm_mode_stays_user_and_asks_each_action(tmp_path):
+    """«Спрашивать каждое действие»: ход Codex не понижается до чтения — каждое действие карточкой."""
+    runner = GateRunner([SILENT], requests=["npm test"])
     h = _make(tmp_path, provider="codex", runner=runner, freedom=True, agent_mode="confirm")
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("запусти тесты")
+        turn = asyncio.ensure_future(h.p.tick())
+        await _wait(lambda: _cards(h))
+        card = _cards(h)[0]
+        assert card["tool_use_id"] == "it-1" and card["args"] == "npm test"
+        await h.p.confirm(card["id"], True)
+        await turn
+        await h.p.shutdown()
+
+    run(main())
+    assert runner.calls[0][1]["access"] == consent.USER
+    assert runner.calls[0][1]["gate"].mode == consent.MODE_CONFIRM
+    assert runner.answers[0][0] == "accept"
+    assert h.p.view()["can"] == {"mode": "consent", "mcp": None, "agent_mode": "confirm", "auto": None}
+    system = runner.calls[0][1]["system_prompt"]
+    assert "MCP, веб и команды тебе недоступны" not in system and "карточкой" in system
+
+
+def test_codex_grant_for_the_meeting_is_journaled_and_reloaded(tmp_path):
+    runner = GateRunner([SILENT], requests=["npm test"])
+    h = _make(tmp_path, provider="codex", runner=runner, freedom=True, agent_mode="confirm")
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("запусти тесты")
+        turn = asyncio.ensure_future(h.p.tick())
+        await _wait(lambda: _cards(h))
+        await h.p.confirm(_cards(h)[0]["id"], True, meeting=True)
+        await turn
+        await h.p.shutdown()
+
+    run(main())
+    assert runner.answers[0][0] == "acceptForSession"
+    assert [g["label"] for g in h.p.view()["grants"]] == ["Bash: npm test"]
+    again_runner = GateRunner([SILENT], requests=["npm test"])
+    again = _make(tmp_path, provider="codex", runner=again_runner, freedom=True, agent_mode="confirm",
+                  folder=h.folder)
+
+    async def second():
+        await again.p.start()
+        await again.p.post_user_message("ещё раз")
+        await again.p.tick()
+        await again.p.shutdown()
+
+    run(second())
+    assert again_runner.answers[0][0] == "acceptForSession" and len(_cards(again)) == 1
+
+
+def test_codex_denials_reach_the_chat_line(tmp_path):
+    runner = GateRunner([SILENT], requests=["cat ~/.ssh/id_rsa"])
+    h = _make(tmp_path, provider="codex", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("покажи ключ")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert runner.answers[0][0] == "decline"
+    assert any(m.get("gate") for m in h.chat.messages() if m["kind"] == "system")
+
+
+def test_opencode_in_confirm_mode_still_only_reads_on_request(tmp_path):
+    """OpenCode спросить не умеет: в режиме `confirm` просьба — только чтение, ворот нет."""
+    runner = FakeRunner([SILENT])
+    h = _make(tmp_path, provider="opencode", runner=runner, freedom=True, agent_mode="confirm")
 
     async def main():
         await h.p.start()
@@ -432,9 +528,10 @@ def test_codex_in_confirm_mode_only_reads_on_request(tmp_path):
         await h.p.shutdown()
 
     run(main())
-    assert runner.calls[0][1]["access"] == consent.READ
+    kw = runner.calls[0][1]
+    assert kw["access"] == consent.READ and "gate" not in kw and "log" not in kw
     assert h.p.view()["can"] == {"mode": "files", "mcp": None, "agent_mode": "confirm"}
-    assert "MCP, веб и команды тебе недоступны" in runner.calls[0][1]["system_prompt"]
+    assert "MCP, веб и команды тебе недоступны" in kw["system_prompt"]
 
 
 def test_codex_without_freedom_gets_no_access_flag(tmp_path):

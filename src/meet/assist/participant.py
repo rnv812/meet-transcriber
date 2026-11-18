@@ -17,7 +17,8 @@
   сохраняется (`persist`) и продолжается по id из `assistant/sessions.json`.
 * Codex, OpenCode — вызов на ход (`runner`) с родным продолжением сеанса
   (`llm.session_kwargs`); Codex работает в своей нейтральной папке (так
-  делает провайдер).
+  делает провайдер), со свободой — через `codex app-server` с воротами
+  согласия (`codex_app`).
 * Локальная модель — без продолжения и без инструментов: затравка из
   журнала (`participant_prompts.seed`) в каждом ходе, а запросы `read` /
   `search` / `list` исполняет Meet (`kb_prep`, вне цикла событий, со сроком).
@@ -52,9 +53,13 @@
 0.3.7). Claude Code: каждый вызов решают ворота (`ConsentGate`, хук
 PreToolUse и `can_use_tool`), карточка — в чате (`card: "confirm"`); ответ
 CLI держится до решения (не дольше `consent.CONFIRM_TIMEOUT_S`). Отказы
-хода — строкой в чате. Codex и OpenCode остановить вызов не дают: в ходе
-USER они правят рабочие папки и выполняют команды сами, а рискованное им
-запрещено (`access`, `work_dirs`). «Личный» отличается только промптом.
+хода — строкой в чате. Codex (0.6.2) идёт через `codex app-server`: выход
+за его песочницу решают те же ворота и карточки (`gate` в вызове), режим
+`confirm` — карточка на каждое действие сверх чтения; не запустился — ход
+через `codex exec`, как раньше. OpenCode остановить вызов не даёт: в ходе
+USER он правит рабочие папки и выполняет команды сам, а рискованное ему
+запрещено (`access`, `work_dirs`); в `confirm` — только чтение. «Личный»
+отличается только промптом.
 Выключено — как в 0.3.6.
 
 **Страховка** — единственная: не больше одного нового сообщения агента за
@@ -282,14 +287,16 @@ class _ConversationSession:
 class _RunnerSession:
     """Codex, OpenCode, локальная модель: вызов `runner` на ход. Сеанс
     продолжается по id (`llm.session_kwargs`), у локальной — нет (затравка в
-    каждом ходе)."""
+    каждом ходе). `gate` (0.6.2, Codex со свободой) — ворота согласия: на
+    время хода у них уровень хода, вызов получает их (`gate`) и журнал
+    (`log`) — выход Codex за песочницу спрашивает человека карточкой."""
 
     mcp_servers = None
-    gate = None
 
     def __init__(self, runner, provider: str, *, system, session_id: str | None,
                  resumable: bool, allowed_dirs=(), deny_paths=(), call_kwargs=None,
-                 freedom: bool = False, mode: str = consent.MODE_AUTO, work_dirs=()) -> None:
+                 freedom: bool = False, mode: str = consent.MODE_AUTO, work_dirs=(),
+                 gate: consent.ConsentGate | None = None, log=None) -> None:
         self._runner = runner
         self._provider = provider
         self._system = system          # () -> str: частота могла смениться
@@ -301,13 +308,16 @@ class _RunnerSession:
         self._freedom = freedom
         self._mode = mode
         self._work = tuple(work_dirs)
+        self.gate = gate
+        self._log = log
 
     @property
     def has_context(self) -> bool:
         return self._resumable and self.session_id is not None
 
     def take_denials(self) -> list:
-        return []   # у Codex и OpenCode отказов по вызовам Meet не видит
+        # Без ворот (OpenCode, Codex без свободы) отказов по вызовам Meet не видит.
+        return self.gate.take_denials() if self.gate is not None else []
 
     async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S,
                    level: str = consent.NONE, on_event=None):
@@ -315,19 +325,29 @@ class _RunnerSession:
         if self._resumable:
             extra = {"resume": self.session_id} if self.session_id else {"keep_session": True}
         if self._freedom:
-            # Уровень хода → флаги и права вызова. Спросить каждое действие
-            # Codex и OpenCode не умеют: в режиме `confirm` просьба — только чтение.
-            extra["access"] = consent.READ if level == consent.USER and self._mode != consent.MODE_AUTO else level
+            # Уровень хода → флаги и права вызова. Без ворот (OpenCode) спросить
+            # каждое действие нельзя: в режиме `confirm` просьба — только чтение.
+            downgrade = level == consent.USER and self._mode != consent.MODE_AUTO and self.gate is None
+            extra["access"] = consent.READ if downgrade else level
             extra["work_dirs"] = self._work
+        if self.gate is not None:
+            extra["gate"] = self.gate
+            extra["log"] = self._log
         from meet import llm
 
         streams = self._provider in llm.STREAMING_PROVIDERS
         if streams and on_event is not None:
             extra["on_event"] = on_event
-        reply = await self._runner(text, system_prompt=self._system(), images=list(images or ()),
-                                   deny_paths=self._deny, allowed_dirs=self._allowed,
-                                   timeout_s=timeout_s, max_turns=12, on_text=on_text,
-                                   **self._kwargs, **extra)
+        if self.gate is not None:
+            self.gate.begin(level)
+        try:
+            reply = await self._runner(text, system_prompt=self._system(), images=list(images or ()),
+                                       deny_paths=self._deny, allowed_dirs=self._allowed,
+                                       timeout_s=timeout_s, max_turns=12, on_text=on_text,
+                                       **self._kwargs, **extra)
+        finally:
+            if self.gate is not None:
+                self.gate.end()
         if self._resumable:
             if reply.resume_failed:
                 self.session_id = None
@@ -731,7 +751,8 @@ class Participant:
     def _can(self) -> dict:
         """Что агент может (шапка окна «может: …»): `consent` — Claude Code
         со свободой (`mcp` — имена MCP-серверов, если CLI их назвал; None —
-        неизвестно); `act` — Codex/OpenCode со свободой в автомоде: правит
+        неизвестно) и Codex со свободой (0.6.2: выход за песочницу — карточкой
+        Meet; `mcp` — None); `act` — OpenCode со свободой в автомоде: правит
         рабочие папки и выполняет команды сам, без MCP и рискованного;
         `files` — они же в режиме `confirm`: только чтение файлов по просьбе;
         `read` — без свободы: чтение встречи и базы; `meet` — просит Meet
@@ -745,6 +766,9 @@ class Participant:
                 auto = self._permission_mode == "auto"
             return {"mode": "consent", "mcp": list(self._mcp) if self._mcp is not None else None,
                     "agent_mode": self.agent_mode, "auto": auto}
+        if self.freedom and self.provider == "codex":
+            # Codex через app-server (0.6.2): действия — с согласия, как у Claude Code; MCP пока нет.
+            return {"mode": "consent", "mcp": None, "agent_mode": self.agent_mode, "auto": None}
         if self.freedom:
             mode = "act" if self.agent_mode == consent.MODE_AUTO else "files"
             return {"mode": mode, "mcp": None, "agent_mode": self.agent_mode}
@@ -1040,19 +1064,20 @@ class Participant:
 
     def system_prompt(self) -> str:
         actions = self.provider == "claude-code"
+        cards = self.provider == "codex"     # Codex через app-server: карточки Meet (0.6.2)
         if self.profile == pp.PERSONAL:
             # Карта, контекст задачи и глоссарий — содержание промпта «Рабочей встречи».
             return pp.build_system(
                 frequency=self.frequency, tools_available=self.tools, owner_name=self._owner_name,
                 folders=self._folders() if self.tools else None, profile=pp.PERSONAL,
-                freedom=self.freedom, actions=actions, mode=self.agent_mode)
+                freedom=self.freedom, actions=actions, mode=self.agent_mode, cards=cards)
         return pp.build_system(
             frequency=self.frequency, tools_available=self.tools, kb_map=self._kb_map,
             owner_name=self._owner_name,
             kb_exclude=tuple(getattr(self._kb, "exclude", ()) or ()) if self._kb is not None else (),
             folders=self._folders() if self.tools else None,
             glossary=self._glossary, task_context=self._task_context, freedom=self.freedom,
-            actions=actions, mode=self.agent_mode)
+            actions=actions, mode=self.agent_mode, cards=cards)
 
     def _gather(self) -> dict:
         """Карта, запреты, материалы — один раз на сессию (в потоке)."""
@@ -1118,18 +1143,8 @@ class Participant:
                 # Свобода (0.4): каждый вызов решают ворота — сами, автомодом
                 # CLI (`auto`) или карточкой Meet (рискованное; в `confirm` —
                 # всё). Папки, MCP и ворота у обоих профилей одни.
-                self._loop = asyncio.get_running_loop()
                 cwd = await asyncio.to_thread(_agent_cwd)
-                sensitive = await asyncio.to_thread(consent.sensitive_paths, library_root=self._library_root)
-                self._gate = consent.ConsentGate(
-                    own_dirs=[self._folder], work_dirs=self._work_dirs(), deny_paths=self._deny_paths,
-                    sensitive=sensitive, cwd=cwd, log=self._log, confirmer=self._confirm_sync,
-                    mode=self.agent_mode,
-                    ask_text=pp.ASK_FIRST_PERSONAL if self.profile == pp.PERSONAL else consent.ASK_FIRST)
-                self._gate.allow_paths(await self._io(self._attached_paths))
-                for gid, key, label in await self._io(self._load_grants):
-                    self._grant_ids[gid], self._grant_labels[gid] = key, label
-                    self._gate.add_grant(key, label)
+                sensitive = await self._open_gate(cwd)
                 extra.update(gate=self._gate, cwd=cwd, mode=self.agent_mode)
                 # Закрытые данные — ещё и правилами CLI (Grep по папке выше их не прочтёт).
                 deny += [str(p) for p in sensitive if p.exists()]
@@ -1142,19 +1157,47 @@ class Participant:
         else:
             if self._runner is None:
                 raise RuntimeError(f"нет вызова модели для {self.provider}")
+            gate = None
             if self.freedom:
-                # Codex — запрет просьбой в промпте, OpenCode — в правах.
-                deny += [str(p) for p in await asyncio.to_thread(
-                    consent.sensitive_paths, library_root=self._library_root) if p.exists()]
+                if self.provider == "codex":
+                    # Codex через app-server (0.6.2): выход за его песочницу решают
+                    # те же ворота и карточки, что у Claude Code; рабочая папка
+                    # сохраняемых сеансов Codex — служебная (`codex.keep_dir`).
+                    from meet.llm import codex
+
+                    sensitive = await self._open_gate(await asyncio.to_thread(codex.keep_dir))
+                    gate = self._gate
+                else:
+                    sensitive = await asyncio.to_thread(consent.sensitive_paths, library_root=self._library_root)
+                # Codex — ещё и просьба в промпте, OpenCode — запрет в правах.
+                deny += [str(p) for p in sensitive if p.exists()]
             self._session = _RunnerSession(
                 self._runner, self.provider, system=self.system_prompt,
                 session_id=self._stored_sid, resumable=self.resumable,
                 allowed_dirs=dirs, deny_paths=deny, call_kwargs=self._call_kwargs,
                 freedom=self.freedom, mode=self.agent_mode,
-                work_dirs=[str(self._folder), *self._work_dirs()])
+                work_dirs=[str(self._folder), *self._work_dirs()],
+                gate=gate, log=self._log if gate is not None else None)
         self._session_profile = self.profile
         self._changed()
         return self._session
+
+    async def _open_gate(self, cwd) -> list:
+        """Ворота согласия сессии (`self._gate`): папки встречи и базы,
+        закрытое, вложения и разрешения «до конца встречи» из журнала;
+        карточки — в чате (`_confirm_sync`). → чувствительные пути."""
+        self._loop = asyncio.get_running_loop()
+        sensitive = await asyncio.to_thread(consent.sensitive_paths, library_root=self._library_root)
+        self._gate = consent.ConsentGate(
+            own_dirs=[self._folder], work_dirs=self._work_dirs(), deny_paths=self._deny_paths,
+            sensitive=sensitive, cwd=cwd, log=self._log, confirmer=self._confirm_sync,
+            mode=self.agent_mode,
+            ask_text=pp.ASK_FIRST_PERSONAL if self.profile == pp.PERSONAL else consent.ASK_FIRST)
+        self._gate.allow_paths(await self._io(self._attached_paths))
+        for gid, key, label in await self._io(self._load_grants):
+            self._grant_ids[gid], self._grant_labels[gid] = key, label
+            self._gate.add_grant(key, label)
+        return sensitive
 
     def _attached_paths(self) -> list[str]:
         """Что пользователь уже приложил к чату (вложения журнала): их можно
