@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { RecordingBadge, RecordingWarnings } from "./RecordingBadge";
+import { MIC_SILENT, RecordingBadge, RecordingWarnings } from "./RecordingBadge";
 import * as api from "../lib/api";
 import * as shell from "../lib/shell";
 import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
@@ -201,6 +201,19 @@ test("настройки не открылись — ошибка видна, е
   expect(await screen.findByRole("alert")).toHaveTextContent("нет доступа");
   await userEvent.click(screen.getByRole("button", { name: "Скрыть ошибку" }));
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("микрофон не слышно (Windows): предупреждение во время записи, без кнопки настроек", async () => {
+  const open = vi.spyOn(shell, "openPrivacyPane").mockResolvedValue();
+  const { rerender } = render(<RecordingWarnings endpoint={ep} snapshot={snap({ mic_silent: true })} />);
+  expect(screen.queryByRole("button", { name: MIC_SILENT })).toBeNull();
+  rerender(<RecordingWarnings endpoint={ep} snapshot={snap({ status: "recording", source: "manual", mic_silent: true })} />);
+  const warn = screen.getByRole("button", { name: MIC_SILENT });
+  expect(warn).not.toHaveAccessibleDescription(/Открыть настройки/);
+  await userEvent.click(warn);
+  expect(open).not.toHaveBeenCalled();
+  rerender(<RecordingWarnings endpoint={ep} snapshot={snap({ status: "recording", source: "manual", mic_silent: false })} />);
+  expect(screen.queryByRole("button", { name: MIC_SILENT })).toBeNull();
 });
 
 test("ошибка команды видна рядом с кнопкой", async () => {

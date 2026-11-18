@@ -887,6 +887,94 @@ def test_silence_padding_emits_event_once(tmp_path):
     assert len(silence) == 1 and silence[0].data["gap_s"] >= 4.0
 
 
+# --- микрофон без разрешения: ровные нули ---
+
+
+def _pump_seconds(stream, seconds: float, sample=lambda i: 0, rate: int = 16000, buf: int = 1024):
+    """Отдать дорожке `seconds` звука буферами по `buf` кадров; `sample(i)` — отсчёт i."""
+    total = int(round(seconds * rate))
+    for start in range(0, total, buf):
+        k = min(buf, total - start)
+        stream.pump(struct.pack(f"<{k}h", *(sample(start + i) for i in range(k))))
+
+
+def _mic_silent(seen):
+    return [e for e in seen if e.kind == events.RECORD_MIC_SILENT]
+
+
+def _bus():
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    return bus, seen
+
+
+def test_mic_of_exact_zeros_is_reported_once_per_stretch(tmp_path, monkeypatch):
+    """Нет разрешения на микрофон (macOS) — поток живой, но отдаёт ровные нули:
+    дольше 3 с — событие и строка журнала, один раз на отрезок."""
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, bus=bus)
+    mic = s.tracks[1].stream
+    _pump_seconds(mic, 2.5)
+    s.tick()
+    assert _mic_silent(seen) == []  # 2,5 с — ещё не повод
+    _pump_seconds(mic, 1.0)  # 3,5 с ровных нулей
+    s.tick()
+    s.tick()
+    _pump_seconds(mic, 2.0)
+    s.tick()  # отрезок тот же — второго события нет
+    silent = _mic_silent(seen)
+    assert len(silent) == 1
+    assert silent[0].data["track"] == "mic.opus" and silent[0].data["state"] == "silent"
+    assert silent[0].data["silent_s"] >= 3.0
+    logs = [e.data["text"] for e in seen if e.kind == events.LOG]
+    assert any("mic.opus" in text and "нули" in text for text in logs)
+
+    _pump_seconds(mic, 0.5, sample=lambda i: 300 if i % 2 else -300)  # микрофон ожил
+    s.tick()
+    assert [e.data["state"] for e in _mic_silent(seen)] == ["silent", "restored"]
+    _pump_seconds(mic, 3.5)  # и снова замолк ровными нулями — новый отрезок
+    s.tick()
+    assert [e.data["state"] for e in _mic_silent(seen)] == ["silent", "restored", "silent"]
+
+
+def test_quiet_but_live_mic_is_not_reported(tmp_path, monkeypatch):
+    """Тихий живой микрофон: шум ±2 отсчёта — нулей подряд нет, события нет."""
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, bus=bus)
+    _pump_seconds(s.tracks[1].stream, 5.0, sample=lambda i: (i % 5) - 2)
+    s.tick()
+    assert _mic_silent(seen) == []
+
+
+def test_silent_system_audio_is_not_reported(tmp_path, monkeypatch):
+    """Ровные нули системного звука — обычная тишина собеседников, не сбой."""
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, bus=bus)
+    _pump_seconds(s.tracks[0].stream, 5.0)
+    s.tick()
+    assert _mic_silent(seen) == []
+
+
+def test_snapshot_shows_the_silent_mic_while_recording(monkeypatch, tmp_path):
+    from meet import tray, tray_control
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    control = tray_control.TrayControl(tray.TrayApp())
+    control.tray.recording = True
+    assert control.snapshot()["mic_silent"] is False
+    control.bus.emit(events.RECORD_MIC_SILENT, track="mic.opus", state="silent", silent_s=3.5)
+    assert control.snapshot()["mic_silent"] is True
+    control.bus.emit(events.RECORD_MIC_SILENT, track="mic.opus", state="restored")
+    assert control.snapshot()["mic_silent"] is False
+    control.bus.emit(events.RECORD_MIC_SILENT, track="mic.opus", state="silent", silent_s=3.5)
+    control.bus.emit(events.RECORD_STOPPED, folder="x", duration_s=1.0)
+    assert control.snapshot()["mic_silent"] is False
+    control.bus.emit(events.RECORD_MIC_SILENT, track="mic.opus", state="silent", silent_s=3.5)
+    control.tray.recording = False  # не записывает — плашки нет
+    assert control.snapshot()["mic_silent"] is False
+
+
 # --- закреплённые устройства: микрофон и вывод по имени ---
 
 _USB_MIC = {"name": "USB-микрофон", "defaultSampleRate": 48000, "maxInputChannels": 1}

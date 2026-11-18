@@ -24,6 +24,17 @@
 //       Дано ли разрешение «Запись экрана»: код 0 — да, 77 — нет. Без захвата
 //       и без системного запроса — резидент спрашивает раз в 15 с, пока
 //       запись идёт без звука собеседников.
+//   meet-audiotap --mic-status
+//       Одна строка JSON {"microphone": "granted" | "denied" | "notDetermined"
+//       | "restricted"} — разрешение «Микрофон», без системного запроса.
+//   meet-audiotap --request-mic
+//       Системный запрос «Микрофон» (уже решённое macOS не переспрашивает);
+//       ждёт ответа человека и печатает ту же строку, что --mic-status.
+//   meet-audiotap --request-screen
+//       Системный запрос «Запись экрана»: {"screen": "granted" | "denied"}
+//       (данное разрешение macOS применит после перезапуска Meet).
+//   Помощника запускает цепочка Meet.app → резидент, поэтому запросы macOS
+//   относит к Meet (текст — NSMicrophoneUsageDescription приложения).
 //
 // Коды выхода: 0 — штатно, 64 — неверные аргументы, 69 — macOS старше 13,
 // 70 — сбой захвата, 77 — нет разрешения «Запись экрана».
@@ -32,6 +43,7 @@
 //   swiftc -O -swift-version 5 -target arm64-apple-macos13.0 \
 //     -o meet-audiotap mac/audiotap/main.swift
 
+import AVFoundation
 import CoreAudio
 import CoreGraphics
 import CoreMedia
@@ -88,6 +100,38 @@ func preflight() -> Never {
     exit(CGPreflightScreenCaptureAccess() ? exitOK : exitPermission)
 }
 
+// MARK: - --mic-status, --request-mic, --request-screen
+
+func microphoneState() -> String {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized: return "granted"
+    case .denied: return "denied"
+    case .notDetermined: return "notDetermined"
+    case .restricted: return "restricted"
+    @unknown default: return "unknown"
+    }
+}
+
+func micStatus() -> Never {
+    printJSON(["microphone": microphoneState()])
+    exit(exitOK)
+}
+
+/// Ответ приходит на произвольной очереди — печатаем и выходим там же, а
+/// главная очередь ждёт в dispatchMain.
+func requestMic() -> Never {
+    AVCaptureDevice.requestAccess(for: .audio) { _ in
+        printJSON(["microphone": microphoneState()])
+        exit(exitOK)
+    }
+    dispatchMain()
+}
+
+func requestScreen() -> Never {
+    printJSON(["screen": CGRequestScreenCaptureAccess() ? "granted" : "denied"])
+    exit(exitOK)
+}
+
 // MARK: - --self-test
 
 func selfTest() -> Never {
@@ -103,6 +147,7 @@ func selfTest() -> Never {
         "stream": stream,
         "mic_users": micUsers,
         "exclude_pid": true,
+        "permissions": true,
         "format": "s16le",
     ])
     exit(exitOK)
@@ -467,9 +512,15 @@ case "--preflight"?:
     preflight()
 case "--mic-users"?:
     micUsers()
+case "--mic-status"?:
+    micStatus()
+case "--request-mic"?:
+    requestMic()
+case "--request-screen"?:
+    requestScreen()
 case "--stream"?:
     runStream(arguments)
 default:
-    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] | --mic-users | --preflight | --self-test")
+    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] [--exclude-pid N] | --mic-users | --preflight | --mic-status | --request-mic | --request-screen | --self-test")
     exit(exitUsage)
 }

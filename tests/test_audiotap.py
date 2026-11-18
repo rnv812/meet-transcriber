@@ -7,6 +7,7 @@ sounddevice — фейковым модулем. Проверяется то, ч
 
 import io
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -95,6 +96,77 @@ def test_mic_users_runs_the_helper(monkeypatch, tmp_path):
     monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
     assert audiotap.helper_path() is None
     assert audiotap.mic_users(run=run) is None
+
+
+# --- разрешения: микрофон и «Запись экрана» ------------------------------------
+
+
+@pytest.mark.parametrize("status", ["granted", "denied", "notDetermined", "restricted"])
+def test_mic_status_protocol_is_parsed(status):
+    line = json.dumps({"microphone": status}) + "\n"
+    assert audiotap.parse_permission(line, "microphone") == status
+    # Строка JSON — последняя: системный шум перед ней не мешает.
+    assert audiotap.parse_permission("предупреждение\n" + line, "microphone") == status
+
+
+@pytest.mark.parametrize("text", [
+    "", "мусор", "[]", '{"microphone": "maybe"}', '{"microphone": 1}', '{"screen": "granted"}',
+])
+def test_permission_answer_out_of_protocol_is_unknown(text):
+    assert audiotap.parse_permission(text, "microphone") is None
+
+
+def _permission_helper(monkeypatch, tmp_path, answers: dict):
+    """Помощник с режимами разрешений: argv → (код, stdout)."""
+    helper = tmp_path / "meet-audiotap"
+    helper.write_bytes(b"")
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(helper))
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append((argv[1:], kwargs["timeout"]))
+        code, stdout = answers[argv[1]]
+        return SimpleNamespace(returncode=code, stdout=stdout)
+
+    return run, seen
+
+
+def test_permission_modes_run_the_helper(monkeypatch, tmp_path):
+    run, seen = _permission_helper(monkeypatch, tmp_path, {
+        "--mic-status": (0, '{"microphone": "notDetermined"}\n'),
+        "--request-mic": (0, '{"microphone": "granted"}\n'),
+        "--request-screen": (0, '{"screen": "denied"}\n'),
+    })
+    assert audiotap.mic_status(run=run) == audiotap.MIC_NOT_DETERMINED
+    assert audiotap.request_mic(run=run) == audiotap.MIC_GRANTED
+    assert audiotap.request_screen(run=run) == audiotap.SCREEN_DENIED
+    assert seen == [
+        (["--mic-status"], audiotap.PERMISSION_TIMEOUT_S),
+        # Системный вопрос ждёт человека — таймаут длинный.
+        (["--request-mic"], audiotap.REQUEST_TIMEOUT_S),
+        (["--request-screen"], audiotap.REQUEST_TIMEOUT_S),
+    ]
+
+
+def test_permission_modes_without_an_answer_are_unknown(monkeypatch, tmp_path):
+    # Прежний помощник режимов не знает: код 64 и строка «использование» в stderr.
+    run, _ = _permission_helper(monkeypatch, tmp_path, {
+        "--mic-status": (audiotap.EXIT_USAGE, ""),
+        "--request-mic": (audiotap.EXIT_USAGE, ""),
+        "--request-screen": (audiotap.EXIT_USAGE, ""),
+    })
+    assert audiotap.mic_status(run=run) is None
+    assert audiotap.request_mic(run=run) is None
+    assert audiotap.request_screen(run=run) is None
+
+    def hung(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    assert audiotap.mic_status(run=hung) is None
+    assert audiotap.request_mic(run=hung) is None
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    assert audiotap.mic_status(run=lambda *a, **k: pytest.fail("помощника нет")) is None
+    assert audiotap.request_screen(run=lambda *a, **k: pytest.fail("помощника нет")) is None
 
 
 # --- фейковый помощник ---------------------------------------------------------

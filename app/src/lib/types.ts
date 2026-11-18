@@ -61,6 +61,11 @@ export type Snapshot = {
    * или помощника) — запись идёт только с микрофона. `permission` — дело в разрешении.
    */
   system_audio_missing?: { notice: string; permission: boolean } | null;
+  /**
+   * Микрофон идущей записи отдаёт ровные нули (`record.mic_silent`): на macOS — нет
+   * разрешения «Микрофон». Нет у старых резидентов.
+   */
+  mic_silent?: boolean;
   /** Последний сбой автоматической выгрузки в базу знаний. */
   kb_export_failed?: { folder: string; error: string; at: number } | null;
   /** Папки записей, которые сейчас обрабатываются в фоне (обрезка ожидания после звонка). */

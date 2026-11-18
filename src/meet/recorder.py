@@ -74,6 +74,10 @@ TAP_RETRY_MIN_S = 2.0
 TAP_RETRY_MAX_S = 60.0
 TAP_STABLE_S = 30.0
 PREFLIGHT_S = 15.0
+# Микрофон отдаёт ровные нули (не тишину, а 0 во всех отсчётах) дольше этого —
+# его не слышно: на macOS так выглядит запрет «Микрофон» (поток открывается и
+# молчит без ошибки). У настоящего микрофона всегда есть шум.
+MIC_SILENT_S = 3.0
 
 
 def new_folder(out_root: Path, now: "datetime | None" = None) -> Path:
@@ -483,6 +487,10 @@ class _Track:
         # Дорожка сейчас пишет с системного вместо выбранного: сообщаем при
         # каждом переходе туда и обратно, а не на каждом переоткрытии.
         self._in_fallback = False
+        # Микрофон: сколько байт подряд пришло ровными нулями (callback) и
+        # сообщено ли об этом отрезке (`check_mic_silent`, такт вотчдога).
+        self._zero_bytes = 0
+        self._mic_silent = False
 
     @property
     def follows_default(self) -> bool:
@@ -677,6 +685,26 @@ class _Track:
             )
         self._pad_silence()
 
+    def check_mic_silent(self) -> None:
+        """Такт вотчдога: микрофон отдаёт ровные нули дольше MIC_SILENT_S —
+        строка журнала и `record.mic_silent` (state "silent"), один раз на
+        отрезок; ожил — "restored". Считаются только буферы, пришедшие от
+        потока: долив тишины по часам (поток молчит) сюда не входит. Системный
+        звук не проверяется — его тишина обычна."""
+        if self.role != 1 or not self.rate:
+            return
+        silent_s = self._zero_bytes / (2 * self.channels * self.rate)
+        if not self._mic_silent and silent_s > MIC_SILENT_S:
+            self._mic_silent = True
+            self._log(f"микрофон отдаёт ровные нули ~{silent_s:.0f} с — его не слышно "
+                      "(нет разрешения «Микрофон» или микрофон выключен)")
+            self.bus.emit(events.RECORD_MIC_SILENT, track=self.fname, state="silent",
+                          silent_s=round(silent_s, 1))
+        elif self._mic_silent and self._zero_bytes == 0:
+            self._mic_silent = False
+            self._log("микрофон снова слышно")
+            self.bus.emit(events.RECORD_MIC_SILENT, track=self.fname, state="restored")
+
     def take_level(self) -> float:
         """Пик уровня с прошлого опроса — и сброс.
 
@@ -772,6 +800,12 @@ class _Track:
                     self._to_tap(data, False)
                     self.bytes_written += len(data)
                 self._stalled = False
+                if self.role == 1:
+                    # Ровные нули: bytes.count — в C, без копии.
+                    if data and data.count(0) == len(data):
+                        self._zero_bytes += len(data)
+                    else:
+                        self._zero_bytes = 0
                 peak = _peak(data)
                 if peak > self.level:
                     self.level = peak
@@ -1221,6 +1255,10 @@ class _Session:
                 t.tick_pad()
             except Exception as e:
                 t._log(f"пауза не дописана: {e!r}")
+            try:
+                t.check_mic_silent()
+            except Exception as e:
+                t._log(f"проверка микрофона не удалась: {e!r}")
         ids = self.endpoints.ids()
         if self.ids is None:
             self.ids = ids  # COM не ответил на старте — базлайн с первого такта

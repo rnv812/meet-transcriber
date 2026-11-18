@@ -105,6 +105,15 @@ def test_helper_speaks_the_python_protocol():
     assert '"--exclude-pid"' in swift and "excludingApplications: excluded" in swift
     assert '"exclude_pid": true' in swift
     assert '"format": "s16le"' in swift
+    # Режимы разрешений: те же ключи и состояния, что разбирает Python.
+    for mode in ('"--mic-status"', '"--request-mic"', '"--request-screen"'):
+        assert mode in swift
+    assert 'printJSON(["microphone": microphoneState()])' in swift
+    assert '["screen": CGRequestScreenCaptureAccess() ?' in swift
+    for state in audiotap.MIC_STATES:
+        assert f'return "{state}"' in swift, state
+    for state in audiotap.SCREEN_STATES:
+        assert f'"{state}"' in swift, state
     # Помощник дописывает тишину раньше резидента: иначе дописали бы оба.
     from meet import recorder
 

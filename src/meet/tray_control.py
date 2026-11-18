@@ -707,6 +707,9 @@ class TrayControl:
         # macOS: звук собеседников идущей записи не пишется —
         # {"notice", "permission"}; None — пишется (или не macOS).
         self._system_audio: dict | None = None
+        # Микрофон идущей записи отдаёт ровные нули (`record.mic_silent`) —
+        # окно держит плашку «Микрофон не слышно», пока он не ожил.
+        self._mic_silent = False
         # Последняя проверка доступа к Hugging Face (без токена): окно рисует
         # её по GET /hf/status, не дёргая сеть на каждый показ.
         self._hf_check: dict | None = None
@@ -1279,9 +1282,12 @@ class TrayControl:
                                       "permission": bool(event.data.get("permission"))}
             else:
                 self._system_audio = None
+        elif event.kind == events.RECORD_MIC_SILENT:
+            self._mic_silent = event.data.get("state") == "silent"
         elif event.kind == events.RECORD_STOPPED:
             self._fallbacks = {}
             self._system_audio = None
+            self._mic_silent = False
 
     # --- что показывать -------------------------------------------------
 
@@ -1322,6 +1328,9 @@ class TrayControl:
             # экрана») — окно держит плашку с кнопкой настроек, пока идёт запись.
             "system_audio_missing": dict(self._system_audio)
             if recording and self._system_audio else None,
+            # Микрофон отдаёт ровные нули (на macOS — нет разрешения «Микрофон»):
+            # окно держит плашку с кнопкой настроек, пока идёт запись.
+            "mic_silent": recording and self._mic_silent,
             # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
             # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
             # None — диск недоступен (отключён, шара не отвечает).

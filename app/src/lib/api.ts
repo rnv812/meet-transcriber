@@ -796,7 +796,7 @@ export function avatarUrl(ep: Endpoint, name: string, version: number): string {
 const EVENT_KINDS = [
   "job.queued", "job.started", "job.progress", "job.done", "job.failed",
   "record.started", "record.stopped", "record.discarded", "record.kept", "record.device", "record.device_fallback", "record.device_pinned",
-  "record.waiting", "record.silence", "record.level", "record.system_audio", "progress", "log", "error",
+  "record.waiting", "record.silence", "record.level", "record.system_audio", "record.mic_silent", "progress", "log", "error",
   "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
   // Этап старта ассистента сменился («загружаю модель распознавания…», готов).
   "live.stage",

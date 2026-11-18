@@ -31,6 +31,12 @@ export const stateChanging = (e: BusEvent) =>
  */
 export const GROUPS_CHANGED = "groups.changed";
 
+/**
+ * Меняют только снимок (предупреждения записи), не библиотеку: микрофон замолк ровными нулями
+ * или ожил — плашка у рейки появляется сразу, а не к следующему опросу.
+ */
+const snapshotChanging = (e: BusEvent) => stateChanging(e) || e.kind === "record.mic_silent";
+
 const refreshWorthy = (e: BusEvent) => e.kind.startsWith("job.") || e.kind === GROUPS_CHANGED || stateChanging(e);
 /** После них меняется само содержимое библиотеки, а не только прогресс задачи. */
 const CONTENT_JOB_EVENTS = new Set(["job.queued", "job.done", "job.failed"]); // отмена приходит как job.failed
@@ -132,7 +138,7 @@ export function useResident(): Resident {
           if (contentChanging(event)) setContentTick((t) => t + 1);
           if (event.kind === "job.done") setDoneTick((t) => t + 1);
           if (event.kind === GROUPS_CHANGED) setGroupsTick((t) => t + 1);
-          if (stateChanging(event)) {
+          if (snapshotChanging(event)) {
             getState(endpoint).then((s) => { if (!closed) apply(s); }).catch(() => {});
           }
         },

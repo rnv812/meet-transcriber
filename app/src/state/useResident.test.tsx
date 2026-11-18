@@ -65,6 +65,22 @@ test("record.started/stopped: снимок перечитывается сраз
   expect(result.current.snapshot?.status).toBe("recording");
 });
 
+test("record.mic_silent: снимок перечитывается сразу, библиотека — нет", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  vi.mocked(getState).mockResolvedValueOnce(
+    { status: "recording", folder: "C:/r/x", elapsed_s: 4, levels: {}, mic_silent: true } as Partial<Snapshot> as Snapshot);
+  const es = FakeEventSource.instances.at(-1)!;
+  const before = result.current.libraryTick;
+  await act(async () => {
+    es.emit("record.mic_silent", { kind: "record.mic_silent", at: 1, track: "mic.opus", state: "silent" });
+    await vi.advanceTimersByTimeAsync(10);
+  });
+  expect(result.current.snapshot?.mic_silent).toBe(true);
+  expect(result.current.libraryTick).toBe(before);
+});
+
 test("doneTick растёт только на job.done", async () => {
   vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
   const { result } = renderHook(() => useResident());

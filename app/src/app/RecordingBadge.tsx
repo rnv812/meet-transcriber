@@ -10,7 +10,8 @@ import { clock, errorText } from "../lib/format";
 import {
   DISCARD_LABEL, KEEP_LABEL, discardConfirm, TEMP_BADGE, TEMP_END_CONFIRM, TEMP_STOP_LABEL,
 } from "../lib/recordingStop";
-import { inTauri, invoke, openScreenRecordingSettings } from "../lib/shell";
+import { IS_MAC } from "../lib/platform";
+import { inTauri, invoke, openPrivacyPane, openScreenRecordingSettings } from "../lib/shell";
 import type { AgentProfile, AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "../live/profiles";
 import { AgentMark } from "../ui/AgentMark";
@@ -45,6 +46,9 @@ const RECORDING_MENU = "Действия с записью";
 /** Кнопка ассистента во время записи (0.5): своя, под кнопкой записи. */
 export const AGENT_ON_LABEL = "Включить ассистента";
 export const AGENT_LABEL = "Ассистент";
+
+/** Микрофон отдаёт ровные нули (`mic_silent`): на macOS так выглядит запрет «Микрофон». */
+export const MIC_SILENT = "Микрофон не слышно — проверьте разрешение";
 
 /** Выбранное в настройках устройство не нашлось — с какого пишем вместо него. */
 export function fallbackText(f: { kind: "mic" | "output"; name: string; reason?: "same_as_mic" }): string {
@@ -555,7 +559,9 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
  * Предупреждения записи внизу рейки — кнопки-значки цвета --warning; текст —
  * их имя и подсказка справа: мало места на диске; выбранное устройство не
  * нашлось (во время записи, своей или ассистента); macOS — системный звук не
- * пишется без разрешения (во время записи; по нажатию — настройки системы).
+ * пишется без разрешения (во время записи; по нажатию — настройки системы);
+ * микрофон отдаёт ровные нули (во время записи; на macOS по нажатию — раздел
+ * «Микрофон», на Windows раздела нет — только текст).
  */
 export function RecordingWarnings({ endpoint, snapshot, online = true }: {
   endpoint: Endpoint | null;
@@ -575,6 +581,14 @@ export function RecordingWarnings({ endpoint, snapshot, online = true }: {
       key: "system-audio", label: sys.notice,
       details: sys.permission ? ["Открыть настройки: нажмите на значок"] : [],
       onClick: sys.permission ? () => void openScreenRecordingSettings()
+        .catch((cause) => setError(errorText(cause))) : undefined,
+    });
+  }
+  if (recording && snapshot.mic_silent) {
+    warns.push({
+      key: "mic-silent", label: MIC_SILENT,
+      details: IS_MAC ? ["Открыть настройки: нажмите на значок"] : [],
+      onClick: IS_MAC ? () => void openPrivacyPane("microphone")
         .catch((cause) => setError(errorText(cause))) : undefined,
     });
   }

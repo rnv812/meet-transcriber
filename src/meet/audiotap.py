@@ -17,6 +17,18 @@
 * `meet-audiotap --preflight` — дано ли разрешение «Запись экрана» (код 0 или
   77), без захвата и без системного запроса: его дёшево спрашивать посреди
   записи, ничего не трогая.
+* `meet-audiotap --mic-status` — одна строка JSON `{"microphone": …}`:
+  разрешение «Микрофон» (`granted`, `denied`, `notDetermined`, `restricted`),
+  без системного запроса;
+* `meet-audiotap --request-mic` — системный запрос «Микрофон» (ждёт ответа
+  человека; уже решённое macOS не переспрашивает), та же строка с итогом;
+* `meet-audiotap --request-screen` — системный запрос «Запись экрана», строка
+  `{"screen": "granted"|"denied"}` (macOS применит разрешение только после
+  перезапуска приложения — тогда «denied»).
+
+Помощника запускает цепочка Meet.app → резидент, поэтому запросы и ответы
+macOS относит к Meet. Прежний помощник режимов разрешений не знает (код 64) —
+ответ «неизвестно» (None).
 
 Коды выхода — `EXIT_*` ниже; отказ в разрешении узнаётся по коду, а не по
 тексту: текст системной ошибки зависит от языка macOS.
@@ -40,6 +52,20 @@ EXIT_PERMISSION = 77  # EX_NOPERM: нет разрешения «Запись э
 
 MIC_USERS_TIMEOUT_S = 3.0
 PREFLIGHT_TIMEOUT_S = 5.0
+PERMISSION_TIMEOUT_S = 5.0  # --mic-status: без вопроса человеку
+REQUEST_TIMEOUT_S = 120.0  # --request-*: системный вопрос ждёт человека
+
+# Разрешение «Микрофон» (`--mic-status`, `--request-mic`) — как у
+# AVAuthorizationStatus.
+MIC_GRANTED = "granted"
+MIC_DENIED = "denied"
+MIC_NOT_DETERMINED = "notDetermined"
+MIC_RESTRICTED = "restricted"
+MIC_STATES = (MIC_GRANTED, MIC_DENIED, MIC_NOT_DETERMINED, MIC_RESTRICTED)
+# Разрешение «Запись экрана» (`--request-screen`).
+SCREEN_GRANTED = "granted"
+SCREEN_DENIED = "denied"
+SCREEN_STATES = (SCREEN_GRANTED, SCREEN_DENIED)
 
 # Почему помощник не дал звук (`TapError.kind`). От этого зависит, что делает
 # запись дальше: «permission» — ждать разрешения (`preflight`), «helper» и
@@ -219,3 +245,53 @@ def mic_users(run=None, timeout: float = MIC_USERS_TIMEOUT_S) -> "list[dict] | N
     if out.returncode != EXIT_OK:
         return None
     return parse_mic_users(out.stdout)
+
+
+def parse_permission(text: str, key: str) -> "str | None":
+    """Ответ режима разрешений — последняя строка JSON `{key: состояние}` →
+    состояние из известных (`MIC_STATES` для «microphone», `SCREEN_STATES` для
+    «screen») или None: не по протоколу."""
+    try:
+        data = json.loads((text or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get(key)
+    known = MIC_STATES if key == "microphone" else SCREEN_STATES
+    return value if isinstance(value, str) and value in known else None
+
+
+def _ask_permission(flag: str, key: str, run, timeout: float) -> "str | None":
+    """Запустить режим разрешений помощника и разобрать ответ. Помощника нет,
+    он прежний (не знает режима), завис или ответил мусором — None."""
+    helper = helper_path()
+    if not helper:
+        return None
+    run = run or subprocess.run
+    try:
+        out = run([helper, flag], capture_output=True, text=True,
+                  encoding="utf-8", errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != EXIT_OK:
+        return None
+    return parse_permission(out.stdout, key)
+
+
+def mic_status(run=None, timeout: float = PERMISSION_TIMEOUT_S) -> "str | None":
+    """Разрешение «Микрофон» (`--mic-status`, без системного вопроса): одно
+    из `MIC_STATES` или None — узнать нечем."""
+    return _ask_permission("--mic-status", "microphone", run, timeout)
+
+
+def request_mic(run=None, timeout: float = REQUEST_TIMEOUT_S) -> "str | None":
+    """Системный вопрос «Микрофон» (`--request-mic`) и его итог — одно из
+    `MIC_STATES` или None. Ждёт ответа человека."""
+    return _ask_permission("--request-mic", "microphone", run, timeout)
+
+
+def request_screen(run=None, timeout: float = REQUEST_TIMEOUT_S) -> "str | None":
+    """Системный вопрос «Запись экрана» (`--request-screen`): `SCREEN_GRANTED`,
+    `SCREEN_DENIED` (в том числе «дал, но нужен перезапуск») или None."""
+    return _ask_permission("--request-screen", "screen", run, timeout)

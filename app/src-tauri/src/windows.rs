@@ -777,19 +777,78 @@ pub fn open_wizard_on_first_run(app: &AppHandle, engine_upkeep: bool) {
     }
 }
 
-/// Раздел «Запись экрана» в настройках конфиденциальности macOS — адрес
-/// зашит: окно открывает только его, не произвольную ссылку.
-pub const SCREEN_RECORDING_PANE: &str =
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+/// Разделы «Системных настроек» macOS, которые может открыть окно: вид →
+/// адреса. Список зашит — окно называет раздел, а не ссылку. Первым — адрес
+/// новых настроек (macOS 13+), вторым — прежняя схема `com.apple.preference.*`.
+pub const PRIVACY_PANES: &[(&str, [&str; 2])] = &[
+    (
+        "microphone",
+        [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        ],
+    ),
+    (
+        "screen_recording",
+        [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+        ],
+    ),
+    (
+        // «Только системный звук» (macOS 14.4+): process tap.
+        "system_audio",
+        [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture",
+        ],
+    ),
+    (
+        "notifications",
+        [
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.notifications",
+        ],
+    ),
+];
 
-/// «Открыть настройки» у плашки «Звук собеседников не записывается» (macOS).
+/// Адреса раздела по виду; вида нет в `PRIVACY_PANES` — ошибка.
+pub fn privacy_pane_urls(kind: &str) -> Result<&'static [&'static str; 2], String> {
+    PRIVACY_PANES
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map(|(_, urls)| urls)
+        .ok_or_else(|| format!("Неизвестный раздел настроек: {kind}"))
+}
+
+/// Открыть первый адрес, который открылся; ни один — код последней попытки.
+/// `open` у macOS не знает, есть ли раздел: неизвестный якорь открывает главную
+/// страницу настроек с успехом — запасной адрес нужен там, где не открылась
+/// сама схема (старая macOS).
+pub fn open_first(
+    urls: &[&str],
+    mut open: impl FnMut(&str) -> Result<(), isize>,
+) -> Result<(), isize> {
+    let mut last = 0;
+    for url in urls {
+        match open(url) {
+            Ok(()) => return Ok(()),
+            Err(code) => last = code,
+        }
+    }
+    Err(last)
+}
+
+/// «Открыть настройки» у плашек записи и мастера (macOS): раздел
+/// «Конфиденциальности» или уведомлений из `PRIVACY_PANES`.
 #[tauri::command]
-pub async fn open_screen_recording_settings() -> Result<(), String> {
+pub async fn open_privacy_pane(kind: String) -> Result<(), String> {
+    let urls = privacy_pane_urls(&kind)?;
     if !cfg!(target_os = "macos") {
         return Err("Только для macOS".to_string());
     }
-    tauri::async_runtime::spawn_blocking(|| {
-        shell_execute(SCREEN_RECORDING_PANE)
+    tauri::async_runtime::spawn_blocking(move || {
+        open_first(urls, shell_execute)
             .map_err(|code| format!("Системные настройки не открылись (код {code})"))
     })
     .await
@@ -1342,5 +1401,74 @@ mod tests {
         // Повторная отметка не ломается.
         write_wizard_done(&base).unwrap();
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn privacy_panes_are_a_fixed_list_new_settings_first() {
+        for (kind, anchor) in [
+            ("microphone", "Privacy_Microphone"),
+            ("screen_recording", "Privacy_ScreenCapture"),
+            ("system_audio", "Privacy_AudioCapture"),
+        ] {
+            let urls = privacy_pane_urls(kind).unwrap();
+            assert_eq!(
+                urls[0],
+                format!(
+                    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?{anchor}"
+                )
+            );
+            assert_eq!(
+                urls[1],
+                format!("x-apple.systempreferences:com.apple.preference.security?{anchor}")
+            );
+        }
+        let notifications = privacy_pane_urls("notifications").unwrap();
+        assert_eq!(
+            notifications[0],
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        );
+        assert_eq!(
+            notifications[1],
+            "x-apple.systempreferences:com.apple.preference.notifications"
+        );
+        // Только разделы из списка: ни неизвестный вид, ни ссылка не проходят.
+        for kind in [
+            "",
+            "camera",
+            "Microphone",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
+        ] {
+            assert!(privacy_pane_urls(kind).is_err(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn privacy_pane_falls_back_to_the_old_address() {
+        let urls = privacy_pane_urls("microphone").unwrap();
+        // Новый адрес открылся — старый не нужен.
+        let mut tried = Vec::new();
+        let opened = open_first(urls, |url| {
+            tried.push(url.to_string());
+            Ok(())
+        });
+        assert_eq!(opened, Ok(()));
+        assert_eq!(tried, vec![urls[0].to_string()]);
+        // Новый не открылся (macOS 12) — старый.
+        let mut tried = Vec::new();
+        let opened = open_first(urls, |url| {
+            tried.push(url.to_string());
+            if url == urls[0] {
+                Err(1)
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(opened, Ok(()));
+        assert_eq!(tried, vec![urls[0].to_string(), urls[1].to_string()]);
+        // Ни один — код последней попытки.
+        assert_eq!(
+            open_first(urls, |url| Err(url.len() as isize)),
+            Err(urls[1].len() as isize)
+        );
     }
 }

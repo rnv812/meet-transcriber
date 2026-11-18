@@ -472,10 +472,18 @@ export async function openLogs(): Promise<void> {
   await invoke<void>("open_logs");
 }
 
+/** Разделы «Системных настроек» macOS, которые открывает оболочка (список зашит в ней). */
+export type PrivacyPane = "microphone" | "screen_recording" | "system_audio" | "notifications";
+
+/** macOS: раздел «Конфиденциальность и безопасность» (или «Уведомления») в «Системных настройках». */
+export async function openPrivacyPane(kind: PrivacyPane): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("open_privacy_pane", { kind });
+}
+
 /** macOS: «Системные настройки → Конфиденциальность и безопасность → Запись экрана». */
 export async function openScreenRecordingSettings(): Promise<void> {
-  if (!inTauri()) return;
-  await invoke<void>("open_screen_recording_settings");
+  await openPrivacyPane("screen_recording");
 }
 
 // --- вкладка «Агент»: Claude Code / Codex / OpenCode во встроенном терминале ---

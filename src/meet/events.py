@@ -44,6 +44,10 @@ RECORD_SILENCE = "record.silence"  # долив тишины по стенным
 # macOS: звук собеседников не пишется (state "missing": нет разрешения «Запись
 # экрана» или помощника; запись идёт с микрофона) или снова пишется ("restored")
 RECORD_SYSTEM_AUDIO = "record.system_audio"
+# Микрофон живой, но отдаёт ровные нули дольше `recorder.MIC_SILENT_S` (state
+# "silent": на macOS — нет разрешения «Микрофон»; у настоящего микрофона всегда
+# есть шум) или снова слышен ("restored"). Один раз на отрезок.
+RECORD_MIC_SILENT = "record.mic_silent"
 RECORD_LEVEL = "record.level"  # уровни дорожек, только для живого UI
 LOG = "log"  # строка журнала записи (дубль record.log)
 PROGRESS = "progress"  # ступень расшифровки
