@@ -19,7 +19,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from meet import library
+from meet import library, speakers
 
 AVATAR_SIZE = 256
 MAX_NAME = 80
@@ -272,17 +272,22 @@ def person(name: str, voices: Path, recordings: Path) -> dict:
 
 
 def sample(name: str, voices: Path, recordings: Path) -> dict | None:
-    """Самая длинная реплика человека в последней по дате записи, где он
-    говорит. `voices` — для единообразия с остальными вызовами: образец берётся
-    из транскриптов, а не из базы голосов."""
+    """Образец фразы человека — из последней по дате записи, где у него есть
+    подходящий сегмент (правило — `speakers.pick_samples`). Нет подходящей
+    фразы — None: окно покажет текст без ▶. `voices` — для единообразия с
+    остальными вызовами: образец берётся из транскриптов, а не из базы голосов."""
     name = valid_name(name)
     for folder in reversed(library.recording_folders(recordings)):
-        data = library.final_transcript(folder)
+        if library.final_transcript(folder) is None:
+            continue
+        data = library.read_transcript_full(folder)
         turns = _turns(data, name)
-        if turns:
-            best = max(turns, key=_duration)
-            return {"recording": folder.name, "start": best["start"],
-                    "end": best["end"], "track": _track_of(folder, data, best)}
+        found = speakers.pick_samples(turns, 1)
+        if found:
+            at, best = found[0]
+            return {"recording": folder.name, "start": best["start"], "end": best["end"],
+                    "track": _track_of(folder, data, turns[at]), "text": best["text"],
+                    "words": best["words"]}
     return None
 
 

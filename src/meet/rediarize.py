@@ -406,7 +406,7 @@ def preview(folder: Path) -> dict | None:
     rows = [{"label": label, "seconds": round(seconds.get(label, 0.0), 2),
              "share": round(seconds.get(label, 0.0) / total, 4),
              "turns": sum(1 for t in turns if t["label"] == label),
-             "samples": speakers._samples(turns, label)} for label in order]
+             "samples": speakers._samples(flat, shown, label)} for label in order]
     return {"created_at": got.get("created_at"), "params": got.get("params") or {}, "stale": stale,
             "speakers": rows, "before": len(before), "changed": changed, "cut": cut,
             "segments": len(old), "kept": done["kept"]}

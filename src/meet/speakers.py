@@ -56,7 +56,12 @@ HISTORY_MAX = 50
 SUGGEST_MIN = 0.40
 SUGGEST_TOP = 3
 SAMPLE_TURNS = 3
-SAMPLE_TEXT_MAX = 300
+# Образец фразы — один сегмент целиком, чтобы звук и текст совпадали по
+# построению: от SAMPLE_MIN_S до SAMPLE_MAX_S. Нет такого — окно SAMPLE_WINDOW_S
+# по словам более длинного сегмента.
+SAMPLE_MIN_S = 3.0
+SAMPLE_MAX_S = 10.0
+SAMPLE_WINDOW_S = 6.0
 # Как склеивает реплики окно (lib/speakers.ts): пауза меньше 2 с — та же реплика.
 GAP_S = 2.0
 _UNNAMED = re.compile(r"^(Спикер \d+|SPEAKER_\d+)$")
@@ -220,13 +225,78 @@ def _turns(segments: list[dict], shown: list[str | None]) -> list[dict]:
     return out
 
 
-def _samples(turns: list[dict], label: str) -> list[dict]:
-    """Самые длинные «чистые» (без нахлёста) реплики спикера — по ним его узнают."""
-    own = [t for t in turns if t["label"] == label and not t["uncertain"]]
-    own.sort(key=lambda t: t["end"] - t["start"], reverse=True)
-    return [{"start": round(t["start"], 2), "end": round(t["end"], 2),
-             "text": " ".join(x for x in t["texts"] if x)[:SAMPLE_TEXT_MAX]}
-            for t in own[:SAMPLE_TURNS]]
+def _span(s: dict) -> tuple[float, float] | None:
+    try:
+        start, end = float(s["start"]), float(s["end"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (start, end) if end > start else None
+
+
+def _words_of(s: dict) -> list[list]:
+    """Слова сегмента со временем, если они ещё описывают его текст."""
+    if not library.words_match(s):
+        return []
+    try:
+        return [[round(float(w[0]), 2), round(float(w[1]), 2), str(w[2])] for w in s["words"]]
+    except (IndexError, TypeError, ValueError):
+        return []
+
+
+def _whole(s: dict, start: float, end: float) -> dict:
+    return {"start": round(start, 2), "end": round(end, 2),
+            "text": str(s.get("text") or "").strip(), "words": _words_of(s)}
+
+
+def _window(s: dict) -> dict | None:
+    """Окно SAMPLE_WINDOW_S из длинного сегмента по его словам: то, где слов
+    больше всего; текст — только слова внутри окна. Слов со временем нет — None."""
+    words = _words_of(s)
+    best: list[list] = []
+    for a in range(len(words)):
+        run = [w for w in words[a:] if w[1] - words[a][0] <= SAMPLE_WINDOW_S]
+        if len(run) > len(best):
+            best = run
+    if not best:
+        return None
+    return {"start": best[0][0], "end": best[-1][1],
+            "text": "".join(w[2] for w in best).strip(), "words": best}
+
+
+def pick_samples(segments: list[dict], count: int = SAMPLE_TURNS) -> list[tuple[int, dict]]:
+    """Образцы фразы спикера из его сегментов: [(номер сегмента, образец)],
+    самые длинные первыми. Образец — {start, end, text, words}; слова — со
+    временем, для подсветки. Правило одно для «Спикеров», «Разделить»,
+    «Переразделить» и «Голосов»:
+
+    1. сегмент 3–10 с без пометки «неуверенно» — целиком, текст его;
+    2. не хватило — окно 6 с из более длинного сегмента по его словам;
+    3. ни того ни другого — самый длинный из коротких, целиком;
+    4. длинный сегмент без слов не годится совсем: нет образца — нет ▶."""
+    whole, windows, short = [], [], []
+    for i, s in enumerate(segments):
+        span = _span(s) if isinstance(s, dict) else None
+        if span is None or s.get("uncertain"):
+            continue
+        length = span[1] - span[0]
+        if SAMPLE_MIN_S <= length <= SAMPLE_MAX_S:
+            whole.append((length, i, _whole(s, *span)))
+        elif length > SAMPLE_MAX_S:
+            found = _window(s)
+            if found:
+                windows.append((found["end"] - found["start"], i, found))
+        else:
+            short.append((length, i, _whole(s, *span)))
+    ranked = sorted(whole, key=lambda x: -x[0]) + sorted(windows, key=lambda x: -x[0])
+    if not ranked and short:
+        ranked = [max(short, key=lambda x: x[0])]
+    return [(i, sample) for _, i, sample in ranked[:count]]
+
+
+def _samples(segments: list[dict], shown: list[str | None], label: str) -> list[dict]:
+    """Образцы фразы спикера `label` (как он показан в карточке)."""
+    own = [s if lab == label else {} for s, lab in zip(segments, shown)]
+    return [sample for _, sample in pick_samples(own)]
 
 
 def _base_without(voices_dir: Path, recording: str, source: str | None) -> dict[str, list[np.ndarray]]:
@@ -362,7 +432,7 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
             "seconds": round(seconds.get(label, 0.0), 2),
             "share": round(seconds.get(label, 0.0) / total, 4),
             "turns": sum(1 for t in turns if t["label"] == label),
-            "samples": _samples(turns, label),
+            "samples": _samples(segments, shown, label),
             "has_voice": bool(entries),
             "suggestions": _suggestions(entries, base),
             # Звонок: где звучит спикер — "mic" (микрофон: вы или человек в

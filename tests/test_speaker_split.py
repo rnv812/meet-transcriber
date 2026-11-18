@@ -558,3 +558,13 @@ def test_owner_turn_stays_mic_when_loopback_has_digital_silence(meeting, backgro
     assert segvoices.read_decisions(meeting).get("48.00-50.00") in (None, "mic")
     segvoices.mark_tracks(meeting, data, {"Вы"})
     assert data["segments"][10]["track"] == "mic"
+
+
+def test_split_samples_follow_the_shared_rule():
+    segs = [{"start": 0, "end": 2, "text": "а", "uncertain": False},
+            {"start": 5, "end": 9, "text": "б", "uncertain": False},
+            {"start": 20, "end": 40, "text": "длинно без слов", "uncertain": False},
+            {"start": 50, "end": 55, "text": "в", "uncertain": True}]
+    got = speaker_split._samples(segs, [0, 1, 2, 3])
+    assert [(s["start"], s["text"]) for s in got] == [(5.0, "б")]
+    assert speaker_split._samples(segs, [2]) == []

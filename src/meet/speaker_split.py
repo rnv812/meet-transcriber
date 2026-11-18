@@ -292,11 +292,9 @@ def _inherit(segments: list[dict], own: list[int], assigned: dict[int, int]) -> 
 
 
 def _samples(segments: list[dict], idx: list[int]) -> list[dict]:
-    clean = [i for i in idx if not segments[i].get("uncertain")] or idx
-    clean = sorted(clean, key=lambda i: _dur(segments[i]), reverse=True)[:SAMPLES]
-    return [{"start": round(float(segments[i]["start"]), 2), "end": round(float(segments[i]["end"]), 2),
-             "text": str(segments[i].get("text") or "")[:speakers.SAMPLE_TEXT_MAX]}
-            for i in sorted(clean, key=lambda i: float(segments[i]["start"]))]
+    """Образцы группы — по тому же правилу, что и у спикеров; по времени."""
+    found = speakers.pick_samples([segments[i] for i in idx], SAMPLES)
+    return [sample for _, sample in sorted(found, key=lambda x: x[1]["start"])]
 
 
 def _turns(segments: list[dict], idx: list[int]) -> int:

@@ -618,8 +618,9 @@ def test_person_sample_plays_the_track_the_person_spoke_on(call, tmp_path):
     for name in ("Пётр", "Анна"):
         (voices / f"{name}.json").write_text('{"samples": []}', encoding="utf-8")
     rec = folder.parent
-    assert people.sample("Пётр", voices, rec) == {"recording": folder.name, "start": 5.2, "end": 5.9,
-                                                  "track": "mic"}
+    got = people.sample("Пётр", voices, rec)
+    assert {k: got[k] for k in ("recording", "start", "end", "track")} == {
+        "recording": folder.name, "start": 5.2, "end": 5.9, "track": "mic"}
     assert people.sample("Анна", voices, rec)["track"] == "sys"
 
 

@@ -355,3 +355,12 @@ def test_old_call_recording_keeps_owner_turns_decided_by_audio(meeting, base, mo
     assert owner["speaker"] == "Олег" and (owner["track"], owner["track_source"]) == ("mic", "audio")
     assert {(s["track"], s["track_source"]) for s in segs if s.get("kind") != "break" and s is not owner} \
         == {("sys", "audio")}
+
+
+def test_preview_samples_are_whole_segments_or_a_window_with_words():
+    flat = [{"start": 0.0, "end": 2.0, "text": "а", "speaker": "Спикер 1"},
+            {"start": 3.0, "end": 8.0, "text": "пять секунд", "speaker": "Спикер 1"},
+            {"start": 9.0, "end": 30.0, "text": "длинно без слов", "speaker": "Спикер 2"}]
+    shown = ["Спикер 1", "Спикер 1", "Спикер 2"]
+    assert [s["text"] for s in speakers._samples(flat, shown, "Спикер 1")] == ["пять секунд"]
+    assert speakers._samples(flat, shown, "Спикер 2") == []

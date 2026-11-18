@@ -434,3 +434,58 @@ def test_apply_on_a_raw_transcript_records_only_the_real_change(meeting, base):
     speakers.undo(meeting, base)
     assert _speakers_of(meeting) == [s["speaker"] for s in SEGMENTS]
     assert len(step["history"]) == 1
+
+
+# --- образец фразы: один сегмент 3-10 с -------------------------------------------
+
+
+def _dense(start, end, step=1.0):
+    """Сегмент с пословным временем: слово на каждый шаг."""
+    n = int((end - start) / step)
+    words = [[round(start + i * step, 2), round(start + (i + 1) * step - 0.1, 2), f" с{i}"] for i in range(n)]
+    return {"start": start, "end": end, "text": "".join(w[2] for w in words).strip(), "words": words}
+
+
+def _pick(*segments):
+    return [s for _, s in speakers.pick_samples([{"speaker": "А", "uncertain": False, **x} for x in segments])]
+
+
+def test_sample_prefers_a_whole_segment_of_3_to_10_seconds():
+    got = _pick({"start": 0, "end": 2, "text": "коротко"}, {"start": 10, "end": 15, "text": "пять секунд"},
+                {"start": 20, "end": 34, "text": "длинно"})
+    assert [(s["start"], s["end"], s["text"]) for s in got] == [(10.0, 15.0, "пять секунд")]
+
+
+def test_sample_of_only_a_long_segment_is_a_six_second_window_of_its_words():
+    got = _pick(_dense(0, 14))
+    assert len(got) == 1 and got[0]["end"] - got[0]["start"] <= 6.0
+    assert got[0]["text"] == "".join(w[2] for w in got[0]["words"]).strip()
+    assert got[0]["words"] and got[0]["words"][0][0] == got[0]["start"]
+    assert all(0 <= w[0] and w[1] <= 14 for w in got[0]["words"]) and len(got[0]["words"]) < 14
+
+
+def test_long_segment_without_words_is_never_a_sample():
+    assert _pick({"start": 0, "end": 14, "text": "длинно"}) == []
+
+
+def test_long_segment_without_words_loses_to_a_short_whole_one():
+    got = _pick({"start": 0, "end": 14, "text": "длинно"}, {"start": 20, "end": 22, "text": "коротко"})
+    assert [(s["start"], s["end"], s["text"]) for s in got] == [(20.0, 22.0, "коротко")]
+
+
+def test_uncertain_segment_is_skipped_for_a_clean_one():
+    got = _pick({"start": 0, "end": 5, "text": "наложение", "uncertain": True}, {"start": 10, "end": 14, "text": "чисто"})
+    assert [s["text"] for s in got] == ["чисто"]
+
+
+def test_when_all_segments_are_short_the_longest_one_is_taken_whole():
+    got = _pick({"start": 0, "end": 1.5, "text": "а"}, {"start": 5, "end": 6.4, "text": "б"},
+                {"start": 9, "end": 10.5, "text": "в"})
+    assert [s["text"] for s in got] == ["а"]
+
+
+def test_sample_carries_words_of_a_whole_segment_when_they_match_its_text():
+    seg = _dense(0, 5)
+    got = _pick(seg)
+    assert got[0]["words"] == [[w[0], w[1], w[2]] for w in seg["words"]]
+    assert _pick({**seg, "text": "правили руками"})[0]["words"] == []

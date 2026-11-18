@@ -75,7 +75,8 @@ def test_stats_include_meetings_recognised_without_enrolled_sample(tmp_path):
     enrolled = _meeting(rec, "2026-09-01_10-00", [
         {"start": 0, "end": 30, "speaker": "Демьян", "text": "первая"}])
     _meeting(rec, "2026-09-29_15-30", [
-        {"start": 0, "end": 12, "speaker": "Демьян", "text": "узнан сам"},
+        {"start": 0, "end": 12, "speaker": "Демьян", "text": "узнан сам",
+         "words": [[0, 6, " узнан"], [6, 12, " сам"]]},
         {"start": 12, "end": 20, "speaker": "Спикер 2", "text": "чужой"}])
     _voice(voices, "Демьян", [enrolled])
     got = people.listing(voices, rec)[0]
@@ -112,16 +113,16 @@ def test_listing_reads_each_transcript_once(tmp_path, monkeypatch):
     assert sorted(reads) == ["2026-09-20_10-00", "2026-09-21_10-00", "2026-09-22_10-00"]
 
 
-def test_sample_is_longest_turn_in_latest_meeting(tmp_path):
+def test_sample_is_a_clean_3_to_10_second_segment_of_the_latest_meeting(tmp_path):
     rec, voices = tmp_path / "rec", tmp_path / "voices"
     old = _meeting(rec, "2026-09-01_10-00", [
-        {"start": 0, "end": 90, "speaker": "Демьян", "text": "старое"}])
+        {"start": 0, "end": 8, "speaker": "Демьян", "text": "старое"}])
     new = _meeting(rec, "2026-09-29_15-30", [
         {"start": 5, "end": 12, "speaker": "Демьян", "text": "а"},
         {"start": 20, "end": 50, "speaker": "Демьян", "text": "б"}])
     _voice(voices, "Демьян", [old, new])
     assert people.sample("Демьян", voices, rec) == {
-        "recording": "2026-09-29_15-30", "start": 20, "end": 50, "track": "sys"}
+        "recording": "2026-09-29_15-30", "start": 5, "end": 12, "track": "sys", "text": "а", "words": []}
     _voice(voices, "Пётр", [])
     assert people.sample("Пётр", voices, rec) is None
 
@@ -580,3 +581,24 @@ def test_new_samples_do_not_drop_the_role(tmp_path):
     people.set_role("Демьян", "CTO", voices)
     voices_db.enroll_sample("Демьян", [0.1, 0.2], "src", "2026-10-01", voices)
     assert people.role_of("Демьян", voices) == "CTO"
+
+
+def test_sample_of_a_long_turn_is_a_six_second_window_with_its_words(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    words = [[i * 2.0, i * 2.0 + 1.5, f" с{i}"] for i in range(20)]   # 40 с речи
+    m = _meeting(rec, "2026-09-29_15-30", [
+        {"start": 0, "end": 40, "speaker": "Демьян", "text": "".join(w[2] for w in words).strip(),
+         "words": words}])
+    _voice(voices, "Демьян", [m])
+    got = people.sample("Демьян", voices, rec)
+    assert got["end"] - got["start"] <= 6.0
+    assert got["text"] == "".join(w[2] for w in got["words"]).strip() and len(got["words"]) == 3
+    assert got["start"] == got["words"][0][0] and got["end"] == got["words"][-1][1]
+
+
+def test_sample_of_a_long_turn_without_words_is_missing(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m = _meeting(rec, "2026-09-29_15-30", [
+        {"start": 0, "end": 40, "speaker": "Демьян", "text": "длинно"}])
+    _voice(voices, "Демьян", [m])
+    assert people.sample("Демьян", voices, rec) is None
