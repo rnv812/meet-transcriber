@@ -3,9 +3,11 @@
 Записывает встречу двумя дорожками (системный звук через WASAPI loopback и
 микрофон) и расшифровывает её локально: на процессоре по умолчанию GigaAM
 (`gigaam_asr.py`), на видеокарте и для не русской речи — Whisper
-(faster-whisper); разделение на спикеров (pyannote), узнавание голосов из базы.
+(faster-whisper), на Mac с macOS 14+ — MLX Whisper (`mlx_asr.py`); разделение
+на спикеров (pyannote), узнавание голосов из базы.
 Анализ встречи, итоги, названия, «Улучшить расшифровку» и живой ассистент —
-через подключённую модель (Claude Code, Codex или OpenAI-совместимый сервер).
+через подключённую модель (Claude Code, Codex, OpenCode, Antigravity CLI или
+OpenAI-совместимый сервер; `src/meet/llm/`).
 Платформа — Windows 10/11 x64, macOS — экспериментально.
 
 ## Устройство
@@ -29,18 +31,75 @@
   сбой — прежний loopback), macOS — помощник `--exclude-pid`;
   `MEET_PROCESS_LOOPBACK=0` выключает. Копия настроек перед откатом версии —
   `backup.py` (`POST /backup`, «О программе» → «Другие версии»).
+- Синхронизация дорожек (0.6.2): обе дорожки считают время от одного начала
+  сессии; медленный старт потока (рукопожатие помощника Mac, активация process
+  loopback) — тишина до первых данных (хук before-data); доливка — по времени
+  захвата буфера, кусками не больше 0,2 с. Так же собственный захват
+  `meet assist` (`live.py`). Старая запись — `track_sync.py`: сдвиг микрофона =
+  длительность `sys` − длительность `mic`, проверка по `events.jsonl` (штатная
+  остановка, рамка до строки `mic.opus`, хвост не обрезан) → `meta.json`
+  `track_offset`; запись с общим нолём — `recorded_mark()`. Применяется только
+  при перерасшифровке (`transcript.json` `track_offset_applied_s`, нет — 0;
+  ручные правки заменяются, карточка предупреждает); читатели сырых дорожек,
+  сведение, склейка и хвост — через `track_sync.load_track`/`audio.shift_filter`,
+  файлы дорожек не переписываются. Пороги `mic_dedupe` проверены на выровненных
+  записях и не менялись. Запрет сна на время записи — `keepawake.py` (Mac и
+  Windows; сон — `meta.json` `sleep_gaps`).
+- Провайдеры моделей — `src/meet/llm/`: `claude.py`/`claude_stream.py`,
+  `codex.py` (`codex exec`) и `codex_app.py` (`codex app-server`, ход
+  участника), `opencode.py`, `antigravity.py` (Antigravity CLI `agy acp`,
+  запасной `agy -p`), `openai_compat.py`; ворота согласия — `llm/consent.py`
+  (общий разбор обёрток оболочки `shell_code`: `bash -lc`, `powershell -ec`…).
+  Наборы — `llm.PROVIDERS`, `AUTO_PROVIDERS` (без `agy`), `VISION_PROVIDERS`,
+  `STREAMING_PROVIDERS` (Codex, `agy`), `RESUME_PROVIDERS`,
+  `DENY_ENFORCED_PROVIDERS`.
 - `app/` — окно приложения: React + TypeScript (Vite, тесты — Vitest).
+- Настройки окна (0.6.2) — 13 разделов (`features/settings/settingsIndex.ts`,
+  `MENU_GROUPS`): Общее; Звук, Автозапись; Распознавание (с движком), Спикеры,
+  Словарь; Модели и анализ (с анализом встречи), Ассистент; Категории,
+  Экспорт и Jira; Дополнительно, Диагностика, О программе. Ключи
+  `config.json` прежние; прежние id разделов — `LEGACY_SECTION` (раздел#блок).
+  «изменено» и «Сбросить раздел» — по `GET /settings/defaults` (умолчания
+  этого пользователя; `settings.resettable` не трогает согласия, историю,
+  `llm.provider`, `ui.theme`, `assist.kb_exclude`, `agent_mode`, пути,
+  категории, секреты), сброс — только в черновик. «Подобрать под этот
+  компьютер» (`asrFit.ts`) — в черновик; поиск объясняет строку под
+  выключенным переключателем (`requires` в индексе).
 - `app/src-tauri/` — оболочка на Tauri 2 (Rust): трей, уведомления, запуск
-  резидента, установка движка, обновления, установщик NSIS.
+  резидента, установка движка, обновления, установщик NSIS; на Mac — меню
+  приложения (`app_menu.rs`), значок в Dock только при главном окне
+  (`dock.rs`), токен HF в своей связке ключей (`hf_token.rs`).
 - `tests/` — тесты Python; `scripts/` — сборка выпуска и вспомогательные
   утилиты; `docs/` — планы и заметки по разработке.
 - macOS (экспериментально, Apple Silicon, не проверено на реальном Mac):
   различия ОС — `meet/plat.py` и `app/src-tauri/src/platform.rs`; звук —
   `meet/mac_audio.py` (sounddevice) и помощник `mac/audiotap/main.swift`
-  (ScreenCaptureKit, `--mic-users`), протокол — `meet/audiotap.py`; сборка —
+  (ScreenCaptureKit на основном дисплее с пересборкой при смене мониторов,
+  `--mic-users`, `--watch-devices`, `--mic-status`/`--request-mic`/
+  `--request-screen`, `--check-tap`), протокол — `meet/audiotap.py`; сборка —
   `scripts/build_release_macos.sh`, job `macos` в `release.yml` (пробный
-  прогон — workflow_dispatch с `macos_only`). Модули Windows (winreg,
+  прогон — workflow_dispatch с `macos_only`; подпись с hardened runtime —
+  `MEET_HARDENED_RUNTIME=1`, вход `hardened_trial`). Модули Windows (winreg,
   ctypes.windll, pyaudiowpatch) импортировать только на Windows.
+- macOS, 0.6.2 (тоже не проверено на Mac): нерусская речь на macOS 14+ —
+  MLX Whisper (`mlx_asr.py`; extra `mlx` — необязательный шаг установки
+  движка, на 13 пропускается; сбой — faster-whisper на процессоре); GigaAM,
+  выравнивание и голоса — на MPS с откатом на процессор
+  (`asr.torch_device`); тяжёлые задачи — `nice`, потоки — по
+  производительным ядрам (`plat.perf_cores`). Окно получает звук в WebM
+  (`lib/audioUrl.ts`, `format=webm` у `/recordings/{id}/audio`). Process tap
+  (14.4+) — необязательный режим `recording.mac_capture` только после проверки
+  звука (`POST /permissions/process-tap`), основной путь — ScreenCaptureKit.
+  Микрофон следует за системным, Bluetooth-микрофон, который не слушает
+  программа звонка, не берётся (`recording.skip_bluetooth_mic`). Разрешения —
+  шаг мастера и «Диагностика» (`GET /permissions`), тишина микрофона —
+  `/state.mic_silent`. Оболочка: без главного окна — только строка меню
+  (`LSUIElement`, `dock.rs`), панели на всех рабочих столах (поверх чужого
+  полноэкранного окна не гарантировано), время записи в строке меню,
+  автозапуск — LaunchAgent, который следует за переносом приложения, PATH —
+  из кэша `login-path.txt`, штатный выход по Cmd+Q и завершению системы
+  (резидент останавливает запись по SIGTERM). Пути — `plat.path_key()` (NFC +
+  casefold); движок и модели исключены из Time Machine и Spotlight.
 
 Данные установленного приложения — `%LOCALAPPDATA%\meet` (настройки
 `config.json`, записи, база голосов, журналы). При запуске из исходников
@@ -97,14 +156,42 @@ git не попадают.
   удаление, запись вне рабочих папок, отправка наружу, MCP-изменения.
   `assist.agent_mode`: `auto` (по умолчанию, в файл не пишется) | `confirm`
   (карточка на каждое действие); однократная строка об этом в первой сессии
-  (`assist.agent_mode_noticed`). Codex/OpenCode в `USER` правят рабочие папки и
-  выполняют команды сами; MCP запрещён; удаление и отправку у Codex удерживает
-  только промпт и его `--approve-for-me`, у OpenCode — правила разрешений.
+  (`assist.agent_mode_noticed`). Обёртки (`bash -lc`, `sh -lc`,
+  `powershell -ec`…) ворота разворачивают (`consent.shell_code`):
+  закодированный код — удаление.
+- **Codex (0.6.2) — через `codex app-server`** (`llm/codex_app.py`, JSON-RPC):
+  `NONE`/`READ` — песочница read-only, `USER` — workspace-write по рабочим папкам
+  (в `confirm` — read-only), проверяющий — человек: запросы одобрения команд и
+  правок идут в ворота (`via=codex`), выход за песочницу — карточка;
+  «до конца встречи» — `acceptForSession`. Не запустился, нет рукопожатия,
+  ошибка протокола — прежний `codex exec` (`--approve-for-me`) со строкой
+  причины, в `confirm` тогда только чтение. Windows без `[windows] sandbox` в
+  его `config.toml` — ход только читает (`CODEX_SANDBOX_NOTICE`, строка на
+  встречу). MCP пользователя: в `NONE` — заглушки; в `USER` и ❓ — включены с
+  `default_tools_approval_mode="prompt"`, вызов — через ворота
+  (`readOnlyHint` — чтение сразу, иначе карточка `mcp-write`); сохранённое в
+  самом Codex «всегда разрешать» Meet не перебивает. Запретов Meet по путям
+  Codex не применяет — защита песочницей и промптом. Чтение вне папок — по
+  просьбе пользователя (промпт).
+- **Antigravity CLI (`agy`, 0.6.2)** — `llm/antigravity.py`, ход — `agy acp`
+  (Agent Client Protocol) со своей папкой данных Meet (`--gemini-dir`, вход —
+  отдельный `agy acp --login --gemini-dir …`) и разовым файлом правил на ход
+  (Default mode, `toolPermission: strict`, запреты удаления и отправки, без
+  allow-правил; в `~/.gemini` Meet не пишет). `session/request_permission` →
+  `consent.agy_approval`: удаление и отправка — отказ без карточки, остальное —
+  ворота (`via=AGY`). MCP из `~/.gemini/config/mcp_config.json` — только в
+  ходах по просьбе. Нет ACP — `agy -p` (действия с согласием отклоняются,
+  строка «отклонено: нужно согласие»). Не в `AUTO_PROVIDERS` и не в
+  `VISION_PROVIDERS`; в настройках — предупреждение об условиях
+  потребительских тарифов, рекомендован ключ API. OpenCode — без изменений:
+  правила разрешений, MCP запрещён.
 - **«Личный» — только промпт:** папки, MCP и ворота те же, что в «Рабочей встрече».
 - **Ход работы в чате:** каждый вызов инструмента — запись `kind: "tool"`,
   `event: "call"` (`assist/tool_rows.py`, патчи по `tool_use_id`: вид, суть,
   состояние, вывод до 64 КБ, решение ворот, `reply`); Claude Code — по ходу
-  (`send(on_event=…)`), Codex/OpenCode — после вызова (`AgentReply.tools`).
+  (`send(on_event=…)`), Codex и `agy` — тоже по ходу (`llm.STREAMING_PROVIDERS`:
+  `item/started`/`item/completed`, `session/update`), OpenCode — после вызова
+  (`AgentReply.tools`).
   Карточка согласия с тем же `tool_use_id` — в строке. В журнал процесса — ничего
   из вызова. Окно — `live/ToolRows.tsx`.
 - **Инструменты Meet (0.5):** свой MCP-сервер `meet` для Claude Code
@@ -135,8 +222,9 @@ git не попадают.
   в начале хода (0.5): реплика `writing` несёт `merge_into`, окно пишет её
   текст продолжением под тем сообщением (`chatModel.feedItems`, `more`).
 - **Одна сессия на встречу, нативное продолжение:** id сеанса провайдера —
-  в `<запись>/assistant/sessions.json` (Claude Code `--resume`, Codex `exec
-  resume`, OpenCode `--session`); не продолжился (`resume_failed`) или
+  в `<запись>/assistant/sessions.json` (Claude Code `--resume`, Codex
+  `thread/resume` или `exec resume`, OpenCode `--session`, `agy`
+  `session/resume`); не продолжился (`resume_failed`) или
   локальная модель — затравка из журнала (`ChatLog.context`).
 - **Журнал** — `<запись>/assistant/chat.jsonl` (`assist/chatlog.py`: записи
   и патчи, `seq`, строгий замок, идемпотентный `client_id`); вложения —
@@ -151,7 +239,9 @@ git не попадают.
   согласия пользователя: это правило промпта, не барьер (доступ на чтение к
   базе и библиотеке у агента есть через `add_dirs`). `assist.kb_exclude` — у
   Claude Code deny-правила сеанса, у остальных — просьба в промпте
-  (`deny_enforced`).
+  (`deny_enforced`); `agy` получает их запретами в разовом файле правил, но в
+  `DENY_ENFORCED_PROVIDERS` не входит (чтение внутри рабочей папки не
+  проверено).
 - **Изображения** уходят только моделям из `llm.VISION_PROVIDERS` (Claude
   Code, Codex); остальным — пометка, текст документов уходит всем.
 - **API:** маршруты ребёнка `/chat*`, `PUT /agent/frequency`, SSE
@@ -172,7 +262,8 @@ git не попадают.
   библиотеки; агент её — `Participant(ephemeral=True)` (сеанс провайдера не
   сохраняется). Любой её «Стоп» удаляет папку сеанса и забывает сеансы агента
   (`llm.forget_session` по `assistant/sessions.json`, включая `past`; Codex —
-  `codex delete --force`), без `_on_saved` и хука. `POST /recording/keep` —
+  `codex delete --force`, `agy` — файлы сеанса в своей папке данных Meet), без
+  `_on_saved` и хука. `POST /recording/keep` —
   «Сохранить как обычную встречу»: отметка `keep`, после «Стоп» перенос в
   библиотеку в фоне (никогда внутрь существующей папки). `/recording/cancel`
   удаляет так же (`temp_meeting.wipe` + `claude.forget_project`); занятый
@@ -233,7 +324,9 @@ Python (из корня, venv с установленным пакетом):
 находит резидента из `.venv` репозитория. Для разделения на спикеров нужен
 токен Hugging Face с принятыми условиями модели
 `pyannote/speaker-diarization-community-1`: его задают в окне приложения
-(хранится в диспетчере учётных данных Windows) или переменной `HF_TOKEN`.
+(хранится в диспетчере учётных данных Windows; на Mac — в связке ключей
+оболочки, резиденту передаётся как `MEET_SHELL_HF_TOKEN`) или переменной
+`HF_TOKEN`.
 
 ## Типовые просьбы пользователя
 
@@ -291,7 +384,7 @@ Python (из корня, venv с установленным пакетом):
   сводки ограждаются разделителями и экранируются (`analysis._safe`,
   `assist/prompts.py`). В журналы — только счётчики и задержки, без текста
   встреч, вопросов и ответов.
-- Тесты не ходят в сеть и не запускают claude/codex (страж в
+- Тесты не ходят в сеть и не запускают claude/codex/agy (страж в
   `tests/conftest.py`).
 - Удаление записей — «все или ни одной» (`library.remove_folders`); папку,
   которую держит другая программа, не удалять по частям.
