@@ -795,6 +795,10 @@ _ROUTES = {
         lines=_int_param(p, "lines", 200)
     ),
     ("GET", "/settings"): lambda h, p: _server_of(h).state.settings(),
+    # Умолчания раздела и отличия от них («изменено», «Сбросить раздел»):
+    # ?keys=секция.ключ,… → {"defaults", "changed"}; только чтение.
+    ("GET", "/settings/defaults"): lambda h, p: _server_of(h).state.settings_defaults(
+        [k for k in (p.get("keys") or [""])[0].split(",") if k]),
     ("GET", "/processes"): lambda h, p: _server_of(h).state.processes(),
     ("GET", "/devices"): lambda h, p: _server_of(h).state.devices(),
     ("POST", "/devices/test"): lambda h, p: _server_of(h).state.test_device(h._body()),

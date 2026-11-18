@@ -423,6 +423,15 @@ export const canDownloadModel = (state: ModelsState, m: Model) =>
 export const getSettings = (ep: Endpoint) => json<Record<string, unknown>>(ep, "/settings");
 export const patchSettings = (ep: Endpoint, updates: Record<string, unknown>) =>
   json<{ settings: Record<string, unknown>; restart_required: string[] }>(ep, "/settings", body("PATCH", updates));
+/**
+ * Умолчания раздела для «изменено» и «Сбросить раздел»: значения по
+ * умолчанию этого пользователя (с учётом его истории и согласий) и какие из
+ * ключей `секция.ключ` от них отличаются. Резидент только читает; ключи,
+ * которые не сбрасываются никогда, в ответ не попадают.
+ */
+export type SettingsDefaults = { defaults: Record<string, Record<string, unknown>>; changed: string[] };
+export const getSettingsDefaults = (ep: Endpoint, keys: string[]) =>
+  json<SettingsDefaults>(ep, `/settings/defaults?keys=${enc(keys.join(","))}`);
 export type Hotwords = { text: string; budget: number; used: number };
 export const getHotwords = (ep: Endpoint) => json<Hotwords>(ep, "/hotwords");
 export const putHotwords = (ep: Endpoint, text: string) =>

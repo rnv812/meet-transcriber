@@ -1,4 +1,4 @@
-import { SETTINGS_INDEX, matchParts } from "./settingsIndex";
+import { SETTINGS_INDEX, matchParts, sectionKeys } from "./settingsIndex";
 
 test("matchParts: совпавшие слова — отдельными кусками, регистр и «ё» не важны", () => {
   expect(matchParts("Пройти мастер заново", "МАСТЕР")).toEqual([
@@ -18,4 +18,19 @@ test("requires: каждое условие — подпись строки то
       expect(SETTINGS_INDEX.some((o) => o.section === e.section && o.label === label)).toBe(true);
     }
   }
+});
+
+test("keys: согласия, история, пути, категории и секреты в сбрасываемые ключи не входят никогда", () => {
+  const all = SETTINGS_INDEX.flatMap((e) => e.keys ?? []);
+  expect(all.length).toBeGreaterThan(0);
+  for (const key of [
+    "analysis.consent", "analysis.auto", "ui.terms_accepted", "ui.wizard_done", "llm.provider", "ui.theme",
+    "assist.kb_exclude", "assist.agent_mode", "assist.agent_freedom", "agent.launch", "integrations.hf_token",
+    "recording.out_dir", "export.meetings_dir", "assistant.knowledge_dir", "integrations.gpu_marker_path",
+    "auto_record.enabled",
+  ]) expect(all).not.toContain(key);
+  expect(all.every((k) => /^[a-z_]+\.[a-z_]+$/.test(k))).toBe(true);
+  expect(sectionKeys("categories")).toEqual([]);
+  expect(sectionKeys("models")).toEqual(expect.arrayContaining(["analysis.types", "transcript_view.types", "llm.model"]));
+  expect(new Set(sectionKeys("asr")).size).toBe(sectionKeys("asr").length);
 });

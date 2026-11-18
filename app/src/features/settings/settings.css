@@ -116,6 +116,8 @@
 .srow__head { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .srow__label { color: var(--ink); font-weight: 500; }
 .srow__hint { color: var(--ink-3); font-size: var(--text-sm); line-height: 1.45; }
+/* «изменено»: опция не по умолчанию — словом на токене приглушённого текста. */
+.srow__changed { color: var(--ink-3); font-size: var(--text-sm); font-weight: 400; }
 .srow__control {
   flex: 0 1 auto; min-width: 0; max-width: min(420px, 100%); margin-left: auto;
   display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; justify-content: flex-end;

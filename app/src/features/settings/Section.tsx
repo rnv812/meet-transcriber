@@ -7,6 +7,22 @@ import { radioKeys, Segmented as SegmentedControl } from "../../ui/Segmented";
 import { Tip } from "../../ui/Tip";
 
 /**
+ * Подписи строк текущего раздела, чьё значение в черновике отличается от
+ * умолчания этого пользователя (SettingsPane по `keys` индекса и ответу
+ * резидента). Пусто — меток нет.
+ */
+export const ChangedLabels = createContext<ReadonlySet<string>>(new Set());
+
+/**
+ * Слово «изменено» после подписи строки, если опция не по умолчанию: текстом
+ * на токене приглушённого текста — его читает экранный диктор, это не только цвет.
+ */
+export function ChangedMark({ label }: { label: string }) {
+  const changed = useContext(ChangedLabels);
+  return changed.has(label) ? <span className="srow__changed">изменено</span> : null;
+}
+
+/**
  * Строка настроек: слева подпись с пояснением (переносится, сжимается),
  * справа элемент управления (не шире 420 px). Тесно — элемент уходит под
  * подпись, а не наезжает на неё. `stack` — элемент всегда под подписью, во
@@ -24,6 +40,7 @@ export function Row({ label, hint, help, htmlFor, stack, disabled, children }: {
       <div className="srow__text">
         <span className="srow__head">
           <label className="srow__label" htmlFor={htmlFor}>{label}</label>
+          <ChangedMark label={label} />
           {help}
         </span>
         {hint && <span className="srow__hint">{hint}</span>}
@@ -44,6 +61,7 @@ export function Switch({ label, hint, help, value, disabled, onChange }: {
       <div className="srow__text">
         <span className="srow__head">
           <span className="srow__label">{label}</span>
+          <ChangedMark label={label} />
           {help}
         </span>
         {hint && <span className="srow__hint">{hint}</span>}

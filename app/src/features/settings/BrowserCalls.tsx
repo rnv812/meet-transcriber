@@ -16,6 +16,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Icon } from "../../ui/Icon";
 import { fieldClass } from "./fields";
+import { ChangedMark } from "./Section";
 
 export type Browser = { exe: string; title: string };
 
@@ -60,6 +61,7 @@ export function BrowserCalls({ browsers, onBrowsers, os = OS }: {
     <div className="callapps" role="group" aria-label="Звонки в браузере">
       <div className="callapps__head">
         <span className="srow__label">Звонки в браузере</span>
+        <ChangedMark label="Звонки в браузере" />
         <HelpTip label="Как распознаются звонки в браузере" title="Звонки в браузере">
           <TipLine>Запись начнётся, когда браузер использует микрофон. Музыка и видео без микрофона запись не запускают.</TipLine>
           <TipLine>
@@ -120,6 +122,7 @@ export function CallSites({ requireSite, sites, onRequireSite, onSites }: {
         <input type="checkbox" className="cb" checked={requireSite} onChange={(e) => onRequireSite(e.target.checked)} />
         <span className="callapps__name">
           <span className="srow__label">Только если в заголовке окна сайт звонка</span>
+          <ChangedMark label="Только если в заголовке окна сайт звонка" />
           <span className="callapps__exes">
             Микрофон в браузере нужен не только для звонков: диктовка, голосовой поиск. В этом режиме они запись не запускают
           </span>
@@ -127,6 +130,7 @@ export function CallSites({ requireSite, sites, onRequireSite, onSites }: {
       </label>
       <div className="callapps__head callapps__head--sub">
         <span className="srow__label">Сайты звонков</span>
+        <ChangedMark label="Сайты звонков" />
         <HelpTip label="Что такое сайт звонка" title="Сайты звонков">
           <TipLine>
             Часть заголовка окна браузера, по которой узнаётся звонок, например «Google Meet» или «Телемост».

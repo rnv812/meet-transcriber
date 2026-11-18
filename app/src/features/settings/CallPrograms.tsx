@@ -16,6 +16,7 @@ import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { OS, type Os } from "../../lib/platform";
 import { Icon } from "../../ui/Icon";
 import { fieldClass } from "./fields";
+import { ChangedMark } from "./Section";
 
 export type CallProgram = { id: string; title: string; exes: string[]; messenger?: boolean };
 
@@ -229,6 +230,7 @@ export function CallPrograms({ value, processes, loadProcesses, onChange, os = O
     <div className="callapps" role="group" aria-label="Программы звонков">
       <div className="callapps__head">
         <span className="srow__label">Программы звонков</span>
+        <ChangedMark label="Программы звонков" />
         <HelpTip label="Какие звонки распознаются" title="Как распознаётся звонок">
           <TipLine>Запись начинается, когда отмеченная программа использует микрофон или воспроизводит звук.</TipLine>
           <TipLine>

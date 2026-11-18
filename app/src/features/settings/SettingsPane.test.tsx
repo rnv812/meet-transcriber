@@ -11,6 +11,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getAssistant: vi.fn(),
   getSettings: vi.fn(),
   patchSettings: vi.fn(),
+  getSettingsDefaults: vi.fn(),
   setAutoRecord: vi.fn(),
   getHotwords: vi.fn(),
   putHotwords: vi.fn(),
@@ -44,6 +45,7 @@ beforeEach(() => {
     settings: { ...structuredClone(settings), ...u }, restart_required: [],
   }));
   vi.mocked(api.setAutoRecord).mockResolvedValue({} as never);
+  vi.mocked(api.getSettingsDefaults).mockResolvedValue({ defaults: {}, changed: [] });
   vi.mocked(api.getHotwords).mockResolvedValue({ text: "", budget: 400, used: 0 });
   vi.mocked(api.getEngine).mockRejectedValue(new Error("x"));
   vi.mocked(api.getModels).mockRejectedValue(new Error("x"));
@@ -1018,3 +1020,57 @@ test("поиск ждёт данных раздела: строка блока �
   const label = await screen.findByText("Расположение", { selector: ".srow__label" });
   await waitFor(() => expect(label.closest(".srow")).toHaveClass("setting-found"));
 }, 10_000);
+
+describe("«изменено» и «Сбросить раздел»", () => {
+  const autoDefaults = {
+    defaults: { auto_record: { processes: ["zoom.exe"], grace_minutes: 10, min_call_seconds: 120 } },
+    changed: ["auto_record.min_call_seconds"],
+  };
+  const rowOf = (label: string) => screen.getByText(label, { selector: ".srow__label" }).closest<HTMLElement>(".srow")!;
+
+  test("слово «изменено» — у опции, отличной от умолчания; равная умолчанию без метки", async () => {
+    vi.mocked(api.getSettingsDefaults).mockResolvedValue(structuredClone(autoDefaults));
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="auto" />);
+    const mark = await within(await waitFor(() => rowOf("Минимальная длительность звонка"))).findByText("изменено");
+    // Текст, а не только цвет: диктор его читает.
+    expect(mark).not.toHaveAttribute("aria-hidden");
+    expect(within(rowOf("Ждать повторного подключения")).queryByText("изменено")).toBeNull();
+    const keys = vi.mocked(api.getSettingsDefaults).mock.calls.at(-1)![1];
+    expect(keys).toContain("auto_record.min_call_seconds");
+    expect(keys).not.toContain("auto_record.enabled"); // переключатель живёт вне черновика
+  });
+
+  test("«Сбросить раздел»: список возвращаемых опций, значения — в черновик, пишет только «Сохранить»", async () => {
+    vi.mocked(api.getSettingsDefaults).mockResolvedValue(structuredClone(autoDefaults));
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="auto" />);
+    await waitFor(() => within(rowOf("Минимальная длительность звонка")).getByText("изменено"));
+    await userEvent.click(screen.getByRole("button", { name: "Сбросить раздел" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Вернуть умолчания в разделе «Автозапись»?" });
+    expect(within(dialog).getByRole("listitem")).toHaveTextContent("Минимальная длительность звонка");
+    expect(within(dialog).queryByText("Ждать повторного подключения")).toBeNull();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Вернуть" }));
+    expect(screen.getByRole("spinbutton")).toHaveValue(120);
+    expect(within(rowOf("Минимальная длительность звонка")).queryByText("изменено")).toBeNull();
+    expect(api.patchSettings).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { auto_record: { min_call_seconds: 120 } }));
+  });
+
+  test("диалог закрыт без «Вернуть» — черновик и настройки прежние", async () => {
+    vi.mocked(api.getSettingsDefaults).mockResolvedValue(structuredClone(autoDefaults));
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="auto" />);
+    await waitFor(() => within(rowOf("Минимальная длительность звонка")).getByText("изменено"));
+    await userEvent.click(screen.getByRole("button", { name: "Сбросить раздел" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Отмена" }));
+    expect(screen.getByRole("spinbutton")).toHaveValue(60);
+    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+    expect(api.patchSettings).not.toHaveBeenCalled();
+  });
+
+  test("нечего возвращать — «Сбросить раздел» недоступна; раздел без опций по умолчанию — кнопки нет", async () => {
+    render(<SettingsPane endpoint={ep} recordingsDir={null} initial="auto" />);
+    expect(await screen.findByRole("button", { name: "Сбросить раздел" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Категории" }));
+    expect(screen.queryByRole("button", { name: "Сбросить раздел" })).toBeNull();
+  });
+});

@@ -73,6 +73,10 @@ class FakeState:
         self.calls.append(("patch", updates))
         return {"settings": {"version": 1}, "restart_required": list(updates)}
 
+    def settings_defaults(self, keys: list) -> dict:
+        self.calls.append(("defaults", keys))
+        return {"defaults": {}, "changed": []}
+
     def diagnostics(self, lines: int = 200) -> dict:
         self.calls.append(("diagnostics", lines))
         return {"watch_log": ["строка"], "record_log": [], "lines": lines}
@@ -510,6 +514,15 @@ def test_settings_get_and_patch(server):
                 method="PATCH")
     assert got["restart_required"] == ["auto_record"]
     assert server.state_obj.calls[-1] == ("patch", {"auto_record": {"enabled": True}})
+
+
+def test_settings_defaults_passes_the_section_keys(server):
+    """Умолчания раздела — чтение: GET с ключами через запятую."""
+    got = _get(server, "/settings/defaults?keys=asr.language,asr.align")
+    assert got == {"defaults": {}, "changed": []}
+    assert server.state_obj.calls[-1] == ("defaults", ["asr.language", "asr.align"])
+    _get(server, "/settings/defaults")
+    assert server.state_obj.calls[-1] == ("defaults", [])
 
 
 def test_patch_broken_json_is_400(server):

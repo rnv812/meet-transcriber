@@ -2269,3 +2269,67 @@ def _route_hf_token(updates: dict, path: Path | None) -> dict:
     if token:
         credentials.set_hf_token(token, path)
     return {**updates, "integrations": rest}
+
+
+# «Изменено» и «Сбросить раздел» (окно): ключи, которые не сбрасываются и не
+# помечаются никогда, даже если о них попросили. Согласия и история (ответ на
+# предложение анализа, условия, мастер первого запуска, однократная строка об
+# автомоде, прежние имена владельца), ключи с умолчанием по истории
+# пользователя (провайдер, тема), закрытые от ассистента папки, режим
+# «подтверждать каждое действие» и расширенные возможности ассистента (сброс
+# не даёт агенту больше прав), параметры запуска агента (в переменных
+# окружения бывают ключи API) и токен. Пути и категории — ниже, по виду поля.
+RESET_PROTECTED = frozenset({
+    "analysis.consent", "analysis.auto",
+    "ui.terms_accepted", "ui.wizard_done", "ui.theme",
+    "llm.provider",
+    "assist.kb_exclude", "assist.agent_mode", "assist.agent_mode_noticed", "assist.agent_freedom",
+    "recording.former_speaker_names",
+    "agent.launch",
+    "integrations.hf_token",
+})
+# Имя ключа похоже на секрет — не участвует, даже если такой ключ появится.
+_SECRET_NAME = re.compile(r"token|secret|password|api_?key", re.IGNORECASE)
+
+
+def resettable(key) -> bool:
+    """Ключ `секция.ключ` можно вернуть к умолчанию и пометить «изменено»:
+    известный ключ известной секции, не из RESET_PROTECTED, не путь и не
+    секрет. Категории — не секция (список целиком) и не сбрасываются."""
+    if not isinstance(key, str) or key.count(".") != 1:
+        return False
+    group, name = key.split(".")
+    if group not in PATCHABLE_SECTIONS or key in RESET_PROTECTED or _SECRET_NAME.search(name):
+        return False
+    section = Settings.__dataclass_fields__[group].type
+    spec = getattr(section, "__dataclass_fields__", {}).get(name)
+    return spec is not None and "Path" not in str(spec.type) and name in getattr(Settings(), group).to_raw()
+
+
+def defaults_for(keys, path: Path | None = None) -> dict:
+    """Умолчания этого пользователя для ключей раздела и какие из ключей от них
+    отличаются: {"defaults": {секция: {ключ: значение}}, "changed": [ключ]}.
+
+    Умолчание зависит от истории (новая установка или обновление, ответ на
+    предложение анализа, хук после записи…), поэтому это не умолчание кода:
+    копия настроек пользователя без этих ключей — история и согласия в ней
+    остаются, — перечитанная через `Settings.from_raw`. Ключи, которые
+    `resettable` не пропускает, молча не участвуют. Файл не пишется (и токен
+    не переносится): только `read_raw`."""
+    wanted = [k for k in dict.fromkeys(k for k in keys if isinstance(k, str)) if resettable(k)]
+    raw = read_raw(path)
+    stripped = {name: dict(value) if isinstance(value, dict) else value for name, value in raw.items()}
+    for key in wanted:
+        group, name = key.split(".")
+        if isinstance(stripped.get(group), dict):
+            stripped[group].pop(name, None)
+    current = Settings.from_raw(raw).to_raw()
+    base = Settings.from_raw(stripped).to_raw()
+    defaults: dict = {}
+    changed = []
+    for key in wanted:
+        group, name = key.split(".")
+        defaults.setdefault(group, {})[name] = base[group][name]
+        if current[group][name] != base[group][name]:
+            changed.append(key)
+    return {"defaults": defaults, "changed": changed}

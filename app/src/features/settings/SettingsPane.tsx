@@ -18,6 +18,14 @@
  * в меню. Уйти из настроек с несохранённым — вопрос (`guardRef`, его задаёт
  * App); «Сбросить…» тоже спрашивает.
  *
+ * «Изменено» и «Сбросить раздел» (0.6.2): ключи строк раздела — `keys` в
+ * индексе; умолчания этого пользователя (с его историей и согласиями) и какие
+ * ключи от них отличаются, отвечает резидент (`GET /settings/defaults`), сам
+ * он ничего не пишет. Строка, у которой значение в черновике не по умолчанию,
+ * помечена словом «изменено» (`ChangedLabels`). «Сбросить раздел» показывает
+ * список опций, которые вернутся, и кладёт умолчания в черновик; пишет их
+ * обычное «Сохранить».
+ *
  * Прежние id разделов (глубокие ссылки трея, карточек, оболочки) ведут в новые
  * через `LEGACY_SECTION`; если прежний раздел стал блоком, окно прокручивает к
  * нему (`data-block` у первой карточки блока).
@@ -37,7 +45,8 @@ import { useCallback, useEffect, useId, useRef, useState, type MutableRefObject 
 import { createPortal } from "react-dom";
 import {
   type Devices, type Endpoint, type Processes,
-  NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
+  type SettingsDefaults,
+  NoResidentError, getDevices, getProcesses, getSettings, getSettingsDefaults, patchSettings, setAutoRecord,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
@@ -66,9 +75,11 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { JiraSection } from "./JiraSection";
 import { dropHiddenJiraChanges, jiraChangesInvalid } from "./JiraSettings";
 import { ModelsSection, modelsChangesInvalid } from "./ModelsSection";
-import { RevealFineTuning, SeeAlsoSlot, SettingsCard, type Raw, type SetFn } from "./Section";
+import { ChangedLabels, RevealFineTuning, SeeAlsoSlot, SettingsCard, type Raw, type SetFn } from "./Section";
 import { SettingsSearch } from "./SettingsSearch";
-import { type BlockId, MENU, MENU_GROUPS, type SectionId, type SettingsEntry } from "./settingsIndex";
+import {
+  type BlockId, MENU, MENU_GROUPS, SETTINGS_INDEX, type SectionId, type SettingsEntry, sectionKeys, sectionTitle,
+} from "./settingsIndex";
 import { SoundSection } from "./SoundSection";
 import { SpeakersSection } from "./SpeakersSection";
 import "./settings.css";
@@ -279,6 +290,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [askReset, setAskReset] = useState(false);
+  // Умолчания открытого раздела от резидента (для «изменено» и «Сбросить раздел»).
+  const [sectionDefaults, setSectionDefaults] = useState<({ section: SectionId } & SettingsDefaults) | null>(null);
+  const [askDefaults, setAskDefaults] = useState(false);
   // Место в шапке раздела для «см. также» (SeeAlso head): узел после отрисовки.
   const [seeSlot, setSeeSlot] = useState<HTMLElement | null>(null);
 
@@ -298,6 +312,18 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   }, [endpoint]);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  // Умолчания раздела: при входе в раздел и после каждой загрузки или сохранения настроек.
+  useEffect(() => {
+    const keys = sectionKeys(section);
+    if (!settings || keys.length === 0) return;
+    let alive = true;
+    getSettingsDefaults(endpoint, keys).then(
+      (got) => { if (alive) setSectionDefaults({ section, ...got }); },
+      () => { if (alive) setSectionDefaults(null); }, // нет ответа — нет и меток
+    );
+    return () => { alive = false; };
+  }, [endpoint, section, settings]);
   // Поиск программы звонков перечитывает запущенные при каждом открытии.
   const loadProcesses = useCallback(() => getProcesses(endpoint), [endpoint]);
 
@@ -443,6 +469,39 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   }
   const dirtyTitles = MENU.filter((m) => dirtySections.has(m.id)).map((m) => m.title);
 
+  // «Изменено»: значение черновика отличается от умолчания (нет его в черновике — ответ резидента).
+  const known = sectionDefaults?.section === section ? sectionDefaults : null;
+  const defaultOf = (key: string): { value: unknown } | null => {
+    const [g, k] = key.split(".") as [string, string];
+    const group = known?.defaults[g];
+    return group && Object.hasOwn(group, k) ? { value: group[k] } : null;
+  };
+  const differs = (key: string): boolean => {
+    const def = defaultOf(key);
+    if (!def) return false;
+    const [g, k] = key.split(".") as [string, string];
+    const value = draft[g]?.[k];
+    if (value === undefined) return known!.changed.includes(key);
+    return JSON.stringify(cleanSetting(g, k, value)) !== JSON.stringify(def.value);
+  };
+  const changedLabels = [...new Set(SETTINGS_INDEX
+    .filter((e) => e.section === section && (e.keys ?? []).some(differs)).map((e) => e.label))];
+  const hasDefaults = sectionKeys(section).length > 0;
+  /** «Вернуть»: умолчания отличающихся ключей раздела — в черновик; пишет «Сохранить». */
+  const applyDefaults = () => {
+    const back = sectionKeys(section).filter(differs).map((key) => ({ key, value: defaultOf(key)!.value }));
+    setAskDefaults(false);
+    setNotice(null);
+    setDraft((cur) => {
+      const next = { ...cur };
+      for (const { key, value } of back) {
+        const [g, k] = key.split(".") as [string, string];
+        next[g] = { ...(next[g] ?? {}), [k]: value };
+      }
+      return next;
+    });
+  };
+
   const save = async (): Promise<boolean> => {
     if (dirty.length === 0) return true;
     if (invalid) return false;
@@ -538,6 +597,10 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
                       : notice}
                   </StatusSlot>
                   <Button variant="ghost" onClick={() => setAskReset(true)} disabled={pending || !isDirty}>Сбросить…</Button>
+                  {hasDefaults && (
+                    <Button variant="ghost" onClick={() => setAskDefaults(true)}
+                      disabled={pending || changedLabels.length === 0}>Сбросить раздел</Button>
+                  )}
                   <Button variant="primary" onClick={save} busy={pending} disabled={!isDirty || invalid}>
                     Сохранить
                   </Button>
@@ -550,8 +613,19 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
               message={`Правки в ${dirtyTitles.length === 1 ? "разделе" : "разделах"} ${dirtyTitles.map((t) => `«${t}»`).join(", ")} будут отменены.`}
               onCancel={() => setAskReset(false)} onConfirm={() => { setAskReset(false); void reload(); }} />
           )}
+          {askDefaults && (
+            <ConfirmDialog title={`Вернуть умолчания в разделе «${sectionTitle(section)}»?`}
+              confirmLabel="Вернуть" danger={false}
+              message={<>
+                <p>Вернутся значения по умолчанию:</p>
+                <ul>{changedLabels.map((l) => <li key={l}>{l}</li>)}</ul>
+                <p>Согласия, пути к папкам и закрытые от ассистента папки остаются как есть. Применится после «Сохранить».</p>
+              </>}
+              onCancel={() => setAskDefaults(false)} onConfirm={applyDefaults} />
+          )}
           {error && <p className="error" role="alert">{error}</p>}
           <div className="settings__content" ref={contentRef}>
+          <ChangedLabels.Provider value={new Set(changedLabels)}>
           <SeeAlsoSlot.Provider value={seeSlot}>
           <RevealFineTuning.Provider value={reveal}>
           {needs && needsSlot && createPortal(
@@ -618,6 +692,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           )}
           </RevealFineTuning.Provider>
           </SeeAlsoSlot.Provider>
+          </ChangedLabels.Provider>
           </div>
         </div>
       </div>

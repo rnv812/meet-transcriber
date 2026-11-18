@@ -195,6 +195,20 @@ def test_settings_roundtrip_through_api(control_state, tmp_path):
     assert got["restart_required"] == []  # хуки применяются на каждой остановке
 
 
+def test_settings_defaults_answer_without_writing_config(control_state, tmp_path):
+    """«Изменено» и «Сбросить раздел»: умолчания этого пользователя и отличия
+    от них; `config.json` не меняется, тема в ответ не попадает никогда."""
+    config = tmp_path / "meet" / "config.json"
+    before = config.read_bytes()
+    got = control_state.settings_defaults(
+        ["auto_record.grace_minutes", "auto_record.processes", "ui.theme"])
+    assert got["defaults"]["auto_record"]["grace_minutes"] == 10.0
+    assert got["defaults"]["auto_record"]["processes"] != ["Zoom.exe"]
+    assert "ui" not in got["defaults"]
+    assert got["changed"] == ["auto_record.processes"]
+    assert config.read_bytes() == before
+
+
 def test_auto_record_patch_admits_restart_needed(control_state):
     """Секция auto_record читается один раз при старте резидента — панель
     обязана сказать это, а не делать вид, что применила."""

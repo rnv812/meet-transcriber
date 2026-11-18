@@ -19,7 +19,7 @@ import { useId } from "react";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { PlayerKeysTip } from "../card/PlayerKeysTip";
-import { SeeAlso, Segmented, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
+import { ChangedMark, SeeAlso, Segmented, SettingsCard, Switch, type Raw, type SetFn } from "./Section";
 
 /** Строка таблицы: подпись, ключ в `analysis` (размечать) и в `transcript_view` (показывать). */
 export type MarkShowItem = {
@@ -161,6 +161,7 @@ function MarkShowTable({ draft, set }: { draft: Raw; set: SetFn }) {
             <tr key={item.mark} className="amark__row">
               <th scope="row" className="amark__item">
                 <span className="srow__label">{item.label}</span>
+                <ChangedMark label={item.label} />
                 <span className="srow__hint">{item.hint}</span>
               </th>
               <td className="amark__cell">

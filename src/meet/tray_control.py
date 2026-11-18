@@ -1846,6 +1846,12 @@ class TrayControl:
     def settings(self) -> dict:
         return settings.load().to_raw()
 
+    def settings_defaults(self, keys: list) -> dict:
+        """Умолчания раздела для «изменено» и «Сбросить раздел» (окно):
+        {"defaults", "changed"} по ключам `секция.ключ` (settings.defaults_for).
+        В config.json не пишет; согласия, история, пути и секреты не участвуют."""
+        return settings.defaults_for(keys)
+
     # --- профили людей убраны (0.3.2) -------------------------------------
 
     def profiles_removed(self) -> dict:
