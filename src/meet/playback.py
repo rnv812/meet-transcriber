@@ -37,6 +37,14 @@ ffmpeg снимаются, после — сверяются). Нет отмет
 (`schedule`), чтобы первое «▶» было мгновенным; иначе — по первому запросу
 плеера (он ждёт). Одновременно сводят не больше двух ffmpeg.
 
+Окно на macOS берёт любую дорожку в WebM (`webm_path`): Ogg/Opus WKWebView
+не играет до macOS 15.4, а на 15.4+ играет с неверным медиа-временем — щелчок
+по слову и точная остановка образца промахивались бы. ffmpeg перепаковывает
+тот же Opus без перекодирования (`-c copy`) в `webm-<дорожка>.webm` рядом с
+дорожкой; кэш свежий, пока дорожка та же (отметка `webm-<дорожка>.json`), —
+пересведённая или сдвинутая заново дорожка перепаковывается заново. Что WebKit
+играет и так (mp3, m4a, wav, webm импорта) — отдаётся как есть.
+
 `using`/`wait_idle`: кто сейчас держит файлы папки (поток плеера, сведение).
 Удаление записи ждёт их недолго — на Windows открытый файл не удаляется.
 """
@@ -61,6 +69,11 @@ STAMP_NAME = "playback.json"
 # Дорожка «Вы» со сдвигом микрофона (без сдвига играется сам mic.*).
 MIC_NAME = "playback-mic.opus"
 MIC_STAMP_NAME = "playback-mic.json"
+# Перепаковка для окна на macOS: кэш `webm-<дорожка>.webm` и его отметка. Не
+# `sys.webm`: такое имя library.find_track принял бы за дорожку записи.
+WEBM_PREFIX = "webm-"
+# Что перепаковывается в WebM: Ogg (Opus записи и сведения, Vorbis импорта).
+WEBM_FROM = (".opus", ".ogg")
 MIX_TIMEOUT_S = 1800
 # Подмена кэша, пока старый файл отдаётся плееру: Windows не даёт заменить
 # открытый файл — ждём столько, затем отдаём старый.
@@ -151,6 +164,15 @@ def shift_command(mic: Path, out: Path, mic_offset: float) -> list[str]:
         "-i", str(mic), "-af", chain,
         "-ac", "1", "-c:a", "libopus", "-b:a", "24k", "-application", "voip",
         "-f", "ogg", str(out),
+    ]
+
+
+def webm_command(src: Path, out: Path) -> list[str]:
+    """ffmpeg: тот же звук в контейнере WebM — поток копируется без перекодирования."""
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(src), "-map", "0:a:0", "-c", "copy",
+        "-f", "webm", str(out),
     ]
 
 
@@ -277,6 +299,17 @@ def mic_path(folder: Path, run=subprocess.run) -> Path | None:
         return mic
     return _cached(folder, [mic], offset, MIC_NAME, MIC_STAMP_NAME,
                    lambda tmp: _ffmpeg(shift_command(mic, tmp, offset), run, "сдвинуты", "сдвинул микрофон"))
+
+
+def webm_path(src: Path, run=subprocess.run) -> Path:
+    """Дорожка `src` для окна на macOS: Ogg — перепакованный в WebM кэш рядом
+    (`WEBM_PREFIX` + имя дорожки), остальное — как есть. Сбой — RuntimeError."""
+    src = Path(src)
+    if src.suffix.lower() not in WEBM_FROM:
+        return src
+    name = f"{WEBM_PREFIX}{src.stem}"
+    return _cached(src.parent, [src], 0.0, f"{name}.webm", f"{name}.json",
+                   lambda tmp: _ffmpeg(webm_command(src, tmp), run, "перепакованы", "перепаковал дорожку"))
 
 
 # --- фоновое сведение после расшифровки ---------------------------------------

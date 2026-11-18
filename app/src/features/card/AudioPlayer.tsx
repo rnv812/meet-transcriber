@@ -23,6 +23,9 @@
  * фрагмент играет (для «Остановить» у образца), `stop()` — остановить его.
  *
  * Токен — в query (`audioUrl`): <audio> в WebView2 не умеет ставить заголовок.
+ * На macOS звук — WebM (`audioUrl` просит его сам): пока резидент перепаковывает
+ * дорожку, вместо времени — «Готовлю звук…»; не вышло — «Не удалось подготовить
+ * звук» и причина от резидента (`audioProblem`: <audio> текста ошибки не видит).
  * `preload="none"`: открытая карточка файл не запрашивает — запрос идёт с
  * первым «▶». `release()` — отпустить файл перед удалением записи.
  *
@@ -51,7 +54,8 @@ import {
   skipTarget, turnAt, turnJump,
   type ChapterView, type Span,
 } from "../../lib/analysisView";
-import { audioUrl, type Endpoint } from "../../lib/api";
+import type { Endpoint } from "../../lib/api";
+import { AUDIO_FORMAT, audioProblem, audioUrl } from "../../lib/audioUrl";
 import { clock, plural } from "../../lib/format";
 import type { CurveMode } from "../../lib/markupPrefs";
 import { stopAt } from "../../lib/phraseStop";
@@ -63,6 +67,7 @@ import { Popover } from "../../ui/Popover";
 import { Segmented, type SegmentedOption } from "../../ui/Segmented";
 import { Slider } from "../../ui/Slider";
 import { Tip } from "../../ui/Tip";
+import { Truncate } from "../../ui/Truncate";
 import type { PersonColor } from "./Turns";
 import { PlayerKeysTip } from "./PlayerKeysTip";
 import "./player.css";
@@ -91,6 +96,8 @@ const SIDE_MISSING: Record<Exclude<PlayerSide, "both">, string> = {
   you: "Микрофон в этой записи не записан",
 };
 const SIDE_BROKEN = "Дорожка не загрузилась";
+/** Пока данных нет: на macOS это ещё и перепаковка в WebM. */
+const LOADING_TEXT = AUDIO_FORMAT ? "Готовлю звук…" : "Подготовка аудио…";
 
 /** Скорости — меню с отметкой текущей (0.5). */
 export const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
@@ -268,6 +275,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [failed, setFailed] = useState(false);
+  /** Причина сбоя от резидента (macOS: перепаковка в WebM); null — неизвестна. */
+  const [problem, setProblem] = useState<string | null>(null);
   /** Запросили воспроизведение, а данных ещё нет: резидент сводит дорожки или файл грузится. */
   const [loading, setLoading] = useState(false);
   const [released, setReleased] = useState(false);
@@ -648,7 +657,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   if (failed) {
     return (
       <div className="player player--off" role="status">
-        <span className="muted">Аудио недоступно</span>
+        {AUDIO_FORMAT ? (
+          <>
+            <span>Не удалось подготовить звук</span>
+            {problem && <Truncate className="muted player__why">{problem}</Truncate>}
+          </>
+        ) : <span className="muted">Аудио недоступно</span>}
       </div>
     );
   }
@@ -712,6 +726,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
             return;
           }
           setFailed(true); setPlaying(false); setLoading(false); available.current?.(false); endPhrase();
+          if (AUDIO_FORMAT) void audioProblem(audioUrl(endpoint, id, SIDE_TRACK[side])).then(setProblem);
         }}
       />
       <div className="player__bar">
@@ -811,7 +826,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         {switching || loading ? (
           <span className="player__status" role="status">
             <span className="player__spinner" aria-hidden="true" />
-            {switching ? "Загружаю дорожку…" : "Подготовка аудио…"}
+            {switching ? "Загружаю дорожку…" : LOADING_TEXT}
           </span>
         ) : (
           <span className="player__clock">

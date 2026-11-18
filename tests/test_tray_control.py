@@ -2654,3 +2654,57 @@ def test_card_tells_whether_the_transcript_has_manual_edits(with_recordings, app
 
 def test_card_without_transcript_has_no_manual_edits(with_recordings, app):
     assert tray_control.TrayControl(app).recording(with_recordings.name)["manual_edits"] is False
+
+
+# --- WebM для окна на macOS ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("track, source", [
+    ("sys", "sys.opus"), ("mic", "mic.opus"), ("them", "sys.opus"), ("playback", "playback.opus"),
+])
+def test_track_path_in_webm_is_the_remuxed_track(with_recordings, app, monkeypatch, track, source):
+    """`format=webm` — та же дорожка, перепакованная резидентом (playback.webm_path)."""
+    from meet import playback
+
+    monkeypatch.setattr(playback, "playback_path", lambda folder: folder / playback.PLAYBACK_NAME)
+    remuxed = []
+
+    def fake_webm(path):
+        remuxed.append(path)
+        return path.with_name(f"webm-{path.stem}.webm")
+
+    monkeypatch.setattr(playback, "webm_path", fake_webm)
+    state = tray_control.TrayControl(app)
+    got = state.track_path(with_recordings.name, track, fmt="webm")
+    assert remuxed == [with_recordings.resolve() / source]
+    assert got == with_recordings.resolve() / f"webm-{source.rsplit('.', 1)[0]}.webm"
+    # Без формата — как раньше, без перепаковки.
+    assert state.track_path(with_recordings.name, track).name == source
+    assert len(remuxed) == 1
+
+
+def test_track_path_in_webm_without_the_track_is_none(with_recordings, app, monkeypatch):
+    from meet import playback
+
+    monkeypatch.setattr(playback, "webm_path", lambda path: pytest.fail("нечего перепаковывать"))
+    (with_recordings / "mic.opus").unlink()
+    assert tray_control.TrayControl(app).track_path(with_recordings.name, "mic", fmt="webm") is None
+
+
+def test_track_path_webm_failure_is_unavailable(with_recordings, app, monkeypatch):
+    from meet import playback
+    from meet.control import Unavailable
+
+    def broken(path):
+        raise RuntimeError("ffmpeg не перепаковал дорожку: плохой файл")
+
+    monkeypatch.setattr(playback, "webm_path", broken)
+    with pytest.raises(Unavailable, match="плохой файл"):
+        tray_control.TrayControl(app).track_path(with_recordings.name, "sys", fmt="webm")
+
+
+def test_track_path_unknown_format_is_a_bad_request(with_recordings, app):
+    from meet.control import BadRequest
+
+    with pytest.raises(BadRequest):
+        tray_control.TrayControl(app).track_path(with_recordings.name, "sys", fmt="mp3")

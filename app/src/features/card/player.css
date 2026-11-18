@@ -12,6 +12,8 @@
 }
 /* Дорожка не загрузилась или её нет: одна тихая строка. */
 .player--off { min-height: 40px; color: var(--ink-3); font-size: var(--text-sm); }
+/* Причина сбоя от резидента (macOS: перепаковка в WebM) — одной строкой (ui/Truncate), целиком в подсказке. */
+.player__why { min-width: 0; }
 .player audio { display: none; }
 
 .player.player--yt {

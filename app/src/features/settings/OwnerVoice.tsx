@@ -270,7 +270,7 @@ export function OwnerVoiceFound({ endpoint, voice }: { endpoint: Endpoint; voice
     const a = audio.current;
     if (!a) return;
     stopTimer.current?.();
-    a.src = `${audioUrl(endpoint, s.recording, "mic")}#t=${s.start},${s.end}`;
+    a.src = audioUrl(endpoint, s.recording, "mic", { span: [s.start, s.end] });
     a.load?.();
     stopTimer.current = stopAt(a, s.end, () => { a.pause(); halt(); });
     playingRef.current = i;

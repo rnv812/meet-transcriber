@@ -4754,13 +4754,31 @@ class TrayControl:
         job = self.queue.submit(jobs.IMPORT, str(folder), {})
         return {"recording": folder.name, "job": job.to_raw()}
 
-    def track_path(self, recording_id: str, track: str) -> Path | None:
+    def track_path(self, recording_id: str, track: str, fmt: str | None = None) -> Path | None:
         """Файл для плеера. `playback` — то, что играет карточка: обе стороны
         звонка, сведённые в одну дорожку (или импортированный файл как есть);
         `them`/`you` — одна сторона по роли для переключателя плеера:
         собеседники (`sys` как есть) и «Вы» — микрофон на шкале текста, с
         применённым сдвигом (playback.mic_path); `sys`/`mic`/`source` — сырые
-        дорожки (образцы голосов, диагностика)."""
+        дорожки (образцы голосов, диагностика).
+
+        `fmt="webm"` — окно на macOS: та же дорожка, перепакованная в WebM без
+        перекодирования (playback.webm_path); сбой — Unavailable с причиной."""
+        if fmt not in (None, "webm"):
+            raise _bad_request(f"формат звука не поддерживается: {fmt}")
+        path = self._track_file(recording_id, track)
+        if fmt is None or path is None:
+            return path
+        from meet import playback
+
+        try:
+            return playback.webm_path(path)
+        except RuntimeError as e:
+            from meet.control import Unavailable
+
+            raise Unavailable(str(e)) from e
+
+    def _track_file(self, recording_id: str, track: str) -> Path | None:
         folder = self._folder(recording_id)
         if folder is None:
             return None

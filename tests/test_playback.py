@@ -472,3 +472,84 @@ def test_real_ffmpeg_shifts_the_mic(tmp_path):
     probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                             "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, check=True)
     assert 2.8 < float(probe.stdout.strip()) < 3.3
+
+
+# --- WebM для окна на macOS ---------------------------------------------------------
+
+
+def test_webm_command_copies_the_stream_without_reencoding(tmp_path):
+    """Ogg/Opus → WebM без перекодирования: поток копируется как есть."""
+    src, out = tmp_path / "playback.opus", tmp_path / "x.tmp"
+    cmd = playback.webm_command(src, out)
+    assert cmd[0] == "ffmpeg"
+    assert cmd[cmd.index("-i") + 1] == str(src)
+    assert cmd[cmd.index("-c") + 1] == "copy"
+    assert "libopus" not in cmd
+    assert cmd[cmd.index("-f") + 1] == "webm"
+    assert cmd[-1] == str(out)
+
+
+def test_webm_path_remuxes_once_and_caches_next_to_the_source(tmp_path):
+    src = _touch(tmp_path / "sys.opus", mtime=1_000_000)
+    _touch(tmp_path / "mic.opus", mtime=1_000_000)
+    run = FakeRun()
+    path = playback.webm_path(src, run=run)
+    assert path.parent == tmp_path and path.suffix == ".webm"
+    assert path.read_bytes() == b"OggS-mixed"
+    assert len(run.calls) == 1
+    assert run.calls[0][run.calls[0].index("-i") + 1] == str(src)
+    assert run.calls[0][-1] != str(path), "пишется во временный файл, затем подменяется"
+    assert not list(tmp_path.glob("*.tmp"))
+    # Кэш не принимается за дорожку записи.
+    assert playback.sources(tmp_path) == [tmp_path / "sys.opus", tmp_path / "mic.opus"]
+    # Дорожка та же — кэш свежий.
+    assert playback.webm_path(src, run=run) == path
+    assert len(run.calls) == 1
+    # Дорожка изменилась (свели заново, перерасшифровали) — перепаковка заново.
+    _touch(src, b"other", mtime=1_000_100)
+    assert playback.webm_path(src, run=run) == path
+    assert len(run.calls) == 2
+
+
+def test_webm_caches_of_different_tracks_do_not_collide(tmp_path):
+    run = FakeRun()
+    paths = {playback.webm_path(_touch(tmp_path / name), run=run)
+             for name in ("sys.opus", "mic.opus", playback.PLAYBACK_NAME, playback.MIC_NAME)}
+    assert len(paths) == 4
+
+
+@pytest.mark.parametrize("name", ["source.mp3", "source.m4a", "source.wav", "source.webm"])
+def test_webm_path_of_a_track_webkit_plays_is_the_track_itself(tmp_path, name):
+    src = _touch(tmp_path / name)
+    run = FakeRun()
+    assert playback.webm_path(src, run=run) == src
+    assert run.calls == []
+
+
+def test_webm_failure_is_a_runtime_error_and_leaves_nothing(tmp_path):
+    src = _touch(tmp_path / "sys.opus")
+    with pytest.raises(RuntimeError, match="ffmpeg.*плохой файл"):
+        playback.webm_path(src, run=FakeRun(returncode=1, stderr="плохой файл"))
+    assert not list(tmp_path.glob("*.webm"))
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_webm_without_ffmpeg_is_a_runtime_error(tmp_path, monkeypatch):
+    src = _touch(tmp_path / "sys.opus")
+    monkeypatch.setattr(playback.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="ffmpeg не найден"):
+        playback.webm_path(src, run=FakeRun())
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg не установлен")
+def test_real_ffmpeg_remuxes_ogg_opus_into_webm(tmp_path):
+    """Настоящий ffmpeg: WebM с тем же Opus и той же длительностью."""
+    src = tmp_path / "sys.opus"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=f=440:d=2", "-c:a", "libopus", str(src)], check=True)
+    path = playback.webm_path(src)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=format_name,duration:stream=codec_name",
+                            "-of", "default=nw=1", str(path)], capture_output=True, text=True, check=True)
+    assert "codec_name=opus" in probe.stdout
+    assert "webm" in probe.stdout.split("format_name=")[1].split()[0]
+    assert 1.9 < float(probe.stdout.split("duration=")[1].split()[0]) < 2.1

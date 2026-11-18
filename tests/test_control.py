@@ -1041,6 +1041,55 @@ def test_audio_stream_marks_the_folder_busy(server, tmp_path, monkeypatch):
     assert used == [track.parent]
 
 
+def test_audio_in_webm_asks_the_resident_for_webm_and_serves_audio_webm(server, tmp_path):
+    """Окно на macOS просит `format=webm`: резидент отдаёт перепакованную дорожку
+    с типом audio/webm (WebKit не играет Ogg или играет его с неверным временем)."""
+    track = tmp_path / "webm-playback.webm"
+    track.write_bytes(b"webm" * 64)
+    asked = []
+    server.state.track_path = lambda rid, t, fmt=None: asked.append((rid, t, fmt)) or track
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback&format=webm&token={server.token}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": "bytes=0-"}), timeout=5) as r:
+        assert r.status == 206
+        assert r.headers["Content-Type"] == "audio/webm"
+        assert len(r.read()) == 256
+    assert asked == [("x", "playback", "webm")]
+
+
+def test_audio_without_format_keeps_ogg(server, tmp_path):
+    track = tmp_path / "playback.opus"
+    track.write_bytes(b"OggS" * 64)
+    asked = []
+    server.state.track_path = lambda rid, t, fmt=None: asked.append(fmt) or track
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback&token={server.token}"
+    with urllib.request.urlopen(url, timeout=5) as r:
+        assert r.headers["Content-Type"] == "audio/ogg"
+    assert asked == [None]
+
+
+def test_audio_remux_failure_is_503_with_the_reason(server):
+    def broken(rid, t, fmt=None):
+        raise control.Unavailable("ffmpeg не перепаковал дорожку: плохой файл")
+
+    server.state.track_path = broken
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=sys&format=webm&token={server.token}"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(url, timeout=5)
+    assert e.value.code == 503
+    assert "плохой файл" in json.loads(e.value.read().decode("utf-8"))["error"]
+
+
+def test_preflight_allows_the_range_header_of_the_window(server):
+    """Окно узнаёт причину сбоя звука запросом одного байта (Range): предварительный
+    запрос CORS его пропускает."""
+    req = urllib.request.Request(f"http://127.0.0.1:{server.port}/recordings/x/audio", method="OPTIONS", headers={
+        "Origin": "http://tauri.localhost", "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "range"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.status == 204
+        assert "range" in r.headers["Access-Control-Allow-Headers"].split(",")
+
+
 def test_audio_without_token_is_refused(server, tmp_path):
     server.state.track_path = lambda rid, t: tmp_path / "x.opus"
     url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback"

@@ -69,7 +69,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     jobs() -> dict                        очередь задач
     submit_job(body) -> dict              новая задача
     cancel_job(id) -> dict                снять задачу
-    track_path(id, track) -> Path | None  файл для плеера (playback — sys+mic вместе)
+    track_path(id, track, fmt=None) -> Path | None  файл для плеера (playback — sys+mic вместе;
+                                          fmt="webm" — перепакованный в WebM для macOS)
     engine() -> dict                      что установлено для расшифровки
     install_engine(options) -> dict       поставить движок задачей
     models() -> dict                      каталог моделей и что уже скачано
@@ -399,7 +400,7 @@ def _make_handler(server: ControlServer):
             origin = self.headers.get("Origin")
             if origin and _origin_allowed(origin):
                 self.send_header("Access-Control-Allow-Origin", origin)
-                self.send_header("Access-Control-Allow-Headers", "authorization,content-type,x-file-name")
+                self.send_header("Access-Control-Allow-Headers", "authorization,content-type,x-file-name,range")
                 self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
             self.end_headers()
             if body:
@@ -696,7 +697,11 @@ def _make_handler(server: ControlServer):
             from meet import playback
 
             track = (params.get("track") or ["sys"])[0]
-            path = server.state.track_path(recording_id, track)
+            # Окно на macOS просит WebM (`format=webm`): Ogg там не играет или
+            # играет с неверным временем. Без формата — прежний вызов.
+            fmt = (params.get("format") or [None])[0]
+            path = (server.state.track_path(recording_id, track, fmt=fmt) if fmt
+                    else server.state.track_path(recording_id, track))
             if path is None:
                 self._send(404, {"error": "дорожки нет"})
                 return
@@ -1080,7 +1085,7 @@ _PATTERNS = (
 _AUDIO_TYPES = {
     ".opus": "audio/ogg", ".ogg": "audio/ogg", ".wav": "audio/wav",
     ".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
-    ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
+    ".mp4": "video/mp4", ".webm": "audio/webm", ".mkv": "video/x-matroska",
 }
 
 

@@ -166,7 +166,7 @@ export function PersonCard({
     if (!a || !sample) return;
     halt();
     const until = sampleUntil(sample);
-    a.src = `${audioUrl(endpoint, sample.recording, sample.track as "sys" | "mic" | "source")}#t=${sample.start},${until}`;
+    a.src = audioUrl(endpoint, sample.recording, sample.track as "sys" | "mic" | "source", { span: [sample.start, until] });
     a.load?.();
     stopTimer.current = stopAt(a, until, () => { a.pause(); halt(); });
     setPlaying(true);
