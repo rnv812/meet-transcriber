@@ -90,6 +90,9 @@ pub const ATTACH_LABEL: &str = "Включить ассистента";
 pub const DETACH_LABEL: &str = "Выключить ассистента";
 /// Автоматическая выгрузка встречи в базу знаний не удалась (`/state.kb_export_failed`).
 pub const KB_EXPORT_FAILED: &str = "Не удалось выгрузить встречу в базу знаний";
+/// macOS: автозапись идёт без разрешений «Микрофон» или «Запись экрана»
+/// (`/state.permissions_missing`); текст — от резидента, запись не трогаем.
+pub const PERMISSIONS_MISSING: &str = "Нет разрешений macOS";
 /// Раздел настроек, куда ведёт отказ `/live/start` без провайдера (409):
 /// «Модели ИИ» — там подключают Claude Code, Codex или OpenCode.
 pub const MODELS_SECTION: &str = "models";
@@ -114,6 +117,7 @@ const IMPORTANT: &[&str] = &[
     LIVE_DETACH_FAILED,
     KEEP_FAILED,
     KB_EXPORT_FAILED,
+    PERMISSIONS_MISSING,
 ];
 
 /// Сводка `/state` + `/jobs`, из которой рисуется трей.
@@ -156,6 +160,25 @@ pub struct View {
     /// Чью историю ассистента «Остановить без сохранения» не удалит
     /// (`/state.forget_gaps`: «Codex», «OpenCode»).
     pub forget_gaps: Vec<String>,
+    /// macOS: автозапись без разрешений (`/state.permissions_missing`).
+    pub permissions_missing: Option<PermissionsMissing>,
+}
+
+/// `/state.permissions_missing`: текст для человека и когда (epoch) — новое
+/// `at` — новое уведомление.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermissionsMissing {
+    pub notice: String,
+    pub at: f64,
+}
+
+impl PermissionsMissing {
+    fn from_json(value: &Value) -> Option<PermissionsMissing> {
+        Some(PermissionsMissing {
+            notice: str_at(value, "notice")?.to_string(),
+            at: value.get("at").and_then(Value::as_f64).unwrap_or(0.0),
+        })
+    }
 }
 
 /// Длиннее — имя устройства в подсказке трея сокращается: у Windows на всю
@@ -365,6 +388,9 @@ impl View {
             reports_stops: state.get("last_stop").is_some(),
             live: state.get("live").map(Live::from_json).unwrap_or_default(),
             kb_failed: state.get("kb_export_failed").and_then(KbFailure::from_json),
+            permissions_missing: state
+                .get("permissions_missing")
+                .and_then(PermissionsMissing::from_json),
             devices_fallback: DeviceFallback::list(state.get("devices_fallback")),
             temporary: state
                 .get("temporary")
@@ -575,6 +601,17 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
             KB_EXPORT_FAILED,
             shorten(&failed.error, ERROR_CHARS),
             recording_id(&failed.folder),
+        ));
+    }
+    if let Some(missing) = next
+        .permissions_missing
+        .as_ref()
+        .filter(|missing| prev.permissions_missing.as_ref() != Some(*missing))
+    {
+        out.push(Notice::new(
+            PERMISSIONS_MISSING,
+            missing.notice.clone(),
+            None,
         ));
     }
     out
@@ -2157,6 +2194,7 @@ mod tests {
             devices_fallback: vec![],
             temporary: false,
             forget_gaps: vec![],
+            permissions_missing: None,
         }
     }
 
@@ -2746,6 +2784,7 @@ mod tests {
             "Не удалось запустить ассистента",
             "Не удалось остановить ассистента",
             "Не удалось выгрузить встречу в базу знаний",
+            "Нет разрешений macOS",
         ]
         .into_iter()
         .map(notice)
@@ -2781,8 +2820,50 @@ mod tests {
                 "Не удалось запустить ассистента",
                 "Не удалось остановить ассистента",
                 "Не удалось выгрузить встречу в базу знаний",
+                "Нет разрешений macOS",
             ]
         );
+    }
+
+    #[test]
+    fn missing_permissions_are_reported_once_and_recording_goes_on() {
+        let notice = "Запись идёт, но macOS не дала Meet разрешений: «Микрофон» (ваш голос)";
+        let state = json!({"status": "recording", "source": "auto", "last_stop": null,
+                           "permissions_missing": {"missing": ["microphone"],
+                                                   "notice": notice, "at": 7.0}});
+        let warned = View::from_json(&state, &json!({"items": []}));
+        assert_eq!(
+            warned.permissions_missing,
+            Some(PermissionsMissing {
+                notice: notice.into(),
+                at: 7.0
+            })
+        );
+        let mut recording = warned.clone();
+        recording.permissions_missing = None;
+        assert_eq!(
+            transitions(Some(&recording), &warned),
+            vec![Notice {
+                title: PERMISSIONS_MISSING.into(),
+                body: notice.into(),
+                recording: None,
+            }]
+        );
+        // Тот же снимок — повторного уведомления нет; первый — точка отсчёта.
+        assert!(transitions(Some(&warned), &warned.clone()).is_empty());
+        assert!(transitions(None, &warned).is_empty());
+        // Старт автозаписи и предупреждение в одном снимке — оба уведомления.
+        let started = transitions(Some(&idle()), &warned);
+        assert_eq!(
+            titles(&started),
+            vec![AUTO_RECORDING_STARTED, PERMISSIONS_MISSING]
+        );
+        // Резидент без поля — ничего.
+        let old = View::from_json(
+            &json!({"status": "recording", "source": "auto"}),
+            &json!({"items": []}),
+        );
+        assert_eq!(old.permissions_missing, None);
     }
 
     #[test]

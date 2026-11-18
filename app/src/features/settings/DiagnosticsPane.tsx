@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, FolderOpen, RefreshCw } from "lucide-react";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
-import { OS_TEXT } from "../../lib/platform";
+import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { Loading } from "../../ui/Loading";
+import { PermissionRows } from "./PermissionRows";
 import { PathText } from "./Section";
 
 export type Diagnostics = {
@@ -78,6 +79,8 @@ export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
           <span className="badge badge--plain">{data.dev_mode ? "Запуск из репозитория" : "Установленное приложение"}</span>
         </div>
       </div>
+      {/* macOS: те же строки, что в шаге мастера «Разрешения». */}
+      {IS_MAC && <PermissionRows endpoint={endpoint} />}
       <div className="diag__logs-head">
         <h3 className="shead">Журнал автозаписи</h3>
         <Button variant="ghost" icon={RefreshCw} onClick={load}>Обновить журналы</Button>

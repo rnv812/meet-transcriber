@@ -2730,3 +2730,138 @@ def test_track_path_unknown_format_is_a_bad_request(with_recordings, app):
 
     with pytest.raises(BadRequest):
         tray_control.TrayControl(app).track_path(with_recordings.name, "sys", fmt="mp3")
+
+
+# --- разрешения macOS: «Микрофон» и «Запись экрана» -----------------------------
+
+
+@pytest.fixture
+def on_mac(monkeypatch):
+    from meet import plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+
+
+def test_permissions_off_macos_are_not_asked(control_state, monkeypatch):
+    from meet import audiotap, plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    monkeypatch.setattr(audiotap, "permissions", lambda: pytest.fail("помощник только на macOS"))
+    assert control_state.permissions() == {"supported": False, "microphone": None, "screen": None}
+
+
+def test_permissions_on_macos_come_from_the_helper(control_state, monkeypatch, on_mac):
+    from meet import audiotap
+
+    monkeypatch.setattr(audiotap, "permissions",
+                        lambda: {"microphone": "notDetermined", "screen": "denied"})
+    assert control_state.permissions() == {
+        "supported": True, "microphone": "notDetermined", "screen": "denied"}
+
+
+def test_permission_request_asks_macos_and_rereads(control_state, monkeypatch, on_mac):
+    from meet import audiotap
+
+    asked = []
+    monkeypatch.setattr(audiotap, "request_mic", lambda: asked.append("mic") or "granted")
+    monkeypatch.setattr(audiotap, "request_screen", lambda: asked.append("screen") or "denied")
+    monkeypatch.setattr(audiotap, "permissions",
+                        lambda: {"microphone": "granted", "screen": "denied"})
+    got = control_state.request_permission({"kind": "microphone"})
+    assert got == {"kind": "microphone", "state": "granted", "supported": True,
+                   "microphone": "granted", "screen": "denied"}
+    got = control_state.request_permission({"kind": "screen"})
+    assert got["kind"] == "screen" and got["state"] == "denied"
+    assert asked == ["mic", "screen"]
+
+
+def test_permission_request_runs_off_the_calling_thread(control_state, monkeypatch, on_mac):
+    import threading
+
+    from meet import audiotap
+
+    threads = []
+    monkeypatch.setattr(audiotap, "request_mic",
+                        lambda: threads.append(threading.current_thread()) or "granted")
+    monkeypatch.setattr(audiotap, "permissions", lambda: {"microphone": "granted", "screen": None})
+    control_state.request_permission({"kind": "microphone"})
+    assert threads and threads[0] is not threading.current_thread()
+
+
+def test_permission_request_is_checked(control_state, monkeypatch):
+    from meet import audiotap, plat
+    from meet.control import BadRequest, Conflict
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    with pytest.raises(BadRequest):
+        control_state.request_permission({"kind": "camera"})
+    with pytest.raises(BadRequest):
+        control_state.request_permission(None)
+    # Пока системный вопрос открыт, второй не задаём.
+    assert control_state._permission_ask.acquire(blocking=False)
+    try:
+        monkeypatch.setattr(audiotap, "request_mic", lambda: pytest.fail("вопрос уже открыт"))
+        with pytest.raises(Conflict):
+            control_state.request_permission({"kind": "microphone"})
+    finally:
+        control_state._permission_ask.release()
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    with pytest.raises(BadRequest):
+        control_state.request_permission({"kind": "microphone"})
+
+
+def _auto_recording(app, source=tray.AUTO):
+    app.recording = True
+    app.source = source
+    app.started = time.monotonic()
+
+
+def test_auto_record_without_permissions_warns_and_keeps_recording(
+        control_state, app, monkeypatch, on_mac):
+    from meet import audiotap
+
+    control_state._background = lambda fn, name=None: fn()
+    monkeypatch.setattr(audiotap, "permissions",
+                        lambda: {"microphone": "denied", "screen": "granted"})
+    shown = []
+    monkeypatch.setattr(app, "_notify", shown.append)
+    _auto_recording(app)
+    app.bus.emit(events.RECORD_STARTED, tracks=[])
+    snap = control_state.snapshot()
+    warning = snap["permissions_missing"]
+    assert warning["missing"] == ["microphone"]
+    assert "Микрофон" in warning["notice"] and "Запись экрана" not in warning["notice"]
+    assert warning["at"] > 0
+    assert shown == [warning["notice"]]
+    # Запись идёт дальше: предупреждение её не трогает.
+    assert snap["status"] == "recording" and app.recording
+    app.recording = False
+    app.bus.emit(events.RECORD_STOPPED)
+    assert control_state.snapshot()["permissions_missing"] is None
+
+
+def test_auto_record_with_permissions_is_quiet(control_state, app, monkeypatch, on_mac):
+    from meet import audiotap
+
+    control_state._background = lambda fn, name=None: fn()
+    monkeypatch.setattr(audiotap, "permissions",
+                        lambda: {"microphone": "granted", "screen": None})
+    monkeypatch.setattr(app, "_notify", lambda text: pytest.fail("всё разрешено"))
+    _auto_recording(app)
+    app.bus.emit(events.RECORD_STARTED, tracks=[])
+    assert control_state.snapshot()["permissions_missing"] is None
+
+
+def test_manual_recording_and_windows_do_not_check_permissions(
+        control_state, app, monkeypatch):
+    from meet import audiotap, plat
+
+    control_state._background = lambda fn, name=None: fn()
+    monkeypatch.setattr(audiotap, "permissions", lambda: pytest.fail("не спрашиваем"))
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    _auto_recording(app, source=tray.MANUAL)
+    app.bus.emit(events.RECORD_STARTED, tracks=[])
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    _auto_recording(app)
+    app.bus.emit(events.RECORD_STARTED, tracks=[])
+    assert control_state.snapshot()["permissions_missing"] is None

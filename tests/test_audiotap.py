@@ -169,6 +169,46 @@ def test_permission_modes_without_an_answer_are_unknown(monkeypatch, tmp_path):
     assert audiotap.request_screen(run=lambda *a, **k: pytest.fail("помощника нет")) is None
 
 
+def test_screen_status_reads_the_preflight_code(monkeypatch, tmp_path):
+    helper = tmp_path / "meet-audiotap"
+    helper.write_bytes(b"")
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(helper))
+    seen = []
+
+    def answer(code):
+        def run(argv, **kwargs):
+            seen.append((argv[1:], kwargs["timeout"]))
+            return SimpleNamespace(returncode=code, stdout="", stderr="")
+        return run
+
+    assert audiotap.screen_status(run=answer(0)) == audiotap.SCREEN_GRANTED
+    assert audiotap.screen_status(run=answer(audiotap.EXIT_PERMISSION)) == audiotap.SCREEN_DENIED
+    # Сбой или незнакомый ответ — не «запрещено», а «неизвестно».
+    assert audiotap.screen_status(run=answer(audiotap.EXIT_FAILED)) is None
+    assert seen[0] == (["--preflight"], audiotap.PREFLIGHT_TIMEOUT_S)
+
+    def hung(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    assert audiotap.screen_status(run=hung) is None
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    assert audiotap.screen_status(run=lambda *a, **k: pytest.fail("помощника нет")) is None
+
+
+def test_permissions_report_both_and_what_is_missing(monkeypatch, tmp_path):
+    run, _ = _permission_helper(monkeypatch, tmp_path, {
+        "--mic-status": (0, '{"microphone": "denied"}\n'),
+        "--preflight": (0, ""),
+    })
+    assert audiotap.permissions(run=run) == {"microphone": "denied", "screen": "granted"}
+    assert audiotap.missing_permissions({"microphone": "denied", "screen": "granted"}) == ["microphone"]
+    assert audiotap.missing_permissions(
+        {"microphone": "notDetermined", "screen": "denied"}) == ["microphone", "screen"]
+    # «Неизвестно» (прежний помощник, его нет) — не повод тревожить человека.
+    assert audiotap.missing_permissions({"microphone": None, "screen": None}) == []
+    assert audiotap.missing_permissions({"microphone": "granted", "screen": "granted"}) == []
+
+
 # --- фейковый помощник ---------------------------------------------------------
 
 

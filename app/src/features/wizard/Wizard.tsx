@@ -1,6 +1,6 @@
 /**
  * Мастер первого запуска: железо → движок → Hugging Face → модели → запись →
- * ваш голос (необязательно) → условия → готово. Шаг условий — только пока они
+ * разрешения (только macOS) → ваш голос (необязательно) → условия → готово. Шаг условий — только пока они
  * не приняты (уже приняли — его нет в списке). Шаги 1–2 работают без резидента (команды оболочки); шагам 3–5 он
  * нужен — после установки оболочка поднимает его сама, мастер ждёт до 90 с.
  *
@@ -25,6 +25,7 @@ import { type InstallPhase, StepEngine } from "./StepEngine";
 import { StepHardware } from "./StepHardware";
 import { StepHf } from "./StepHf";
 import { StepModels } from "./StepModels";
+import { StepPermissions } from "./StepPermissions";
 import { StepTerms } from "./StepTerms";
 import { StepVoice } from "./StepVoice";
 import type { WizardStep } from "./useWizardGate";
@@ -32,17 +33,19 @@ import type { WizardStep } from "./useWizardGate";
 import "../settings/settings.css";
 import "./wizard.css";
 
+// «Разрешения» — только на macOS: на Windows микрофон и системный звук не спрашивают.
 const STEPS: { id: WizardStep; title: string }[] = [
   { id: "hardware", title: "Ваш компьютер" },
   { id: "engine", title: "Установка движка" },
   { id: "hf", title: "Hugging Face" },
   { id: "models", title: "Модели" },
   { id: "devices", title: "Запись" },
+  ...(IS_MAC ? [{ id: "permissions" as const, title: "Разрешения" }] : []),
   { id: "voice", title: "Ваш голос" },
   { id: "terms", title: "Условия" },
   { id: "done", title: "Готово" },
 ];
-const NEEDS_RESIDENT: WizardStep[] = ["hf", "models", "devices", "voice", "terms"];
+const NEEDS_RESIDENT: WizardStep[] = ["hf", "models", "devices", "permissions", "voice", "terms"];
 
 /** Ждём резидент после установки: раз в секунду, до 90 попыток. */
 export const SERVICE_POLL_MS = 1000;
@@ -187,6 +190,9 @@ export function Wizard({
         break;
       case "devices":
         body = <StepDevices endpoint={ep} onNext={next} />;
+        break;
+      case "permissions":
+        body = <StepPermissions endpoint={ep} onNext={next} />;
         break;
       case "voice":
         body = <StepVoice endpoint={ep} onNext={next} />;

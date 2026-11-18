@@ -295,3 +295,38 @@ def request_screen(run=None, timeout: float = REQUEST_TIMEOUT_S) -> "str | None"
     """Системный вопрос «Запись экрана» (`--request-screen`): `SCREEN_GRANTED`,
     `SCREEN_DENIED` (в том числе «дал, но нужен перезапуск») или None."""
     return _ask_permission("--request-screen", "screen", run, timeout)
+
+
+def screen_status(run=None, timeout: float = PREFLIGHT_TIMEOUT_S) -> "str | None":
+    """Разрешение «Запись экрана» по `--preflight`, без системного вопроса:
+    код 0 — `SCREEN_GRANTED`, 77 — `SCREEN_DENIED`. Помощника нет, он завис
+    или ответил другим кодом — None (в отличие от `preflight`, где это «ждать
+    дальше», здесь это «неизвестно»). «Ещё не спрашивали» macOS для записи
+    экрана не различает — это тоже «denied»."""
+    helper = helper_path()
+    if not helper:
+        return None
+    run = run or subprocess.run
+    try:
+        out = run([helper, "--preflight"], capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode == EXIT_OK:
+        return SCREEN_GRANTED
+    if out.returncode == EXIT_PERMISSION:
+        return SCREEN_DENIED
+    return None
+
+
+def permissions(run=None) -> dict:
+    """Оба разрешения записи без системных вопросов: {"microphone": одно из
+    `MIC_STATES` | None, "screen": одно из `SCREEN_STATES` | None}."""
+    return {"microphone": mic_status(run=run), "screen": screen_status(run=run)}
+
+
+def missing_permissions(states: dict) -> list[str]:
+    """Какие разрешения из `permissions()` не выданы: ключи "microphone",
+    "screen" по порядку. «Неизвестно» (None) не считается: прежний помощник
+    или его отсутствие — не повод тревожить человека."""
+    return [key for key in ("microphone", "screen")
+            if states.get(key) is not None and states.get(key) != MIC_GRANTED]

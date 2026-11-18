@@ -479,6 +479,20 @@ export const backupBefore = (ep: Endpoint, target: string) =>
 export const getDiagnostics = (ep: Endpoint, lines = 200) =>
   json<Record<string, unknown>>(ep, `/diagnostics?lines=${lines}`);
 export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");
+/** macOS: разрешение «Микрофон» (как AVAuthorizationStatus). */
+export type MicPermission = "granted" | "denied" | "notDetermined" | "restricted";
+/** macOS: разрешение «Запись экрана»; «ещё не спрашивали» macOS не отличает от «denied». */
+export type ScreenPermission = "granted" | "denied";
+/** `GET /permissions`: null — узнать нечем (прежний помощник, его нет); не macOS — `supported: false`. */
+export type Permissions = { supported: boolean; microphone: MicPermission | null; screen: ScreenPermission | null };
+export type PermissionKind = "microphone" | "screen";
+export const getPermissions = (ep: Endpoint) => json<Permissions>(ep, "/permissions");
+/**
+ * «Разрешить»: системный вопрос macOS (резидент ждёт ответа человека) → итог и состояние обоих.
+ * Включённая «Запись экрана» применится после перезапуска Meet — до него `state` = "denied".
+ */
+export const requestPermission = (ep: Endpoint, kind: PermissionKind) =>
+  json<Permissions & { kind: PermissionKind; state: string | null }>(ep, "/permissions/request", body("POST", { kind }));
 /** ~2 с записи с устройства (null — системное) → пиковый уровень; 409 во время записи. */
 export const testDevice = (ep: Endpoint, kind: DeviceKind, name: string | null) =>
   json<DeviceCheck>(ep, "/devices/test", body("POST", { kind, name }));

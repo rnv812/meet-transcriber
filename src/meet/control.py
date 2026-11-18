@@ -35,6 +35,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     processes() -> dict                  запущенные процессы для выбора клиента
     devices() -> dict                    микрофоны и выводы для настроек «Звук»
     test_device(body) -> dict            ~2 с с устройства → пик (409 при записи)
+    permissions() -> dict                macOS: «Микрофон» и «Запись экрана» (supported: False — не macOS)
+    request_permission(body) -> dict     системный вопрос {"kind"} → {"kind", "state", …}
     recordings(limit, q, filters) -> dict  библиотека записей (q — поиск, filters — library_filter)
     search(q, limit, filters) -> dict    поиск по тексту встреч с фрагментами
     groups(q, filters) / create_group / patch_group / delete_group / order_groups /
@@ -807,6 +809,12 @@ _ROUTES = {
     ("GET", "/processes"): lambda h, p: _server_of(h).state.processes(),
     ("GET", "/devices"): lambda h, p: _server_of(h).state.devices(),
     ("POST", "/devices/test"): lambda h, p: _server_of(h).state.test_device(h._body()),
+    # macOS: разрешения «Микрофон» и «Запись экрана» (мастер, «Диагностика»):
+    # состояние без системных вопросов; «Разрешить» — системный вопрос
+    # {"kind": "microphone" | "screen"}, ответ ждёт человека.
+    ("GET", "/permissions"): lambda h, p: _server_of(h).state.permissions(),
+    ("POST", "/permissions/request"): lambda h, p: _server_of(h).state.request_permission(
+        h._body()),
     # Образец голоса владельца: что записано и ход записи; записать (~25 с с
     # микрофона, разбор задачей); удалить образец — в _PATTERNS.
     ("GET", "/owner-voice"): lambda h, p: _server_of(h).state.owner_voice(),

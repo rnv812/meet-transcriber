@@ -553,6 +553,15 @@ test("левая колонка: «Шаг N из 8», восемь шагов с
   expect(within(after[0]!).getByText("пройден")).toBeInTheDocument();
 });
 
+test("на Windows шага «Разрешения» нет: после «Запись» — «Ваш голос»", () => {
+  show({ endpoint: ep });
+  const list = screen.getByRole("list", { name: "Шаги мастера" });
+  const titles = within(list).getAllByRole("listitem").map((li) => li.textContent);
+  expect(titles.some((t) => t?.includes("Разрешения"))).toBe(false);
+  const at = titles.findIndex((t) => t?.includes("Запись"));
+  expect(titles[at + 1]).toContain("Ваш голос");
+});
+
 test("«Далее» — главная кнопка шага, «Переустановить с нуля» — обычная", () => {
   show({ start: "engine", engine: engine({ installed: true, profile: "cuda" }) });
   expect(screen.getByRole("button", { name: "Далее" })).toHaveClass("btn--primary");

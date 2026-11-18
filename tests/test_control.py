@@ -94,6 +94,17 @@ class FakeState:
                 "inputs": [{"name": "Микрофон", "default": True}],
                 "outputs": [{"name": "Колонки", "default": True}]}
 
+    def permissions(self) -> dict:
+        return {"supported": True, "microphone": "notDetermined", "screen": "denied"}
+
+    def request_permission(self, body):
+        kind = (body or {}).get("kind")
+        if kind not in ("microphone", "screen"):
+            raise control.BadRequest("kind — microphone или screen")
+        self.calls.append(("permission", kind))
+        return {"kind": kind, "state": "granted", "supported": True,
+                "microphone": "granted", "screen": "denied"}
+
     def test_device(self, body):
         if body.get("name") == "сломан":
             raise control.Unavailable("Не удалось проверить устройство: Устройство не ответило")
@@ -905,6 +916,18 @@ def test_device_test_endpoint(server):
     got = _post(server, "/devices/test", {"kind": "mic", "name": "USB-микрофон"})
     assert got["peak"] == 0.5 and got["device"] == "USB-микрофон"
     assert ("device-test", {"kind": "mic", "name": "USB-микрофон"}) in server.state.calls
+
+
+def test_permissions_endpoint(server):
+    assert _get(server, "/permissions") == {
+        "supported": True, "microphone": "notDetermined", "screen": "denied"}
+
+
+def test_permission_request_endpoint(server):
+    got = _post(server, "/permissions/request", {"kind": "microphone"})
+    assert got["state"] == "granted" and got["microphone"] == "granted"
+    assert ("permission", "microphone") in server.state.calls
+    _post(server, "/permissions/request", {"kind": "camera"}, expect=400)
 
 
 def test_device_test_refused_while_recording(server):

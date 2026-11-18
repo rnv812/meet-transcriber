@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths,
+from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths, plat,
                   settings, temp_meeting, track_sync, watch)
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
@@ -539,6 +539,39 @@ def _conflict(text: str):
     return Conflict(text)
 
 
+# Разрешения macOS, о которых спрашивает окно (`POST /permissions/request`).
+PERMISSION_KINDS = ("microphone", "screen")
+PERMISSION_NAMES = {
+    "microphone": "«Микрофон» (ваш голос)",
+    "screen": "«Запись экрана» (звук собеседников)",
+}
+
+
+def permissions_notice(missing: list[str]) -> str:
+    """Текст уведомления: автозапись идёт без этих разрешений."""
+    names = ", ".join(PERMISSION_NAMES[key] for key in missing if key in PERMISSION_NAMES)
+    return (f"Запись идёт, но macOS не дала Meet разрешений: {names}. "
+            "Выдать — Настройки Meet → Диагностика")
+
+
+def _in_worker(fn, timeout: float):
+    """Вызвать `fn` в отдельном потоке и дождаться не дольше `timeout`:
+    подпроцесс помощника не держит вызывающий поток сверх своего таймаута.
+    Не дождались или `fn` упала — None («неизвестно»)."""
+    result: dict = {}
+
+    def run() -> None:
+        try:
+            result["value"] = fn()
+        except Exception:
+            result["value"] = None
+
+    worker = threading.Thread(target=run, name="meet-permission", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return result.get("value")
+
+
 # Название записи длиннее не бывает: окно ограничивает поле тем же.
 TITLE_MAX = 200
 # Расшифровка для агента во вкладке «Агент» (Claude Code / Codex в папке записи).
@@ -710,6 +743,13 @@ class TrayControl:
         # Микрофон идущей записи отдаёт ровные нули (`record.mic_silent`) —
         # окно держит плашку «Микрофон не слышно», пока он не ожил.
         self._mic_silent = False
+        # macOS: автозапись началась без разрешений «Микрофон» или «Запись
+        # экрана» — {"missing", "notice", "at"}; оболочка показывает по новому
+        # `at` уведомление, запись идёт дальше. Запись кончилась — None.
+        self._permissions_missing: dict | None = None
+        # Системный вопрос о разрешении — по одному за раз: второй открылся бы
+        # поверх первого, и ответ на него человек дал бы не глядя.
+        self._permission_ask = threading.Lock()
         # Последняя проверка доступа к Hugging Face (без токена): окно рисует
         # её по GET /hf/status, не дёргая сеть на каждый показ.
         self._hf_check: dict | None = None
@@ -1284,10 +1324,35 @@ class TrayControl:
                 self._system_audio = None
         elif event.kind == events.RECORD_MIC_SILENT:
             self._mic_silent = event.data.get("state") == "silent"
+        elif event.kind == events.RECORD_STARTED:
+            self._check_auto_permissions()
         elif event.kind == events.RECORD_STOPPED:
             self._fallbacks = {}
             self._system_audio = None
             self._mic_silent = False
+            self._permissions_missing = None
+
+    def _check_auto_permissions(self) -> None:
+        """macOS, автозапись: выданы ли «Микрофон» и «Запись экрана». Нет —
+        предупреждение в снимке (уведомление оболочки) и в трее; запись при
+        этом идёт как шла. Помощник спрашивается в фоне: подписчик шины не
+        должен ждать подпроцесс."""
+        if not plat.is_macos() or self.tray.source != AUTO or not self.tray.recording:
+            return
+
+        def work() -> None:
+            from meet import audiotap
+
+            missing = audiotap.missing_permissions(audiotap.permissions())
+            if not missing or not self.tray.recording:
+                return
+            notice = permissions_notice(missing)
+            self._permissions_missing = {"missing": missing, "notice": notice,
+                                         "at": time.time()}
+            self.tray.log(f"автозапись без разрешений macOS: {len(missing)}")
+            self.tray._notify(notice)
+
+        self._background(work, name="meet-permissions")
 
     # --- что показывать -------------------------------------------------
 
@@ -1331,6 +1396,10 @@ class TrayControl:
             # Микрофон отдаёт ровные нули (на macOS — нет разрешения «Микрофон»):
             # окно держит плашку с кнопкой настроек, пока идёт запись.
             "mic_silent": recording and self._mic_silent,
+            # macOS: автозапись идёт без разрешений {"missing", "notice", "at"}
+            # — новое `at` оболочка показывает уведомлением.
+            "permissions_missing": dict(self._permissions_missing)
+            if recording and self._permissions_missing else None,
             # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
             # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
             # None — диск недоступен (отключён, шара не отвечает).
@@ -1989,6 +2058,44 @@ class TrayControl:
             raise Unavailable(
                 f"Не удалось проверить устройство: {result.get('error') or 'нет ответа'}")
         return result
+
+    # --- разрешения macOS ------------------------------------------------
+
+    def permissions(self) -> dict:
+        """«Микрофон» и «Запись экрана» для мастера и «Диагностики»: состояние
+        без системных вопросов. Не macOS — `supported: False`, помощник не
+        запускается. Состояние — как у `audiotap.permissions` (None — узнать
+        нечем: помощника нет или он прежний)."""
+        if not plat.is_macos():
+            return {"supported": False, "microphone": None, "screen": None}
+        from meet import audiotap
+
+        return {"supported": True, **audiotap.permissions()}
+
+    def request_permission(self, body: dict | None) -> dict:
+        """«Разрешить»: системный вопрос {"kind": "microphone" | "screen"} →
+        {"kind", "state", …состояние обоих}. Вопрос ждёт человека (до
+        `audiotap.REQUEST_TIMEOUT_S`), поэтому идёт в отдельном потоке, а не
+        в вызывающем; второй вопрос, пока открыт первый, — 409.
+
+        Помощника запускает резидент (дочерний процесс Meet.app), поэтому
+        macOS относит вопрос и ответ к Meet. Включённая «Запись экрана»
+        применится после перезапуска приложения — до него ответ «denied»."""
+        kind = body.get("kind") if isinstance(body, dict) else None
+        if kind not in PERMISSION_KINDS:
+            raise _bad_request("kind — microphone или screen")
+        if not plat.is_macos():
+            raise _bad_request("Разрешения спрашивает только macOS")
+        from meet import audiotap
+
+        ask = audiotap.request_mic if kind == "microphone" else audiotap.request_screen
+        if not self._permission_ask.acquire(blocking=False):
+            raise _conflict("Вопрос о разрешении уже открыт")
+        try:
+            state = _in_worker(ask, audiotap.REQUEST_TIMEOUT_S + 5.0)
+        finally:
+            self._permission_ask.release()
+        return {"kind": kind, "state": state, **self.permissions()}
 
     # --- библиотека и задачи --------------------------------------------
 
