@@ -202,43 +202,72 @@ class OpusWriter:
 def _make_converter(src_rate: int, src_ch: int, dst_rate: int, dst_ch: int):
     """bytes→bytes: int16 PCM устройства → канонический формат дорожки
     (формат её первого устройства, с которым запущен ffmpeg на всю запись).
-    На happy path (устройство не менялось) — passthrough без audioop.
-    Стерео↔моно через audioop, у >2 каналов берутся первые два (полного
-    даунмикса N каналов нет — экзотика), ресемплинг — audioop.ratecv
-    (линейный, без ФНЧ — на понижении возможен алиасинг; основной путь
-    ресемплит ffmpeg) с переносом состояния между callback'ами.
-    IMPORTANT: audioop удалён в Python 3.13 (в 3.12 deprecated) — при
-    апгрейде Python заменить; happy path от него не зависит."""
+    На happy path (устройство не менялось) — passthrough без копирования.
+    У >2 каналов берутся первые два (полного даунмикса N каналов нет —
+    экзотика), стерео → моно — среднее каналов (с округлением вниз), моно →
+    стерео — повтор. Ресемплинг — `_LinearResampler`: линейная интерполяция,
+    как у прежнего audioop.ratecv (без ФНЧ — на понижении возможен алиасинг;
+    основной путь ресемплит ffmpeg), с переносом состояния между
+    callback'ами. Модуль audioop не нужен: в Python 3.13 его нет."""
     if src_rate == dst_rate and src_ch == dst_ch:
         return lambda data: data
-    import array
+    import numpy as np
 
-    # audioop нужен не всякой конвертации (первые два канала из N режет array):
-    # не импортируем зря — на Python 3.13 модуля нет вовсе.
-    if src_rate != dst_rate or min(src_ch, 2) != dst_ch:
-        import audioop
-
-    state = None
+    resample = _LinearResampler(src_rate, dst_rate, dst_ch) if src_rate != dst_rate else None
 
     def convert(data: bytes) -> bytes:
-        nonlocal state
-        ch = src_ch
-        if ch > 2:
-            samples = array.array("h", data)
-            frames = len(samples) // ch
-            stereo = array.array("h", bytes(4 * frames))
-            stereo[0::2] = samples[0 : frames * ch : ch]
-            stereo[1::2] = samples[1 : frames * ch : ch]
-            data, ch = stereo.tobytes(), 2
-        if ch == 2 and dst_ch == 1:
-            data = audioop.tomono(data, 2, 0.5, 0.5)
-        elif ch == 1 and dst_ch == 2:
-            data = audioop.tostereo(data, 2, 1, 1)
-        if src_rate != dst_rate:
-            data, state = audioop.ratecv(data, 2, dst_ch, src_rate, dst_rate, state)
-        return data
+        frames = len(data) // (2 * src_ch)
+        x = np.frombuffer(data, dtype="<i2", count=frames * src_ch).reshape(frames, src_ch)
+        x = x[:, :2]
+        if x.shape[1] == 2 and dst_ch == 1:
+            x = ((x[:, 0].astype(np.int32) + x[:, 1]) >> 1)[:, None]
+        elif x.shape[1] == 1 and dst_ch == 2:
+            x = np.repeat(x, 2, axis=1)
+        if resample is not None:
+            return resample(x)
+        return np.ascontiguousarray(x, dtype="<i2").tobytes()
 
     return convert
+
+
+class _LinearResampler:
+    """Ресемплинг int16 PCM линейной интерполяцией по кускам потока, как
+    audioop.ratecv: выход j — значение входа в точке j·src/dst (до первого
+    кадра вход считается нулём), отсчёты на стыке кусков те же, что при
+    одном вызове. Состояние — последний кадр прошлого куска и положение
+    следующего выходного отсчёта; точки считаются в целых (доли входного
+    кадра со знаменателем dst), без накопления ошибки за часы записи."""
+
+    def __init__(self, src_rate: int, dst_rate: int, channels: int) -> None:
+        import math
+
+        import numpy as np
+
+        g = math.gcd(int(src_rate), int(dst_rate))
+        self._in, self._out = int(src_rate) // g, int(dst_rate) // g
+        # Положение следующего выходного отсчёта от начала следующего куска,
+        # в долях 1/out входного кадра; всегда > -out (он после прошлого кадра).
+        self._phase = 0
+        self._prev = np.zeros((1, channels), dtype=np.float64)
+
+    def __call__(self, x) -> bytes:
+        import numpy as np
+
+        n = len(x)
+        if n == 0:
+            return b""
+        inn, out = self._in, self._out
+        # Выходные отсчёты в точках не дальше последнего кадра куска.
+        last = (n - 1) * out
+        count = 0 if self._phase > last else (last - self._phase) // inn + 1
+        q = self._phase + inn * np.arange(count, dtype=np.int64)
+        k = -(-q // out)  # кадр справа от точки (ceil)
+        w = ((k * out - q) / out)[:, None]  # вес кадра слева
+        ext = np.concatenate([self._prev, x.astype(np.float64)])
+        y = ext[k + 1] * (1.0 - w) + ext[k] * w
+        self._phase += count * inn - n * out
+        self._prev = ext[-1:].copy()
+        return np.clip(np.rint(y), -32768, 32767).astype("<i2").tobytes()
 
 
 def _peak(data: bytes, stride: int = LEVEL_STRIDE) -> float:

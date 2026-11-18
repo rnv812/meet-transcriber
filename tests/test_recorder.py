@@ -84,6 +84,118 @@ def test_converter_many_to_stereo_needs_no_audioop(monkeypatch):
     assert struct.unpack("<4h", conv(data)) == (1, 2, 3, 4)
 
 
+def test_converter_needs_no_audioop_for_any_conversion(monkeypatch):
+    """Смена устройства с другой частотой и числом каналов работает и на
+    Python 3.13, где модуля audioop нет."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_audioop(name, *args, **kwargs):
+        if name == "audioop":
+            raise ModuleNotFoundError("No module named 'audioop'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_audioop)
+    for formats in ((48000, 2, 16000, 1), (16000, 1, 48000, 2), (44100, 6, 48000, 2)):
+        conv = _make_converter(*formats)
+        src_rate, src_ch, dst_rate, dst_ch = formats
+        out = conv(b"\x01\x00" * (src_ch * src_rate // 10))  # 0,1 с
+        assert abs(len(out) // (2 * dst_ch) - dst_rate // 10) <= 2
+
+
+# Эталон — audioop (Python 3.12): numpy-конвертер даёт то же самое.
+
+
+def _signal(rate: int, channels: int, seconds: float, seed: int = 1) -> bytes:
+    """Речь-подобный тест: две синусоиды разной частоты по каналам плюс шум."""
+    import numpy as np
+
+    n = int(rate * seconds)
+    t = np.arange(n) / rate
+    rng = np.random.default_rng(seed)
+    chans = [8000 * np.sin(2 * np.pi * (220 + 110 * c) * t) + rng.normal(0, 500, n)
+             for c in range(channels)]
+    return np.clip(np.stack(chans, axis=1), -32768, 32767).astype("<i2").tobytes()
+
+
+def _chunks(data: bytes, frame: int, frames: int = 1024):
+    step = frame * frames
+    return [data[i:i + step] for i in range(0, len(data), step)]
+
+
+def _audioop_reference(src_rate, src_ch, dst_rate, dst_ch):
+    """Прежний конвертер на audioop: первые два канала, моно/стерео, ratecv с
+    состоянием между вызовами."""
+    import array
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        audioop = pytest.importorskip("audioop")
+    state = None
+
+    def convert(data: bytes) -> bytes:
+        nonlocal state
+        ch = src_ch
+        if ch > 2:
+            samples = array.array("h", data)
+            frames = len(samples) // ch
+            stereo = array.array("h", bytes(4 * frames))
+            stereo[0::2] = samples[0: frames * ch: ch]
+            stereo[1::2] = samples[1: frames * ch: ch]
+            data, ch = stereo.tobytes(), 2
+        if ch == 2 and dst_ch == 1:
+            data = audioop.tomono(data, 2, 0.5, 0.5)
+        elif ch == 1 and dst_ch == 2:
+            data = audioop.tostereo(data, 2, 1, 1)
+        if src_rate != dst_rate:
+            data, state = audioop.ratecv(data, 2, dst_ch, src_rate, dst_rate, state)
+        return data
+
+    return convert
+
+
+def _samples(data: bytes):
+    import numpy as np
+
+    return np.frombuffer(data, dtype="<i2").astype(np.int32)
+
+
+@pytest.mark.parametrize("formats", [
+    (48000, 2, 16000, 1),  # гарнитура → дорожка микрофона
+    (16000, 1, 48000, 2),  # обратно, с повтором каналов
+    (44100, 1, 48000, 1),  # некратные частоты
+    (48000, 6, 16000, 2),  # 5.1 → первые два канала
+])
+def test_converter_matches_audioop_in_1024_frame_chunks(formats):
+    src_rate, src_ch, dst_rate, dst_ch = formats
+    ref = _audioop_reference(*formats)
+    conv = _make_converter(*formats)
+    data = _signal(src_rate, src_ch, 1.0)
+    chunks = _chunks(data, 2 * src_ch)
+    got = b"".join(conv(c) for c in chunks)
+    want = b"".join(ref(c) for c in chunks)
+    assert abs(len(got) // (2 * dst_ch) - dst_rate) <= 2  # длительность та же
+    assert len(got) == len(want)
+    assert abs(_samples(got) - _samples(want)).max() <= 2  # расхождение — округление
+
+
+def test_converter_carries_state_across_chunks_without_seams():
+    """Поток кусками по 1024 кадра даёт то же, что и одним куском: на стыках
+    нет ни пропущенных, ни лишних отсчётов (щелчков)."""
+    data = _signal(48000, 2, 2.0, seed=7)
+    whole = _make_converter(48000, 2, 16000, 1)(data)
+    conv = _make_converter(48000, 2, 16000, 1)
+    chunked = b"".join(conv(c) for c in _chunks(data, 4))
+    assert len(chunked) == len(whole)
+    assert abs(_samples(chunked) - _samples(whole)).max() <= 1
+    odd = _make_converter(44100, 1, 16000, 1)
+    src = _signal(44100, 1, 1.0, seed=3)
+    pieces = [src[i:i + 2 * 333] for i in range(0, len(src), 2 * 333)]  # 333 кадра
+    assert b"".join(odd(p) for p in pieces) == _make_converter(44100, 1, 16000, 1)(src)
+
+
 # --- WavWriter (легаси-формат, транскрибируется как прежде) ---
 
 
