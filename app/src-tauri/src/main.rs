@@ -12,6 +12,7 @@
 
 mod api;
 mod app_icon;
+mod app_menu;
 mod appearance;
 mod autostart;
 mod close_guard;
@@ -33,9 +34,16 @@ mod updater;
 mod upgrade;
 mod windows;
 
-use tauri::{RunEvent, WindowEvent};
+use std::time::Duration;
+
+use tauri::{Manager, RunEvent, WindowEvent};
 
 use resident::Supervisor;
+
+/// Сколько оболочка ждёт резидента, когда приложение завершает система
+/// (выход из сеанса, выключение, перезагрузка, «Завершить» из Dock):
+/// дольше система ждать не станет, а держать выход нельзя.
+const SYSTEM_EXIT_LIMIT: Duration = Duration::from_secs(10);
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -71,7 +79,15 @@ fn main() {
     // с Codex «не находились».
     #[cfg(unix)]
     platform::adopt_login_path();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // macOS: своё меню приложения (`app_menu.rs`) вместо стандартного Tauri —
+    // «Настройки…» по Cmd+, и «Завершить Meet» через вопрос и штатную
+    // остановку резидента. На Windows у окон меню нет.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(app_menu::build)
+        .on_menu_event(|app, event| app_menu::on_event(app, event.id().as_ref()));
+    builder
         // Первым: второй экземпляр должен выйти до того, как другие плагины и
         // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк
         // приходит в первый экземпляр внутри WM_COPYDATA, пока второй ждёт
@@ -261,11 +277,32 @@ fn main() {
         .expect("оболочка meet не запустилась")
         .run(|app, event| match event {
             // Закрытие последнего окна не завершает приложение: оно живёт в
-            // трее. Выход — только «Выход» (app.exit(0), у него code = Some).
-            RunEvent::ExitRequested { api, code, .. } if code.is_none() => api.prevent_exit(),
+            // трее. Выход — «Выход» и «Завершить Meet» (app.exit(0), у него
+            // code = Some); начатый выход закрытие окон не держит.
+            RunEvent::ExitRequested { api, code, .. }
+                if tray::keeps_running(
+                    code,
+                    app.try_state::<Supervisor>()
+                        .is_some_and(|supervisor| supervisor.is_quitting()),
+                ) =>
+            {
+                api.prevent_exit()
+            }
+            // Сюда приходит и выход, начатый системой, мимо `ExitRequested`:
+            // macOS — выход из сеанса, выключение, перезагрузка, «Завершить»
+            // из Dock (`applicationWillTerminate`); Windows — конец сеанса
+            // (`WM_ENDSESSION`). После обработчика процесс завершается, поэтому
+            // резидент гасится здесь, со сроком: запись сохраняется, а выход
+            // системы не задерживается дольше `SYSTEM_EXIT_LIMIT`. После
+            // «Выхода» резидент уже погашен, и это мгновенно. Отдельная
+            // подписка на уведомление о выключении (NSWorkspace) не нужна:
+            // выключение приходит этим же путём.
             // Job object агентов и так закроет Windows; гасим явно и раньше.
             // Геометрию панели ассистента, ждущую отложенной записи, — в файл.
             RunEvent::Exit => {
+                if let Some(supervisor) = app.try_state::<Supervisor>() {
+                    supervisor.shutdown_within(SYSTEM_EXIT_LIMIT);
+                }
                 live_panel::flush(app);
                 pty::kill_all();
                 // macOS: job object нет — установку движка гасим сами.

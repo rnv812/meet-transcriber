@@ -799,6 +799,80 @@ def test_headless_exits_when_parent_dies(monkeypatch, tmp_path):
     assert app._alive is False
 
 
+def _headless_with_signal(monkeypatch, tmp_path, signals=1):
+    """Резидент под оболочкой, идёт запись; на втором такте ему приходит
+    SIGTERM (выход из системы, выключение, launchd) — `signals` раз подряд."""
+    import signal
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    app = tray.TrayApp(start_now=False)
+    app.recording = True
+    calls = []
+    monkeypatch.setattr(app, "_start_control_api", lambda: None)
+
+    def stop_recording(**_kw):
+        calls.append("stop")
+        app.recording = False
+
+    monkeypatch.setattr(app, "stop_recording", stop_recording)
+    real_exit = app.request_exit
+    monkeypatch.setattr(app, "request_exit", lambda: (calls.append("exit"), real_exit()))
+    ticks = []
+
+    def tick():
+        ticks.append(1)
+        if len(ticks) == 2:
+            for _ in range(signals):
+                signal.raise_signal(signal.SIGTERM)
+        if len(ticks) > 500:  # страховка: сигнал не дошёл — не висеть
+            real_exit()
+
+    monkeypatch.setattr(app, "_tick", tick)
+    monkeypatch.setattr(tray, "TICK_S", 0.01)
+    before = signal.getsignal(signal.SIGTERM)
+    app.run_headless(parent_pid=None)
+    return app, calls, ticks, before
+
+
+def test_sigterm_stops_recording_like_the_parent_watchdog_and_exits(monkeypatch, tmp_path):
+    """SIGTERM резиденту во время записи — тот же путь, что у сторожа оболочки:
+    штатная остановка (хвост, meta.json, расшифровка в очереди), затем выход."""
+    import signal
+
+    app, calls, ticks, before = _headless_with_signal(monkeypatch, tmp_path)
+    assert calls == ["stop", "exit"]
+    assert len(ticks) < 500
+    assert app._alive is False
+    # Обработчик — только на время работы резидента: прежний возвращён.
+    assert signal.getsignal(signal.SIGTERM) == before
+    assert not (tmp_path / "meet" / "tray.lock").exists()
+
+
+def test_repeated_sigterm_stops_the_recording_once(monkeypatch, tmp_path):
+    _app, calls, _ticks, _before = _headless_with_signal(monkeypatch, tmp_path, signals=3)
+    assert calls.count("stop") == 1
+
+
+def test_exit_signals_off_the_main_thread_are_skipped_with_a_log_line(monkeypatch, tmp_path):
+    """signal.signal работает только из главного потока: из другого — строка в
+    журнал, резидент работает как раньше."""
+    import signal
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app = tray.TrayApp(start_now=False)
+    lines = []
+    monkeypatch.setattr(app, "log", lines.append)
+    before = signal.getsignal(signal.SIGTERM)
+    out = {}
+    worker = threading.Thread(target=lambda: out.update(prev=app._install_exit_signals()))
+    worker.start()
+    worker.join(timeout=5)
+    assert out["prev"] == {}
+    assert signal.getsignal(signal.SIGTERM) == before
+    assert any("сигнал" in line for line in lines)
+
+
 def test_main_headless_flag(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.delenv("MEET_DATA_DIR", raising=False)

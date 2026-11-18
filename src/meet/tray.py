@@ -414,6 +414,9 @@ class TrayApp:
         self._keep_thread: threading.Thread | None = None
         self._mutex = threading.Lock()
         self._alive = True
+        # Сигнал завершения уже получен: повторный SIGTERM второй остановки
+        # не начинает.
+        self._exit_signalled = False
         self._call_end = None
         self._retry_after = 0.0
         self._last_poll = 0.0
@@ -825,6 +828,60 @@ class TrayApp:
         if self.icon is not None:
             self.icon.stop()
 
+    def _stop_and_exit(self, reason: str) -> None:
+        """Штатно сохранить идущую запись и выйти: хвост, meta.json и
+        расшифровка в очереди — как у «Стоп». Общий путь сторожа оболочки и
+        сигнала завершения."""
+        self.log(reason)
+        if self.recording:
+            self.stop_recording()
+        self.request_exit()
+
+    def _on_exit_signal(self, signum, _frame) -> None:
+        """SIGTERM: выход из системы, выключение, перезагрузка (launchd шлёт его
+        всем процессам сеанса), `kill`. Обработчик идёт в главном потоке между
+        инструкциями, а тот мог держать `_mutex` посреди такта — остановка
+        поэтому в своём потоке, главный только продолжает тикать до
+        `request_exit`."""
+        if self._exit_signalled:
+            return
+        self._exit_signalled = True
+        threading.Thread(
+            target=self._stop_and_exit,
+            args=(f"сигнал завершения ({signum}) — сохраняю запись и выхожу",),
+            name="meet-exit-signal",
+            daemon=True,
+        ).start()
+
+    def _install_exit_signals(self) -> dict:
+        """Поставить обработчик SIGTERM; вернуть прежние, чтобы снять их на
+        выходе (`_restore_exit_signals`).
+
+        Только из главного потока (так требует `signal`); из другого — строка в
+        журнал, и резидент работает без обработчика, как раньше. На Windows
+        SIGTERM снаружи не доставляется (TerminateProcess не перехватить), а
+        консольные события закрытия и выхода из сеанса резиденту без окна
+        консоли не приходят — там выход системы штатно гасит оболочка
+        (`/shutdown`)."""
+        import signal
+
+        previous = {}
+        try:
+            previous[signal.SIGTERM] = signal.signal(signal.SIGTERM, self._on_exit_signal)
+        except (ValueError, OSError) as e:
+            self.log(f"обработчик сигнала завершения не поставлен: {type(e).__name__}")
+        return previous
+
+    @staticmethod
+    def _restore_exit_signals(previous: dict) -> None:
+        import signal
+
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+
     # --- цикл -----------------------------------------------------------
 
     def ticker(self, icon) -> None:
@@ -1077,7 +1134,8 @@ class TrayApp:
         (Tauri), резидент отдаёт только API, запись и автозапись.
 
         parent_pid — оболочка: умерла она — выходим сами, штатно сохранив
-        запись, иначе осиротевший резидент держал бы микрофон невидимым."""
+        запись, иначе осиротевший резидент держал бы микрофон невидимым.
+        SIGTERM (выход из системы, выключение) — тот же штатный выход."""
         if _resident_alive():
             return
         lock = _state_dir() / "tray.lock"
@@ -1090,6 +1148,7 @@ class TrayApp:
         except OSError:
             pass
         _drop_command()
+        signals = self._install_exit_signals()
         api = self._start_control_api()
         # macOS: движок и модели — мимо Time Machine и Spotlight (после установки
         # движка оболочкой первым поднимается резидент). В фоне: tmutil не держит старт.
@@ -1102,10 +1161,7 @@ class TrayApp:
             def watch_parent() -> None:
                 while self._alive:
                     if not _pid_alive(parent_pid):
-                        self.log("оболочка завершилась — выхожу")
-                        if self.recording:
-                            self.stop_recording()
-                        self.request_exit()
+                        self._stop_and_exit("оболочка завершилась — выхожу")
                         return
                     time.sleep(1.0)
 
@@ -1118,6 +1174,7 @@ class TrayApp:
             self._alive = False
             self._stop_services(api)
             self._release_lock(lock)
+            self._restore_exit_signals(signals)
 
     def _stop_services(self, api) -> None:
         """Погасить то, что резидент держит подпроцессами, и только потом API.

@@ -859,14 +859,17 @@ pub async fn open_privacy_pane(kind: String) -> Result<(), String> {
 /// же папка, что у пункта трея, — журналы, а без них папка данных.
 #[tauri::command]
 pub async fn open_logs() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let data = resident::data_dir();
-        let target = tray::log_folder(&logs::resident_log(&data), &data);
-        platform::open_folder(&target)
-            .map_err(|error| format!("не удалось открыть журнал: {error}"))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(open_logs_folder)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Папка журналов (без неё — папка данных) в файловом менеджере: окно и
+/// «Справка → Открыть журналы» меню приложения.
+pub(crate) fn open_logs_folder() -> Result<(), String> {
+    let data = resident::data_dir();
+    let target = tray::log_folder(&logs::resident_log(&data), &data);
+    platform::open_folder(&target).map_err(|error| format!("не удалось открыть журнал: {error}"))
 }
 
 #[tauri::command]

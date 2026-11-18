@@ -1818,7 +1818,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 /// Команда резиденту в отдельном потоке: обработчик меню — главный поток.
 /// Удача видна на следующем тике опроса; неудача — уведомлением, иначе клик
 /// по меню просто ничего бы не сделал.
-fn command(app: &AppHandle, action: Action) {
+pub(crate) fn command(app: &AppHandle, action: Action) {
     let app = app.clone();
     thread::spawn(move || {
         let reply = resident::read_endpoint()
@@ -1842,7 +1842,7 @@ fn command(app: &AppHandle, action: Action) {
     });
 }
 
-fn import(app: &AppHandle) {
+pub(crate) fn import(app: &AppHandle) {
     let handle = app.clone();
     app.dialog()
         .file()
@@ -1908,7 +1908,7 @@ static QUIT_ASKING: AtomicBool = AtomicBool::new(false);
 /// «Выход» из меню трея: идёт запись или расшифровка — сначала вопрос
 /// (тот же rfd, что у отмены записи: Esc и крестик — «Не выходить»).
 /// Состояние резидента — в отдельном потоке, вопрос — в главном.
-fn confirm_quit(app: &AppHandle) {
+pub(crate) fn confirm_quit(app: &AppHandle) {
     if QUIT_ASKING.swap(true, Ordering::SeqCst) {
         return; // вопрос уже открыт
     }
@@ -1952,6 +1952,14 @@ fn confirm_quit(app: &AppHandle) {
             QUIT_ASKING.store(false, Ordering::SeqCst);
         }
     });
+}
+
+/// `RunEvent::ExitRequested`: держать ли приложение. Без кода — закрылось
+/// последнее окно, а Meet живёт в трее. Выход уже начат (`quitting`:
+/// «Выход», «Завершить Meet», выход системы) — не держим ничего, иначе
+/// закрытые по пути окна остановили бы выход.
+pub fn keeps_running(code: Option<i32>, quitting: bool) -> bool {
+    code.is_none() && !quitting
 }
 
 /// «Выход»: резидент сохраняет идущую запись и гасится (до 70 с), и только
@@ -3653,6 +3661,18 @@ mod tests {
         assert!(!cancel_still_meant(a, b)); // автозапись начала новую
         assert!(!cancel_still_meant(a, None)); // запись уже закончилась
         assert!(!cancel_still_meant(None, a)); // резидент не ответил при открытии
+    }
+
+    #[test]
+    fn closing_the_last_window_keeps_the_tray_until_exit_has_begun() {
+        // Последнее окно закрыто — Meet живёт в трее.
+        assert!(keeps_running(None, false));
+        // «Выход», «Завершить Meet» (app.exit с кодом) — выходим.
+        assert!(!keeps_running(Some(0), false));
+        // Выход уже идёт (в том числе системный: выход из сеанса, выключение) —
+        // закрытие окон его не останавливает.
+        assert!(!keeps_running(None, true));
+        assert!(!keeps_running(Some(0), true));
     }
 
     #[test]

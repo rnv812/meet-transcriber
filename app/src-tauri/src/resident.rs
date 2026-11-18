@@ -459,24 +459,36 @@ impl EngineContext {
 }
 
 impl Supervisor {
-    /// Поднять надзор в фоновом потоке и положить его в состояние приложения.
-    /// `held` — резидент ждёт обслуживания движка (`EngineUpdating`): надзор
-    /// начнётся с `respawn` по его окончании.
-    pub fn start(app: &AppHandle, held: bool) {
-        let supervisor = Supervisor {
+    fn new(status: ResidentStatus) -> Supervisor {
+        Supervisor {
             inner: Arc::new(Inner {
-                status: Mutex::new(if held {
-                    ResidentStatus::EngineUpdating { step: 0, of: 0 }
-                } else {
-                    ResidentStatus::Starting
-                }),
+                status: Mutex::new(status),
                 child: Mutex::new(None),
                 running_from: Mutex::new(None),
                 quitting: AtomicBool::new(false),
                 generation: AtomicU64::new(0),
                 shutdown_gate: Mutex::new(()),
             }),
-        };
+        }
+    }
+
+    /// Надзор со своим запущенным резидентом — для тестов остановки.
+    #[cfg(test)]
+    fn with_child(child: Child) -> Supervisor {
+        let supervisor = Supervisor::new(ResidentStatus::Running);
+        *lock(&supervisor.inner.child) = Some(child);
+        supervisor
+    }
+
+    /// Поднять надзор в фоновом потоке и положить его в состояние приложения.
+    /// `held` — резидент ждёт обслуживания движка (`EngineUpdating`): надзор
+    /// начнётся с `respawn` по его окончании.
+    pub fn start(app: &AppHandle, held: bool) {
+        let supervisor = Supervisor::new(if held {
+            ResidentStatus::EngineUpdating { step: 0, of: 0 }
+        } else {
+            ResidentStatus::Starting
+        });
         app.manage(supervisor.clone());
         if !held {
             supervisor.supervise_in_background(app);
@@ -1015,14 +1027,54 @@ impl Supervisor {
         self.stop_child();
     }
 
+    /// То же, что `shutdown`, но не дольше `limit`: система завершает сеанс
+    /// (выход из системы, выключение, перезагрузка) и долго ждать оболочку не
+    /// станет. Резидент сохраняет запись по `/shutdown` (и сам — по SIGTERM
+    /// от системы); не вышел к сроку — дерево гасится. Идёт обычный «Выход»
+    /// (замок занят) — ждём его не дольше того же срока. Блокирует.
+    pub fn shutdown_within(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        let _gate = loop {
+            match self.inner.shutdown_gate.try_lock() {
+                Ok(gate) => break gate,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    shell_log!("выход системы: остановка резидента не успела к сроку");
+                    return;
+                }
+            }
+        };
+        if self.inner.quitting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        *lock(&self.inner.status) = ResidentStatus::Quitting;
+        self.stop_child_by(Some(deadline));
+    }
+
+    /// Выход уже начат (`shutdown`, `shutdown_within`): закрытие окон больше
+    /// не держит приложение.
+    pub fn is_quitting(&self) -> bool {
+        self.quitting()
+    }
+
     /// Погасить свой процесс: `POST /shutdown` (идущая запись сохраняется,
     /// ответ — до 70 с), затем, если процесс ещё жив, — убить дерево.
     /// Своего процесса нет — ничего не делает.
     fn stop_child(&self) {
+        self.stop_child_by(None);
+    }
+
+    /// `stop_child` со сроком: `/shutdown` уходит из отдельного потока, а
+    /// процесс ждём только до `deadline`. Без срока — ответ `/shutdown` и ещё
+    /// `EXIT_GRACE`.
+    fn stop_child_by(&self, deadline: Option<Instant>) {
         let Some(pid) = self.child_pid() else {
             return;
         };
-        match read_endpoint() {
+        let post = || match read_endpoint() {
             Some(endpoint) => {
                 if let Err(error) =
                     api::Client::new(&endpoint).post("/shutdown", serde_json::Value::Null)
@@ -1031,8 +1083,22 @@ impl Supervisor {
                 }
             }
             None => shell_log!("резидент не опубликовал адрес — /shutdown некуда слать"),
-        }
-        let deadline = Instant::now() + EXIT_GRACE;
+        };
+        let deadline = match deadline {
+            Some(deadline) => {
+                if let Err(error) = thread::Builder::new()
+                    .name("meet-shutdown".into())
+                    .spawn(post)
+                {
+                    shell_log!("/shutdown не отправлен: {error}");
+                }
+                deadline
+            }
+            None => {
+                post();
+                Instant::now() + EXIT_GRACE
+            }
+        };
         while Instant::now() < deadline {
             if self.child_exited() {
                 *lock(&self.inner.running_from) = None;
@@ -1492,5 +1558,88 @@ mod tests {
         child.wait().unwrap();
         drop(child); // закрыть свой хэндл — иначе процесс-зомби держит pid
         assert!(!pid_alive(pid));
+    }
+
+    /// Резидент, который сам не выходит (полминуты ждёт), — свой ребёнок
+    /// надзора.
+    fn stubborn_child() -> Child {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "ping -n 30 127.0.0.1 >nul"]);
+            command
+        };
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        platform::own_group(&mut command);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn system_exit_stops_the_resident_within_the_deadline() {
+        // Выход из системы, выключение: ждать резидента можно недолго —
+        // не вышел к сроку, дерево гасится, и оболочка не держит выход.
+        let supervisor = Supervisor::with_child(stubborn_child());
+        let pid = supervisor.child_pid().unwrap();
+        let started = Instant::now();
+        supervisor.shutdown_within(Duration::from_millis(500));
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(supervisor.is_quitting());
+        assert_eq!(supervisor.status(), ResidentStatus::Quitting);
+        assert!(supervisor.child_pid().is_none());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while pid_alive(pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!pid_alive(pid));
+        // Второй выход (обычный «Выход» после системного) — сразу.
+        let again = Instant::now();
+        supervisor.shutdown();
+        assert!(again.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn system_exit_does_not_outwait_a_quit_in_progress() {
+        // «Выход» из трея ещё ждёт резидента (держит замок), а система уже
+        // завершает сеанс: ждём не дольше срока.
+        let supervisor = Supervisor::with_child(stubborn_child());
+        let held = supervisor.clone();
+        let (locked, release) = (
+            std::sync::mpsc::channel::<()>(),
+            std::sync::mpsc::channel::<()>(),
+        );
+        let holder = thread::spawn(move || {
+            let _gate = lock(&held.inner.shutdown_gate);
+            locked.0.send(()).unwrap();
+            let _ = release.1.recv_timeout(Duration::from_secs(20));
+        });
+        locked.1.recv().unwrap();
+        let started = Instant::now();
+        supervisor.shutdown_within(Duration::from_millis(300));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        release.0.send(()).unwrap();
+        holder.join().unwrap();
+        // Убрать за собой ребёнка.
+        supervisor.shutdown_within(Duration::from_millis(100));
+        if let Some(pid) = supervisor.child_pid() {
+            kill_tree(pid);
+        }
     }
 }
