@@ -50,6 +50,15 @@ MIN_GAP_S = 0.05  # паузы короче не заполняем: латен�
 # считает время по `time.monotonic()` напрямую.
 _clock = time.monotonic
 TICK_PAD_S = 1.0  # живой стрим без данных дольше этого — доливать тишину
+# Перед буфером доливается дефицит больше этого — относительно момента захвата
+# буфера, а не прихода callback'а: запоздавший callback отдаёт накопленный звук
+# пачкой, и долив по времени прихода сдвинул бы дорожку вперёд навсегда.
+CAPTURE_PAD_S = 0.2
+# Тишина пишется кусками не длиннее этого, замок отпускается между кусками:
+# расхождение часов устройства не вставляет секунду тишины посреди звука.
+PAD_CHUNK_S = 0.2
+# Возраст буфера (time_info) больше этого — значения потока не годятся.
+CAPTURE_MAX_AGE_S = 5.0
 # macOS, системный звук (помощник ScreenCaptureKit): своя пауза между
 # перезапусками помощника — 2, 4, 8 … 60 с; продержался TAP_STABLE_S —
 # пауза снова 2 с. Нет разрешения «Запись экрана» — помощник не дёргаем, а
@@ -709,10 +718,19 @@ class _Track:
 
     def _callback(self, convert, cont: int, abort: int):
         """Аудио-callback дорожки: привести к формату записи, дописать, уровень;
-        сбой — `abort` (стрим переоткроется)."""
+        сбой — `abort` (стрим переоткроется).
+
+        Перед буфером доливается дефицит больше CAPTURE_PAD_S относительно
+        момента захвата буфера (`_captured_at`): звук после тишины встаёт на
+        своё место, а пачка запоздавших буферов с ранними моментами захвата
+        тишины не получает. Без годного момента захвата — без долива здесь
+        (паузу догонит такт вотчдога)."""
         def cb(in_data, frame_count, time_info, status):
             try:
+                captured = _captured_at(time_info, time.monotonic())
                 data = convert(in_data)
+                if captured is not None:
+                    self._pad_silence(captured, over=CAPTURE_PAD_S)
                 with self._lock:
                     self.writer.write(data)
                     self._to_tap(data, False)
@@ -745,19 +763,23 @@ class _Track:
         self.had_audio = True
         self.stream = stream
 
-    def _pad_silence(self, until: float | None = None) -> None:
-        """Дописать тишину до стенных часов (или до `until`, если он раньше). Кусками
-        ≤1 с и под локом: пауза может быть длинной (сон машины), а callback
-        возобновиться посреди паддинга — дефицит пересчитывается на каждом куске."""
+    def _pad_silence(self, until: float | None = None, over: float = MIN_GAP_S) -> None:
+        """Дописать тишину до стенных часов (или до `until`, если он раньше), если
+        дефицит больше `over`; начав — до остатка не больше MIN_GAP_S. Кусками
+        ≤PAD_CHUNK_S, замок — на кусок: пауза может быть длинной (сон машины), а
+        callback возобновиться посреди долива — дефицит пересчитывается на
+        каждом куске, и звук не ждёт, пока допишется вся пауза."""
         frame = 2 * self.channels
+        chunk = max(1, int(PAD_CHUNK_S * self.rate))
         while True:
             with self._lock:
                 written_s = self.bytes_written / (frame * self.rate)
                 now = time.monotonic() if until is None else min(until, time.monotonic())
                 gap = (now - self.started) - written_s
-                if gap <= MIN_GAP_S:
+                if gap <= over:
                     return
-                n = min(int(gap * self.rate), self.rate)
+                over = MIN_GAP_S
+                n = min(int(gap * self.rate), chunk)
                 pad = b"\x00" * (n * frame)
                 self.writer.write(pad)
                 self._to_tap(pad, True)
@@ -765,6 +787,31 @@ class _Track:
 
     def _log(self, msg: str) -> None:
         self.log(f"{self.fname}: {msg}")
+
+
+def _captured_at(time_info, now: float) -> "float | None":
+    """Момент захвата буфера в часах `time.monotonic()` по `time_info` callback'а.
+
+    Часы потока у PortAudio свои (на Windows — QPC, а `time.monotonic()` —
+    GetTickCount64), поэтому берётся только возраст буфера: `current_time −
+    input_buffer_adc_time`, и он вычитается из «сейчас». pyaudiowpatch отдаёт
+    словарь, sounddevice — структуру с полями PortAudio; свои потоки
+    (`TapStream`, `ProcessLoopbackStream`) — словарь со счётчиком кадров.
+    Поле не заполнено или возраст негодный — None."""
+    if time_info is None:
+        return None
+    try:
+        if isinstance(time_info, dict):
+            adc, cur = time_info["input_buffer_adc_time"], time_info["current_time"]
+        else:
+            adc, cur = time_info.inputBufferAdcTime, time_info.currentTime
+        adc, cur = float(adc), float(cur)
+    except Exception:
+        return None
+    age = cur - adc
+    if not adc or not -0.1 <= age <= CAPTURE_MAX_AGE_S:
+        return None
+    return now - max(age, 0.0)
 
 
 def _default_mic(p: "pyaudio.PyAudio") -> dict:

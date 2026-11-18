@@ -1116,3 +1116,167 @@ def test_failed_start_leaves_no_alignment_mark(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         s.start()
     assert not (tmp_path / "meta.json").exists()
+
+
+# --- долив по времени захвата буфера и мелкими кусками ---
+
+
+class _Clock:
+    """Часы записи (`recorder.time.monotonic`), которые двигает тест."""
+
+    def __init__(self, t: float = 100.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class _ChunkWriter(_DummyWriter):
+    """Пишет и запоминает размер каждого куска."""
+
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.chunks = []
+
+    def write(self, data):
+        self.chunks.append(len(data))
+        super().write(data)
+
+
+def _clocked_track(tmp_path, monkeypatch, bus=None):
+    clock = _Clock()
+    monkeypatch.setattr(recorder, "time", SimpleNamespace(monotonic=clock, sleep=time.sleep))
+    t = recorder._Track("sys.opus", lambda p: None, 0, tmp_path, log=lambda m: None, bus=bus)
+    t.writer = _ChunkWriter("x", 1, 16000)
+    t.rate, t.channels = 16000, 1
+    t.started = clock.t
+    cb = t._callback(lambda data: data, 0, 2)
+    return t, clock, cb
+
+
+def _sound(seconds: float) -> bytes:
+    return b"\x01\x00" * int(round(seconds * 16000))
+
+
+def _info(age: float, base: float = 5000.0) -> dict:
+    """time_info PortAudio: часы потока свои (не monotonic), важна разница."""
+    return {"input_buffer_adc_time": base, "current_time": base + age, "output_buffer_dac_time": 0.0}
+
+
+def _silences(data: bytes, rate: int = 16000) -> list:
+    """Отрезки тишины (начало, длина) в секундах."""
+    runs, start = [], None
+    samples = memoryview(data).cast("h")
+    for i, v in enumerate(samples):
+        if v == 0 and start is None:
+            start = i
+        elif v != 0 and start is not None:
+            runs.append((start / rate, (i - start) / rate))
+            start = None
+    if start is not None:
+        runs.append((start / rate, (len(samples) - start) / rate))
+    return runs
+
+
+def test_sound_after_long_silence_starts_at_its_capture_time(tmp_path, monkeypatch):
+    """Loopback молчал 7,3 с (без callback'ов): такт вотчдога доливал тишину
+    порциями, а недолитый остаток перед возобновившимся звуком — не больше 0,2 с."""
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch)
+    start = clock.t
+    for i in range(14):  # такты вотчдога каждые 0,5 с — до 7,0 с
+        clock.t = start + (i + 1) * 0.5
+        t.tick_pad()
+    clock.t = start + 7.31  # callback пришёл через 10 мс после захвата
+    cb(_sound(0.1), 1600, _info(0.01), 0)
+    first = _silences(bytes(t.writer.data))[0]
+    assert first[0] == 0.0
+    assert 7.3 - 0.2 <= first[1] <= 7.3 + 0.001
+
+
+def test_late_burst_with_early_capture_times_inserts_no_silence(tmp_path, monkeypatch):
+    """Callback'и молчали 0,5 с, потом отдали накопленное пачкой: звук захвачен
+    вовремя — тишины не вставлено, длина дорожки равна стенному времени."""
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch)
+    start = clock.t
+    for i in range(10):  # 1 с ровного звука
+        clock.t = start + (i + 1) * 0.1
+        cb(_sound(0.1), 1600, _info(0.1), 0)
+    clock.t = start + 1.5
+    t.tick_pad()
+    for i in range(5):  # пачка: захвачено на 1,0 … 1,4 с, пришло на 1,5 с
+        age = 1.5 - (1.0 + i * 0.1)
+        cb(_sound(0.1), 1600, _info(age), 0)
+    data = bytes(t.writer.data)
+    assert _silences(data) == []
+    assert len(data) / (2 * 16000) == pytest.approx(1.5, abs=0.001)
+
+
+def test_drifting_clock_never_inserts_more_than_a_chunk(tmp_path, monkeypatch):
+    """Устройство отдаёт звук медленнее стенных часов: дефицит растёт на 0,05 с за
+    такт. Ни одна вставка тишины посреди звука не длиннее 0,2 с."""
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch)
+    start = clock.t
+    for i in range(40):
+        clock.t = start + (i + 1) * 0.15  # 0,1 с звука за 0,15 с
+        cb(_sound(0.1), 1600, _info(0.01), 0)
+        t.tick_pad()
+    runs = _silences(bytes(t.writer.data))
+    assert runs, "дефицит должен доливаться"
+    assert max(length for _, length in runs) <= recorder.CAPTURE_PAD_S + 1 / 16000
+    written_s = t.bytes_written / (2 * 16000)
+    assert clock.t - start - written_s <= recorder.CAPTURE_PAD_S
+
+
+def test_small_deficit_is_not_padded(tmp_path, monkeypatch):
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch)
+    clock.t += 0.15 + 0.01
+    cb(_sound(0.1), 1600, _info(0.01), 0)
+    assert _silences(bytes(t.writer.data)) == []
+
+
+def test_capture_time_from_a_sounddevice_struct(tmp_path, monkeypatch):
+    """sounddevice отдаёт time_info структурой с полями PortAudio."""
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch)
+    clock.t += 0.8
+    cb(_sound(0.1), 1600, SimpleNamespace(inputBufferAdcTime=7.0, currentTime=7.02), 0)
+    first = _silences(bytes(t.writer.data))[0]
+    assert first[1] == pytest.approx(0.78, abs=0.06)
+
+
+@pytest.mark.parametrize("info", [
+    None,
+    {"input_buffer_adc_time": 0.0, "current_time": 5000.0},  # поле не заполнено
+    {"input_buffer_adc_time": 5000.0, "current_time": 4000.0},  # «из будущего»
+])
+def test_without_a_sane_capture_time_the_callback_does_not_pad(tmp_path, monkeypatch, info):
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch)
+    clock.t += 0.8
+    cb(_sound(0.1), 1600, info, 0)
+    assert _silences(bytes(t.writer.data)) == []
+
+
+def test_tick_pad_writes_small_chunks(tmp_path, monkeypatch):
+    t, clock, _ = _clocked_track(tmp_path, monkeypatch)
+    clock.t += 3.0
+    t.tick_pad()
+    assert t.bytes_written == pytest.approx(3.0 * 2 * 16000, abs=2 * 16000 * 0.05)
+    assert max(t.writer.chunks) <= int(recorder.PAD_CHUNK_S * 16000) * 2
+
+
+def test_one_pause_is_one_silence_event(tmp_path, monkeypatch):
+    """Пауза 3 с без callback'ов — одно событие record.silence; долив перед
+    буфером после короткой паузы событий не шлёт."""
+    bus = recorder.events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    t, clock, cb = _clocked_track(tmp_path, monkeypatch, bus=bus)
+    start = clock.t
+    for i in range(6):
+        clock.t = start + (i + 1) * 0.5
+        t.tick_pad()
+    clock.t += 0.01
+    cb(_sound(0.1), 1600, _info(0.01), 0)
+    clock.t += 0.6  # короткая пауза: долив перед буфером, не «нет данных»
+    cb(_sound(0.1), 1600, _info(0.01), 0)
+    silence = [e for e in seen if e.kind == "record.silence"]
+    assert len(silence) == 1

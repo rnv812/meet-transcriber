@@ -123,6 +123,10 @@ class ProcessLoopbackStream:
                     self.before_data()
                 except Exception:  # noqa: BLE001 — сбой долива не повод терять звук
                     pass
+            # Момент захвата буфера — отметка старта плюс отданные кадры: пакеты
+            # идут и в тишине (флаг SILENT), без пропусков, поэтому счётчик
+            # верен, даже если поток прочитал накопленное с опозданием.
+            t0, done = time.monotonic(), 0
             self._active = True
             self._ready.set()
             frame = 2 * CHANNELS
@@ -134,7 +138,10 @@ class ProcessLoopbackStream:
                         n = frames * frame
                         chunk = bytes(n) if flags & 2 else _read(data, n)    # AUDCLNT_BUFFERFLAGS_SILENT
                         capture.ReleaseBuffer(frames)
-                        _, code = self._callback(chunk, frames, None, 0)
+                        info = {"input_buffer_adc_time": t0 + done / RATE,
+                                "current_time": time.monotonic(), "output_buffer_dac_time": 0.0}
+                        done += frames
+                        _, code = self._callback(chunk, frames, info, 0)
                         if code != PA_CONTINUE:
                             return
             finally:

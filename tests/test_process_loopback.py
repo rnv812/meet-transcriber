@@ -197,3 +197,23 @@ def test_slow_activation_is_silence_before_the_first_data(monkeypatch, tmp_path)
     lead = (len(data) - len(data.lstrip(b"\x00"))) // frame / pl.RATE
     assert lead == pytest.approx(3.0, abs=0.06)
     assert len(data) == pytest.approx(want, abs=frame * 48)
+
+
+def test_capture_time_comes_from_the_frame_counter(monkeypatch):
+    """Process loopback отдаёт пакеты и в тишине: момент захвата — отметка
+    старта плюс уже отданные кадры."""
+    infos = []
+    stream, _, _ = _stream(monkeypatch, [(480, 0), (480, 2), (240, 0)],
+                           lambda d, n, info, s: (infos.append(info), (None, pl.PA_CONTINUE))[1])
+    before = time.monotonic()
+    stream.start_stream()
+    after = time.monotonic()
+    deadline = time.monotonic() + 2
+    while len(infos) < 3 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    stream.stop_stream()
+    adc = [i["input_buffer_adc_time"] for i in infos]
+    assert before <= adc[0] <= after
+    assert adc[1] - adc[0] == pytest.approx(0.01)
+    assert adc[2] - adc[1] == pytest.approx(0.01)
+    assert all(i["current_time"] >= before for i in infos)

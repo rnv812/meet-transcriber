@@ -1027,3 +1027,24 @@ def test_tap_stream_survives_a_failing_hook():
         time.sleep(0.005)
     stream.close()
     assert got  # долив не удался — звук всё равно идёт
+
+
+def test_tap_stream_reports_capture_time_from_its_frame_counter():
+    """Помощник пишет без пропусков (тишину — тоже): момент захвата буфера —
+    отметка старта плюс уже отданные кадры, а не время прихода."""
+    infos = []
+    popen, _ = _popen_factory(HANDSHAKE + _pcm(1024 * 3))
+    stream = mac_audio.TapStream(48000, 1, lambda d, n, info, s: (infos.append(info), (None, 0))[1],
+                                 1024, popen=popen, helper="/r/meet-audiotap")
+    before = time.monotonic()
+    stream.start_stream()
+    after = time.monotonic()
+    deadline = time.monotonic() + 2.0
+    while len(infos) < 3 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    stream.close()
+    adc = [i["input_buffer_adc_time"] for i in infos[:3]]
+    assert before <= adc[0] <= after
+    assert adc[1] - adc[0] == pytest.approx(1024 / 48000)
+    assert adc[2] - adc[1] == pytest.approx(1024 / 48000)
+    assert all(i["current_time"] >= before for i in infos[:3])

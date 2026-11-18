@@ -231,6 +231,8 @@ class TapStream:
         # помощника — она встаёт перед его звуком, а не после. Атрибут, а не
         # аргумент `open()`: у pyaudiowpatch лишних аргументов нет.
         self.before_data = None
+        self._t0 = 0.0
+        self._frames_in = 0
 
     def start_stream(self) -> None:
         helper = self._helper or audiotap.helper_path()
@@ -260,6 +262,11 @@ class TapStream:
                 f"Помощник записи системного звука отдаёт {fmt['rate']} Гц, "
                 f"{fmt['channels']} кан. вместо {self.rate} Гц, {self.channels} кан.")
         _call_hook(self.before_data)
+        # Счётчик кадров от этой отметки — момент захвата каждого буфера:
+        # помощник пишет без пропусков (в тишине — нули), поэтому кадр N
+        # захвачен через N/rate после первого, когда бы его ни прочитали.
+        self._t0 = time.monotonic()
+        self._frames_in = 0
         self._last_data = time.monotonic()
         self._reader = threading.Thread(target=self._pump, name="meet-audiotap",
                                         daemon=True)
@@ -341,8 +348,11 @@ class TapStream:
             if not data:
                 continue
             self._last_data = time.monotonic()
+            frames = len(data) // (2 * self.channels)
+            info = _time_info(self._t0 + self._frames_in / self.rate)
+            self._frames_in += frames
             try:
-                result = self._callback(data, len(data) // (2 * self.channels), None, 0)
+                result = self._callback(data, frames, info, 0)
             except Exception:
                 result = (None, paAbort)
             if result and result[1] == paAbort:
@@ -399,6 +409,12 @@ class TapStream:
             proc.wait(timeout=STOP_TIMEOUT_S)
         except Exception:
             pass
+
+
+def _time_info(captured: float) -> dict:
+    """time_info для callback'а в форме PyAudio, часы — `time.monotonic()`."""
+    return {"input_buffer_adc_time": captured, "current_time": time.monotonic(),
+            "output_buffer_dac_time": 0.0}
 
 
 def _call_hook(hook) -> None:
