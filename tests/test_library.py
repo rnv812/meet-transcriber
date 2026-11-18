@@ -346,3 +346,14 @@ def test_transcript_head_is_a_named_tuple_and_phase_still_works(tmp_path):
     assert head.has_json is True and head.title == "Т" and head.phase == "text"
     assert head[4] == "text" and head.people == ()
     assert library.transcript_phase(folder) == "text"
+
+
+def test_card_reports_sleep_gaps_and_drops_broken_ones(tmp_path):
+    folder = _recording(tmp_path)
+    assert library.describe(folder).to_raw()["sleep_gaps"] == []
+    good = ["2026-11-18T14:03:12+03:00", "2026-11-18T14:21:40+03:00"]
+    library.write_meta(folder, {"sleep_gaps": [good, ["нет"], "не список", [1, 2]]})
+    assert library.describe(folder).to_raw()["sleep_gaps"] == [good]
+    library.write_meta(folder, {"sleep_gaps": "не список"})
+    assert library.describe(folder).to_raw()["sleep_gaps"] == []
+

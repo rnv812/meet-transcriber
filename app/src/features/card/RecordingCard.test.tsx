@@ -604,6 +604,20 @@ test("импорт без duration_s: длительность по концу �
   expect(container.querySelector(".card__meta")).toHaveTextContent("2 мин");
 });
 
+test("машина спала посреди записи — выноска с временем сна", async () => {
+  load({ sleep_gaps: [["2026-09-30T10:12:00+03:00", "2026-09-30T10:40:30+03:00"]] });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.getByRole("note")).toHaveTextContent("Компьютер спал с 10:12 по 10:40");
+});
+
+test("не спала — выноски о сне нет", async () => {
+  load({ sleep_gaps: [] });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByText(/Компьютер спал/)).toBeNull();
+});
+
 test("готовая запись: вкладки «Расшифровка · Итоги · Ассистент · Агент», расшифровка по умолчанию", async () => {
   load();
   const onOpenSettings = vi.fn();

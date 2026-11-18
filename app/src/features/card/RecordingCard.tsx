@@ -48,7 +48,7 @@ import { TranscriptView, type FindRequest, type SeekRequest } from "./Transcript
 import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
-import { asrNoteText, systemAudioText } from "./asrNote";
+import { asrNoteText, sleepText, systemAudioText } from "./asrNote";
 import { MicSplitNote } from "./micSplit";
 import { PaneResizer } from "../../ui/PaneResizer";
 import { createPlayClock, PlayTime } from "./playClock";
@@ -691,6 +691,7 @@ export function RecordingCard({
   );
   const asrNote = status.kind === "ready" ? asrNoteText(rec.asr_note) : null;
   const systemAudio = systemAudioText(rec.system_audio, rec.system_audio_reason);
+  const slept = sleepText(rec.sleep_gaps);
 
   // Макет «карточка готовой встречи»: шапка (название и действия, строка о встрече),
   // под ней — тихие строки и выноски, вкладки и тело карточки с границей сверху.
@@ -754,6 +755,7 @@ export function RecordingCard({
                 onShowRemoved={showRemoved} />
             )}
             {systemAudio && <Callout tone="warn" role="note">{systemAudio}</Callout>}
+            {slept && <Callout tone="warn" role="note">{slept}</Callout>}
           </div>
           <JiraLinks.Provider value={jiraLinks}>{body}</JiraLinks.Provider>
           {status.kind === "ready" && turnEdit.menu}

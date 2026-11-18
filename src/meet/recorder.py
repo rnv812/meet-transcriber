@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from meet import events, plat
+from meet import events, keepawake, plat
 
 
 def audio_backend():
@@ -49,6 +49,13 @@ MIN_GAP_S = 0.05  # паузы короче не заполняем: латен�
 # Часы начала сессии и дорожек (подменяются в тестах); остальной код записи
 # считает время по `time.monotonic()` напрямую.
 _clock = time.monotonic
+# Стенные часы (подменяются в тестах): отметка о сне машины — в местном времени.
+_wall = time.time
+# Между тактами вотчдога прошло больше этого — машина спала (закрытая крышка:
+# запрет сна, `meet.keepawake`, её не удержит). Отметка — в meta.json
+# `sleep_gaps`, строка — в карточке.
+SLEEP_GAP_S = 60.0
+SLEEP_GAPS_KEY = "sleep_gaps"
 TICK_PAD_S = 1.0  # живой стрим без данных дольше этого — доливать тишину
 # Перед буфером доливается дефицит больше этого — относительно момента захвата
 # буфера, а не прихода callback'а: запоздавший callback отдаёт накопленный звук
@@ -1100,6 +1107,8 @@ class _Session:
         self.tap_next = 0.0
         self.tap_since = 0.0
         self.preflight_next = 0.0
+        # Стенное время конца прошлого такта вотчдога (см. tick).
+        self.last_wall: float | None = None
         self.tracks = (
             _Track("sys.opus", _Picker("output", output_device, mic=mic_device), 0, out_dir,
                    self.log, self.bus, pcm_tap),
@@ -1147,6 +1156,7 @@ class _Session:
         tap = self.tracks[0]
         if tap.is_tap and tap.missing:
             self._schedule_tap(tap, now)
+        self.last_wall = _wall()
         self.bus.emit(
             events.RECORD_STARTED,
             folder=str(self.out_dir),
@@ -1174,6 +1184,38 @@ class _Session:
         return {t.fname: t.take_level() for t in self.tracks}
 
     def tick(self) -> None:
+        """Такт вотчдога. Между концом прошлого такта и началом этого прошло
+        больше SLEEP_GAP_S стенного времени — машина спала: отметка в meta.json.
+        Время внутри такта (долгий перезапуск устройств) сном не считается."""
+        now_wall = _wall()
+        if self.last_wall is not None and now_wall - self.last_wall > SLEEP_GAP_S:
+            self._mark_sleep(self.last_wall, now_wall)
+        try:
+            self._tick()
+        finally:
+            self.last_wall = _wall()
+
+    def _mark_sleep(self, start: float, end: float) -> None:
+        """Отметка о сне машины в meta.json (`sleep_gaps`: [[с, по], …] —
+        ISO-время с поясом); сбой — строка в журнал."""
+        self.log(f"компьютер спал ~{(end - start) / 60:.0f} мин — отмечаю в meta.json")
+
+        def stamp(t: float) -> str:
+            return datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds")
+
+        gap = [stamp(start), stamp(end)]
+        try:
+            from meet import library
+
+            def add(data: dict) -> dict:
+                gaps = data.get(SLEEP_GAPS_KEY)
+                return {**data, SLEEP_GAPS_KEY: [*(gaps if isinstance(gaps, list) else []), gap]}
+
+            library.update_meta(self.out_dir, add)
+        except Exception as e:
+            self.log(f"meta.json не обновлён: {e!r}")
+
+    def _tick(self) -> None:
         for t in self.tracks:
             try:
                 t.tick_pad()
@@ -1399,11 +1441,15 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
 
     session = _Session(out_dir, bus, mic_device=mic_device,
                        output_device=output_device, pcm_tap=pcm_tap)
+    # Пока идёт запись, система не засыпает от бездействия; снимается в finally
+    # («Стоп», Ctrl+C и сбой старта).
+    awake = keepawake.KeepAwake(session.log)
     # Машинный двойник record.log рядом с дорожками: по нему экран диагностики
     # разбирает запись после того, как она кончилась. Уровни в файл не идут.
     sink = events.JsonlSink(out_dir / "events.jsonl")
     unsubscribe = session.bus.subscribe(sink)
     try:
+        awake.acquire()
         session.start()
         print(f"Запись идёт... Остановить: Ctrl+C. Папка: {out_dir}")
         try:
@@ -1423,6 +1469,7 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
         except KeyboardInterrupt:
             pass
     finally:
+        awake.release()
         session.close(getattr(stop_event, "at", None))
         unsubscribe()
         sink.close()

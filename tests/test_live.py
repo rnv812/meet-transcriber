@@ -2155,3 +2155,52 @@ def test_rewrite_backoff_does_not_touch_the_device_restart_backoff(tmp_path, mon
     state["fail"] = True
     engine._apply_renames(Drain("Пётр"))  # неудачная — своя пауза с 1 с
     assert engine._rewrite_wait == 1.0 and engine._retry_wait == 40.0
+
+
+# --- запрет сна на время своего захвата ---
+
+
+class _FakeAwake:
+    log: list = []
+
+    def __init__(self, log=None):
+        self.held = False
+
+    def acquire(self):
+        self.held = True
+        _FakeAwake.log.append("acquire")
+        return True
+
+    def release(self):
+        if self.held:
+            _FakeAwake.log.append("release")
+        self.held = False
+
+
+def test_own_capture_keeps_system_awake_until_stop(tmp_path, monkeypatch):
+    from meet import keepawake
+
+    _FakeAwake.log = []
+    monkeypatch.setattr(keepawake, "KeepAwake", _FakeAwake)
+    _fake_audio(monkeypatch)
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=0.05,
+                        speaker_name="Вы")
+    engine.start()
+    assert _FakeAwake.log == ["acquire"]
+    engine.stop()
+    assert _FakeAwake.log == ["acquire", "release"]
+    engine.stop()  # повторная остановка — без второго снятия
+    assert _FakeAwake.log == ["acquire", "release"]
+
+
+def test_failed_capture_start_releases_keep_awake(tmp_path, monkeypatch):
+    from meet import keepawake
+
+    _FakeAwake.log = []
+    monkeypatch.setattr(keepawake, "KeepAwake", _FakeAwake)
+    world = _switchable_audio(monkeypatch)
+    world["fail_open"] = {1}
+    engine = _live(tmp_path, [])
+    with pytest.raises(OSError):
+        engine.start()
+    assert _FakeAwake.log == ["acquire", "release"]

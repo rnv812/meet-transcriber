@@ -97,6 +97,9 @@ class Recording:
     # "helper" — нет помощника, "unsupported" — macOS старше 13, "failed" —
     # помощник не запустился. Старая пометка без причины — None.
     system_audio_reason: str | None = None
+    # Машина спала посреди записи (meta.json `sleep_gaps`, meet.recorder):
+    # [[с, по], …] — ISO-время с поясом. Не спала — пусто.
+    sleep_gaps: list = field(default_factory=list)
     # Транскрипт — только текст, спикеры ещё не определены (`phase: "text"`):
     # идёт диаризация или расшифровку прервали между фазами. None — окончательный.
     transcript_phase: str | None = None
@@ -141,6 +144,7 @@ class Recording:
             "category": self.category,
             "system_audio": self.system_audio,
             "system_audio_reason": self.system_audio_reason,
+            "sleep_gaps": [list(g) for g in self.sleep_gaps],
             "transcript_phase": self.transcript_phase,
             "mic_split": self.mic_split,
             "group": self.group,
@@ -926,6 +930,7 @@ def describe(folder: Path) -> Recording | None:
         else None,
         system_audio_reason=meta["system_audio_reason"]
         if meta.get("system_audio_reason") in SYSTEM_AUDIO_REASONS else None,
+        sleep_gaps=_sleep_gaps(meta),
         transcript_phase=head.phase,
         mic_split=head.mic_split,
         group=_group(meta),
@@ -945,6 +950,15 @@ ANALYSIS_JSON = "analysis.json"
 # живая лента meet.live) — без импорта модулей ассистента.
 LIVE_STATE_JSON = "live_state.json"
 LIVE_TRANSCRIPT_MD = "live_transcript.md"
+
+
+def _sleep_gaps(meta: dict) -> list:
+    """Отметки о сне машины из meta.json: только пары строк, прочее — мимо."""
+    gaps = meta.get("sleep_gaps")
+    if not isinstance(gaps, list):
+        return []
+    return [list(g) for g in gaps
+            if isinstance(g, list) and len(g) == 2 and all(isinstance(x, str) for x in g)]
 
 
 def has_assistant(folder: Path, meta: dict | None = None) -> bool:

@@ -1392,3 +1392,110 @@ def test_one_pause_is_one_silence_event(tmp_path, monkeypatch):
     cb(_sound(0.1), 1600, _info(0.01), 0)
     silence = [e for e in seen if e.kind == "record.silence"]
     assert len(silence) == 1
+
+
+# --- запрет сна и отметка о сне машины ---
+
+
+class _FakeAwake:
+    log: list = []
+
+    def __init__(self, log=None):
+        self.held = False
+
+    def acquire(self):
+        self.held = True
+        _FakeAwake.log.append("acquire")
+        return True
+
+    def release(self):
+        if self.held:
+            _FakeAwake.log.append("release")
+        self.held = False
+
+
+def _fake_awake(monkeypatch):
+    _FakeAwake.log = []
+    monkeypatch.setattr(recorder.keepawake, "KeepAwake", _FakeAwake)
+
+
+def test_record_keeps_system_awake_until_stop(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    _fake_awake(monkeypatch)
+    ev = threading.Event()
+    ev.set()
+    record(str(tmp_path), stop_event=ev)
+    assert _FakeAwake.log == ["acquire", "release"]
+
+
+def test_record_releases_keep_awake_when_start_fails(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch, capture=None)  # микрофона нет — start() падает
+    _fake_awake(monkeypatch)
+    with pytest.raises(OSError):
+        record(str(tmp_path), stop_event=threading.Event())
+    assert _FakeAwake.log == ["acquire", "release"]
+
+
+def _wall_clock(monkeypatch, start: float):
+    now = [start]
+    monkeypatch.setattr(recorder, "_wall", lambda: now[0])
+    return now
+
+
+def test_long_gap_between_ticks_is_noted_as_sleep(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    now = _wall_clock(monkeypatch, 1_800_000_000.0)
+    s = _session(monkeypatch, tmp_path)
+    s.tick()
+    now[0] += 0.5
+    s.tick()
+    now[0] += 300.0  # машина спала 5 минут
+    s.tick()
+    now[0] += 0.5
+    s.tick()
+    s.close()
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    (gap,) = meta["sleep_gaps"]
+    start, end = (datetime.fromisoformat(x).timestamp() for x in gap)
+    assert start == pytest.approx(1_800_000_000.5)
+    assert end == pytest.approx(1_800_000_300.5)
+    assert datetime.fromisoformat(gap[0]).tzinfo is not None  # с поясом: окно покажет местное время
+    assert "спал" in (tmp_path / "record.log").read_text(encoding="utf-8")
+
+
+def test_two_sleeps_are_two_marks_and_short_gaps_none(tmp_path, monkeypatch):
+    now = _wall_clock(monkeypatch, 1_800_000_000.0)
+    s = _session(monkeypatch, tmp_path)
+    s.tick()
+    now[0] += 30.0  # полминуты — не сон (нагруженная машина)
+    s.tick()
+    now[0] += 120.0
+    s.tick()
+    now[0] += 61.0
+    s.tick()
+    s.close()
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert len(meta["sleep_gaps"]) == 2
+
+
+def test_slow_tick_itself_is_not_sleep(tmp_path, monkeypatch):
+    """Долгий перезапуск устройств внутри такта — не сон: считается время между тактами."""
+    now = _wall_clock(monkeypatch, 1_800_000_000.0)
+    s = _session(monkeypatch, tmp_path)
+    s.tick()
+    real_restart = s._restart
+
+    def slow_restart(ids, reason):
+        now[0] += 90.0
+        real_restart(ids, reason)
+
+    monkeypatch.setattr(s, "_restart", slow_restart)
+    _FakePyAudio.devices["capture"] = _dev("Наушники")
+    now[0] += 0.5
+    s.tick()  # перезапуск занял 90 с
+    now[0] += 0.5
+    s.tick()
+    s.close()
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert "sleep_gaps" not in meta

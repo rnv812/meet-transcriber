@@ -395,6 +395,9 @@ class LiveEngine:
         self._rewrite_at = 0.0  # monotonic, раньше которого не повторяем
         self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
+        # Запрет сна на время своего захвата (meet.keepawake); у подключённого к
+        # записи резидента его держит сама запись.
+        self._awake = None
         # Голоса (meet.voice_id.VoiceMatcher, duck-typed): онлайн-кластеры
         # дорожек (meet.live_voices) — когда матчер загрузится (в фоне).
         self._matcher = voice_matcher
@@ -1039,9 +1042,13 @@ class LiveEngine:
                 pass
 
     def _open_devices(self) -> None:
-        from meet import recorder
+        from meet import keepawake, recorder
         from meet.recorder import OpusWriter
 
+        # Пока пишем свои дорожки, система не засыпает от бездействия; снимается
+        # вместе с lock записи (`_release_lock`): «Стоп» и сбой старта.
+        self._awake = keepawake.KeepAwake(self._say)
+        self._awake.acquire()
         # pyaudiowpatch на Windows, sounddevice и помощник ScreenCaptureKit на macOS.
         pyaudio = recorder.audio_backend()
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -1654,6 +1661,10 @@ class LiveEngine:
         return first or error
 
     def _release_lock(self) -> None:
+        """Отдать lock записи и снять запрет сна; повторно — ничего."""
+        awake, self._awake = self._awake, None
+        if awake is not None:
+            awake.release()
         lock, self._lock_path = self._lock_path, None
         if lock is not None:
             lock.unlink(missing_ok=True)

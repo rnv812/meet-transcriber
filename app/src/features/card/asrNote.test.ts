@@ -1,4 +1,4 @@
-import { asrNoteText, systemAudioText } from "./asrNote";
+import { asrNoteText, sleepText, systemAudioText } from "./asrNote";
 
 test("про разрешение — только когда дело было в нём", () => {
   expect(systemAudioText("missing", "permission"))
@@ -28,4 +28,17 @@ test("пометка о распознавании: видеокарта без 
 test("пометка о распознавании: движок с видеокартой, а распознал процессор — с причиной", () => {
   expect(asrNoteText("no_gpu")).toBe("Распознано на процессоре: видеокарта NVIDIA не найдена");
   expect(asrNoteText("no_cuda_libs")).toBe("Распознано на процессоре: не найдены библиотеки CUDA");
+});
+
+test("сон машины посреди записи: время из отметки, как записано", () => {
+  expect(sleepText([["2026-11-18T14:03:12+03:00", "2026-11-18T14:21:40+03:00"]]))
+    .toBe("Компьютер спал с 14:03 по 14:21");
+  expect(sleepText([
+    ["2026-11-18T14:03:12+03:00", "2026-11-18T14:21:40+03:00"],
+    ["2026-11-18T15:00:00+03:00", "2026-11-18T15:30:05+03:00"],
+  ])).toBe("Компьютер спал с 14:03 по 14:21 и с 15:00 по 15:30");
+  expect(sleepText([["не время", "2026-11-18T14:21:40+03:00"]])).toBeNull();
+  expect(sleepText([])).toBeNull();
+  expect(sleepText(null)).toBeNull();
+  expect(sleepText(undefined)).toBeNull();
 });

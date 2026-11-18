@@ -43,3 +43,23 @@ export function systemAudioText(
   }
   return null;
 }
+
+/** «ЧЧ:ММ» из ISO-времени отметки — местное время машины на момент записи. */
+const clock = (iso: string): string | null => {
+  const m = /T(\d{2}):(\d{2})/.exec(iso);
+  return m ? `${m[1]}:${m[2]}` : null;
+};
+
+/**
+ * Машина спала посреди записи (`sleep_gaps` в meta.json: [[с, по], …], ISO-время):
+ * звук за это время не записан. Негодная отметка — без строки.
+ */
+export function sleepText(gaps: readonly (readonly string[])[] | null | undefined): string | null {
+  const spans: string[] = [];
+  for (const [from, to] of gaps ?? []) {
+    const a = clock(from ?? ""), b = clock(to ?? "");
+    if (!a || !b) return null;
+    spans.push(`с ${a} по ${b}`);
+  }
+  return spans.length ? `Компьютер спал ${spans.join(" и ")}` : null;
+}
