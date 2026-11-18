@@ -169,8 +169,9 @@ git не попадают.
   его `config.toml` — ход только читает (`CODEX_SANDBOX_NOTICE`, строка на
   встречу). MCP пользователя: в `NONE` — заглушки; в `USER` и ❓ — включены с
   `default_tools_approval_mode="prompt"`, вызов — через ворота
-  (`readOnlyHint` — чтение сразу, иначе карточка `mcp-write`); сохранённое в
-  самом Codex «всегда разрешать» Meet не перебивает. Запретов Meet по путям
+  (`readOnlyHint` — чтение сразу, иначе карточка `mcp-write`); `approval_mode =
+  "approve"` из его `config.toml` перекрывается ключом на каждый инструмент
+  (`codex.mcp_prompt_args`), сервер не из `config.toml` — заглушка. Запретов Meet по путям
   Codex не применяет — защита песочницей и промптом. Чтение вне папок — по
   просьбе пользователя (промпт).
 - **Antigravity CLI (`agy`, 0.6.2)** — `llm/antigravity.py`, ход — `agy acp`
