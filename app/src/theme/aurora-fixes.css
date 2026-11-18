@@ -14,3 +14,10 @@
   height: var(--control-sm); border-radius: var(--r-control-sm); font-size: var(--text-sm);
   padding-left: 10px; padding-right: 8px; gap: 6px;
 }
+
+/* Шрифт текста на Mac: после фирменных Onest и Golos UI идут системные шрифты macOS
+   (-apple-system, BlinkMacSystemFont), и только потом Segoe UI и Roboto. Фирменные шрифты и
+   --font-display не меняются. Атрибут data-os ставит appearance-boot.js до отрисовки. */
+:root[data-os="macos"] {
+  --font-body: 'Onest', 'Golos UI', -apple-system, BlinkMacSystemFont, ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+}

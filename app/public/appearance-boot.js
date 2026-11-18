@@ -20,6 +20,8 @@
     a = { theme: hint, aurora: "violet", auroraStyle: "glow", motion: true };
   }
   var root = document.documentElement;
+  // ОС для стилей (theme/aurora-fixes.css: системный шрифт macOS).
+  try { if (/^Mac/i.test(navigator.platform || "") || /Macintosh/.test(navigator.userAgent || "")) root.setAttribute("data-os", "macos"); } catch (e) {}
   var dark = !window.matchMedia || window.matchMedia("(prefers-color-scheme: dark)").matches;
   root.setAttribute("data-theme", a.theme === "system" ? (dark ? "dark" : "light") : a.theme);
   root.setAttribute("data-aurora", a.aurora);

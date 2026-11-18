@@ -7,6 +7,13 @@
  * Плотность обычная (не `compact`, доводка 0.4, C1): кнопки `btn--sm`, поля
  * `field--sm` и списки `select-btn--sm` — 32 px, строка — одна линейка. Только
  * токены Atlas Aurora.
+ *
+ * Один каркас у всех разделов (за образец взят «Звук»): колонка до 760 px по
+ * центру (`.settings__column`), карточки `.scard` с отступами `--s-1` / `--s-5`,
+ * строки `.srow` с отступом 14 px. Подсказка к опции — отдельной строкой под ней:
+ * `.srow__hint` на токене приглушённого текста `--ink-3`, `--text-sm`, интервал 1.45;
+ * остальные пояснения под опцией (`.mtable__sub`, `.asr-device__note`,
+ * `.amark__note`) — те же значения. Свой каркас у раздела не заводится.
  */
 .settings { display: flex; height: 100%; min-height: 0; }
 
@@ -232,7 +239,7 @@
 .mtable__model { min-width: 220px; }
 .mtable__head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px var(--s-2); }
 .mtable__name { color: var(--ink); font-weight: 500; }
-.mtable__sub, .mtable__note { display: block; margin-top: 2px; font-size: var(--text-sm); line-height: 1.4; color: var(--ink-3); }
+.mtable__sub, .mtable__note { display: block; margin-top: 2px; font-size: var(--text-sm); line-height: 1.45; color: var(--ink-3); }
 .mtable__sub--local { color: var(--success); }
 .mtable__note.error { color: var(--danger); }
 .mtable__act { width: 1%; text-align: right; }
@@ -363,7 +370,7 @@
 .asr-device--disabled .asr-device__title { color: var(--ink-3); }
 .asr-device__head { display: flex; align-items: center; gap: var(--s-2); min-height: 24px; padding-top: var(--s-3); }
 .asr-device__title { font-weight: 600; color: var(--ink); }
-.asr-device__note { margin: 2px 0 0; font-size: var(--text-sm); color: var(--ink-3); }
+.asr-device__note { margin: 2px 0 0; font-size: var(--text-sm); line-height: 1.45; color: var(--ink-3); }
 .asr-device .srow:last-child { border-bottom: 0; }
 .asr-model { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .asr-fallback { margin: 0; padding: 10px 0 14px; font-size: var(--text-sm); color: var(--ink-3); }
@@ -430,7 +437,7 @@
 .amark td.amark__cell { padding: var(--s-3) 0 var(--s-3) var(--s-5); height: auto; vertical-align: middle; text-align: center; }
 .amark td.amark__cell .switch { vertical-align: middle; }
 .amark .switch:disabled { opacity: 0.5; cursor: not-allowed; }
-.amark__note { display: block; margin-top: 4px; color: var(--ink-3); font-size: var(--text-xs); line-height: 1.4; }
+.amark__note { display: block; margin-top: 4px; color: var(--ink-3); font-size: var(--text-sm); line-height: 1.45; }
 .amark__intro { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 /* «Поиск по настройкам» над меню: поле Aurora .search + .field--sm, выдача — вместо групп меню. */
