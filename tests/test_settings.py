@@ -543,7 +543,7 @@ def test_new_config_gets_auto_provider_and_no_folders(monkeypatch):
     assert cfg.assistant.knowledge_dir is None
     assert cfg.assistant.notes_dir is None
     assert cfg.assistant.notes_subdir == "Встречи"
-    assert settings.LLM_PROVIDERS == ("auto", "claude-code", "codex", "opencode", "openai-compatible")
+    assert settings.LLM_PROVIDERS == ("auto", "claude-code", "codex", "opencode", "agy", "openai-compatible")
 
 
 def test_first_run_without_llm_sections_is_new():

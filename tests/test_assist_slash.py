@@ -363,6 +363,65 @@ def test_codex_model_with_shell_characters_is_refused(tmp_path, bad):
     assert "model" not in runner.calls[0][1] and h.p.view().get("model_override") is None
 
 
+# --- Antigravity CLI ---
+
+
+def test_agy_supports_help_clear_and_model(tmp_path):
+    runner = FakeRunner([SILENT])
+    h = _make(tmp_path, provider="agy", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await _post(h, "/compact")
+        await _post(h, "/mcp")
+        await _post(h, "/model gemini-3-pro")
+        await h.p.post_user_message("что дальше?")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    compact, mcp, model = _lines(h)
+    assert compact["text"] == "/compact недоступно для Antigravity CLI"
+    assert mcp["text"] == "/mcp недоступно для Antigravity CLI"
+    assert model["text"] == "Модель для следующих ходов: gemini-3-pro"
+    assert runner.calls[0][1]["model"] == "gemini-3-pro"
+    assert {c["name"] for c in h.p.view()["commands"]} == {"help", "clear", "model"}
+
+
+@pytest.mark.parametrize("bad", ["gemini&calc", "gemini%PATH%"])
+def test_agy_model_with_shell_characters_is_refused(tmp_path, bad):
+    runner = FakeRunner([SILENT])
+    h = _make(tmp_path, provider="agy", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await _post(h, f"/model {bad}")
+        await h.p.post_user_message("что дальше?")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    (line,) = _lines(h, "model")
+    assert line["level"] == "error" and "недопустимые символы" in line["text"]
+    assert "model" not in runner.calls[0][1]
+
+
+def test_agy_turn_gets_the_consent_gate_and_the_level(tmp_path):
+    runner = FakeRunner([SILENT])
+    h = _make(tmp_path, provider="agy", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("посмотри задачу ABC-1")
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    kwargs = runner.calls[0][1]
+    assert kwargs["access"] == "user" and kwargs["gate"] is not None and kwargs.get("log") is not None
+    assert h.p.view()["can"]["mode"] == "consent"
+
+
 # --- «Продолжить разговор» после встречи ---
 
 

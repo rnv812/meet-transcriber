@@ -8,6 +8,11 @@ OpenCode проверяется без вызова модели (квоту н�
 ли у него модель из настроек (`opencode models <провайдер>`), а без своей
 модели — есть ли вход (записи в его auth.json). Годен ли сам ключ, так не
 узнать: это скажет первый настоящий вызов.
+
+Antigravity CLI (`agy`): найден ли он и годен ли путь запуска, годно ли имя
+модели (`llm.agy_model`), есть ли вход — без модели, по ответу `agy acp` на
+`session/new` в папке данных Meet (`antigravity.login_status`), затем, как у
+Codex, короткий вызов модели.
 """
 
 import asyncio
@@ -92,6 +97,28 @@ async def _check_opencode() -> str | None:
     return None if ok else f"не авторизован: {why}"
 
 
+async def _check_agy() -> str | None:
+    from meet import settings
+    from meet.llm import antigravity
+
+    path = detect.find_agy()
+    if path is None:
+        return detect.AGY_NOT_FOUND
+    shim = antigravity.launch_error(path)
+    if shim:
+        return shim
+    llm = settings.load().llm
+    model = llm.agy_model or None
+    if antigravity.model_error(model):
+        return antigravity.model_error(model)
+    ok, why = await asyncio.to_thread(detect.logged_in, "agy", path)
+    if not ok:
+        return why
+    reply = await antigravity.run(PROBE_PROMPT, system_prompt=PROBE_SYSTEM, model=model, max_turns=1,
+                                  timeout_s=PROBE_TIMEOUT_S, proxy=llm.proxy)
+    return reply.error
+
+
 async def _check_local() -> tuple[str | None, str | None]:
     """→ (ошибка, сведения). Сначала список моделей сервера (выбранная
     должна в нём быть), затем короткий вызов. Сервер без списка моделей (не
@@ -149,6 +176,8 @@ async def check(provider: str) -> dict:
             error = await _check_codex()
         elif provider == "opencode":
             error = await _check_opencode()
+        elif provider == "agy":
+            error = await _check_agy()
         else:
             error, detail = await _check_local()
             return _result(provider, error, detail)

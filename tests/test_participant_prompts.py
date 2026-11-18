@@ -728,3 +728,23 @@ def test_codex_prompt_has_user_mcp_like_claude_code():
     assert "изменения через MCP" in section and "ответов MCP" in section
     # Без app-server (OpenCode, запасной exec) MCP у агента по-прежнему нет.
     assert "MCP-серверов пользователя у тебя нет" in pp._FREEDOM_RUNNER
+
+
+def test_agy_prompt_cards_mcp_and_never_delete_or_send():
+    """Antigravity CLI через ACP (0.6.2): запись вне своих папок и изменения через MCP — карточкой,
+    MCP на чтение по просьбе — сразу, удаление и отправку наружу Meet не даёт вовсе."""
+    auto = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards="agy")
+    section = auto.split("# Возможности")[1].split("# Материалы")[0]
+    assert "MCP-серверы пользователя (Jira, GitLab и другие)" in section
+    assert "правь файлы в своих папках, выполняй команды" in section
+    assert "Запись вне своих папок и изменения через MCP" in section and "Meet покажет пользователю карточкой" in section
+    assert "Meet тебе не даст — даже по просьбе" in section
+    assert "песочниц" not in section and "Удалять файлы даже в своих папках" not in section
+    confirm = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards="agy",
+                              mode="confirm")
+    section = confirm.split("# Возможности")[1].split("# Материалы")[0]
+    assert "инструменты MCP, которые только читают, по просьбе работают сразу" in section
+    assert "Meet показывает пользователю карточкой" in section and "Meet тебе не даст" in section
+    personal = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards="agy",
+                               profile=pp.PERSONAL)
+    assert "Meet тебе не даст" in personal

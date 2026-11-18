@@ -2,7 +2,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
-  AUTO_ORDER, AUTO_SHORT, RECHECK_MS, RECHECK_TRIES, enabledOf, loopback, opencodeModelError, privacyLine, proxyError,
+  AGY_PLAN_NOTICE, AUTO_ORDER, AUTO_SHORT, RECHECK_MS, RECHECK_TRIES, agyModelError, enabledOf, loopback,
+  opencodeModelError, privacyLine, proxyError,
 } from "./ModelsSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
@@ -362,7 +363,7 @@ test("прокси: «?» объясняет, зачем он нужен", async
   await screen.findByText("сейчас: Claude Code");
   await userEvent.click(screen.getByRole("button", { name: "Зачем нужен прокси" }));
   expect(screen.getByRole("tooltip")).toHaveTextContent(
-    "Claude Code, Codex и OpenCode сами не используют системный прокси Windows — приложение передаёт его им. "
+    "Claude Code, Codex, OpenCode и Antigravity CLI сами не используют системный прокси Windows — приложение передаёт его им. "
     + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.");
 });
 
@@ -500,9 +501,60 @@ test("«Проверить» OpenCode уходит провайдеру opencode
   expect(api.checkProvider).toHaveBeenCalledWith(ep, "opencode");
 });
 
-test("«Авто» OpenCode не выбирает — так и подписано", async () => {
+test("«Авто» OpenCode и Antigravity CLI не выбирает — так и подписано", async () => {
   expect(AUTO_ORDER).toBe(
-    "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode — только явным выбором)");
+    "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode и Antigravity CLI — только явным выбором)");
+});
+
+test("Antigravity CLI: не найден — ссылка на установку", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue({
+    ...structuredClone(info),
+    available: { ...structuredClone(info.available), agy: { found: false, path: null } },
+  });
+  open();
+  const row = await screen.findByRole("row", { name: "Antigravity CLI" });
+  expect(await within(row).findByText("antigravity.google/docs/cli")).toBeInTheDocument();
+  await userEvent.click(within(row).getByText("antigravity.google/docs/cli"));
+  expect(shell.openUrl).toHaveBeenCalledWith("https://antigravity.google/docs/cli");
+});
+
+test("Antigravity CLI: поле модели, проверка на месте и предупреждение о тарифах", async () => {
+  open();
+  await screen.findByText("сейчас: Claude Code");
+  expect(screen.queryByRole("textbox", { name: "Модель Antigravity CLI" })).toBeNull();
+  expect(screen.queryByText(AGY_PLAN_NOTICE)).toBeNull();
+  await userEvent.click(screen.getByRole("radio", { name: "Antigravity CLI" }));
+  const model = screen.getByRole("textbox", { name: "Модель Antigravity CLI" });
+  expect(model).toHaveValue("");
+  expect(screen.getByText(AGY_PLAN_NOTICE)).toBeInTheDocument();
+  await userEvent.type(model, "gemini&calc");
+  expect(screen.getByText(/недопустимые символы/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.clear(model);
+  await userEvent.type(model, "gemini-3-pro");
+  expect(screen.queryByText(/недопустимые символы/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    llm: { provider: "agy", enabled: ["claude-code", "codex", "agy"], agy_model: "gemini-3-pro" },
+  }));
+});
+
+test("agyModelError — как у резидента", () => {
+  expect(agyModelError("")).toBeNull();
+  expect(agyModelError("gemini-3-pro")).toBeNull();
+  expect(agyModelError("gemini-3-flash@preview")).toBeNull();
+  expect(agyModelError("gem ini")).toMatch(/недопустимые символы/);
+  expect(agyModelError("a%PATH%")).toMatch(/недопустимые символы/);
+  expect(agyModelError("a^b")).toMatch(/недопустимые символы/);
+});
+
+test("«Проверить» Antigravity CLI уходит провайдеру agy", async () => {
+  vi.mocked(api.checkProvider).mockResolvedValue({ ok: false, error: "Antigravity CLI: вход не выполнен", provider: "agy" });
+  open();
+  const row = await screen.findByRole("row", { name: "Antigravity CLI" });
+  await userEvent.click(within(row).getByRole("button", { name: "Проверить" }));
+  expect(await within(row).findByText("Antigravity CLI: вход не выполнен")).toBeInTheDocument();
+  expect(api.checkProvider).toHaveBeenCalledWith(ep, "agy");
 });
 
 

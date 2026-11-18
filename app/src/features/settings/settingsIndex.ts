@@ -140,10 +140,11 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "asr", label: "Папка моделей", keywords: ["кэш", "hugging face"] },
   { section: "asr", label: "Папка моделей GigaAM", keywords: ["gigaam"] },
   // ИИ
-  { section: "models", label: "Модели", hint: "Какие включены и какая по умолчанию", keywords: ["провайдер", "claude", "codex", "opencode", "локальная"] },
+  { section: "models", label: "Модели", hint: "Какие включены и какая по умолчанию", keywords: ["провайдер", "claude", "codex", "opencode", "antigravity", "agy", "gemini", "локальная"] },
   { section: "models", label: "Модель Claude Code", keys: ["llm.model", "llm.effort"], keywords: ["sonnet", "opus", "haiku", "уровень рассуждений", "effort"] },
   { section: "models", label: "Уровень рассуждений Codex", keys: ["llm.codex_effort"], keywords: ["effort", "reasoning", "думает"] },
   { section: "models", label: "Модель OpenCode", keys: ["llm.opencode_model"] },
+  { section: "models", label: "Модель Antigravity CLI", keys: ["llm.agy_model"], keywords: ["agy", "gemini", "antigravity"] },
   { section: "models", label: "Адрес сервера", keys: ["llm.base_url"], hint: "Локальная модель: LM Studio, Ollama, vLLM", keywords: ["ollama", "lm studio", "url"] },
   { section: "models", label: "Имя модели", keys: ["llm.local_model"], hint: "Локальная модель", keywords: ["ollama", "qwen"] },
   { section: "models", label: "Прокси для подключения к моделям", keys: ["llm.proxy"], keywords: ["proxy", "сеть"] },

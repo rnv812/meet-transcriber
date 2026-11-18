@@ -112,12 +112,16 @@ export function ProviderTip() {
         <code>opencode auth login</code>.
       </TipLine>
       <TipLine>
+        Antigravity CLI (<code>agy</code>) — программа Google для моделей Gemini. Её нужно установить и войти; на
+        личных тарифах Google встраивание agy в другие программы не поддерживается — лучше ключ API Gemini.
+      </TipLine>
+      <TipLine>
         Локальная модель работает через LM Studio или Ollama без передачи данных в интернет, но не
         использует базу знаний.
       </TipLine>
       <TipLine>
         «Авто» выбирает первую доступную из включённых: Claude Code, затем Codex, затем локальную модель. OpenCode
-        «Авто» не выбирает — только если сделать его моделью по умолчанию явно.
+        и Antigravity CLI «Авто» не выбирает — только если сделать их моделью по умолчанию явно.
       </TipLine>
     </HelpTip>
   );

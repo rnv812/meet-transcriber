@@ -27,7 +27,7 @@ def test_vision_flags():
 
 
 def test_resume_support_and_session_kwargs():
-    assert [p for p in llm.PROVIDERS if llm.supports_resume(p)] == ["claude-code", "codex", "opencode"]
+    assert [p for p in llm.PROVIDERS if llm.supports_resume(p)] == ["claude-code", "codex", "opencode", "agy"]
     assert llm.session_kwargs("codex", None) == {"keep_session": True}
     assert llm.session_kwargs("claude-code", "abc") == {"resume": "abc"}
     assert llm.session_kwargs("opencode", "ses_1") == {"resume": "ses_1"}

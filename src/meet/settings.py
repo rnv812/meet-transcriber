@@ -161,12 +161,13 @@ ASR_BACKENDS = ("faster-whisper", "whisper.cpp", "gigaam")
 WHISPER = "faster-whisper"
 GIGAAM = "gigaam"
 ASR_BACKEND_ALIASES = {"whisper": WHISPER}
-LLM_PROVIDERS = ("auto", "claude-code", "codex", "opencode", "openai-compatible")
+LLM_PROVIDERS = ("auto", "claude-code", "codex", "opencode", "agy", "openai-compatible")
 # Настоящие провайдеры (без «Авто») — в каноническом порядке окна настроек.
 # Тот же список, что `meet.llm.PROVIDERS` (сверяет тест): пакет llm сюда не
 # импортируется — он сам читает настройки.
 LLM_CONCRETE = LLM_PROVIDERS[1:]
-# Кандидаты «Авто» по порядку (`meet.llm.AUTO_PROVIDERS`): OpenCode — только явным выбором.
+# Кандидаты «Авто» по порядку (`meet.llm.AUTO_PROVIDERS`): OpenCode и Antigravity CLI — только
+# явным выбором.
 LLM_AUTO_ORDER = ("claude-code", "codex", "openai-compatible")
 # Провайдер для конфига без явного выбора у уже работавшего пользователя: до
 # появления "auto" ассистент ходил через Claude Code, и это не должно меняться.
@@ -906,6 +907,25 @@ def opencode_model_error(value) -> str | None:
     return None
 
 
+# Модель Antigravity CLI (`agy`): имя, как в `agy models` (gemini-3-pro…). Символы —
+# только те, что бывают в именах моделей: имя уходит и в командную строку запасного
+# пути `agy -p`, в том числе через сценарий agy.cmd (cmd.exe).
+_AGY_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}")
+AGY_MODEL_EXAMPLE = "например gemini-3-pro"
+
+
+def agy_model_error(value) -> str | None:
+    """Негодная модель Antigravity CLI — текст для человека; пусто — годится
+    (agy возьмёт модель из своих настроек)."""
+    if not isinstance(value, str):
+        return f"Модель Antigravity CLI — строка, {AGY_MODEL_EXAMPLE}"
+    text = value.strip()
+    if text and not _AGY_MODEL.fullmatch(text):
+        return ("В имени модели Antigravity CLI недопустимые символы: только латиница, цифры "
+                f"и . _ - : @ + /, {AGY_MODEL_EXAMPLE}")
+    return None
+
+
 # urllib не умеет SOCKS: локальная модель «через прокси» с таким адресом не пойдёт.
 SOCKS_LOCAL_ERROR = ("SOCKS-прокси для локальной модели не поддерживается — укажите HTTP-прокси "
                      "или выключите «Локальную модель — через прокси»")
@@ -936,6 +956,9 @@ class Llm:
     имя модели Claude Code, «sonnet» OpenCode не поймёт); пусто — модель из
     конфига OpenCode.
 
+    `agy_model` — модель Antigravity CLI (`agy`, 0.6.2); пусто — модель из
+    настроек agy. В файл не пишется, пока пустое (`save`).
+
     `local_via_proxy` — «Локальную модель — через прокси»: по умолчанию
     сервер локальной модели в своей сети (localhost, частные адреса) идёт
     напрямую; включают там, где он доступен только через прокси
@@ -948,6 +971,7 @@ class Llm:
     local_model: str | None = None
     proxy: str = "system"
     opencode_model: str = ""
+    agy_model: str = ""
     enabled: tuple[str, ...] = LLM_AUTO_ORDER
     local_via_proxy: bool = False
     # Уровень рассуждений (0.5): Claude Code (`--effort`, все вызовы и ассистент) и
@@ -980,6 +1004,7 @@ class Llm:
             local_model=str(local).strip() if local else None,
             proxy=netproxy.normalize(raw.get("proxy")),
             opencode_model=_opencode_model(raw.get("opencode_model")),
+            agy_model=_agy_model(raw.get("agy_model")),
             enabled=tuple(enabled),
             local_via_proxy=raw.get("local_via_proxy") is True,
             effort=_effort(raw.get("effort"), CLAUDE_EFFORTS),
@@ -998,6 +1023,10 @@ class Llm:
                 raise ValueError(error)
         if "opencode_model" in update and update["opencode_model"] is not None:
             error = opencode_model_error(update["opencode_model"])
+            if error:
+                raise ValueError(error)
+        if "agy_model" in update and update["agy_model"] is not None:
+            error = agy_model_error(update["agy_model"])
             if error:
                 raise ValueError(error)
         if "enabled" in update:
@@ -1025,7 +1054,7 @@ class Llm:
         if merged.get("provider") == "auto" and isinstance(enabled, list) and not any(
                 name in enabled for name in LLM_AUTO_ORDER):
             raise ValueError("Включите хотя бы одну модель для «Авто»: Claude Code, Codex или "
-                             "локальную (OpenCode «Авто» не выбирает)")
+                             "локальную (OpenCode и Antigravity CLI «Авто» не выбирает)")
 
     def to_raw(self) -> dict:
         return {
@@ -1035,6 +1064,7 @@ class Llm:
             "local_model": self.local_model,
             "proxy": self.proxy,
             "opencode_model": self.opencode_model,
+            "agy_model": self.agy_model,
             "enabled": list(self.enabled),
             "local_via_proxy": self.local_via_proxy,
             "effort": self.effort,
@@ -1059,6 +1089,13 @@ def _enabled(values, provider: str) -> tuple[str, ...]:
     if provider in LLM_CONCRETE:
         wanted.add(provider)
     return tuple(name for name in LLM_CONCRETE if name in wanted)
+
+
+def _agy_model(value) -> str:
+    """`llm.agy_model` из файла: негодное (испорчено руками) — пусто."""
+    if not isinstance(value, str) or agy_model_error(value) is not None:
+        return ""
+    return value.strip()
 
 
 def _opencode_model(value) -> str:
@@ -2009,6 +2046,7 @@ def save(settings: Settings, path: Path | None = None) -> None:
         _keep_default_participant_unset(merged, before)
         _keep_default_terms_unset(merged, before)
         _keep_default_recording_unset(merged, before)
+        _keep_default_agy_model_unset(merged, before)
         # Integrations.to_raw токена не содержит: запасная копия токена
         # (диспетчер недоступен) приходит из файла выше и так и сохраняется.
         # post_record_hook больше не читается (его место — hooks.post_record), но
@@ -2057,6 +2095,15 @@ def _keep_default_recording_unset(merged: dict, before: dict) -> None:
         value = recording.get(key)
         if type(value) is type(default) and value == default and key not in had:
             recording.pop(key, None)
+
+
+def _keep_default_agy_model_unset(merged: dict, before: dict) -> None:
+    """`llm.agy_model` (0.6.2) пустым в файл не пишется, пока его там нет: у
+    того, кто Antigravity CLI не настраивал, в файле не появляется новый ключ."""
+    section = merged.get("llm")
+    had = before.get("llm") if isinstance(before.get("llm"), dict) else {}
+    if isinstance(section, dict) and section.get("agy_model") == "" and "agy_model" not in had:
+        section.pop("agy_model", None)
 
 
 def _keep_default_terms_unset(merged: dict, before: dict) -> None:

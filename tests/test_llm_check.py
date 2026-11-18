@@ -327,3 +327,47 @@ def test_local_check_routes_through_an_explicit_proxy_address(monkeypatch):
     monkeypatch.setattr(settings, "load", lambda *a, **k: replace(cfg, llm=replace(cfg.llm, proxy="http://p:3128")))
     asyncio.run(check.check("openai-compatible"))
     assert seen["via_proxy"] == "http://p:3128" and seen["calls"][0]["via_proxy"] == "http://p:3128"
+
+
+def _agy_env(monkeypatch, *, path="C:/agy/bin/agy.exe", logged=(True, None), reply=AgentReply(text="Да")):
+    from meet.llm import antigravity
+
+    monkeypatch.setattr(detect, "find_agy", lambda: path)
+    monkeypatch.setattr(detect, "logged_in", lambda name, p: logged)
+    calls = []
+
+    async def fake_run(prompt, **kw):
+        calls.append((prompt, kw))
+        return reply
+
+    monkeypatch.setattr(antigravity, "run", fake_run)
+    return calls
+
+
+def test_agy_not_found(monkeypatch):
+    _agy_env(monkeypatch, path=None)
+    res = asyncio.run(check.check("agy"))
+    assert res == {"ok": False, "error": detect.AGY_NOT_FOUND, "provider": "agy"}
+
+
+def test_agy_not_logged_in_is_said_without_a_model_call(monkeypatch):
+    calls = _agy_env(monkeypatch, logged=(False, "Antigravity CLI: вход не выполнен"))
+    res = asyncio.run(check.check("agy"))
+    assert res["ok"] is False and "вход не выполнен" in res["error"]
+    assert calls == []
+
+
+def test_agy_ok_calls_the_model_once(monkeypatch):
+    calls = _agy_env(monkeypatch)
+    res = asyncio.run(check.check("agy"))
+    assert res == {"ok": True, "error": None, "provider": "agy"}
+    assert calls[0][0] == "Ответь одним словом: да" and calls[0][1]["max_turns"] == 1
+
+
+def test_agy_unsafe_shim_is_refused(monkeypatch):
+    from meet.llm import antigravity
+
+    calls = _agy_env(monkeypatch, path="C:/a&b/agy.cmd")
+    monkeypatch.setattr(antigravity, "_ON_WINDOWS", True)
+    res = asyncio.run(check.check("agy"))
+    assert res["error"] == antigravity.SHIM_UNSAFE and calls == []

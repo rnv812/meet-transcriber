@@ -46,7 +46,7 @@ from meet.assist.prompts import (
 from meet.assist.qa import QAService
 from meet.assist.web import bound_port, run_web
 
-NO_PROVIDER_ERROR = "Подключите Claude Code, Codex или OpenCode в настройках"
+NO_PROVIDER_ERROR = "Подключите Claude Code, Codex, OpenCode или Antigravity CLI в настройках"
 PARENT_POLL_S = 1.0  # как резидент следит за оболочкой (tray.run_headless)
 # Код выхода «повтор не поможет» (нет провайдера, вход в Claude, занятая
 # запись): резидент не повторяет такой старт (meet.live_control.EXIT_FATAL).

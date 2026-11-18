@@ -15,10 +15,11 @@
   собеседника: читает сам (`add_dirs` — папка встречи, база знаний,
   библиотека встреч), `kb_exclude` — правила запрета (`deny_paths`), сеанс
   сохраняется (`persist`) и продолжается по id из `assistant/sessions.json`.
-* Codex, OpenCode — вызов на ход (`runner`) с родным продолжением сеанса
-  (`llm.session_kwargs`); Codex работает в своей нейтральной папке (так
-  делает провайдер), со свободой — через `codex app-server` с воротами
-  согласия (`codex_app`).
+* Codex, OpenCode, Antigravity CLI — вызов на ход (`runner`) с родным
+  продолжением сеанса (`llm.session_kwargs`); Codex работает в своей
+  нейтральной папке (так делает провайдер), со свободой — через `codex
+  app-server` с воротами согласия (`codex_app`); Antigravity CLI — через
+  `agy acp` с теми же воротами (`antigravity`).
 * Локальная модель — без продолжения и без инструментов: затравка из
   журнала (`participant_prompts.seed`) в каждом ходе, а запросы `read` /
   `search` / `list` исполняет Meet (`kb_prep`, вне цикла событий, со сроком).
@@ -56,7 +57,9 @@ CLI держится до решения (не дольше `consent.CONFIRM_TIM
 хода — строкой в чате. Codex (0.6.2) идёт через `codex app-server`: выход
 за его песочницу решают те же ворота и карточки (`gate` в вызове), режим
 `confirm` — карточка на каждое действие сверх чтения; не запустился — ход
-через `codex exec`, как раньше. OpenCode остановить вызов не даёт: в ходе
+через `codex exec`, как раньше. Antigravity CLI (0.6.2) — через `agy acp`:
+каждый его запрос разрешения решают те же ворота и карточки; удаление,
+отправку наружу и публикацию он не выполняет никогда. OpenCode остановить вызов не даёт: в ходе
 USER он правит рабочие папки и выполняет команды сам, а рискованное ему
 запрещено (`access`, `work_dirs`); в `confirm` — только чтение. «Личный»
 отличается только промптом.
@@ -135,7 +138,7 @@ TOOL_RESULT_MAX = 12_000       # символов ответа Meet модели
 MERGED_MAX = 8_000             # склеенное сообщение — не длиннее
 TASK_NOTE_MAX = 2_000          # контекст задачи в заметке агенту
 WORKDIR = "meet-agent"         # рабочая папка процесса Claude Code агента
-TOOL_PROVIDERS = ("claude-code", "codex", "opencode")
+TOOL_PROVIDERS = ("claude-code", "codex", "opencode", "agy")
 # Продолжение сеанса с новым системным промптом: Claude Code передаёт его при
 # каждом запуске (`--system-prompt` с `--resume`). Codex (`exec resume`) и
 # OpenCode (длинный промпт — коротким при продолжении) — нет.
@@ -766,8 +769,9 @@ class Participant:
                 auto = self._permission_mode == "auto"
             return {"mode": "consent", "mcp": list(self._mcp) if self._mcp is not None else None,
                     "agent_mode": self.agent_mode, "auto": auto}
-        if self.freedom and self.provider == "codex":
-            # Codex через app-server (0.6.2): действия — с согласия, как у Claude Code; MCP пока нет.
+        if self.freedom and self.provider in ("codex", "agy"):
+            # Codex через app-server, Antigravity CLI через ACP (0.6.2): действия — с
+            # согласия, как у Claude Code; список MCP окну они не сообщают.
             return {"mode": "consent", "mcp": None, "agent_mode": self.agent_mode, "auto": None}
         if self.freedom:
             mode = "act" if self.agent_mode == consent.MODE_AUTO else "files"
@@ -1064,7 +1068,8 @@ class Participant:
 
     def system_prompt(self) -> str:
         actions = self.provider == "claude-code"
-        cards = self.provider == "codex"     # Codex через app-server: карточки Meet (0.6.2)
+        # Codex через app-server и Antigravity CLI через ACP: карточки Meet (0.6.2).
+        cards = "agy" if self.provider == "agy" else self.provider == "codex"
         if self.profile == pp.PERSONAL:
             # Карта, контекст задачи и глоссарий — содержание промпта «Рабочей встречи».
             return pp.build_system(
@@ -1166,6 +1171,14 @@ class Participant:
                     from meet.llm import codex
 
                     sensitive = await self._open_gate(await asyncio.to_thread(codex.keep_dir))
+                    gate = self._gate
+                elif self.provider == "agy":
+                    # Antigravity CLI через ACP (0.6.2): каждый запрос разрешения agy
+                    # решают те же ворота и карточки; рабочая папка его сеансов —
+                    # служебная (`antigravity.keep_dir`).
+                    from meet.llm import antigravity
+
+                    sensitive = await self._open_gate(await asyncio.to_thread(antigravity.keep_dir))
                     gate = self._gate
                 else:
                     sensitive = await asyncio.to_thread(consent.sensitive_paths, library_root=self._library_root)
@@ -2195,11 +2208,16 @@ class Participant:
 
     def model_error(self, name: str) -> str | None:
         """Имя модели для `/model`, которое нельзя передать провайдеру, — текст
-        отказа (Codex: `codex.model_error`); годится — None."""
+        отказа (Codex: `codex.model_error`, Antigravity CLI:
+        `antigravity.model_error`); годится — None."""
         if self.provider == "codex":
             from meet.llm import codex
 
             return codex.model_error(name)
+        if self.provider == "agy":
+            from meet.llm import antigravity
+
+            return antigravity.model_error(name)
         return None
 
     def model_choices(self) -> list[str]:
@@ -2216,13 +2234,13 @@ class Participant:
         choices = self.model_choices()
         if choices:
             lines.append("Можно: " + ", ".join(choices))
-        if self.provider in ("claude-code", "codex", "opencode"):
+        if self.provider in ("claude-code", "codex", "opencode", "agy"):
             lines.append("Сменить: /model <имя>")
         return "\n".join(lines)
 
     async def set_model(self, name: str) -> str:
         """`/model имя`: Claude Code — `set_model` до конца сессии (новые
-        процессы — с ней же); Codex, OpenCode — на следующие вызовы. Негодное
+        процессы — с ней же); Codex, OpenCode, Antigravity CLI — на следующие вызовы. Негодное
         имя (`model_error`) — ValueError, модель прежняя."""
         error = self.model_error(name)
         if error:

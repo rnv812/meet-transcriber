@@ -258,4 +258,4 @@ def test_opencode_tools_still_arrive_after_the_call(tmp_path):
 def test_streaming_providers_list():
     from meet import llm
 
-    assert llm.STREAMING_PROVIDERS == ("codex",)
+    assert llm.STREAMING_PROVIDERS == ("codex", "agy")

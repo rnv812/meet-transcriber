@@ -3,7 +3,8 @@
 Модуль читает резидент, поэтому здесь только stdlib: ни claude_agent_sdk, ни
 aiohttp. `available()` — быстрая проверка «установлено/отвечает»;
 `logged_in()` спрашивает CLI о входе (доли секунды, квоту не тратит) и
-нужен выбору `auto` и команде «Проверить»; у OpenCode — читает его файл входов.
+нужен выбору `auto` и команде «Проверить»; у OpenCode — читает его файл входов;
+у Antigravity CLI — спрашивает `agy acp` без модели (`antigravity.login_status`).
 
 OpenCode (opencode.ai) ставится по-разному: npm -g (`opencode-ai`: в PATH —
 сценарий opencode.cmd, настоящая программа — в node_modules рядом), scoop,
@@ -216,6 +217,40 @@ def find_opencode() -> str | None:
     return shim
 
 
+AGY_NOT_FOUND = "не найден Antigravity CLI (agy) — установите его с antigravity.google/docs/cli"
+# Где ставится agy без PATH: Windows — установщик кладёт agy.exe в
+# %LOCALAPPDATA%\agy\bin (проверено на 1.5.11); macOS/Linux — обычные папки
+# (`_UNIX_DIRS`: ~/.local/bin, Homebrew) и по аналогии с Windows своя папка
+# данных пользователя [не проверено на Mac].
+_AGY_UNIX_DIRS = ("~/Library/Application Support/agy/bin", "~/.local/share/agy/bin", "~/.agy/bin")
+
+
+def find_agy() -> str | None:
+    """Путь к Antigravity CLI. Windows: agy.exe в PATH, затем место установки
+    по умолчанию (%LOCALAPPDATA%\\agy\\bin\\agy.exe), последним — сценарий
+    agy.cmd (его путь проверяет `antigravity.launch_error`). macOS/Linux —
+    PATH, обычные папки установки и папки agy."""
+    if not _WINDOWS:
+        found = shutil.which("agy") or _unix_fallback("agy")
+        if found:
+            return found
+        home = _home()
+        for d in _AGY_UNIX_DIRS:
+            exe = Path(home + d[1:]) / "agy"
+            if exe.is_file() and os.access(exe, os.X_OK):
+                return str(exe)
+        return None
+    exe = shutil.which("agy.exe")
+    if exe and not exe.lower().endswith(_BATCH_SUFFIXES):
+        return exe
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        default = Path(local) / "agy" / "bin" / "agy.exe"
+        if default.is_file():
+            return str(default)
+    return shutil.which("agy.cmd")
+
+
 def local_reachable(base_url: str, timeout: float = 0.5, via_proxy: bool | str = False) -> bool:
     """Слушает ли кто-то адрес локальной модели (TCP-соединение, без запроса).
     «Через прокси» (`via_proxy`): напрямую сервер может быть недоступен —
@@ -264,10 +299,12 @@ def available(base_url: str | None = None, probe_local: bool = True, via_proxy: 
     claude = find_claude()
     codex = find_codex()
     opencode = find_opencode()
+    agy = find_agy()
     return {
         "claude-code": {"found": claude is not None, "path": claude},
         "codex": {"found": codex is not None, "path": codex},
         "opencode": {"found": opencode is not None, "path": opencode},
+        "agy": {"found": agy is not None, "path": agy},
         "openai-compatible": {"found": local_reachable(url, via_proxy=via_proxy) if probe_local else None,
                               "base_url": url},
     }
@@ -372,6 +409,11 @@ def logged_in(name: str, path: str) -> tuple[bool, str | None]:
         if opencode_auth_present():
             return True, None
         return False, f"{OPENCODE_NO_LOGIN} (нет записей в {opencode_auth_file()})"
+    if name == "agy":
+        # Без модели: `agy acp` — `initialize` и `session/new` в папке данных Meet.
+        from meet.llm import antigravity
+
+        return antigravity.login_status(path)
     if name == "codex":
         cmd = [path, "login", "status"]
         env = None

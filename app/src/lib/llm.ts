@@ -14,6 +14,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
+  agy: "Antigravity CLI",
   "openai-compatible": "Локальная модель",
 };
 

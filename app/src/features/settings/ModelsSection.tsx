@@ -1,7 +1,8 @@
 /**
  * «Модели и анализ» (0.6.2; 0.4 — «Модели ИИ», прежде — верх раздела
- * «Ассистент»): какие модели включены и какая по умолчанию, модель Claude Code
- * и OpenCode, локальная модель, прокси; ниже — блок «Анализ встречи»
+ * «Ассистент»): какие модели включены и какая по умолчанию, модель Claude Code,
+ * OpenCode и Antigravity CLI (0.6.2: с предупреждением об условиях Google для
+ * потребительских тарифов), локальная модель, прокси; ниже — блок «Анализ встречи»
  * (`children`); в «Тонкой настройке» внизу — «Локальную модель — через прокси».
  *
  * «Модели» (0.3.4): включённые модели (`llm.enabled`) можно выбрать у действий
@@ -18,7 +19,7 @@
  *
  * Сверху (0.6.2) — «Как сейчас настроено» по сохранённым настройкам и
  * «Подобрать под этот компьютер» (`modelsFit`): включённые модели, чьей
- * программы на этом компьютере нет (Claude Code, Codex, OpenCode — «не
+ * программы на этом компьютере нет (Claude Code, Codex, OpenCode, Antigravity CLI — «не
  * найден»), выключаются. Ничего не включается и модель по умолчанию не
  * меняется: текст встречи не уходит новой модели и новый автоматический
  * вызов не появляется без решения человека. Локальная модель не
@@ -48,10 +49,12 @@ const PROVIDERS: Provider[] = [
   { value: "claude-code", label: "Claude Code", link: "claude.ai/code" },
   { value: "codex", label: "Codex", link: "github.com/openai/codex" },
   { value: "opencode", label: "OpenCode", link: "opencode.ai/docs/" },
+  { value: "agy", label: "Antigravity CLI", link: "antigravity.google/docs/cli" },
   { value: "openai-compatible", label: "Локальная (LM Studio / Ollama)" },
 ];
 const LOCAL = "openai-compatible";
 const OPENCODE = "opencode";
+const AGY = "agy";
 const CLAUDE = "claude-code";
 const CODEX = "codex";
 /** Настоящие модели в порядке окна (как `llm.enabled` у резидента). */
@@ -59,7 +62,7 @@ const CONCRETE = PROVIDERS.filter((p) => p.value !== "auto").map((p) => p.value)
 /** Кандидаты «Авто» — его выбор у конфига без списка включённых. */
 const AUTO_CANDIDATES = ["claude-code", "codex", "openai-compatible"];
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
-const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "enabled", "local_via_proxy"];
+const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "agy_model", "enabled", "local_via_proxy"];
 
 /**
  * Включённые модели из черновика `llm`: список резидента, а у конфига без него
@@ -155,8 +158,43 @@ function OpencodeModelTip() {
   );
 }
 
+/** Подпись `llm.agy_model` (0.6.2). */
+export const AGY_MODEL_LABEL = "Модель Antigravity CLI";
+const AGY_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}$/;
+/** Условия Google: на потребительских тарифах встраивание agy в чужие программы не поддерживается. */
+export const AGY_PLAN_NOTICE = "На личных (потребительских) тарифах Google встраивание Antigravity CLI в другие программы "
+  + "не поддерживается. Для Meet рекомендуем ключ API Gemini или корпоративный вход Gemini Enterprise.";
+
+/**
+ * Значение `llm.agy_model` нельзя сохранить: текст для человека, иначе null.
+ * Та же проверка, что у резидента (`meet.settings.agy_model_error`).
+ */
+export function agyModelError(value: string): string | null {
+  const text = value.trim();
+  if (!text || AGY_MODEL_RE.test(text)) return null;
+  return "В имени модели Antigravity CLI недопустимые символы: только латиница, цифры и . _ - : @ + /";
+}
+
+function AgyModelTip() {
+  return (
+    <HelpTip label="Как Meet работает с Antigravity CLI" title={AGY_MODEL_LABEL}>
+      <TipLine>
+        Модель, на которой Antigravity CLI (<code>agy</code>) готовит итоги, анализ и названия, отвечает на вопросы
+        и ведёт живого ассистента, — имя, как его показывает <code>agy models</code>, например gemini-3-pro. Пусто —
+        модель из настроек самого agy.
+      </TipLine>
+      <TipLine>
+        Meet запускает agy со своей папкой настроек: ваши правила и MCP-серверы agy он не меняет, а действия
+        ассистента спрашивает карточкой, как у Claude Code. Вход для Meet — один раз в терминале командой
+        <code> agy acp --login</code> с папкой, которую назовёт «Проверить».
+      </TipLine>
+      <TipLine>{AGY_PLAN_NOTICE}</TipLine>
+    </HelpTip>
+  );
+}
+
 const PROXY_LABEL = "Прокси для подключения к моделям";
-const PROXY_HELP = "Claude Code, Codex и OpenCode сами не используют системный прокси Windows — приложение передаёт его им. "
+const PROXY_HELP = "Claude Code, Codex, OpenCode и Antigravity CLI сами не используют системный прокси Windows — приложение передаёт его им. "
   + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.";
 const PROXY_SCHEMES = ["http", "https", "socks5", "socks5h"];
 const PROXY_EXAMPLE = "например http://127.0.0.1:8080";
@@ -209,7 +247,7 @@ export function socksLocalError(llm: Record<string, unknown> | undefined): strin
 }
 
 /**
- * Правки раздела нельзя сохранить: прокси, модель OpenCode или SOCKS у
+ * Правки раздела нельзя сохранить: прокси, модель OpenCode или Antigravity CLI, SOCKS у
  * локальной модели вне правил. Смотрим только изменённое (`changes` — то, что
  * уйдёт в PATCH): значение, уже лежащее в файле, не должно запирать
  * «Сохранить» для остальных разделов.
@@ -217,8 +255,10 @@ export function socksLocalError(llm: Record<string, unknown> | undefined): strin
 export function modelsChangesInvalid(changes: Raw, draft?: Raw): boolean {
   const proxy = changes.llm?.proxy;
   const ocModel = changes.llm?.opencode_model;
+  const agyModel = changes.llm?.agy_model;
   return (typeof proxy === "string" && proxyError(proxy) !== null)
     || (typeof ocModel === "string" && opencodeModelError(ocModel) !== null)
+    || (typeof agyModel === "string" && agyModelError(agyModel) !== null)
     || ((changes.llm?.local_via_proxy !== undefined || changes.llm?.proxy !== undefined)
       && socksLocalError(draft?.llm ?? changes.llm) !== null);
 }
@@ -226,14 +266,14 @@ export function modelsChangesInvalid(changes: Raw, draft?: Raw): boolean {
 /** Подпись «Авто» в таблице моделей; порядок выбора — подсказкой (AUTO_ORDER). */
 export const AUTO_SHORT = "первая готовая из включённых";
 /** Порядок выбора «Авто» (llm.resolve). */
-export const AUTO_ORDER = "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode — только явным выбором)";
+export const AUTO_ORDER = "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode и Antigravity CLI — только явным выбором)";
 
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
 /** Название модели для строк «Как сейчас» (и в «Ассистенте»). */
 export const providerTitle = titleOf;
 
 /** Модели, у которых резидент ищет программу на машине (`available[…].found`). */
-const PROGRAMS = [CLAUDE, CODEX, OPENCODE];
+const PROGRAMS = [CLAUDE, CODEX, OPENCODE, AGY];
 
 /**
  * Подбор под компьютер: выключить включённые модели, чьей программы на
@@ -408,6 +448,8 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
   const proxyProblem = proxyMode === "custom" ? proxyError(proxy) : null;
   const ocModel = String(llm("opencode_model") ?? "");
   const ocModelProblem = opencodeModelError(ocModel);
+  const agyModel = String(llm("agy_model") ?? "");
+  const agyModelProblem = agyModelError(agyModel);
 
   const fit = info ? modelsFit(draft.llm, info) : null;
   return (
@@ -525,6 +567,16 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
             {ocModelProblem && <span className="error proxy__error">{ocModelProblem}</span>}
           </Row>
         )}
+        {on(AGY) && (
+          <Row label={AGY_MODEL_LABEL} htmlFor="llm-agy-model" help={<AgyModelTip />}
+            hint="Имя, как в agy models. Пусто — модель из настроек Antigravity CLI">
+            <input id="llm-agy-model" type="text" className={fieldClass({ mono: true })} spellCheck={false}
+              placeholder="gemini-3-pro" aria-invalid={agyModelProblem ? true : undefined}
+              value={agyModel} onChange={(e) => set("llm", "agy_model", e.target.value)} />
+            {agyModelProblem && <span className="error proxy__error">{agyModelProblem}</span>}
+            <span className="muted proxy__error">{AGY_PLAN_NOTICE}</span>
+          </Row>
+        )}
       </SettingsCard>
       {on(LOCAL) && (
         <SettingsCard title="Локальная модель">
@@ -535,7 +587,7 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
         </SettingsCard>
       )}
       <SettingsCard title="Подключение">
-        <Radio label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"
+        <Radio label={PROXY_LABEL} hint="Через него Claude Code, Codex, OpenCode и Antigravity CLI подключаются к своим сервисам"
           help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>} stack
           value={proxyMode}
           options={[

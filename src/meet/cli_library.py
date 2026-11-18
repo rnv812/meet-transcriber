@@ -25,7 +25,7 @@ from meet import library, plat
 
 COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
             "analyze", "title", "improve", "category")
-NO_PROVIDER_HINT = ("Подключите Claude Code, Codex или OpenCode: meet {command} … --provider codex "
+NO_PROVIDER_HINT = ("Подключите Claude Code, Codex, OpenCode или Antigravity CLI: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
 

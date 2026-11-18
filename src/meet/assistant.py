@@ -34,7 +34,7 @@ MAX_TRANSCRIPT_CHARS = 400_000
 QA_HISTORY = 6
 SUMMARY_TIMEOUT_S = 600.0
 ASK_TIMEOUT_S = 300.0
-NO_PROVIDER = "Подключите Claude Code, Codex или OpenCode в настройках"
+NO_PROVIDER = "Подключите Claude Code, Codex, OpenCode или Antigravity CLI в настройках"
 EMPTY_REPLY = "модель вернула пустой ответ"
 
 SUMMARY_SYSTEM = """\

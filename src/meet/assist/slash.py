@@ -21,7 +21,7 @@
 * `/clear` — новый разговор с агентом: прежний сеанс забыт, затравка без
   переписки чата; лента остаётся;
 * `/model [имя]` — без имени текущая модель и список, с именем — сменить
-  (Claude Code — `set_model` до конца сессии, Codex/OpenCode — на следующие
+  (Claude Code — `set_model` до конца сессии, Codex/OpenCode/Antigravity CLI — на следующие
   ходы; неизвестную CLI отвергает — строка ошибки; имя Codex со знаками
   cmd.exe — отказ до остановки хода, `Participant.model_error`);
 * `/compact [указание]` — Claude Code: отдельным ходом (сжатие — строкой
@@ -50,7 +50,7 @@ from dataclasses import dataclass
 _COMMAND = re.compile(r"/([A-Za-z][\w:.-]*)(?:\s+(.*))?", re.DOTALL)
 
 CLAUDE = "claude-code"
-RUNNERS = ("codex", "opencode")
+RUNNERS = ("codex", "opencode", "agy")
 
 # Команды Meet: имя, подсказка аргументов, описание.
 MEET_COMMANDS = (
@@ -66,6 +66,7 @@ SUPPORTED = {
     CLAUDE: MEET_NAMES,
     "codex": frozenset({"help", "mcp", "clear", "model"}),
     "opencode": frozenset({"help", "clear", "model"}),
+    "agy": frozenset({"help", "clear", "model"}),
 }
 DEFAULT_SUPPORTED = frozenset({"help", "clear"})
 # Команды терминала Claude Code: в headless-режиме их нет.

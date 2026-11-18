@@ -41,7 +41,10 @@
 песочницу — `codex_approval` переводит запрос в вызов и решает его
 `check(via=CODEX)`: что CLI решил бы сам (`auto`), здесь — карточка; вызов
 MCP Codex одобряет MCP-вопросом — `codex_elicitation` (инструмент с пометкой
-«только чтение» — сразу, изменение — карточка, как у Claude Code). OpenCode
+«только чтение» — сразу, изменение — карточка, как у Claude Code).
+Antigravity CLI через `agy acp` (0.6.2) спрашивает `session/request_permission`
+— `agy_approval`: команды из общего списка запретов (`command_denial_patterns`,
+тот же у OpenCode) — отказ всегда, остальное — `check(via=AGY)`. OpenCode
 и Codex через `codex exec` обратного вызова не имеют: строки `ask` у них —
 отказ (`codex.access_args`, `opencode.permission_for`).
 
@@ -2049,7 +2052,7 @@ _WHY_LABELS = {
     DELETE: "удаление", SEND: "отправка наружу", "outside": "запись вне рабочих папок",
     "sandbox": "без песочницы", "mcp-write": "изменение через MCP", "mcp-address": "адрес в MCP",
     "recursive": "обход рядом с закрытым", UNPARSED: "непонятная команда",
-    "launch": "запуск программы",
+    "launch": "запуск программы", "agy-denied": "не для Antigravity",
 }
 
 
@@ -2673,13 +2676,18 @@ class ConsentGate:
         просьбе, разрешение «до конца встречи»), проходит; что отдал бы CLI
         (`auto`), — карточка: одобренное Codex выполнит без песочницы; чтение
         MCP (у Claude Code его решил бы автомод) — пропускается, как в ходе
-        ❓ и в режиме confirm. `read_only` — см. `decide`."""
+        ❓ и в режиме confirm. `read_only` — см. `decide`.
+
+        `via=AGY` (0.6.2) — Antigravity CLI спрашивает по ACP
+        (`agy_approval`): что CLI решил бы сам (`auto`), agy делает сам, если
+        это команда, правка в рабочих папках, чтение, веб или MCP-чтение
+        (`_AGY_SELF`), иначе — карточка."""
         data = data if isinstance(data, dict) else {}
         tool = str(tool or "")
         canonical = _canonical(tool, data)
         key = tool_use_id or canonical
         with self._lock:
-            if via in ("hook", CODEX):
+            if via in ("hook", CODEX, AGY):
                 self._seen.update(k for k in (tool_use_id, canonical) if k)
             else:
                 keys = {key, canonical}
@@ -2693,7 +2701,15 @@ class ConsentGate:
         decision = self.decide(tool, data, read_only=read_only)
         if decision.outcome == DENY:
             return decision
-        if via == CODEX:
+        if via == AGY:
+            if decision.outcome == AUTO:
+                if decision.kind in _AGY_SELF:
+                    return Decision(ALLOW, what=decision.what, kind=decision.kind)
+                decision = Decision(ASK, what=decision.what, kind=decision.kind,
+                                    card=card_for(tool, data, self._grant_offer(tool, data)))
+            elif decision.outcome != ASK:
+                return decision
+        elif via == CODEX:
             if decision.outcome == AUTO and decision.kind in ("mcp-read", "mcp-resource"):
                 return Decision(ALLOW, what=decision.what, kind=decision.kind)
             if decision.outcome == AUTO:
@@ -2777,6 +2793,71 @@ def denial_line(denials) -> str:
            else "закрытые данные" if whys <= {"sensitive"}
            else "в фоне" if whys == {"background"} else "без согласия")
     return f"Ассистент хотел {why}: {shown} — запрос заблокирован"
+
+
+# --- Запреты команд для CLI без карточки на каждое действие (OpenCode, Antigravity) ------------
+
+
+def command_denial_patterns() -> list[str]:
+    """Шаблоны команд, которые ход USER у OpenCode (`opencode.bash_denials`)
+    и Antigravity CLI (`agy_approval`) не выполняет никогда: удаление,
+    отправка наружу, публикация, оболочки с кодом в строке (их содержимое
+    шаблоны не видят). Шаблон — `*` и `?` по всей строке команды, как у
+    OpenCode; регистр PowerShell — вариант в нижнем регистре добавляет
+    вызывающий."""
+    rules: list[str] = []
+    for prog in [*sorted(DELETE_PROGRAMS | SEND_PROGRAMS), "Remove-Item", "Send-MailMessage"]:
+        rules += [prog, f"{prog} *"]
+    rules += ["git clean*", "git rm *", "git reset --hard*", "git reset * --hard*", "git checkout -- *",
+              "git checkout .*", "git restore *", "git stash drop*", "git stash clear*", "git push*",
+              "git * push*", "git * clean*", "git send-email*", "find *-delete*", "find *-exec*",
+              "find *-ok*", "xargs *", "rsync *:*"]
+    for flag in ("-d", "--data", "-F", "--form", "-T", "--upload", "--json", "-X", "--request"):
+        rules.append(f"curl *{flag}*")
+    rules += ["wget *--post*", "wget *--method*", "wget *--body*"]
+    for cmdlet in ("Invoke-WebRequest", "iwr", "Invoke-RestMethod", "irm"):
+        rules += [f"{cmdlet} *{flag}*" for flag in ("-M", "-B", "-I", "-F")]
+    for forge in ("gh", "glab"):
+        rules += [f"{forge} * {verb}*" for verb in ("create", "comment", "note", "review", "merge", "close",
+                                                  "reopen", "edit", "delete", "upload")]
+        rules += [f"{forge} api *{flag}*" for flag in ("-f", "-F", "-X", "--field", "--raw-field", "--input",
+                                                       "--method")]
+    rules += [f"{prog} publish*" for prog in ("npm", "pnpm", "yarn", "cargo", "poetry", "uv")]
+    rules += ["twine upload*", "docker push*", "podman push*", "gem push*", "dotnet nuget push*"]
+    rules += [f"{shell} -c*" for shell in ("bash", "sh", "zsh", "dash")]
+    rules += ["cmd *", "powershell *", "pwsh *", "eval *", "iex *", "Invoke-Expression *",
+              "Invoke-Command *", "sudo *", "doas *", "runas *"]
+    return rules
+
+
+_DENIAL_RES: list[re.Pattern] | None = None
+
+
+def _denial_res() -> list[re.Pattern]:
+    global _DENIAL_RES
+    if _DENIAL_RES is None:
+        _DENIAL_RES = [re.compile("".join(".*" if ch == "*" else "." if ch == "?" else re.escape(ch)
+                                          for ch in rule), re.DOTALL | re.IGNORECASE)
+                       for rule in command_denial_patterns()]
+    return _DENIAL_RES
+
+
+def command_denied(command: str) -> bool:
+    """Подходит ли команда под `command_denial_patterns` — вся строка или
+    любая её простая команда (цепочки `a && b`, конвейеры) после снятия
+    обёрток (`sudo`, `env`…). Регистр не важен (PowerShell)."""
+    text = " ".join(str(command or "").split())
+    if not text:
+        return False
+    candidates = [text]
+    for tool in ("Bash", "PowerShell"):
+        tokens = _tokens(text, tool)
+        for words in _commands(tokens) if tokens else ():
+            for variant in (words, _strip_wrappers(words)):
+                joined = " ".join(variant)
+                if joined and joined not in candidates:
+                    candidates.append(joined)
+    return any(r.fullmatch(c) for c in candidates for r in _denial_res())
 
 
 # --- Codex через app-server (0.6.2): запрос одобрения → вызов «как у Claude Code» ---------------
@@ -2973,3 +3054,173 @@ def codex_elicitation(gate: "ConsentGate", params: dict, item: dict | None = Non
     if answer in (ALLOW, ALLOW_MEETING):
         return "accept", Decision(ALLOW, what=what, kind="mcp", why="confirmed")
     return "decline", Decision(DENY, DECLINED.format(what=what), what, "mcp", "declined")
+
+
+# --- Antigravity CLI через ACP (0.6.2): запрос разрешения → вызов «как у Claude Code» ----------
+#
+# `agy acp` спрашивает клиента `session/request_permission` с описанием вызова
+# (`toolCall`: `toolCallId`, `title`, `kind` — read / edit / delete / move /
+# search / execute / think / fetch / switch_mode / other, `rawInput`,
+# `locations`, `content`; по спецификации ACP). Meet переводит его в вызов,
+# который понимают ворота, и решает `agy_approval`. Имена полей `rawInput`
+# у agy 1.5.11 живым ходом не проверены — разбор осторожный: не понял —
+# отказ (`switch_mode`, пустая команда) или карточка (неизвестный вид в ходе
+# USER).
+
+AGY = "agy"
+AGY_DENIED = ("Meet заблокировал: {what} — удаление, отправку наружу, публикацию и оболочки с кодом "
+              "в строке ассистент на Antigravity CLI не выполняет. Скажи пользователю, что нужно "
+              "сделать, — он сделает это сам.")
+# Что Antigravity в ходе USER (режим auto) делает сам, когда ворота отдают решение CLI (`auto`):
+# команды и правка в рабочих папках, чтение, веб, MCP-чтение (таблица уровней доступа agy).
+_AGY_SELF = frozenset(("shell", "write", "read", "web-search", "web-fetch", "mcp-read", "mcp-resource"))
+_AGY_COMMAND_KEYS = ("command", "CommandLine", "commandLine", "cmd")
+_AGY_PATH_KEYS = ("path", "file_path", "filePath", "AbsolutePath", "absolutePath", "TargetFile", "targetFile",
+                  "target_file", "DirectoryPath", "directoryPath", "SearchPath", "searchPath")
+_AGY_DEST_KEYS = ("destination", "Destination", "newPath", "new_path", "to")
+_AGY_URL_KEYS = ("url", "Url", "URL")
+_AGY_QUERY_KEYS = ("query", "Query", "pattern", "Pattern")
+_AGY_MCP_TITLE = re.compile(r"^\s*mcp\(([^/()\s]+)/([^()\s]+)\)")
+_AGY_MCP_SERVER_KEYS = ("mcpServerName", "serverName", "server")
+_AGY_MCP_TOOL_KEYS = ("mcpToolName", "toolName", "tool")
+_AGY_KIND = re.compile(r"[^a-z_]")
+
+
+def _agy_str(data, keys) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _agy_metas(tool_call: dict) -> list[dict]:
+    """`_meta` вызова и словари в нём на один уровень вниз (`antigravity`…)."""
+    meta = tool_call.get("_meta") if isinstance(tool_call.get("_meta"), dict) else {}
+    return [meta, *(v for v in meta.values() if isinstance(v, dict))]
+
+
+def agy_mcp(tool_call: dict) -> tuple[str, str] | None:
+    """Вызов MCP в запросе agy → (сервер, инструмент): из `_meta`
+    (`mcpServerName`/`serverName`, `mcpToolName`/`toolName`) или из
+    заголовка вида правил agy `mcp(сервер/инструмент)`; иначе None."""
+    tool_call = tool_call if isinstance(tool_call, dict) else {}
+    for meta in _agy_metas(tool_call):
+        server, tool = _agy_str(meta, _AGY_MCP_SERVER_KEYS), _agy_str(meta, _AGY_MCP_TOOL_KEYS)
+        if server and tool and _MCP_TOOL_NAME.match(server) and _MCP_TOOL_NAME.match(tool):
+            return server, tool
+    found = _AGY_MCP_TITLE.match(str(tool_call.get("title") or ""))
+    if found and _MCP_TOOL_NAME.match(found.group(1)) and _MCP_TOOL_NAME.match(found.group(2)):
+        return found.group(1), found.group(2)
+    return None
+
+
+def agy_read_only(tool_call: dict) -> bool:
+    """Инструмент MCP объявил «только чтение»: `readOnlyHint` в `_meta` (или
+    в `_meta.annotations`), либо agy пометил вызов видом read / search."""
+    tool_call = tool_call if isinstance(tool_call, dict) else {}
+    for meta in _agy_metas(tool_call):
+        if meta.get("readOnlyHint") is True:
+            return True
+        notes = meta.get("annotations")
+        if isinstance(notes, dict) and notes.get("readOnlyHint") is True:
+            return True
+    return tool_call.get("kind") in ("read", "search")
+
+
+def _agy_path(tool_call: dict, raw: dict) -> str:
+    for loc in tool_call.get("locations") or ():
+        if isinstance(loc, dict) and isinstance(loc.get("path"), str) and loc["path"].strip():
+            return loc["path"].strip()
+    return _agy_str(raw, _AGY_PATH_KEYS)
+
+
+def _agy_new_text(tool_call: dict, raw: dict) -> str:
+    for block in tool_call.get("content") or ():
+        if isinstance(block, dict) and block.get("type") == "diff" and isinstance(block.get("newText"), str):
+            return block["newText"]
+    return _agy_str(raw, ("content", "CodeContent", "newText", "new_string", "ReplacementContent"))
+
+
+def agy_call(tool_call: dict, *, windows: bool) -> tuple[str, dict] | None:
+    """Запрос разрешения agy → (инструмент, аргументы) для ворот, как у
+    Claude Code: execute → Bash/PowerShell (обёртка оболочки снимается,
+    `codex_command`), read → Read, search → Grep, edit → Write, delete →
+    команда удаления, move → команда переноса, fetch → WebFetch/WebSearch,
+    MCP → `mcp__сервер__инструмент`, think → внутреннее. Смена режима
+    (`switch_mode`) и вызов без нужного поля — None (отказ); неизвестный вид
+    — `agy:<вид>` (ворота: в ходе USER — карточка)."""
+    tool_call = tool_call if isinstance(tool_call, dict) else {}
+    raw = tool_call.get("rawInput") if isinstance(tool_call.get("rawInput"), dict) else {}
+    kind = str(tool_call.get("kind") or "other")
+    mcp = agy_mcp(tool_call)
+    if mcp is not None:
+        return f"mcp__{mcp[0]}__{mcp[1]}", dict(raw)
+    if kind == "switch_mode":
+        return None
+    if kind == "think":
+        return "TodoWrite", {}
+    if kind == "execute":
+        command = _agy_str(raw, _AGY_COMMAND_KEYS)
+        if not command:
+            return None
+        tool, code = codex_command(command, windows=windows)
+        return tool, {"command": code}
+    path = _agy_path(tool_call, raw)
+    if kind == "read":
+        return ("Read", {"file_path": path}) if path else None
+    if kind == "search":
+        pattern = _agy_str(raw, _AGY_QUERY_KEYS)
+        if not path and not pattern:
+            return None
+        return "Grep", {k: v for k, v in (("pattern", pattern), ("path", path)) if v}
+    if kind == "edit":
+        return ("Write", {"file_path": path, "content": _agy_new_text(tool_call, raw)}) if path else None
+    if kind == "delete":
+        if not path:
+            return None
+        return (("PowerShell", {"command": f"Remove-Item -LiteralPath {_ps_quote(path)}"}) if windows
+                else ("Bash", {"command": f"rm -- {shlex.quote(path)}"}))
+    if kind == "move":
+        dest = _agy_str(raw, _AGY_DEST_KEYS)
+        if not path or not dest:
+            return None
+        return (("PowerShell", {"command": f"Move-Item -LiteralPath {_ps_quote(path)} "
+                                           f"-Destination {_ps_quote(dest)}"}) if windows
+                else ("Bash", {"command": f"mv -- {shlex.quote(path)} {shlex.quote(dest)}"}))
+    if kind == "fetch":
+        url = _agy_str(raw, _AGY_URL_KEYS)
+        if url:
+            return "WebFetch", {"url": url}
+        query = _agy_str(raw, _AGY_QUERY_KEYS)
+        return ("WebSearch", {"query": query}) if query else None
+    title = " ".join(str(tool_call.get("title") or "").split())[:200]
+    return f"agy:{_AGY_KIND.sub('', kind.lower()) or 'other'}", {"title": title, **raw}
+
+
+def agy_approval(gate: "ConsentGate", tool_call: dict, *, windows: bool) -> Decision:
+    """Ответ на `session/request_permission` agy — решение ворот (`allow` —
+    разрешить один раз, иначе отказ). Команда из `command_denial_patterns`
+    — отказ без карточки в любом ходе (удаление, отправка наружу,
+    публикация: agy их не выполняет, таблица уровней доступа). Остальное —
+    `check(via=AGY)`: что ворота отдали бы CLI (`auto`), agy в ходе USER
+    делает сам — команды, правку в рабочих папках, чтение, веб, MCP-чтение;
+    прочее (неизвестный вид) — карточка. Запись вне рабочих папок, изменение
+    через MCP, режим confirm — карточка, как у Claude Code."""
+    tool_call = tool_call if isinstance(tool_call, dict) else {}
+    call = agy_call(tool_call, windows=windows)
+    tid = tool_call.get("toolCallId") if isinstance(tool_call.get("toolCallId"), str) else None
+    if call is None:
+        what = ("сменить режим Antigravity" if tool_call.get("kind") == "switch_mode"
+                else "непонятный запрос Antigravity")
+        return gate._record(Decision(DENY, "", what, "other", UNPARSED))
+    tool, data = call
+    if tool in SHELL and command_denied(str(data.get("command") or "")):
+        kind, what = describe(tool, data)
+        risk = shell_risk(tool, str(data.get("command") or ""))
+        gate._log(f"согласие: отказ (agy, запрет команды, {kind})")
+        return gate._record(Decision(DENY, AGY_DENIED.format(what=what), what, kind,
+                                     risk if risk in (DELETE, SEND) else "agy-denied"))
+    return gate.check(tool, data, tool_use_id=tid, via=AGY, read_only=agy_read_only(tool_call))

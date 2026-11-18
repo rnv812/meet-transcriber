@@ -1873,3 +1873,51 @@ def test_codex_mcp_question_without_a_card_is_declined(dirs, level, params):
     shown = _cards_answer(gate, ["allow"])
     assert consent.codex_approval(gate, _ELICIT, params, {}, windows=False)[0] == "decline"
     assert shown == []
+
+
+# --- Antigravity CLI: запрос разрешения ACP → вызов для ворот ---------------------------------
+
+
+def test_agy_call_maps_acp_kinds_like_claude_code():
+    from meet.llm import consent as c
+
+    assert c.agy_call({"kind": "execute", "rawInput": {"command": "npm test"}}, windows=False) == \
+        ("Bash", {"command": "npm test"})
+    assert c.agy_call({"kind": "execute", "rawInput": {"CommandLine": "dir"}}, windows=True)[0] == "PowerShell"
+    assert c.agy_call({"kind": "read", "locations": [{"path": "/a/b.md"}]}, windows=False) == \
+        ("Read", {"file_path": "/a/b.md"})
+    assert c.agy_call({"kind": "edit", "locations": [{"path": "/a/b.md"}],
+                       "content": [{"type": "diff", "path": "/a/b.md", "newText": "x"}]}, windows=False) == \
+        ("Write", {"file_path": "/a/b.md", "content": "x"})
+    assert c.agy_call({"kind": "delete", "locations": [{"path": "/a/b.md"}]}, windows=False) == \
+        ("Bash", {"command": "rm -- /a/b.md"})
+    assert c.agy_call({"kind": "fetch", "rawInput": {"url": "https://x.org"}}, windows=False) == \
+        ("WebFetch", {"url": "https://x.org"})
+    assert c.agy_call({"kind": "switch_mode"}, windows=False) is None
+    assert c.agy_call({"kind": "execute", "rawInput": {}}, windows=False) is None
+    assert c.agy_call({"kind": "other", "title": "Странное"}, windows=False)[0] == "agy:other"
+
+
+def test_agy_mcp_and_read_only_hint():
+    from meet.llm import consent as c
+
+    call = {"kind": "other", "title": "mcp(jira/get_issue)", "rawInput": {"issueKey": "A-1"}}
+    assert c.agy_call(call, windows=False) == ("mcp__jira__get_issue", {"issueKey": "A-1"})
+    assert c.agy_mcp({"_meta": {"antigravity": {"mcpServerName": "atlas", "mcpToolName": "get_page"}}}) == \
+        ("atlas", "get_page")
+    assert c.agy_read_only({"_meta": {"readOnlyHint": True}}) is True
+    assert c.agy_read_only({"_meta": {"annotations": {"readOnlyHint": True}}}) is True
+    assert c.agy_read_only({"kind": "other"}) is False
+
+
+def test_agy_denied_commands_never_reach_a_card():
+    from meet.llm import consent as c
+
+    cards = []
+    gate = c.ConsentGate(own_dirs=[], sensitive=[], confirmer=lambda card: cards.append(card) or "allow")
+    gate.begin(c.USER)
+    decision = c.agy_approval(gate, {"toolCallId": "t1", "kind": "execute",
+                                     "rawInput": {"command": "cd x && git push origin main"}}, windows=False)
+    assert decision.outcome == c.DENY and "Antigravity" in decision.reason and not cards
+    assert c.command_denied("sudo rm -rf /")
+    assert not c.command_denied("git status && npm test")

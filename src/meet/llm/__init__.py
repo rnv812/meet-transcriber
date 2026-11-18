@@ -1,4 +1,5 @@
-"""Слой провайдеров модели: Claude Code, Codex CLI, OpenCode, локальная OpenAI-совместимая.
+"""Слой провайдеров модели: Claude Code, Codex CLI, OpenCode, Antigravity CLI (`agy`),
+локальная OpenAI-совместимая.
 
 Пакет импортирует резидент, поэтому провайдеры здесь подгружаются лениво
 (внутри функций): ни claude_agent_sdk, ни aiohttp при импорте не тянутся.
@@ -12,11 +13,13 @@ from meet.llm.base import DEFAULT_CLAUDE_MODEL, NO_VISION_NOTE, AgentReply, Runn
 if TYPE_CHECKING:
     from meet.settings import Settings
 
-PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
+PROVIDERS = ("claude-code", "codex", "opencode", "agy", "openai-compatible")
 # Порядок выбора для "auto": подписки CLI раньше локальной модели. OpenCode в
 # «Авто» не участвует — только явным выбором: у кого «Авто» шло на локальную
 # модель, текст встречи не должен сам уйти облачному провайдеру из конфига
-# OpenCode, едва тот появился на машине.
+# OpenCode, едва тот появился на машине. Antigravity CLI (`agy`) — тоже только
+# явным выбором: на потребительских тарифах Google встраивание agy в чужие
+# приложения не поддерживает, рекомендован ключ API (окно «Модели и анализ»).
 AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
 __all__ = ["AUTO_PROVIDERS", "DEFAULT_CLAUDE_MODEL", "LABELS", "NO_VISION_NOTE", "PROVIDERS", "AgentReply",
@@ -25,17 +28,20 @@ __all__ = ["AUTO_PROVIDERS", "DEFAULT_CLAUDE_MODEL", "LABELS", "NO_VISION_NOTE",
            "tier_kwargs", "vision"]
 
 # Кто видит изображения (v4-design §5.1): Claude Code — блоки base64 в
-# сообщении, Codex — `--image=`. OpenCode (флаг вложения не проверен) и
-# локальная модель (решение концепции) — нет: runner параметр `images`
+# сообщении, Codex — `--image=`. OpenCode (флаг вложения не проверен),
+# Antigravity CLI (как у OpenCode — пометкой) и локальная модель (решение
+# концепции) — нет: runner параметр `images`
 # принимает и игнорирует, окно показывает NO_VISION_NOTE.
 VISION_PROVIDERS = ("claude-code", "codex")
 # Чьи вызовы инструментов приходят в чат по ходу вызова (`run(on_event=…)`):
-# Codex — построчно из `--json`. OpenCode — после вызова (`AgentReply.tools`);
-# у Claude Code свой поток (`claude_stream`), не runner.
-STREAMING_PROVIDERS = ("codex",)
+# Codex — построчно из `--json`, Antigravity CLI — из `session/update` ACP.
+# OpenCode — после вызова (`AgentReply.tools`); у Claude Code свой поток
+# (`claude_stream`), не runner.
+STREAMING_PROVIDERS = ("codex", "agy")
 # Кто продолжает свой сеанс нативно (v4-design §12): Claude Code `--resume`,
-# Codex `exec resume`, OpenCode `--session`. Локальная модель — только затравкой.
-RESUME_PROVIDERS = ("claude-code", "codex", "opencode")
+# Codex `exec resume`, OpenCode `--session`, Antigravity CLI `session/resume`.
+# Локальная модель — только затравкой.
+RESUME_PROVIDERS = ("claude-code", "codex", "opencode", "agy")
 # Кто сам не даёт читать закрытые папки (`deny_paths`, `kb_exclude`; v4-simple
 # §6): Claude Code — правила Read(//…/**) (проверено, что CLI их принимает при
 # наших флагах; что Grep их соблюдает — смоук); OpenCode — запрет в правах
@@ -49,6 +55,7 @@ LABELS = {
     "claude-code": "Claude Code",
     "codex": "Codex",
     "opencode": "OpenCode",
+    "agy": "Antigravity CLI",
     "openai-compatible": "Локальная модель",
 }
 
@@ -113,6 +120,9 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
     if name == "opencode":
         from meet.llm import opencode
         return partial(_call, opencode, proxy=cfg.llm.proxy, model=cfg.llm.opencode_model or None)
+    if name == "agy":
+        from meet.llm import antigravity
+        return partial(_call, antigravity, proxy=cfg.llm.proxy, model=cfg.llm.agy_model or None)
     if name == "openai-compatible":
         from meet.llm import openai_compat
         return partial(openai_compat.run, base_url=cfg.llm.base_url,
@@ -155,7 +165,7 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
     if name == "openai-compatible":
         return detect.local_reachable(cfg.llm.base_url, via_proxy=local_route(cfg))
     finders = {"claude-code": detect.find_claude, "codex": detect.find_codex,
-               "opencode": detect.find_opencode}
+               "opencode": detect.find_opencode, "agy": detect.find_agy}
     path = finders[name]() if name in finders else None
     if path is None:
         return False
@@ -214,6 +224,8 @@ def not_found(name: str, cfg: "Settings") -> str:
         return "не найден Codex CLI (codex)"
     if name == "opencode":
         return detect.OPENCODE_NOT_FOUND
+    if name == "agy":
+        return detect.AGY_NOT_FOUND
     return f"локальная модель не отвечает: {cfg.llm.base_url}"
 
 
@@ -225,6 +237,8 @@ def describe(provider: str | None, cfg: "Settings") -> dict:
         model = claude_model(cfg.llm.model)
     elif provider == "opencode":
         model = cfg.llm.opencode_model or None
+    elif provider == "agy":
+        model = cfg.llm.agy_model or None
     elif provider == "openai-compatible":
         model = cfg.llm.local_model or None
     return {"provider": provider, "model": model}
@@ -289,7 +303,8 @@ def deny_enforced(provider: str | None) -> bool:
 def forget_session(provider: str | None, session_id: str | None) -> int:
     """Удалить сохранённый сеанс провайдера (удалили чат встречи; смоук с
     `--cleanup`): Claude Code и Codex — файлы сеанса в их хранилище (команды
-    удаления у CLI нет), OpenCode — `opencode session delete`. → сколько
+    удаления у CLI нет), OpenCode — `opencode session delete`, Antigravity CLI —
+    файлы разговора в папке данных agy для Meet. → сколько
     удалено (0 — нечего, не тот id или провайдер без сеансов)."""
     if not session_id:
         return 0
@@ -302,6 +317,9 @@ def forget_session(provider: str | None, session_id: str | None) -> int:
     if provider == "opencode":
         from meet.llm import opencode
         return opencode.forget_session(session_id)
+    if provider == "agy":
+        from meet.llm import antigravity
+        return antigravity.forget_session(session_id)
     return 0
 
 

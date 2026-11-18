@@ -83,7 +83,7 @@ def _installed(monkeypatch, **found):
 
 def test_summary_without_any_provider_is_409_text(state, monkeypatch):
     _installed(monkeypatch)
-    with pytest.raises(control.Conflict, match="Подключите Claude Code, Codex или OpenCode"):
+    with pytest.raises(control.Conflict, match="Подключите Claude Code, Codex, OpenCode или Antigravity CLI"):
         state.make_summary(RID)
     assert state.llm_queue.listing() == []
 

@@ -186,33 +186,12 @@ def bash_denials() -> dict:
     """Шаблоны `bash` в ходе USER, которые OpenCode запрещает: удаление,
     отправка наружу, публикация, оболочки с кодом в строке (их содержимое
     шаблоны не видят). Шаблон OpenCode — `*` и `?` по всей строке команды;
-    регистр PowerShell — оба варианта."""
+    регистр PowerShell — оба варианта. Список шаблонов — общий с Antigravity
+    CLI (`consent.command_denial_patterns`)."""
     from meet.llm import consent
 
-    rules: list[str] = []
-    for prog in [*sorted(consent.DELETE_PROGRAMS | consent.SEND_PROGRAMS), "Remove-Item", "Send-MailMessage"]:
-        rules += [prog, f"{prog} *"]
-    rules += ["git clean*", "git rm *", "git reset --hard*", "git reset * --hard*", "git checkout -- *",
-              "git checkout .*", "git restore *", "git stash drop*", "git stash clear*", "git push*",
-              "git * push*", "git * clean*", "git send-email*", "find *-delete*", "find *-exec*",
-              "find *-ok*", "xargs *", "rsync *:*"]
-    for flag in ("-d", "--data", "-F", "--form", "-T", "--upload", "--json", "-X", "--request"):
-        rules.append(f"curl *{flag}*")
-    rules += ["wget *--post*", "wget *--method*", "wget *--body*"]
-    for cmdlet in ("Invoke-WebRequest", "iwr", "Invoke-RestMethod", "irm"):
-        rules += [f"{cmdlet} *{flag}*" for flag in ("-M", "-B", "-I", "-F")]
-    for forge in ("gh", "glab"):
-        rules += [f"{forge} * {verb}*" for verb in ("create", "comment", "note", "review", "merge", "close",
-                                                  "reopen", "edit", "delete", "upload")]
-        rules += [f"{forge} api *{flag}*" for flag in ("-f", "-F", "-X", "--field", "--raw-field", "--input",
-                                                       "--method")]
-    rules += [f"{prog} publish*" for prog in ("npm", "pnpm", "yarn", "cargo", "poetry", "uv")]
-    rules += ["twine upload*", "docker push*", "podman push*", "gem push*", "dotnet nuget push*"]
-    rules += [f"{shell} -c*" for shell in ("bash", "sh", "zsh", "dash")]
-    rules += ["cmd *", "powershell *", "pwsh *", "eval *", "iex *", "Invoke-Expression *",
-              "Invoke-Command *", "sudo *", "doas *", "runas *"]
     out: dict[str, str] = {}
-    for rule in rules:
+    for rule in consent.command_denial_patterns():
         for variant in dict.fromkeys((rule, rule.lower())):
             out[variant] = "deny"
     return out

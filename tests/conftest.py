@@ -133,6 +133,13 @@ def _isolated_agent_homes(monkeypatch, tmp_path_factory):
     # OpenCode хранит сеансы в `$XDG_DATA_HOME/opencode` (по умолчанию
     # ~/.local/share/opencode): тоже временная.
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path_factory.mktemp("xdg-data")))
+    # Antigravity CLI: своя папка данных Meet — в папке данных (LOCALAPPDATA уже
+    # временная), а общие настройки agy пользователя (`~/.gemini/config`, список
+    # MCP-серверов) — тоже временные.
+    from meet.llm import antigravity
+
+    agy_user = tmp_path_factory.mktemp("agy-user-config")
+    monkeypatch.setattr(antigravity, "user_config_dir", lambda: agy_user)
 
 
 @pytest.fixture(autouse=True)
@@ -267,12 +274,12 @@ def _no_model_process(monkeypatch):
     monkeypatch.setattr(codex, "_mcp_cache", {})
 
 
-_AGENT_STEMS = ("claude", "codex", "opencode")
+_AGENT_STEMS = ("claude", "codex", "opencode", "agy")
 
 
 def _agent_program(args) -> str | None:
-    """Запуск Claude Code, Codex или OpenCode в аргументах процесса: имя программы
-    claude*/codex*/opencode* (не *.py — поддельные CLI тестов идут через python) или
+    """Запуск Claude Code, Codex, OpenCode или Antigravity CLI в аргументах процесса: имя программы
+    claude*/codex*/opencode*/agy* (не *.py — поддельные CLI тестов идут через python) или
     cli.js пакета Claude Code где-либо в командной строке."""
     import os
     import shlex
@@ -301,7 +308,7 @@ def _agent_program(args) -> str | None:
 
 @pytest.fixture(autouse=True)
 def _no_agent_spawn(monkeypatch):
-    """Ни один тест не запускает Claude Code, Codex и OpenCode: настоящий CLI на машине
+    """Ни один тест не запускает Claude Code, Codex, OpenCode и Antigravity CLI (agy): настоящий CLI на машине
     разработчика сделал бы настоящий вызов модели по подписке. Перехвачены
     `subprocess.Popen` (через него идут и asyncio/anyio-подпроцессы),
     `asyncio.create_subprocess_exec` и запуск процесса транспортом Claude
