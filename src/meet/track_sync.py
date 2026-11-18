@@ -30,7 +30,9 @@
 не узнали (нет ffprobe, файл занят) — это не свойство записи: такой отказ не
 запоминается, оценка повторится в следующий раз.
 
-Здесь только оценка; применяет её «Расшифровать заново».
+Применяет оценку «Расшифровать заново» (`transcribe._transcribe_two_track`):
+сдвигает временную 16-кГц копию микрофона, а применённый сдвиг пишет в
+транскрипт (`APPLIED_KEY`). Файлы дорожек не меняются.
 """
 
 from __future__ import annotations
@@ -43,6 +45,10 @@ from meet import library
 from meet.merge import probe_duration
 
 META_KEY = "track_offset"
+# Поле транскрипта: сдвиг, применённый к микрофону при расшифровке. Плеер и
+# читатели дорожки берут только его — оценённый, но не применённый сдвиг с
+# текстом не согласован.
+APPLIED_KEY = "track_offset_applied_s"
 
 # Способ оценки: разница длительностей дорожек.
 METHOD_DURATIONS = "durations"
@@ -75,6 +81,27 @@ START_LINE = "запись начата"
 STOP_LINE = "запись остановлена штатно"
 MIC_PREFIX = "mic.opus: "
 TRIMMED_KIND = "record.trimmed"
+
+
+def offset_to_apply(stored: dict | None) -> float:
+    """Сколько секунд сдвига применить к микрофону: принятая оценка — её
+    `mic_s`, отказ, отметка записи с общим нолём, битое значение и запись не
+    из двух дорожек — 0."""
+    if not isinstance(stored, dict) or stored.get("reason") is not None:
+        return 0.0
+    mic_s = stored.get("mic_s")
+    if isinstance(mic_s, bool) or not isinstance(mic_s, (int, float)):
+        return 0.0
+    return float(mic_s)
+
+
+def applied_s(transcript: dict | None) -> float:
+    """Сдвиг микрофона, с которым расшифрована запись (`APPLIED_KEY`
+    транскрипта). Расшифровка до поправки (поля нет) и одна дорожка — 0."""
+    value = transcript.get(APPLIED_KEY) if isinstance(transcript, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
 
 
 def recorded_mark() -> dict:

@@ -103,6 +103,9 @@ class _Run:
         # сайдкар, mic_voices.json и поле `mic_split` пишет окончательная
         # расшифровка. None — микрофона нет (одна дорожка).
         self.mic = None
+        # Сдвиг, применённый к временной копии микрофона (meet.track_sync),
+        # секунды; транскрипт хранит его рядом с текстом. None — одна дорожка.
+        self.track_offset: float | None = None
 
     def choose(self, wav: Path) -> asr.Choice:
         if self.choice is None:
@@ -730,7 +733,8 @@ def transcribe(
                                 diarization=diar.skipped if diar is not None else None,
                                 choice=run.choice,
                                 created_at=text_phase.created_at if text_phase is not None else None,
-                                mic_split=mic.report if mic is not None else None)
+                                mic_split=mic.report if mic is not None else None,
+                                track_offset=run.track_offset)
     if written:
         # После транскрипта: не записался он — список убранного описывал бы
         # расшифровку, которой нет.
@@ -757,9 +761,19 @@ def _asr_fields(raw: dict, choice) -> None:
         raw["asr_note"] = note
 
 
+def _offset_field(raw: dict, track_offset: float | None) -> None:
+    """Сдвиг микрофона в транскрипт (`track_sync.APPLIED_KEY`): плеер и
+    образцы сводят дорожки с ним, а не с оценкой из meta.json."""
+    if track_offset is not None:
+        from meet import track_sync
+
+        raw[track_sync.APPLIED_KEY] = round(float(track_offset), 3)
+
+
 def _write_structured(path: Path, segments, title: str, name_map: dict,
                       diarization: str | None = None, choice=None,
-                      created_at: str | None = None, mic_split: dict | None = None) -> bool:
+                      created_at: str | None = None, mic_split: dict | None = None,
+                      track_offset: float | None = None) -> bool:
     """`transcript.json` рядом с записью — структурный источник для редактора.
 
     Markdown остаётся человеческим артефактом и форматом экспорта, но править
@@ -779,6 +793,9 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
 
     `mic_split` — итог разделения микрофона звонка (meet.mic_split: статус,
     людей в комнате, сколько убрано дублей); у одной дорожки поля нет.
+
+    `track_offset` — сдвиг, применённый к микрофону (`track_offset_applied_s`,
+    meet.track_sync; 0 — не сдвигали); у одной дорожки поля нет.
 
     → записан ли transcript.json."""
     if not path.is_dir():
@@ -805,6 +822,7 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
         raw["diarization"] = diarization
     if mic_split:
         raw["mic_split"] = mic_split
+    _offset_field(raw, track_offset)
     _asr_fields(raw, choice)
     if _find_track(path, "sys") and _find_track(path, "mic"):
         # Микрофонные сегменты помечены пайплайном (`track`): выводить их по
@@ -994,6 +1012,7 @@ class _TextPhase:
                  for s in segments]
         raw = library.segments_to_raw(plain, title=self.title, source=str(self.folder))
         raw[library.PHASE] = library.TEXT_PHASE
+        _offset_field(raw, self.run.track_offset)
         _asr_fields(raw, self.run.choice)
         if _find_track(self.folder, "sys") and _find_track(self.folder, "mic"):
             raw["track_marks"] = "pipeline"
@@ -1043,6 +1062,23 @@ def _transcribe_single(
     return segments, diar, name_map
 
 
+def _mic_offset(folder: Path) -> float:
+    """Сдвиг микрофона записи (meet.track_sync): оценка из meta.json или
+    новая, если её там нет. Отказ оценки и сбой при ней — 0, расшифровка идёт
+    как раньше. В журнал — только число и способ."""
+    from meet import track_sync
+
+    try:
+        stored = track_sync.ensure(folder)
+    except OSError as e:
+        print(f"сдвиг дорожек не оценён ({type(e).__name__})")
+        return 0.0
+    offset = track_sync.offset_to_apply(stored)
+    if offset:
+        print(f"сдвиг микрофона: {offset:+.3f} с ({stored.get('method')})")
+    return offset
+
+
 def _transcribe_two_track(
     folder: Path,
     speakers: int | None,
@@ -1060,9 +1096,13 @@ def _transcribe_two_track(
     stages = run.stages = Stages(bus, _two_track_plan(_align_planned(align)))
     with temp_dir() as td, stages.ticking():
         stages.begin("convert")
+        # Сдвиг старой записи — один раз, во временную копию микрофона: дальше
+        # распознавание, склейка дорожек и разбор микрофона видят выровненный
+        # звук. Исходные дорожки не меняются.
+        run.track_offset = _mic_offset(folder)
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
         stages.update(0.5)
-        mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
+        mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav", offset_s=run.track_offset)
         stages.update(1)
         _weigh_tracks(stages, sys_wav, mic_wav)
         run.tracks = {"sys": sys_wav, "mic": mic_wav}

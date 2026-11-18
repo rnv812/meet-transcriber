@@ -202,3 +202,32 @@ def test_estimate_folder_does_not_write(tmp_path):
     got = track_sync.estimate_folder(folder, probe=_Probe(3600.4, 3600.1))
     assert got["mic_s"] == pytest.approx(0.3)
     assert not (folder / library.META_JSON).exists()
+
+
+# --- что применяет перерасшифровка -------------------------------------------
+
+
+@pytest.mark.parametrize("stored, applied", [
+    ({"mic_s": 0.4, "method": "durations", "bounds": [0.0, 0.5]}, 0.4),
+    ({"mic_s": -0.3, "method": "durations"}, -0.3),
+    (track_sync.recorded_mark(), 0.0),
+    ({"reason": "no_journal"}, 0.0),
+    ({"method": "durations", "reason": "out_of_bounds", "raw_s": 2.0}, 0.0),
+    ({"reason": "no_duration"}, 0.0),
+    ({"mic_s": "0.4", "method": "durations"}, 0.0),  # битое значение — как отказ
+    ({"mic_s": True, "method": "durations"}, 0.0),
+    (None, 0.0),  # не двухдорожечная
+])
+def test_offset_to_apply_takes_only_an_accepted_estimate(stored, applied):
+    assert track_sync.offset_to_apply(stored) == pytest.approx(applied)
+
+
+@pytest.mark.parametrize("transcript, applied", [
+    ({"segments": [], "track_offset_applied_s": 0.4}, 0.4),
+    ({"segments": [], "track_offset_applied_s": -0.3}, -0.3),
+    ({"segments": []}, 0.0),  # расшифровка до поправки
+    ({"segments": [], "track_offset_applied_s": "x"}, 0.0),
+    (None, 0.0),  # транскрипта нет
+])
+def test_applied_offset_of_a_transcript_reads_old_ones_as_zero(transcript, applied):
+    assert track_sync.applied_s(transcript) == pytest.approx(applied)

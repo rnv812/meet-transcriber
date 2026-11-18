@@ -14,17 +14,30 @@ def ensure_ffmpeg() -> None:
         )
 
 
-def to_wav16k(src: Path, dst: Path, normalize: bool = False) -> Path:
+def to_wav16k(src: Path, dst: Path, normalize: bool = False, offset_s: float = 0.0) -> Path:
     """Любой аудио/видеофайл → mono 16 kHz wav (вход для ASR и диаризации).
 
     normalize=True добавляет loudness-нормализацию (EBU R128, loudnorm) — для
     тихой дальней дорожки (звук собеседников из звонка), чтобы поднять её до
     уровня, на котором ASR работает стабильнее. Микрофон не нормализуем.
+
+    offset_s сдвигает звук во времени (сдвиг микрофона старой записи,
+    meet.track_sync): больше нуля — столько секунд тишины в начале, меньше
+    нуля — начало обрезано на столько же. Меняется только `dst`, исходный
+    файл ffmpeg лишь читает.
     """
     ensure_ffmpeg()
     cmd = ["ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000"]
+    filters = []
     if normalize:
-        cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+        filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+    if offset_s > 0:
+        # all=1 — на каждом канале: до -ac 1 дорожка может быть стерео.
+        filters.append(f"adelay=delays={round(offset_s * 1000, 3)}:all=1")
+    elif offset_s < 0:
+        filters.append(f"atrim=start={-offset_s:.6f},asetpts=PTS-STARTPTS")
+    if filters:
+        cmd += ["-af", ",".join(filters)]
     cmd.append(str(dst))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:

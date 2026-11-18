@@ -739,3 +739,146 @@ def test_replacement_rules_failure_does_not_stop_transcription(monkeypatch, caps
     segs = [Segment(0.0, 1.0, "а")]
     assert tr._fix_terms(segs) is segs
     assert "правила замены" in capsys.readouterr().out
+
+
+# --- сдвиг микрофона старой записи при перерасшифровке -----------------------
+
+
+def _shift_pipeline(monkeypatch, tmp_path, offset: dict | None, ext=".opus"):
+    """Папка двухдорожечной записи и пайплайн без моделей; to_wav16k
+    запоминает, с какими параметрами переводили каждую дорожку."""
+    import json
+
+    import meet.transcribe as tr
+    from meet import library
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    folder = tmp_path / "2026-09-01_10-00"
+    folder.mkdir()
+    (folder / f"sys{ext}").write_bytes(b"sys-bytes")
+    (folder / f"mic{ext}").write_bytes(b"mic-bytes")
+    if offset is not None:
+        (folder / library.META_JSON).write_text(json.dumps({"track_offset": offset}), encoding="utf-8")
+    calls = {}
+
+    def fake_wav(src, dst, **kw):
+        calls[Path(src).stem] = kw
+        return dst
+
+    monkeypatch.setattr(tr, "to_wav16k", fake_wav)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: (
+        [Segment(0.0, 1.0, "привет")] if "sys" in str(p) else [Segment(2.0, 3.0, "здравствуйте")]))
+    return tr, folder, calls
+
+
+def test_accepted_offset_shifts_only_the_temp_mic_and_is_stored(monkeypatch, tmp_path):
+    from meet import library, track_sync
+
+    tr, folder, calls = _shift_pipeline(monkeypatch, tmp_path, {"mic_s": 0.4, "method": "durations"})
+    tr.transcribe(str(folder), align=False)
+    assert calls["mic"].get("offset_s") == pytest.approx(0.4)
+    assert not calls["sys"].get("offset_s")
+    assert calls["sys"].get("normalize") is True
+    data = library.read_transcript(folder)
+    assert data[track_sync.APPLIED_KEY] == pytest.approx(0.4)
+    assert (folder / "sys.opus").read_bytes() == b"sys-bytes"
+    assert (folder / "mic.opus").read_bytes() == b"mic-bytes"
+
+
+def test_negative_offset_trims_the_temp_mic(monkeypatch, tmp_path):
+    from meet import library, track_sync
+
+    tr, folder, calls = _shift_pipeline(monkeypatch, tmp_path, {"mic_s": -0.3, "method": "durations"})
+    tr.transcribe(str(folder), align=False)
+    assert calls["mic"].get("offset_s") == pytest.approx(-0.3)
+    assert library.read_transcript(folder)[track_sync.APPLIED_KEY] == pytest.approx(-0.3)
+
+
+def test_refused_estimate_changes_nothing_and_applies_zero(monkeypatch, tmp_path):
+    """Нет журнала — отказ запоминается в meta.json, микрофон как есть."""
+    from meet import library, track_sync
+
+    tr, folder, calls = _shift_pipeline(monkeypatch, tmp_path, None)
+    tr.transcribe(str(folder), align=False)
+    assert library.read_meta(folder)[track_sync.META_KEY]["reason"] == track_sync.NO_JOURNAL
+    assert not calls["mic"].get("offset_s")
+    assert library.read_transcript(folder)[track_sync.APPLIED_KEY] == 0
+
+
+def test_estimate_is_made_before_recognition_when_meta_has_none(monkeypatch, tmp_path):
+    from meet import track_sync
+
+    tr, folder, calls = _shift_pipeline(monkeypatch, tmp_path, None)
+    seen = []
+    monkeypatch.setattr(track_sync, "ensure",
+                        lambda f, probe=None: seen.append(Path(f)) or {"mic_s": 0.25, "method": "durations"})
+    tr.transcribe(str(folder), align=False)
+    assert seen == [folder]
+    assert calls["mic"].get("offset_s") == pytest.approx(0.25)
+
+
+def test_estimate_failure_does_not_stop_transcription(monkeypatch, tmp_path):
+    """meta.json не записался — расшифровка идёт как раньше, без сдвига."""
+    from meet import library, track_sync
+
+    tr, folder, calls = _shift_pipeline(monkeypatch, tmp_path, None)
+
+    def broken(f, probe=None):
+        raise PermissionError("meta.json занят")
+
+    monkeypatch.setattr(track_sync, "ensure", broken)
+    tr.transcribe(str(folder), align=False)
+    assert not calls["mic"].get("offset_s")
+    assert library.read_transcript(folder)[track_sync.APPLIED_KEY] == 0
+
+
+def test_single_track_is_not_estimated_and_has_no_applied_offset(monkeypatch, tmp_path):
+    from meet import library, track_sync
+
+    tr = _no_token_pipeline(monkeypatch)
+    monkeypatch.setattr(track_sync, "ensure", lambda *a, **k: pytest.fail("оценка у одной дорожки"))
+    folder = tmp_path / "2026-10-01_10-00_import"
+    folder.mkdir()
+    (folder / "source.mp4").write_bytes(b"x")
+    tr.transcribe(str(folder), align=False)
+    assert track_sync.APPLIED_KEY not in library.read_transcript(folder)
+
+
+@pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="ffmpeg не установлен")
+def test_real_conversion_delays_the_temp_mic_and_keeps_originals(monkeypatch, tmp_path):
+    """Настоящий ffmpeg: распознавание микрофона получает файл с 0,4 с тишины в
+    начале, исходные дорожки побайтно те же."""
+    import wave
+
+    import meet.audio as audio
+    from meet import library, track_sync
+
+    tr, folder, _ = _shift_pipeline(monkeypatch, tmp_path, {"mic_s": 0.4, "method": "durations"}, ext=".wav")
+    monkeypatch.setattr(tr, "to_wav16k", audio.to_wav16k)
+    rate = 48000
+    tone = (0.5 * np.sin(2 * np.pi * 440 * np.arange(rate) / rate) * 32767).astype(np.int16)
+    for name in ("sys.wav", "mic.wav"):
+        with wave.open(str(folder / name), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(tone.tobytes())
+    before = {name: (folder / name).read_bytes() for name in ("sys.wav", "mic.wav")}
+    heard = {}
+
+    def fake_asr(path, hotwords, **kw):
+        with wave.open(str(path), "rb") as w:
+            data = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+            sr = w.getframerate()
+        loud = np.flatnonzero(np.abs(data) > 0.05)
+        heard[Path(path).stem] = (float(loud[0]) / sr, len(data) / sr)
+        return [Segment(0.0, 1.0, "а")]
+
+    monkeypatch.setattr(tr, "transcribe_wav", fake_asr)
+    tr.transcribe(str(folder), align=False)
+    assert heard["mic16"][0] == pytest.approx(0.4, abs=0.01)
+    assert heard["mic16"][1] == pytest.approx(1.4, abs=0.01)
+    assert heard["sys16"][0] < 0.01
+    assert {name: (folder / name).read_bytes() for name in before} == before
+    assert library.read_transcript(folder)[track_sync.APPLIED_KEY] == pytest.approx(0.4)
