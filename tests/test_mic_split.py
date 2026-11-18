@@ -622,6 +622,27 @@ def test_speaker_echo_is_dropped_from_mic(tmp_path):
     assert got.voices["lag_s"]["echo"] == pytest.approx(-0.03, abs=0.01)
 
 
+def test_aligned_delays_decide_echo_neighbour_and_leak(tmp_path):
+    """Дорожки с общим нолём (без сдвига старта микрофона): эхо колонок на
+    0,15 с позже sys, сосед на 0,2 с раньше sys, мой голос в sys на 0,15 с
+    позже — по звуку и словам каждое решено своим видом."""
+    echo_room = [(_words(t, s + 0.15), ROOM2, QUIET) for s, t in ROOM2_PHRASES]
+    remote = [(_words(t, s), ROOM2) for s, t in ROOM2_PHRASES]
+    got, _ = _run(_meeting(tmp_path, extra_mic=echo_room, sys_phrases=remote), _owner())
+    assert got.report["dropped"] == {"echo": 4, "neighbour": 0, "owner_leak": 0}
+    assert got.voices["lag_s"]["echo"] == pytest.approx(-0.15, abs=0.01)
+
+    neighbour = [(_words(t, s + 0.2), ROOM1) for s, t in ROOM1_PHRASES]
+    got, _ = _run(_meeting(tmp_path, room1=True, sys_phrases=neighbour), _owner())
+    assert got.report["dropped"] == {"echo": 0, "neighbour": 4, "owner_leak": 0}
+    assert got.voices["lag_s"]["neighbour"] == pytest.approx(0.2, abs=0.01)
+
+    leak = [(_words(t, s + 0.15), OWNER) for s, t in OWNER_PHRASES]
+    got, _ = _run(_meeting(tmp_path, sys_phrases=leak), _owner())
+    assert got.report["dropped"] == {"echo": 0, "neighbour": 0, "owner_leak": 4}
+    assert got.sys == [] and got.voices["leak"]["gate"] == "voice_match"
+
+
 def test_owner_voice_leaking_into_sys_is_dropped_from_sys(tmp_path):
     sys_phrases = [(_words(t, s + LEAK_LAG), OWNER) for s, t in OWNER_PHRASES]
     other = _words("коллеги всем добрый день начнём", 60.0)

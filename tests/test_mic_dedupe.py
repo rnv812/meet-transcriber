@@ -190,6 +190,33 @@ def test_speaker_echo_in_room_window_is_dropped_from_mic():
     assert lags.reference("echo") == pytest.approx(-0.03, abs=0.01)
 
 
+# Задержки на выровненных дорожках (общий ноль, без сдвига старта): эхо
+# колонок — копия в микрофоне позже sys на 0,05–0,25 с, сосед — копия в sys
+# позже микрофона на 0,07–0,29 с. Пороги не должны зависеть от того, что
+# раньше к лагу прибавлялся сдвиг старта микрофона.
+
+
+@pytest.mark.parametrize("lag", [-0.05, -0.15, -0.25])
+def test_speaker_echo_delay_range_is_an_echo(lag):
+    text = "по бюджету вопросов больше нет"
+    sys = _words(text, 20.0, seg="s1")
+    mic = _words(text, 20.0 - lag, seg="m1", role="room")
+    drops, lags = _find(mic, sys, lag=lag)
+    assert _reasons(drops) == [("mic", "echo", 5)]
+    assert lags.reference("echo") == pytest.approx(lag, abs=0.01)
+    assert lags.reference("neighbour") is None
+
+
+@pytest.mark.parametrize("lag", [0.07, 0.2, 0.29])
+def test_room_neighbour_delay_range_is_a_neighbour(lag):
+    mic = _words(NEIGHBOUR, 10.0, seg="m1", role="room")
+    sys = _words(NEIGHBOUR, 10.0 + lag, seg="s1")
+    drops, lags = _find(mic, sys, lag=lag)
+    assert _reasons(drops) == [("mic", "neighbour", 5)]
+    assert lags.reference("neighbour") == pytest.approx(lag, abs=0.01)
+    assert lags.reference("echo") is None
+
+
 LEAK_PHRASES = ["я пришлю отчёт до пятницы", "мы созвонимся с поставщиком завтра",
                 "надо проверить счёт ещё раз", "давайте закончим на этом сегодня",
                 "я напишу всем после обеда", "и ещё одна фраза про склад"]
@@ -226,6 +253,15 @@ def test_owner_leak_with_established_lag_and_same_envelope_is_dropped_from_sys()
     assert drops[0].to_raw()["pair"]["track"] == "mic" and drops[0].env_corr > 0.9
     assert report == {"candidates": 5, "seconds": pytest.approx(9.6, abs=0.05),
                       "judged_s": pytest.approx(9.6, abs=0.05), "cos": 0.9, "gate": "voice_match"}
+
+
+def test_owner_leak_of_015_s_on_aligned_tracks_passes_the_leak_check():
+    """Мой голос через ноутбук соседа в моём sys на 0,15 с позже — и по
+    словам, и по звуку: выше LEAK_MIN_LAG, утечка."""
+    report = {}
+    drops, _ = _leak_case(lag=0.15, report=report)
+    assert _reasons(drops) == LEAKED
+    assert report["gate"] == "voice_match" and report["candidates"] == 5
 
 
 def test_owner_leak_needs_envelope_evidence():

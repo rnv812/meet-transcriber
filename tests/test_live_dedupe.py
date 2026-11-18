@@ -1,6 +1,9 @@
 """Дубли соседа в живой ленте (meet.live_dedupe): задержка строк людей рядом,
 проверка против догнавшего sys, перепроверка показанных раньше времени."""
 
+import pytest
+
+from meet import mic_dedupe
 from meet.asr import Segment, Word
 from meet.live_dedupe import HOLD_MAX_S, LiveDuplicates
 
@@ -156,3 +159,32 @@ def test_envelope_frames_grow_with_audio():
     assert len(amp) == 100  # до 2 с по 20 мс
     assert abs(float(amp[0]) - 0.25) < 1e-6 and abs(float(amp[60]) - 0.5) < 1e-6
     assert float(amp[30]) == 0.0  # дыра — тишина
+
+
+@pytest.mark.parametrize("lag,kind", [(-0.15, "echo"), (0.2, "neighbour")])
+def test_live_decisions_match_the_recording_for_echo_and_neighbour(lag, kind):
+    """Эхо колонок (копия в микрофоне на 0,15 с позже sys) и сосед (копия в
+    sys на 0,2 с позже микрофона) на выровненных дорожках: живая лента
+    решает так же, как расшифровка записи по тем же словам."""
+    d = LiveDuplicates(clock=Clock())
+    mic_all, sys_all, shown = [], [], []
+    for i, text in enumerate(PHRASES[:4]):
+        mic = seg(10.0 * i, text)
+        sys_seg = seg(10.0 * i + lag, text)
+        mic_all.append(mic)
+        sys_all.append(sys_seg)
+        d.hold({"line": text}, mic, "room")
+        d.heard_sys([sys_seg], max(mic.end, sys_seg.end) + 3.5)
+        shown += [it["line"] for it in d.release()]
+    # Три первые пары — подпорки L*, четвёртая — копия: не показывается.
+    assert shown == PHRASES[:3] and d.stats["dropped"] == 1
+    assert d.lags.reference(kind) == pytest.approx(lag, abs=0.01)
+
+    def toks(segs, track, role=None):
+        return [mic_dedupe.Tok(key=(track, si, wi), seg=(track, si), start=w.start, end=w.end, text=w.text,
+                               **({"role": role} if role else {}))
+                for si, s in enumerate(segs) for wi, w in enumerate(s.words)]
+
+    drops, lags = mic_dedupe.find(toks(mic_all, "mic", "room"), toks(sys_all, "sys"), owner_known=True)
+    assert {d.reason for d in drops} == {kind} and len(drops) == 4
+    assert lags.reference(kind) == pytest.approx(lag, abs=0.01)
