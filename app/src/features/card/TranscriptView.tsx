@@ -64,7 +64,7 @@ const MAP_TOP = "16px";
 const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
 export function TranscriptView({
-  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
+  turns, colors, playable, onPlay, onPlayRange, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, seekTo = null, nowTurn = null,
   textPhase = false, notice = null, legendEnd = null,
 }: {
@@ -76,6 +76,8 @@ export function TranscriptView({
   colors: Map<string, string>;
   playable: boolean;
   onPlay: (turn: Turn) => void;
+  /** ▶ у «(нахлёст)»: кусок записи до отметки. */
+  onPlayRange?: (start: number, until: number) => void;
   onNameSpeaker?: (label: string) => void;
   /** Правка спикера у реплики (TurnEdit): меню, выбор нескольких. */
   onSpeaker?: (turn: number, anchor: HTMLElement) => void;
@@ -480,7 +482,8 @@ export function TranscriptView({
         </div>
       ) : (
         <div className="transcript__feed">
-          <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
+          <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onPlayRange={onPlayRange}
+            onNameSpeaker={onNameSpeaker}
             onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
             marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
             onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase}

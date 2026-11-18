@@ -376,7 +376,13 @@ export type PersonCard = {
   role?: string;
 };
 
-export type Sample = { recording: string; start: number; end: number; track: string };
+/** Слово образца: начало, конец (секунды записи) и текст с ведущим пробелом. */
+export type SampleWord = [number, number, string];
+
+/** Образец человека в «Голосах»: одна фраза последней записи с ним (нет — резидент отвечает 404). */
+export type Sample = {
+  recording: string; start: number; end: number; track: string; text?: string; words?: SampleWord[];
+};
 
 /** Профили людей убраны (0.3.2): строка об уборке в «Голосах». `notes` — файл с заметками людей, `folder` — где он. */
 export type ProfilesRemovedNotice = { notes: string | null; folder: string };
@@ -400,8 +406,8 @@ export type MicSplitInfo = {
 /** Фраза, убранная из расшифровки как повтор (`track` — с какой дорожки она убрана). */
 export type MicRemovedItem = { start: number; end: number; text: string; reason: MicDropReason; track: "mic" | "sys" };
 
-/** Фраза спикера для прослушивания в панели «Спикеры». */
-export type SpeakerPhrase = { start: number; end: number; text: string };
+/** Образец спикера — одна фраза 3–10 с; `words` — её слова со временем (у старого резидента нет, бывает пустым). */
+export type SpeakerPhrase = { start: number; end: number; text: string; words?: SampleWord[] };
 /** Похожий голос из базы: `score` — сходство 0..1. */
 export type SpeakerSuggestion = { name: string; score: number };
 /** Строка панели «Спикеры»: `label` — подпись в расшифровке, `name` — null у «Спикер N». */

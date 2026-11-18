@@ -10,6 +10,12 @@ export function clock(s: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
+/** «00:12,4» — время с десятыми долями секунды (подсказка у времени реплики). */
+export function preciseClock(s: number): string {
+  const tenths = Math.round(Math.max(0, s) * 10);
+  return `${clock(Math.floor(tenths / 10))},${tenths % 10}`;
+}
+
 export function duration(s: number): string {
   const mins = Math.round(Math.max(0, s) / 60);
   const h = Math.floor(mins / 60);

@@ -83,6 +83,9 @@
 .pcard__name:focus { outline: none; background: var(--surface-1); border-color: var(--accent); }
 /* Значок «Прослушать образец» — вровень с текстом имени (поле кнопки 12 + рамка 1 уходят влево). */
 .btn.pcard__play { margin-left: -13px; }
+/* Образец: кнопка и «00:12 · 4 с»; нет образца — подпись без кнопки. */
+.pcard__sample { display: flex; align-items: center; gap: var(--s-2); }
+.pcard__sample-time, .pcard__nosample { color: var(--ink-3); font-size: var(--text-xs); }
 .avatar-btn { padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; }
 .pcard__role { display: flex; flex-direction: column; gap: 6px; }
 .pcard__role-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); }

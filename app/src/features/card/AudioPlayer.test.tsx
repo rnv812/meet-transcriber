@@ -156,6 +156,129 @@ test("seek(at, true, until): фраза спикера играет до отм�
   expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
 });
 
+describe("точная остановка фрагмента — по таймеру, а не по timeupdate", () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** Как браузер: воспроизведение пошло (play() сработал, данные есть). */
+  function playing(audio: HTMLAudioElement) {
+    Object.defineProperty(audio, "paused", { configurable: true, value: false });
+    fireEvent.playing(audio);
+  }
+
+  test("фрагмент 3,0–8,0 с: пауза ровно на 8,0 с без единого timeupdate", () => {
+    const onPhrase = vi.fn();
+    const { ref, audio } = setup({ onPhrase });
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    expect(onPhrase).toHaveBeenLastCalledWith({ start: 3, until: 8 });
+    act(() => playing(audio));
+    act(() => { vi.advanceTimersByTime(4999); });
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+    expect(onPhrase).toHaveBeenLastCalledWith(null);
+  });
+
+  test("пока данных нет, таймер не идёт: отсчёт — с начала воспроизведения", () => {
+    const { ref, audio } = setup();
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => { vi.advanceTimersByTime(30_000); }); // «Подготовка аудио…»
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+    act(() => playing(audio));
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("скорость 2× — таймер на 2,5 с", () => {
+    const { ref, audio } = setup();
+    loaded(audio, 600);
+    audio.playbackRate = 2;
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    act(() => { vi.advanceTimersByTime(2499); });
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("смена скорости посреди фрагмента переставляет таймер", () => {
+    const { ref, audio } = setup();
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    act(() => { vi.advanceTimersByTime(2000); });
+    audio.currentTime = 5;
+    act(() => { audio.playbackRate = 2; }); // ratechange: осталось 3 с записи — 1,5 с
+    act(() => { vi.advanceTimersByTime(1499); });
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("timeupdate перепроверяет: конец пройден — пауза сразу", () => {
+    const { ref, audio } = setup();
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    audio.currentTime = 8.02;
+    fireEvent.timeUpdate(audio);
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("перемотка во время фрагмента отменяет таймер", () => {
+    const onPhrase = vi.fn();
+    const { ref, audio } = setup({ onPhrase });
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Позиция" }), { key: "ArrowRight" });
+    expect(onPhrase).toHaveBeenLastCalledWith(null);
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+  });
+
+  test("новый фрагмент снимает прежний: остановка — по концу нового", () => {
+    const onPhrase = vi.fn();
+    const { ref, audio } = setup({ onPhrase });
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    act(() => { vi.advanceTimersByTime(1000); });
+    act(() => ref.current!.seek(20, true, 30));
+    expect(onPhrase.mock.calls.map((c) => c[0])).toEqual([{ start: 3, until: 8 }, null, { start: 20, until: 30 }]);
+    act(() => { vi.advanceTimersByTime(9999); });
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("stop() — «Остановить» у образца: пауза, фрагмент снят", () => {
+    const onPhrase = vi.fn();
+    const { ref, audio } = setup({ onPhrase });
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    act(() => ref.current!.stop());
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+    expect(onPhrase).toHaveBeenLastCalledWith(null);
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  });
+
+  test("пауза кнопкой плеера снимает фрагмент", () => {
+    const onPhrase = vi.fn();
+    const { ref, audio } = setup({ onPhrase });
+    loaded(audio, 600);
+    act(() => ref.current!.seek(3, true, 8));
+    act(() => playing(audio));
+    fireEvent.play(audio);
+    fireEvent.click(screen.getByRole("button", { name: "Пауза" }));
+    expect(onPhrase).toHaveBeenLastCalledWith(null);
+  });
+});
+
 test("дорожка не загрузилась — «Аудио недоступно» вместо плеера", () => {
   const onAvailable = vi.fn();
   const { audio } = setup({ onAvailable });

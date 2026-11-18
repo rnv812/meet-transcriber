@@ -41,6 +41,8 @@ beforeEach(() => {
     name, color: "#000", has_avatar: false, samples: 1,
     meetings: [{ recording: "r1", title: "Планёрка", started_at: "2026-09-30T10:00:00", seconds: 600 }],
   }));
+  // Карточка человека спрашивает образец сразу: по умолчанию его нет.
+  vi.mocked(api.getSample).mockRejectedValue(new api.ApiError(404, "образца нет"));
   HTMLMediaElement.prototype.play = vi.fn(async () => {});
   HTMLMediaElement.prototype.load = vi.fn();
 });

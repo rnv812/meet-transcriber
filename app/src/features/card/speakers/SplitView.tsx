@@ -10,7 +10,7 @@
  * 4. «Применить» — один шаг истории встречи (его отменяет «Отменить»).
  */
 
-import { ArrowLeft, ChevronDown, Equal, Play } from "lucide-react";
+import { ArrowLeft, ChevronDown, Equal } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applySplit, cancelJob, prepareSplit, previewSplit, type Endpoint,
@@ -24,11 +24,11 @@ import { JobProgress } from "../../../ui/JobProgress";
 import { ProgressBar } from "../../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
+import { SamplePhrases } from "./SamplePhrases";
 import { TargetPicker, type Target } from "./TargetPicker";
 import { Icon } from "../../../ui/Icon";
 import { Select } from "../../../ui/Select";
 
-const PHRASE_S = 6;
 /** Сколько голосов можно задать при автоматическом разделении. */
 const K_OPTIONS = [2, 3, 4, 5].map((n) => ({ value: String(n), label: String(n) }));
 /** Сходство голосов групп, выше которого это, скорее всего, один человек (замер на реальной встрече: свои 0,91–0,94, чужие 0,02–0,08). */
@@ -320,19 +320,7 @@ function GroupCard({
           Голос этих реплик не похож уверенно ни на одного из выбранных людей. По умолчанию они остаются за «{label}» — проверьте их вручную.
         </div>
       )}
-      {group.samples.length > 0 && (
-        <ul className="spk-row__phrases" aria-label="Фразы группы">
-          {group.samples.map((s) => (
-            <li key={s.start} className="spk-phrase">
-              <button type="button" className="spk-phrase__play" disabled={!playable}
-                aria-label={`Прослушать фразу с ${clock(s.start)}`}
-                onClick={() => onPlay(s.start, Math.min(s.end, s.start + PHRASE_S))}><Icon as={Play} size="sm" /></button>
-              <span className="spk-phrase__time num muted">{clock(s.start)}</span>
-              <span className="spk-phrase__text">{s.text}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <SamplePhrases samples={group.samples} label="Фразы группы" playable={playable} onPlay={onPlay} />
       {group.suggestions.length > 0 && (
         <div className="spk-row__sugs" role="group" aria-label="Похожие голоса из базы">
           <span className="muted">Похож на:</span>

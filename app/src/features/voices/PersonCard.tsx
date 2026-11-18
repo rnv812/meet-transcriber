@@ -1,11 +1,13 @@
-import { Play } from "lucide-react";
+import { Play, Square } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
-  audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson, setPersonRole,
+  ApiError, audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson, setPersonRole,
   type Endpoint,
 } from "../../lib/api";
 import { dayLabel, duration, errorText } from "../../lib/format";
-import { ROLE_MAX, type Person, type PersonCard as PersonData } from "../../lib/types";
+import { stopAt } from "../../lib/phraseStop";
+import { NO_PHRASE, sampleCaption, sampleUntil } from "../../lib/samples";
+import { ROLE_MAX, type Person, type PersonCard as PersonData, type Sample } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog, useConfirm } from "../../ui/ConfirmDialog";
 import { Select } from "../../ui/Select";
@@ -50,7 +52,11 @@ export function PersonCard({
   const [draft, setDraft] = useState(name);
   const [confirm, setConfirm] = useState<null | "delete" | { merge: string }>(null);
   const audio = useRef<HTMLAudioElement>(null);
-  const stopAt = useRef<number | null>(null);
+  /** Образец фразы: undefined — ещё грузится, null — подходящей фразы нет (резидент: «образца нет»). */
+  const [sample, setSample] = useState<Sample | null | undefined>(undefined);
+  const [playing, setPlaying] = useState(false);
+  /** Отмена точной остановки играющего образца. */
+  const stopTimer = useRef<(() => void) | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const cancelled = useRef(false);
   const nameInput = useRef<HTMLInputElement>(null);
@@ -83,6 +89,30 @@ export function PersonCard({
     getPerson(endpoint, name).then((d) => live && setData(d), (e) => live && setError(errorText(e)));
     return () => { live = false; };
   }, [endpoint, name]);
+
+  // Образец — вместе с карточкой: рядом с ▶ видно его начало и длительность, а без образца ▶ нет.
+  useEffect(() => {
+    let live = true;
+    setSample(undefined);
+    setPlaying(false);
+    getSample(endpoint, name).then((s) => live && setSample(s), (e) => {
+      if (!live) return;
+      setSample(null);
+      if (!(e instanceof ApiError && e.status === 404)) setError(errorText(e));
+    });
+    return () => { live = false; };
+  }, [endpoint, name]);
+
+  const halt = () => {
+    stopTimer.current?.();
+    stopTimer.current = null;
+    setPlaying(false);
+  };
+  // Карточку закрыли или сменили человека — образец не доигрывает.
+  useEffect(() => () => {
+    stopTimer.current?.();
+    audio.current?.pause?.();
+  }, [name]);
 
   async function run(fn: () => Promise<void>) {
     setError(null);
@@ -130,15 +160,22 @@ export function PersonCard({
       onRoleSaved?.();
     });
   };
-  const play = () => run(async () => {
-    const s = await getSample(endpoint, name);
+  /** ▶ образца: от начала до конца фразы (не дольше страховки), остановка — точно на конце. */
+  const play = () => {
     const a = audio.current;
-    if (!a) return;
-    stopAt.current = s.end;
-    a.src = `${audioUrl(endpoint, s.recording, s.track as "sys" | "mic" | "source")}#t=${s.start},${s.end}`;
+    if (!a || !sample) return;
+    halt();
+    const until = sampleUntil(sample);
+    a.src = `${audioUrl(endpoint, sample.recording, sample.track as "sys" | "mic" | "source")}#t=${sample.start},${until}`;
     a.load?.();
+    stopTimer.current = stopAt(a, until, () => { a.pause(); halt(); });
+    setPlaying(true);
     void a.play?.()?.catch?.(() => {});
-  });
+  };
+  const stop = () => {
+    audio.current?.pause();
+    halt();
+  };
   const doConfirmed = () => {
     const c = confirm;
     setConfirm(null);
@@ -187,9 +224,18 @@ export function PersonCard({
               if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); }
             }}
           />
-          <Button variant="ghost" size="xs" icon={Play} className="pcard__play" onClick={() => void play()}>
-            Прослушать образец
-          </Button>
+          {sample ? (
+            <div className="pcard__sample">
+              {playing ? (
+                <Button variant="ghost" size="xs" icon={Square} className="pcard__play" onClick={stop}>Остановить</Button>
+              ) : (
+                <Button variant="ghost" size="xs" icon={Play} className="pcard__play" onClick={play}>
+                  Прослушать образец
+                </Button>
+              )}
+              <span className="pcard__sample-time num">{sampleCaption(sample)}</span>
+            </div>
+          ) : sample === null ? <span className="pcard__nosample">{NO_PHRASE}</span> : null}
         </div>
       </div>
 
@@ -215,17 +261,7 @@ export function PersonCard({
         />
       </div>
       {error && <div className="pcard__error" role="alert">{error}</div>}
-      <audio
-        ref={audio}
-        className="pcard__audio"
-        onTimeUpdate={(e) => {
-          const a = e.currentTarget;
-          if (stopAt.current !== null && a.currentTime >= stopAt.current) {
-            a.pause();
-            stopAt.current = null;
-          }
-        }}
-      />
+      <audio ref={audio} className="pcard__audio" onEnded={halt} onError={halt} />
 
       <section className="pcard__section" aria-label="Встречи">
         <h3 className="pcard__h">

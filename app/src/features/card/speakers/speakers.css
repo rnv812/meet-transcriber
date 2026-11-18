@@ -66,6 +66,10 @@
 }
 .spk-phrase__play:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 .spk-phrase__play:disabled { opacity: 0.4; cursor: default; }
+/* Образец играет: ▶ стал «Остановить». */
+.spk-phrase__play[data-on] { background: var(--accent); color: var(--on-accent); }
+/* Подходящей фразы нет — подпись вместо списка, без ▶. */
+.spk-row__nophrase { margin: 0; font-size: var(--text-xs); }
 .spk-phrase__time { color: var(--ink-3); font-size: 11px; }
 .spk-phrase__text {
   color: var(--ink-2); line-height: 1.45;

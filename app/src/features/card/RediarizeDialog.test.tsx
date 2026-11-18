@@ -65,8 +65,13 @@ test("параметры: точное число собеседников и ч
   rerender({ jobs: [job("done", "render")] });
   expect(await within(dialog).findByText(/Было спикеров: 2, станет: 3\. Сменят спикера 14 из 120 фраз, разделятся по словам: 3/))
     .toBeInTheDocument();
+  // Образец — целиком (8 с, страховка — 10 с): начало и длительность рядом с ▶.
+  const anna = within(dialog).getByRole("list", { name: "Фразы: Анна Смирнова" });
+  expect(anna).toHaveTextContent("00:12 · 8 с");
   await userEvent.click(within(dialog).getByRole("button", { name: "Прослушать фразу с 00:12" }));
-  expect(onPlay).toHaveBeenCalledWith(12, 18);
+  expect(onPlay).toHaveBeenCalledWith(12, 20);
+  // У спикера без подходящей фразы — подпись без ▶.
+  expect(within(dialog).getAllByText("нет подходящей фразы")).toHaveLength(2);
   await userEvent.click(within(dialog).getByRole("button", { name: "Применить" }));
   expect(api.applyRediarized).toHaveBeenCalledWith(ep, "r1");
   expect(onApplied).toHaveBeenCalled();

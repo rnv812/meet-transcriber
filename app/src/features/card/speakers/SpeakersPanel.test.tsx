@@ -1,8 +1,9 @@
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../../lib/api";
 import type { SpeakerRow, SpeakersView, SpeakerStep } from "../../../lib/types";
+import { PhrasePlayback } from "./SamplePhrases";
 import { SpeakersPanel } from "./SpeakersPanel";
 
 vi.mock("../../../lib/api", async (orig) => ({
@@ -61,16 +62,58 @@ beforeEach(() => {
   vi.mocked(api.getSpeakers).mockResolvedValue(view());
 });
 
-test("строки: доля времени, фразы с ▶ (около 6 секунд), «Показать все реплики»", async () => {
+test("строки: доля времени, фразы с ▶ (образец целиком, не дольше 10 с), «Показать все реплики»", async () => {
   const { onPlay, onShowTurns } = setup();
   const first = await screen.findByRole("region", { name: /^Спикер 1/ });
   expect(within(first).getByText(/52% времени · 12 реплик/)).toBeInTheDocument();
   await userEvent.click(within(first).getByRole("button", { name: "Прослушать фразу с 01:35" }));
-  expect(onPlay).toHaveBeenCalledWith(95, 101);
+  expect(onPlay).toHaveBeenCalledWith(95, 105);
   await userEvent.click(within(first).getByRole("button", { name: "Прослушать фразу с 00:03" }));
   expect(onPlay).toHaveBeenLastCalledWith(3, 7);
   await userEvent.click(within(first).getByRole("button", { name: "Показать все реплики" }));
   expect(onShowTurns).toHaveBeenCalledWith("Спикер 1");
+});
+
+test("образец: начало и длительность, «Остановить» во время игры; второй ▶ останавливает первый", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ speakers: [
+    row("Спикер 1", { samples: [
+      { start: 12, end: 16.2, text: "Склад готов.", words: [[12, 12.6, " Склад"], [12.7, 16.2, " готов."]] },
+      { start: 40, end: 46, text: "Поставка в пятницу.", words: [] }] }),
+  ] }));
+  const cardRef = createRef<HTMLElement>();
+  /** Как карточка: один плеер на все образцы — новый фрагмент сменяет прежний. */
+  function Card() {
+    const [now, setNow] = useState<{ start: number; until: number } | null>(null);
+    return (
+      <PhrasePlayback.Provider value={{ now, stop: () => setNow(null) }}>
+        <section ref={cardRef}>
+          <SpeakersPanel endpoint={ep} recordingId="r1" people={people} open focus={null} version={1} playable
+            cardRef={cardRef} onClose={vi.fn()} onShowTurns={vi.fn()} onChanged={vi.fn()}
+            onPlay={(start, until) => setNow({ start, until })} />
+        </section>
+      </PhrasePlayback.Provider>
+    );
+  }
+  render(<Card />);
+  const first = await screen.findByRole("region", { name: /^Спикер 1/ });
+  const [one, two] = within(first).getAllByRole("listitem");
+  expect(one).toHaveTextContent("00:12 · 4 с");
+  expect(two).toHaveTextContent("00:40 · 6 с");
+  await userEvent.click(within(one!).getByRole("button", { name: "Прослушать фразу с 00:12" }));
+  expect(within(one!).getByRole("button", { name: "Остановить" })).toBeInTheDocument();
+  await userEvent.click(within(two!).getByRole("button", { name: "Прослушать фразу с 00:40" }));
+  expect(within(two!).getByRole("button", { name: "Остановить" })).toBeInTheDocument();
+  expect(within(one!).queryByRole("button", { name: "Остановить" })).toBeNull();
+  expect(within(one!).getByRole("button", { name: "Прослушать фразу с 00:12" })).toBeInTheDocument();
+  await userEvent.click(within(two!).getByRole("button", { name: "Остановить" }));
+  expect(screen.queryByRole("button", { name: "Остановить" })).toBeNull();
+});
+
+test("нет подходящей фразы — подпись без ▶", async () => {
+  setup();
+  const second = await screen.findByRole("region", { name: /^Спикер 2/ });
+  expect(within(second).getByText("нет подходящей фразы")).toBeInTheDocument();
+  expect(within(second).queryByRole("button", { name: /^Прослушать фразу/ })).toBeNull();
 });
 
 test("без звука ▶ у фраз неактивна", async () => {

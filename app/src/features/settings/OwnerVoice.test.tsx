@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import type {
@@ -209,6 +209,38 @@ test("поиск по встречам: ▶ играет кусок микроф
   expect(play).toHaveBeenCalled();
   play.mockRestore();
   load.mockRestore();
+});
+
+test("поиск по встречам: пример останавливается точно на своём конце, во время игры — «Остановить»", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found(), derive: derive() }));
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  const first = await screen.findByRole("button", { name: "Послушать пример 1 — встреча 01.10" });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    fireEvent.click(first);
+    expect(screen.getByRole("button", { name: "Остановить пример 1" })).toBeInTheDocument();
+    // Второй пример сменяет первый: «Остановить» — только у него.
+    fireEvent.click(screen.getByRole("button", { name: "Послушать пример 2 — встреча 02.10" }));
+    expect(screen.queryByRole("button", { name: "Остановить пример 1" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Остановить пример 2" })).toBeInTheDocument();
+    const audio = document.querySelector("audio")!;
+    audio.currentTime = 12;
+    Object.defineProperty(audio, "paused", { configurable: true, value: false });
+    fireEvent.playing(audio);
+    act(() => { vi.advanceTimersByTime(4499); });
+    expect(pause).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /^Остановить пример/ })).toBeNull();
+  } finally {
+    vi.useRealTimers();
+    play.mockRestore();
+    pause.mockRestore();
+    load.mockRestore();
+  }
 });
 
 test("поиск по встречам: «Да, это я» — образец, карточка исчезает", async () => {

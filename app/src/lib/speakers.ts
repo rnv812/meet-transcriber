@@ -7,6 +7,8 @@ export type Turn = {
   room?: boolean;
   /** Голос микрофона под вопросом: подписан владельцем, но мог быть кто-то рядом. */
   unsure?: boolean;
+  /** Где в реплике нахлёст (первый его сегмент): ▶ у пометки «(нахлёст)». */
+  overlap?: { start: number; end: number };
   /** "break" — отметка перерыва объединённой встречи: разделитель, не реплика. */
   kind?: "break";
   /** Номера сегментов транскрипта, из которых склеена реплика (для правки спикера). */
@@ -40,13 +42,17 @@ export function mergeTurns(segments: Segment[]): Turn[] {
     if (cur && cur.speaker === speaker && s.start - cur.end < GAP_S && curMic === mic && !!cur.unsure === unsure) {
       cur.texts.push(s.text);
       cur.end = Math.max(cur.end, s.end);
-      if (overlap) cur.uncertain = true;
+      if (overlap) {
+        cur.uncertain = true;
+        cur.overlap ??= { start: s.start, end: s.end };
+      }
       if (unsure) cur.unsure = true;
       if (s.room) cur.room = true;
       cur.idx?.push(i);
     } else {
       cur = { speaker, start: s.start, end: s.end, texts: [s.text], uncertain: overlap, idx: [i] };
       curMic = mic;
+      if (overlap) cur.overlap = { start: s.start, end: s.end };
       if (unsure) cur.unsure = true;
       if (s.room) cur.room = true;
       out.push(cur);

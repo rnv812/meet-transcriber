@@ -10,6 +10,11 @@
  * одну дорожку и кэширует её; импорт играется как есть. Реплика лишь
  * перематывает общий плеер (`seek`).
  *
+ * Фрагмент (образец спикера, нахлёст: `seek(at, true, until)`) останавливается
+ * точно на `until` — таймером (lib/phraseStop), а не по `timeupdate`. Любая
+ * перемотка, пауза или новый фрагмент его снимают; `onPhrase` сообщает, какой
+ * фрагмент играет (для «Остановить» у образца), `stop()` — остановить его.
+ *
  * Токен — в query (`audioUrl`): <audio> в WebView2 не умеет ставить заголовок.
  * `preload="none"`: открытая карточка файл не запрашивает — запрос идёт с
  * первым «▶». `release()` — отпустить файл перед удалением записи.
@@ -42,6 +47,7 @@ import {
 import { audioUrl, type Endpoint } from "../../lib/api";
 import { clock, plural } from "../../lib/format";
 import type { CurveMode } from "../../lib/markupPrefs";
+import { stopAt } from "../../lib/phraseStop";
 import type { Turn } from "../../lib/speakers";
 import { Avatar } from "../../ui/Avatar";
 import { Icon } from "../../ui/Icon";
@@ -53,9 +59,14 @@ import type { PersonColor } from "./Turns";
 import { PlayerKeysTip } from "./PlayerKeysTip";
 import "./player.css";
 
+/** Играющий фрагмент: с какой секунды и до какой. */
+export type Phrase = { start: number; until: number };
+
 export type AudioPlayerHandle = {
   /** Перемотать; `play` — и играть, `until` — остановиться на этой секунде (фраза спикера). */
   seek: (at: number, play?: boolean, until?: number) => void;
+  /** Остановить играющий фрагмент («Остановить» у образца). */
+  stop: () => void;
   /** Остановить и отпустить файл (перед удалением записи). */
   release: () => void;
 };
@@ -217,10 +228,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   onSeeked?: (at: number) => void;
   /** Где сейчас воспроизведение (каждый кадр при игре и после перемотки): для отметки «сейчас играет». */
   onPlayhead?: (at: number) => void;
+  /** Начался фрагмент (`seek` с `until`) или закончился (null): дошёл до конца, пауза, перемотка, новый. */
+  onPhrase?: (phrase: Phrase | null) => void;
 }>(function AudioPlayer({
   endpoint, id, durationHint, onAvailable, turns = NO_TURNS, chapters = NO_CHAPTERS, importance = null,
   curveMode = "hover", barLabels = true, people = NO_PEOPLE, avatarVersion, onChapter,
-  onSeeked, onPlayhead,
+  onSeeked, onPlayhead, onPhrase,
 }, ref) {
   const el = useRef<HTMLAudioElement>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -254,8 +267,19 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   seeked.current = onSeeked;
   const playhead = useRef(onPlayhead);
   playhead.current = onPlayhead;
-  /** Где остановиться (прослушивание фразы); любая другая перемотка это снимает. */
-  const stopAt = useRef<number | null>(null);
+  const phraseCb = useRef(onPhrase);
+  phraseCb.current = onPhrase;
+  /** Отмена таймера играющего фрагмента; любая другая перемотка, пауза и новый фрагмент его снимают. */
+  const phrase = useRef<(() => void) | null>(null);
+  const endPhrase = useCallback(() => {
+    const cancel = phrase.current;
+    if (!cancel) return;
+    phrase.current = null;
+    cancel();
+    phraseCb.current?.(null);
+  }, []);
+  // Плеер убрали (другая запись, запись идёт) — фрагмент кончился.
+  useEffect(() => endPhrase, [endPhrase]);
   /** «Только важное»: человек сам перемотал в неважное — играем до следующего важного фрагмента. */
   const free = useRef(false);
   const total = duration ?? (durationHint && durationHint > 0 ? durationHint : 0);
@@ -307,7 +331,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const seek = useCallback((at: number): number | undefined => {
     const a = el.current;
     if (!a) return undefined;
-    stopAt.current = null;
+    endPhrase();
     const end = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : totalRef.current || Infinity;
     const t = Math.max(0, Math.min(at, end));
     a.currentTime = t;
@@ -317,7 +341,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     paint(t);
     playhead.current?.(t);
     return t;
-  }, [paint]);
+  }, [paint, endPhrase]);
 
   /** Перемотка по просьбе человека из плеера: ещё и прокрутить расшифровку к этой реплике. */
   const userSeek = useCallback((at: number) => {
@@ -327,26 +351,35 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
 
   useImperativeHandle(ref, () => ({
     seek(at, play = false, until) {
-      seek(at);
-      if (play) {
-        stopAt.current = until ?? null;
-        start();
+      const t = seek(at);
+      const a = el.current;
+      if (!play || !a || t === undefined) return;
+      if (until !== undefined && until > t) {
+        phrase.current = stopAt(a, until, () => { a.pause(); endPhrase(); });
+        phraseCb.current?.({ start: at, until });
       }
+      start();
+    },
+    stop() {
+      if (!phrase.current) return;
+      el.current?.pause();
+      endPhrase();
     },
     release() {
       const a = el.current;
+      endPhrase();
       if (!a) return;
       a.pause?.();
       a.removeAttribute("src");
       a.load?.();
       setReleased(true);
     },
-  }), [seek, start]);
+  }), [seek, start, endPhrase]);
 
   const playingRef = useRef(playing);
   playingRef.current = playing;
   const toggle = useCallback(() => {
-    stopAt.current = null;
+    endPhrase();
     if (playingRef.current) {
       el.current?.pause();
       return;
@@ -356,7 +389,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     const a = el.current;
     if (list?.length && a && skipTarget(list, a.currentTime) === Infinity) userSeek(list[0]!.start);
     start();
-  }, [start, userSeek]);
+  }, [start, userSeek, endPhrase]);
 
   /** Меню скорости открыто: у кнопки «1×». */
   const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
@@ -591,21 +624,17 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         onTimeUpdate={(e) => {
           const a = e.currentTarget;
           setCurrent(a.currentTime);
-          if (stopAt.current !== null && a.currentTime >= stopAt.current) {
-            stopAt.current = null;
-            a.pause();
-          }
           skip(a);
         }}
         onPlay={() => setPlaying(true)}
-        onPause={() => { setPlaying(false); setLoading(false); }}
+        onPause={() => { setPlaying(false); setLoading(false); endPhrase(); }}
         onWaiting={() => setLoading(true)}
         onCanPlay={() => setLoading(false)}
         onPlaying={() => setLoading(false)}
-        onEnded={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); endPhrase(); }}
         onError={() => {
           if (released) return; // src убрали сами перед удалением
-          setFailed(true); setPlaying(false); setLoading(false); available.current?.(false);
+          setFailed(true); setPlaying(false); setLoading(false); available.current?.(false); endPhrase();
         }}
       />
       <div className="player__bar">

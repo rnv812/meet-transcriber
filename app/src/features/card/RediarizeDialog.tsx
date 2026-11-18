@@ -8,26 +8,25 @@
  * шаг истории встречи: его отменяет «Отменить» в панели «Спикеры».
  */
 
-import { Minus, Play, Plus, X } from "lucide-react";
+import { Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   applyRediarized, cancelJob, discardRediarized, getRediarized, rediarize, type Endpoint,
 } from "../../lib/api";
-import { clock, errorText, plural } from "../../lib/format";
+import { errorText, plural } from "../../lib/format";
 import type { Job, RediarizeParams, RediarizePreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { JobProgress } from "../../ui/JobProgress";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { Icon } from "../../ui/Icon";
 import { IconButton } from "../../ui/IconButton";
 import { Slider } from "../../ui/Slider";
+import { SamplePhrases } from "./speakers/SamplePhrases";
 import "./speakers/speakers.css";
 import "./rediarize.css";
 
-const PHRASE_S = 6;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
@@ -295,17 +294,7 @@ export function RediarizeDialog({
                     {pct(s.share)} времени · {s.turns} {plural(s.turns, "реплика", "реплики", "реплик")}
                   </div>
                   <div className="spk-row__bar" aria-hidden="true"><span style={{ width: pct(s.share) }} /></div>
-                  <ul className="spk-row__phrases" aria-label={`Фразы: ${s.label}`}>
-                    {s.samples.map((p) => (
-                      <li key={p.start} className="spk-phrase">
-                        <button type="button" className="spk-phrase__play" disabled={!playable}
-                          aria-label={`Прослушать фразу с ${clock(p.start)}`}
-                          onClick={() => onPlay(p.start, Math.min(p.end, p.start + PHRASE_S))}><Icon as={Play} size="sm" /></button>
-                        <span className="spk-phrase__time num muted">{clock(p.start)}</span>
-                        <span className="spk-phrase__text">{p.text}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <SamplePhrases samples={s.samples} label={`Фразы: ${s.label}`} playable={playable} onPlay={onPlay} />
                 </li>
               ))}
             </ul>

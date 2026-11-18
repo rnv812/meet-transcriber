@@ -20,8 +20,8 @@ import {
 import {
   applySpeakers, getSpeakers, redoSpeakers, revertSpeakers, undoSpeakers, type Endpoint,
 } from "../../../lib/api";
-import { CircleHelp, Play, Plus, UserRound, X } from "lucide-react";
-import { clock, errorText, plural } from "../../../lib/format";
+import { CircleHelp, Plus, UserRound, X } from "lucide-react";
+import { errorText, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
 import { speakerTones } from "../../../lib/tones";
 import type { Job, SpeakerRow, SpeakersView } from "../../../lib/types";
@@ -34,6 +34,7 @@ import { PersonMark } from "../PersonMark";
 import type { PersonColor } from "../Turns";
 import { HistoryList, HistoryTools, useUndoKeys } from "./SpeakerHistory";
 import { MicRemoved } from "./MicRemoved";
+import { SamplePhrases } from "./SamplePhrases";
 import { SplitView } from "./SplitView";
 import { ThresholdBox } from "./ThresholdBox";
 import {
@@ -43,8 +44,6 @@ import "./speakers.css";
 import { Icon } from "../../../ui/Icon";
 import { BADGE_CLASS } from "../../../ui/badge";
 
-/** Сколько секунд играет фраза по ▶. */
-export const PHRASE_S = 6;
 /** Сколько людей базы показывать в списке «Кто это?». */
 const PICK_MAX = 8;
 
@@ -390,19 +389,7 @@ function SpeakerRowView({
         <span style={{ width: pct(row.share) }} />
       </div>
 
-      {row.samples.length > 0 && (
-        <ul className="spk-row__phrases" aria-label="Фразы спикера">
-          {row.samples.map((s) => (
-            <li key={s.start} className="spk-phrase">
-              <button type="button" className="spk-phrase__play" disabled={!playable}
-                aria-label={`Прослушать фразу с ${clock(s.start)}`}
-                onClick={() => onPlay(s.start, Math.min(s.end, s.start + PHRASE_S))}><Icon as={Play} size="sm" /></button>
-              <span className="spk-phrase__time num muted">{clock(s.start)}</span>
-              <span className="spk-phrase__text">{s.text}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <SamplePhrases samples={row.samples} label="Фразы спикера" playable={playable} onPlay={onPlay} />
       <Button variant="ghost" size="sm" className="spk-row__turns" onClick={() => onShowTurns(row.label)}>
         Показать все реплики
       </Button>

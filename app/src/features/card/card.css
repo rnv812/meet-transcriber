@@ -171,6 +171,14 @@ button.turn__speaker:hover { text-decoration: underline; }
   .transcript__feed { column-gap: 0; }
 }
 .turn__flag { color: var(--warning); font-size: var(--text-xs); }
+/* «(нахлёст)»: пояснение — подсказкой (и с клавиатуры), рядом ▶ — сам нахлёст. */
+.turn__overlap { display: inline-flex; align-items: center; gap: 2px; }
+.turn__overlap .turn__flag { cursor: help; border-radius: var(--r-sm); }
+.turn__overlap-play {
+  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;
+  border: 0; border-radius: var(--r-full); background: none; color: var(--ink-3); cursor: pointer;
+}
+.turn__overlap-play:hover { background: var(--surface-3); color: var(--ink); }
 /* Человек рядом с владельцем в комнате: голос с микрофона (meet.mic_split). */
 .turn__room {
   padding: 0 6px; border: 1px solid var(--hairline-strong); border-radius: var(--r-xs);

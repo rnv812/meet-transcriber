@@ -1,13 +1,14 @@
 import { memo, useContext, useMemo, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
-import { Sparkle } from "lucide-react";
+import { Play, Sparkle } from "lucide-react";
 import { seriesStarts, type ChapterView, type InsightView, type TurnRow } from "../../lib/analysisView";
-import { clock, plural } from "../../lib/format";
+import { clock, plural, preciseClock } from "../../lib/format";
 import { JiraLinks, type JiraMatch } from "../../lib/jira";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
+import { Icon } from "../../ui/Icon";
 import { Tip } from "../../ui/Tip";
 import { LinkedText } from "../../ui/LinkedText";
 import { InsightNote, TypeIcon } from "./markup";
@@ -16,6 +17,9 @@ import { InsightNote, TypeIcon } from "./markup";
 export type PersonColor = { name: string; color: string; has_avatar: boolean; role?: string };
 
 const NO_LINKS: JiraMatch[] = [];
+
+/** Пояснение к пометке «(нахлёст)». */
+export const OVERLAP_TIP = "Здесь говорили одновременно: спикер этой части мог быть определён неточно";
 
 /** Подсветка поиска: что выделить в реплике и номер её первого совпадения. */
 export type TurnMarks = Map<number, { ranges: Range[]; first: number }>;
@@ -31,7 +35,7 @@ export type TurnAnnotations = {
 
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
 export const Turns = memo(function Turns({
-  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
+  turns, colors, playable, onPlay, onPlayRange, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
   rows, annotations, onAskChapter, onExpand, textPhase = false, insights, onJump, onAskInsight,
 }: {
   /** Наблюдения анализа (0.6.1): заметка — под первой репликой из ссылок наблюдения. */
@@ -44,6 +48,8 @@ export const Turns = memo(function Turns({
   colors: Map<string, string>;
   playable: boolean;
   onPlay: (turn: Turn) => void;
+  /** ▶ у «(нахлёст)»: сыграть кусок записи и остановиться на его конце. */
+  onPlayRange?: (start: number, until: number) => void;
   onNameSpeaker?: (label: string) => void;
   /** Щелчок по имени у реплики: меню правки спикера (иначе — `onNameSpeaker`). */
   onSpeaker?: (turn: number, anchor: HTMLElement) => void;
@@ -140,14 +146,19 @@ export const Turns = memo(function Turns({
         const headless = textPhase && t.speaker === NO_SPEAKER;
         const person = !unnamed && color ? ({ "--person": color } as CSSProperties) : undefined;
         const cont = !starts.has(i);
+        // Точное время реплики (начало–конец, десятые доли) — при наведении на её время.
+        const precise = `${preciseClock(t.start)}–${preciseClock(t.end)}`;
         const time = playable ? (
-          <button type="button" className="turn__time num" aria-label={`Слушать с ${clock(t.start)}`}
-            onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onPlay(t); }}>
-            {clock(t.start)}
-          </button>
+          <Tip content={precise}>
+            <button type="button" className="turn__time num" aria-label={`Слушать с ${clock(t.start)}`}
+              onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onPlay(t); }}>
+              {clock(t.start)}
+            </button>
+          </Tip>
         ) : (
-          <span className="turn__time num">{clock(t.start)}</span>
+          <Tip content={precise}><span className="turn__time num">{clock(t.start)}</span></Tip>
         );
+        const overlap = t.uncertain ? t.overlap : undefined;
         const speakerCls = `turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}${cont ? " turn__speaker--cont" : ""}`;
         const tags = [
           t.room && !textPhase ? (
@@ -155,7 +166,19 @@ export const Turns = memo(function Turns({
               <span className="turn__room">в комнате</span>
             </Tip>
           ) : null,
-          t.uncertain ? <span key="unc" className="turn__flag">(нахлёст)</span> : null,
+          // Пояснение — и с клавиатуры (пометка в порядке Tab); ▶ — сам нахлёст.
+          t.uncertain ? (
+            <span key="unc" className="turn__overlap">
+              <Tip content={OVERLAP_TIP}>
+                <span className="turn__flag" tabIndex={0}>(нахлёст)</span>
+              </Tip>
+              {playable && overlap && onPlayRange && (
+                <button type="button" className="turn__overlap-play"
+                  aria-label={`Прослушать нахлёст с ${clock(overlap.start)}`}
+                  onClick={() => onPlayRange(overlap.start, overlap.end)}><Icon as={Play} size="sm" /></button>
+              )}
+            </span>
+          ) : null,
           t.unsure ? (
             <Tip key="unsure" content="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
               <span className="turn__flag">(голос под вопросом)</span>

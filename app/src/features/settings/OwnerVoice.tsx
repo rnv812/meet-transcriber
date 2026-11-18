@@ -16,13 +16,14 @@
  * «Да, это я» (`POST /owner-voice/suggestion`). Ничего не нашлось — причина словами.
  */
 
-import { Play } from "lucide-react";
+import { Play, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   answerOwnerSuggestion, audioUrl, cancelJob, deleteOwnerVoice, deriveOwnerVoice, type Endpoint, getOwnerVoice,
   recordOwnerVoice,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { stopAt } from "../../lib/phraseStop";
 import type { OwnerVoiceSample, OwnerVoiceSampleRef, OwnerVoiceStatus } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
@@ -243,24 +244,42 @@ export function deriveNote(status: OwnerVoiceStatus | null): string | null {
 
 /**
  * Карточка найденного голоса: «Похоже, это ваш голос — послушайте: ▶ ▶ ▶ ·
- * Да, это я · Нет». Кусок играет дорожка микрофона той встречи.
+ * Да, это я · Нет». Кусок играет дорожка микрофона той встречи и
+ * останавливается точно на своём конце (lib/phraseStop); пока играет — его ▶
+ * становится «Остановить», следующий пример сменяет предыдущий.
  */
 export function OwnerVoiceFound({ endpoint, voice }: { endpoint: Endpoint; voice: OwnerVoice }) {
   const audio = useRef<HTMLAudioElement>(null);
-  const stopAt = useRef<number | null>(null);
-  /** Какой пример играет: не открылся (запись удалили) — его ▶ гасим. */
-  const playing = useRef<number | null>(null);
+  /** Отмена точной остановки играющего примера. */
+  const stopTimer = useRef<(() => void) | null>(null);
+  /** Какой пример играет: «Остановить» у него; не открылся (запись удалили) — его ▶ гасим. */
+  const [playing, setPlaying] = useState<number | null>(null);
+  const playingRef = useRef<number | null>(null);
   const [dead, setDead] = useState<Set<number>>(() => new Set());
+  // Карточку убрали — пример не доигрывает.
+  useEffect(() => () => { stopTimer.current?.(); }, []);
   const found = voice.status?.suggestion;
   if (!found) return null;
+  const halt = () => {
+    stopTimer.current?.();
+    stopTimer.current = null;
+    playingRef.current = null;
+    setPlaying(null);
+  };
   const play = (s: OwnerVoiceSampleRef, i: number) => {
     const a = audio.current;
     if (!a) return;
-    stopAt.current = s.end;
-    playing.current = i;
+    stopTimer.current?.();
     a.src = `${audioUrl(endpoint, s.recording, "mic")}#t=${s.start},${s.end}`;
     a.load?.();
+    stopTimer.current = stopAt(a, s.end, () => { a.pause(); halt(); });
+    playingRef.current = i;
+    setPlaying(i);
     void a.play?.()?.catch?.(() => {});
+  };
+  const stop = () => {
+    audio.current?.pause();
+    halt();
   };
   const answering = voice.pending;
   return (
@@ -271,8 +290,10 @@ export function OwnerVoiceFound({ endpoint, voice }: { endpoint: Endpoint; voice
       {found.samples.map((s, i) => (dead.has(i)
         ? <IconButton key={`${s.recording}-${s.start}`} icon={Play} disabled
             label={`Пример ${i + 1} недоступен — запись удалена`} />
-        : <IconButton key={`${s.recording}-${s.start}`} icon={Play}
-            label={`Послушать пример ${i + 1} — встреча ${shortDate(s.recording)}`} onClick={() => play(s, i)} />
+        : playing === i
+          ? <IconButton key={`${s.recording}-${s.start}`} icon={Square} label={`Остановить пример ${i + 1}`} onClick={stop} />
+          : <IconButton key={`${s.recording}-${s.start}`} icon={Play}
+              label={`Послушать пример ${i + 1} — встреча ${shortDate(s.recording)}`} onClick={() => play(s, i)} />
       ))}
       <span className="muted" aria-hidden="true">·</span>
       <Button variant="primary" disabled={answering} onClick={() => voice.answer(true)}>Да, это я</Button>
@@ -281,16 +302,10 @@ export function OwnerVoiceFound({ endpoint, voice }: { endpoint: Endpoint; voice
       {found.conflict && (
         <span className="notice">Он не похож на ваш записанный образец — послушайте внимательно.</span>
       )}
-      <audio ref={audio} className="ownv__audio" onTimeUpdate={(e) => {
-        const a = e.currentTarget;
-        if (stopAt.current !== null && a.currentTime >= stopAt.current) {
-          a.pause();
-          stopAt.current = null;
-        }
-      }} onError={() => {
-        const i = playing.current;
+      <audio ref={audio} className="ownv__audio" onEnded={halt} onError={() => {
+        const i = playingRef.current;
         if (i !== null) setDead((prev) => new Set(prev).add(i));
-        playing.current = null;
+        halt();
       }} />
     </div>
   );
