@@ -1,3 +1,4 @@
+import sys
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -6,12 +7,15 @@ import pytest
 
 from meet import paths, settings, watch
 
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
+
 
 def _write(path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
+@windows_only
 def test_defaults_without_file(tmp_path):
     cfg = settings.load(tmp_path / "нет.json")
     assert cfg.version == settings.SCHEMA_VERSION
@@ -77,6 +81,7 @@ def test_v2_config_of_version_010_without_processes_keeps_the_old_defaults(tmp_p
     assert settings.load(f).auto_record.processes == list(settings.HISTORIC_PROCESSES)
 
 
+@windows_only
 def test_config_saved_by_this_version_keeps_the_new_defaults(tmp_path):
     f = tmp_path / "config.json"
     settings.patch({"ui": {"wizard_done": True}}, f)

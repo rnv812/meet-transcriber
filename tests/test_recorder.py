@@ -22,6 +22,8 @@ from meet.recorder import (
     record,
 )
 
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
+
 
 # --- конвертация PCM к каноническому формату дорожки ---
 
@@ -766,6 +768,7 @@ def test_record_reopens_dead_stream(tmp_path, monkeypatch):
     assert not _FakePyAudio.live
 
 
+@windows_only
 def test_opus_writer_spawns_ffmpeg_without_console_window(monkeypatch):
     # meet-tray — GUI-процесс без консоли: без CREATE_NO_WINDOW каждый
     # ffmpeg-подпроцесс открывал собственное окно терминала (приёмка 02.07)

@@ -7,11 +7,14 @@ RMDir /r, ни масок Delete по $INSTDIR, кроме resources» держ�
 подключает как есть.
 """
 
+import sys
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "nsis_tripwire.ps1"
@@ -28,6 +31,7 @@ def _run(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+@windows_only
 def test_rules_catch_data_wipes_and_spare_installer_files():
     result = _run("-SelfTest")
     assert result.returncode == 0, result.stdout + result.stderr

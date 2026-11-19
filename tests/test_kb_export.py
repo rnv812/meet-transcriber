@@ -612,4 +612,5 @@ def test_same_folder_across_unicode_forms_on_mac_only(monkeypatch, tmp_path):
     assert kb_export._same(a, b)
     monkeypatch.setattr(sys, "platform", "win32")
     assert not kb_export._same(a, b)  # Windows: как раньше — разные имена
-    assert kb_export._same(a, tmp_path / unicodedata.normalize("NFC", "ВСТРЕЧИ Й"))
+    if __import__("os").name == "nt":  # регистр снимает normcase самой Windows
+        assert kb_export._same(a, tmp_path / unicodedata.normalize("NFC", "ВСТРЕЧИ Й"))

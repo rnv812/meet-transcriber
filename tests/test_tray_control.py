@@ -5,12 +5,15 @@
 не нужны — TrayApp собирается без них.
 """
 
+import sys
 import json
 import time
 
 import pytest
 
 from meet import events, jobs, library, live_control, settings, tray, tray_control, watch
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 
 def _write_config(root, data: dict) -> None:
@@ -238,6 +241,7 @@ def test_tray_log_lines_reach_the_bus(app):
     assert seen[0].data["source"] == "watch"
 
 
+@windows_only
 def test_processes_lists_running_and_marks_selection(control_state):
     """Выбирать клиент конференции надо из реальности, а не вспоминать имя exe."""
     got = control_state.processes()

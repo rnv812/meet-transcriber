@@ -4,6 +4,7 @@
 Сюда же — всё, что ревью воспроизвело на живом CLI (обходы через Bash, MCP
 по имени, повтор согласия)."""
 
+import sys
 import os
 import threading
 import time
@@ -12,6 +13,8 @@ import pytest
 
 from meet.llm import consent
 from meet.llm.consent import ALLOW, ASK, AUTO, DENY, NONE, READ, USER, ConsentGate
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 # Ход по просьбе в режиме «Спрашивать каждое действие» (`confirm`) — поведение 0.3.7.
 CONFIRM = "confirm"
@@ -196,6 +199,7 @@ def test_kb_exclude_is_closed_for_tools_and_commands(dirs, level):
         assert "закрыта настройками" in d.reason
 
 
+@windows_only
 def test_prefixed_relative_and_git_bash_paths_resolve_to_the_same_folder(dirs):
     gate = _gate(dirs, CONFIRM)
     private = dirs["kb"] / "Личное"
@@ -1417,7 +1421,7 @@ def test_not_read_only_commands_are_not_treated_as_reading(dirs, command):
     ("Bash", "mv /etc/a /tmp/b"), ("PowerShell", "Remove-Item C:/x -Recurse -Force"), ("PowerShell", "ri C:/x"),
     ("PowerShell", "rm C:/x"), ("PowerShell", "del C:/x"), ("PowerShell", "erase C:/x"), ("PowerShell", "rd C:/x"),
     ("PowerShell", "gci C:/x | % { Remove-Item $_ }"), ("PowerShell", "powershell -Command \"Remove-Item C:/x\""),
-    ("PowerShell", "powershell -EncodedCommand ZQBjAGgAbwA="), ("PowerShell", "Move-Item C:/a D:/b"),
+    ("PowerShell", "powershell -EncodedCommand ZQBjAGgAbwA="), pytest.param("PowerShell", "Move-Item C:/a D:/b", marks=windows_only),
 ])
 def test_delete_commands_ask_every_time_and_are_never_granted(dirs, tool, command):
     assert consent.shell_risk(tool, command) == consent.DELETE, command

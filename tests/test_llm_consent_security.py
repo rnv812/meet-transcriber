@@ -6,12 +6,15 @@
 (хук отвечает `allow`), поэтому любая команда, выдающая себя за чтение, —
 дыра; `shell_risk` — карточка Meet поверх автомода."""
 
+import sys
 import os
 
 import pytest
 
 from meet.llm import consent
 from meet.llm.consent import ALLOW, ASK, DENY, NONE, READ, USER, ConsentGate
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 _UNC_START = ("\\\\", "//", "/\\", "\\/")
 
@@ -181,6 +184,7 @@ def test_resolve_never_touches_a_network_or_device_path(path, no_network):
     assert no_network == []
 
 
+@windows_only
 def test_resolve_keeps_a_local_path_with_a_device_prefix(env):
     rec = env["rec"].replace("/", "\\")
     assert consent.resolve("\\\\?\\" + rec + "\\a.txt") == consent.resolve(env["rec"] + "/a.txt")

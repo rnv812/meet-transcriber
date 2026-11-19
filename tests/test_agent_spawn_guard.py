@@ -8,19 +8,21 @@ import pytest
 
 from conftest import _agent_program
 
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
+
 
 @pytest.mark.parametrize("args,hit", [
     (["C:/Users/u/.local/bin/claude.exe", "-p"], True),
     (["claude", "--version"], True),
-    (r'"C:\Program Files\codex\codex.exe" exec -', True),
+    pytest.param(r'"C:\Program Files\codex\codex.exe" exec -', True, marks=windows_only),
     (["node", "C:/npm/node_modules/@anthropic-ai/claude-code/cli.js"], True),
     (["C:/oc/opencode.exe", "run", "--format", "json"], True),
     (["/usr/local/bin/opencode", "auth", "list"], True),
-    (r'"C:\Users\u\AppData\Roaming\npm\opencode.cmd" models', True),
+    pytest.param(r'"C:\Users\u\AppData\Roaming\npm\opencode.cmd" models', True, marks=windows_only),
     (["node", "C:/npm/node_modules/opencode-ai/bin/opencode", "run"], True),
     (["C:/Users/u/AppData/Local/agy/bin/agy.exe", "acp"], True),
     (["/Users/u/.local/bin/agy", "-p", "--output-format", "stream-json"], True),
-    (r'"C:\Users\u\AppData\Roaming\npm\agy.cmd" acp', True),
+    pytest.param(r'"C:\Users\u\AppData\Roaming\npm\agy.cmd" acp', True, marks=windows_only),
     ([sys.executable, "tests/fake_agy_acp.py", "--gemini-dir", "x"], False),
     ([sys.executable, "tests/fake_claude_stream.py"], False),
     (["ffmpeg", "-i", "x"], False),

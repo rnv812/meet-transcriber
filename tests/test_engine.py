@@ -7,7 +7,11 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from meet import engine
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 
 def test_state_lists_components_and_target():
@@ -73,6 +77,7 @@ def test_install_reports_lines():
     assert "Downloading torch-2.9.0" in lines
 
 
+@windows_only
 def test_missing_gpu_is_not_an_error(monkeypatch):
     """Отсутствие nvidia-smi нормально для ноутбука — это «не видно», а не сбой."""
     monkeypatch.setattr(engine.shutil, "which", lambda name: None)
@@ -324,6 +329,7 @@ UV_INPUTS = dict(
 UV_CONSTRAINTS = {p: f"C:\\r\\constraints-{p}.txt" for p in ("cuda", "cpu")}
 
 
+@windows_only
 def test_profile_for_follows_gpu_shape():
     assert engine.profile_for({"available": True, "name": "RTX"}) == "cuda"
     assert engine.profile_for({"available": False, "name": None}) == "cpu"

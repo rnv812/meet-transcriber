@@ -1,3 +1,4 @@
+import sys
 import json
 import os
 import threading
@@ -9,6 +10,8 @@ import meet.tray as tray
 import meet.watch as watch
 from meet import paths, settings
 from meet.tray import OUT_ROOT, _icon_image
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 
 def test_icon_image_is_drawable():
@@ -49,6 +52,7 @@ def test_post_hook_silent_while_flag_is_off(monkeypatch):
     assert calls == []
 
 
+@windows_only
 def test_post_hook_substitutes_placeholders(monkeypatch):
     """Шаблон команды — обычная программа с аргументами, не обязательно ассистент."""
     calls = []
@@ -146,6 +150,7 @@ def _write_config(tmp_path, body: dict) -> None:
     path.write_text(json.dumps(body), encoding="utf-8")
 
 
+@windows_only
 def test_auto_config_defaults_to_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     cfg = tray._auto_config()
@@ -173,6 +178,7 @@ def test_auto_config_reads_file(monkeypatch, tmp_path):
     }
 
 
+@windows_only
 def test_auto_config_survives_garbage_section(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     _write_config(tmp_path, {"auto_record": {"processes": []}})
@@ -282,6 +288,7 @@ def test_shortcut_delegates_to_living_resident(monkeypatch, tmp_path):
     assert tray._take_command() == "start"
 
 
+@windows_only
 def test_shortcut_records_when_no_resident(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setattr(tray, "_resident_alive", lambda: False)
@@ -292,6 +299,7 @@ def test_shortcut_records_when_no_resident(monkeypatch, tmp_path):
     assert started == [True]
 
 
+@windows_only
 def test_watch_flag_only_stands_by(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setattr(tray, "_resident_alive", lambda: False)

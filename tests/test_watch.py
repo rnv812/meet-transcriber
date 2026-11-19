@@ -1,5 +1,11 @@
+import sys
+
+import pytest
+
 import meet.watch as watch
 from meet.watch import NONE, START, STOP, Watcher, busy_from_times
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 
 # --- признак «микрофон занят» -------------------------------------------
@@ -72,6 +78,7 @@ def _reg(monkeypatch, tree):
     monkeypatch.setattr(watch, "winreg", _FakeReg(tree))
 
 
+@windows_only
 def test_mic_busy_finds_key_by_exe_suffix(monkeypatch):
     # путь установки на разных машинах отличается — ищем по имени exe
     _reg(monkeypatch, {
@@ -91,6 +98,7 @@ def test_mic_busy_ignores_other_apps(monkeypatch):
     assert watch.mic_busy("Dion.exe") is None
 
 
+@windows_only
 def test_mic_busy_true_if_any_install_path_is_busy(monkeypatch):
     _reg(monkeypatch, {
         "C:#Old#Dion.exe": {"LastUsedTimeStart": 100, "LastUsedTimeStop": 200},
@@ -99,6 +107,7 @@ def test_mic_busy_true_if_any_install_path_is_busy(monkeypatch):
     assert watch.mic_busy("Dion.exe") is True
 
 
+@windows_only
 def test_mic_busy_false_when_key_exists_but_free(monkeypatch):
     _reg(monkeypatch, {
         "C:#New#Dion.exe": {"LastUsedTimeStart": 100, "LastUsedTimeStop": 200},

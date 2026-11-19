@@ -729,6 +729,7 @@ def test_transcription_learns_step_times(monkeypatch, tmp_path):
     monkeypatch.setattr(tr, "diarize_wav", fake_diarize)
     monkeypatch.setattr(tr, "_restore_latin", lambda segments, run: None)
     monkeypatch.setattr(tr, "_match_names", lambda diar, threshold=None: {})
+    monkeypatch.setattr("meet.progress._on_mac", lambda: False)  # профиль CPU, не MPS
     (tmp_path / "sys.opus").write_bytes(b"x")
     (tmp_path / "mic.opus").write_bytes(b"x")
     bus, seen = _bus()

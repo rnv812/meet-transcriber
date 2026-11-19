@@ -7,8 +7,11 @@
 """
 
 import json
+import sys
 import time
 import urllib.request
+
+import pytest
 
 from meet import events, live_control, pcm_tap
 
@@ -22,6 +25,8 @@ from test_live_control import (  # noqa: F401  (фикстуры pytest)
     data_dir,
     make_live,
 )
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="поведение Windows")
 
 
 def _allow(stub, name: str) -> None:
@@ -91,6 +96,7 @@ def test_stalled_stage_is_killed_with_its_name_in_the_error_and_log(make_live, d
     assert error in log  # причина — в live.log, а не только в журнале резидента
 
 
+@windows_only
 def test_silent_native_crash_leaves_its_code_in_live_log(make_live, data_dir, tmp_path):
     live, _, rec = make_live("native-crash", max_attempts=1)
     live.start(tmp_path / "recordings")
@@ -244,6 +250,7 @@ def test_endpoint_reading_keeps_new_fields(tmp_path):
     assert live_control._read_endpoint(path, 7)["stage"] == "x"
 
 
+@windows_only
 def test_silent_crash_after_a_progress_line_is_not_shown_as_that_line(make_live, data_dir,
                                                                       tmp_path):
     """Последняя строка вывода — ход работы, а не ошибка: в окне — «аварийно
@@ -313,6 +320,7 @@ def test_whole_start_is_capped(make_live, tmp_path):
     assert "не запустился за 2 с" in rec.last(live_control.LIVE_FAILED).data["error"]
 
 
+@windows_only
 def test_attached_crash_says_the_recording_goes_on(make_live, tmp_path):
     live, stub, rec = make_live("native-crash", max_attempts=1)
     folder = tmp_path / "rec" / "f"

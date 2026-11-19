@@ -137,6 +137,22 @@ def _isolated_secrets(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _windows_recording_path_on_mac(monkeypatch):
+    """Подделки звука в тестах — под путь записи Windows (pyaudiowpatch,
+    WASAPI): так их и гоняет CI на Windows. На раннере macOS запись по
+    умолчанию пошла бы в настоящий sounddevice; тесты пути macOS сами ставят
+    `recorder._MAC = True` и подменяют `meet.mac_audio`."""
+    if sys.platform != "darwin":
+        return
+    from meet import recorder
+
+    real_backend = recorder.audio_backend
+    monkeypatch.setattr(recorder, "_MAC", False)
+    monkeypatch.setattr(recorder, "audio_backend",
+                        lambda: sys.modules.get("pyaudiowpatch") or real_backend())
+
+
+@pytest.fixture(autouse=True)
 def _isolated_agent_homes(monkeypatch, tmp_path_factory):
     """Папки настроек Claude Code, Codex и OpenCode — временные: «Остановить без
     сохранения» и временная встреча забывают сеансы и проект вкладки «Агент»

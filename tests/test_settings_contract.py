@@ -47,7 +47,7 @@ VALUES = {
     ("assist", "vault"): str(Path("D:/meet-test/vault")),
     ("assistant", "knowledge_dir"): str(Path("D:/meet-test/kb")),
     ("assistant", "notes_dir"): str(Path("D:/meet-test/notes")),
-    ("export", "meetings_dir"): str(Path("D:/meet-test/meetings")),
+    ("export", "meetings_dir"): str(Path.home() / "meet-test" / "meetings"),  # полный путь на любой ОС
     ("integrations", "gpu_marker_path"): str(Path("D:/meet-test/gpu.lock")),
     ("hooks", "recurring_window"): ["11:00", "12:00"],
     ("llm", "local_model"): "qwen3-8b",

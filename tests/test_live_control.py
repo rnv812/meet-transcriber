@@ -218,7 +218,17 @@ def _wait_for(predicate, timeout: float = 10.0) -> None:
         if predicate():
             return
         time.sleep(0.02)
-    raise AssertionError("не дождались")
+    raise AssertionError("не дождались" + _child_log_tail())
+
+
+def _child_log_tail() -> str:
+    """Хвост журнала ребёнка (live.log) — в текст сбоя: на раннере CI иначе не
+    видно, на чём ассистент остановился."""
+    try:
+        text = live_control.log_path().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return "\nжурнал ребёнка:\n" + text[-3000:] if text.strip() else ""
 
 
 class Stub:
