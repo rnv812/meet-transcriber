@@ -163,6 +163,11 @@ def test_ask_takes_the_choice(state):
 def test_summary_queued_by_another_model_is_a_conflict(state):
     first = state.make_summary(RID)
     assert state.make_summary(RID)["id"] == first["id"]
+    # Конфликт — у идущей задачи (ждущую заменяет выбор человека): ждём,
+    # пока очередь её возьмёт, иначе на медленной машине CI — гонка.
+    deadline = time.monotonic() + 5
+    while state.llm_queue.get(first["id"]).state != jobs.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.01)
     with pytest.raises(control.Conflict, match="другой моделью"):
         state.make_summary(RID, {"provider": "claude-code"})
 

@@ -5,6 +5,7 @@ VAD перед вызовом и пересчёт времени к исходн
 Настоящего `mlx` здесь нет: модуль `mlx_whisper` подставляется в
 sys.modules, macOS и её версия — подменой."""
 
+import importlib.util
 import json
 import sys
 import types
@@ -16,6 +17,10 @@ from meet import asr, gigaam_asr, live_asr, mlx_asr, models, plat, settings
 from meet.asr import Segment, Word
 
 SR = 16000
+# VAD и декодер MLX-пути — из faster-whisper (extra `engine-*`); в CI без
+# движка эти тесты пропускаются.
+needs_faster_whisper = pytest.mark.skipif(importlib.util.find_spec("faster_whisper") is None,
+                                          reason="faster-whisper не установлен")
 
 
 class FakeMlx(types.ModuleType):
@@ -83,6 +88,7 @@ def _seg(start, end, text, words=None, **extra):
 # --- перевод ответа ------------------------------------------------------------
 
 
+@needs_faster_whisper
 def test_segments_and_words_keep_their_times(monkeypatch, tmp_path):
     _mac(monkeypatch)
     snapshot = _model_on_disk(monkeypatch, tmp_path)
@@ -107,6 +113,7 @@ def test_segments_and_words_keep_their_times(monkeypatch, tmp_path):
     assert progress == [1.5 / 4, 3.0 / 4]  # ход — по концу сегмента
 
 
+@needs_faster_whisper
 def test_vad_cut_silence_and_word_times_return_to_the_recording(monkeypatch, tmp_path):
     _mac(monkeypatch)
     _model_on_disk(monkeypatch, tmp_path)
@@ -123,6 +130,7 @@ def test_vad_cut_silence_and_word_times_return_to_the_recording(monkeypatch, tmp
     assert [(s.start, s.end) for s in out] == [(2.2, 3.0), (10.5, 11.5)]
 
 
+@needs_faster_whisper
 def test_no_speech_never_reaches_the_model(monkeypatch, tmp_path):
     _mac(monkeypatch)
     _model_on_disk(monkeypatch, tmp_path)
@@ -132,6 +140,7 @@ def test_no_speech_never_reaches_the_model(monkeypatch, tmp_path):
     assert fake.calls == []
 
 
+@needs_faster_whisper
 def test_transcribe_reads_the_file(monkeypatch, tmp_path):
     _mac(monkeypatch)
     _model_on_disk(monkeypatch, tmp_path)
@@ -142,6 +151,7 @@ def test_transcribe_reads_the_file(monkeypatch, tmp_path):
     assert [s.text for s in out] == ["Hi."] and len(fake.calls) == 1
 
 
+@needs_faster_whisper
 def test_off_mac_mlx_is_never_imported(monkeypatch, tmp_path):
     monkeypatch.setattr(plat, "is_macos", lambda: False)
     fake = _fake(monkeypatch)
@@ -151,6 +161,7 @@ def test_off_mac_mlx_is_never_imported(monkeypatch, tmp_path):
     assert mlx_asr.usable() is False
 
 
+@needs_faster_whisper
 def test_live_window_is_short_and_without_word_stamps(monkeypatch, tmp_path):
     _mac(monkeypatch)
     _model_on_disk(monkeypatch, tmp_path)
@@ -298,6 +309,7 @@ def pipeline(monkeypatch, tmp_path):
     return tr, calls
 
 
+@needs_faster_whisper
 def test_mlx_failure_falls_back_to_faster_whisper_on_cpu(pipeline, tmp_path, capsys):
     from meet import library
 
@@ -393,6 +405,7 @@ def test_live_pick_off_mac_keeps_whisper(monkeypatch):
     assert isinstance(live_asr.pick(_live_cfg("en"), log=lambda _l: None), FakeWhisper)
 
 
+@needs_faster_whisper
 def test_live_mlx_window(mac_ready, monkeypatch):
     fake = _fake(monkeypatch, result={"segments": [_seg(0.2, 1.0, " Hi.")]})
     _speech(monkeypatch, [(0.0, 2.0)])
@@ -417,6 +430,7 @@ def test_live_mlx_load_failure_falls_back_to_whisper(mac_ready, monkeypatch):
     assert any("MLX Whisper" in line and "RuntimeError" in line for line in logs)
 
 
+@needs_faster_whisper
 def test_live_mlx_three_failed_windows_switch_to_whisper(mac_ready, monkeypatch):
     fake = _fake(monkeypatch, result={"segments": []})
     _speech(monkeypatch, [(0.0, 1.0)])
