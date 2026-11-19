@@ -24,6 +24,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 # Один поток BLAS на процесс тестов — до первого импорта numpy. Иначе OpenBLAS на
 # каждом процессе xdist держит буферы на все ядра; при занятой памяти машины
@@ -108,9 +109,23 @@ def _isolated_secrets(monkeypatch, tmp_path_factory):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     monkeypatch.delenv("MEET_DATA_DIR", raising=False)
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata")))
+    default_local = str(tmp_path_factory.mktemp("localappdata"))
+    monkeypatch.setenv("LOCALAPPDATA", default_local)
     if sys.platform == "darwin":
         monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+        # Тесты кладут настройки в свой LOCALAPPDATA (папка данных Windows); на
+        # Mac приложение ищет их в ~/Library/Application Support. Задал тест
+        # LOCALAPPDATA сам — папка данных оттуда, как на Windows; иначе —
+        # настоящая macOS (её проверяют тесты plat через HOME).
+        from meet import plat
+
+        real_root = plat.data_root
+
+        def data_root():
+            local = os.environ.get("LOCALAPPDATA")
+            return Path(local) if local and local != default_local else real_root()
+
+        monkeypatch.setattr(plat, "data_root", data_root)
     try:
         from meet import settings
 
