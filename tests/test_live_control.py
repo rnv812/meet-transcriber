@@ -141,8 +141,19 @@ class H(BaseHTTPRequestHandler):
             os._exit(3)
 
 
-srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+class Srv(ThreadingHTTPServer):
+    def server_bind(self):
+        # Без socket.getfqdn() из HTTPServer.server_bind: обратный DNS на
+        # раннере macOS отвечает дольше, чем тест ждёт старта.
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+
+note("server_start")
+srv = Srv(("127.0.0.1", 0), H)
 srv.daemon_threads = True
+note("server_bound")
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 if mode == "hang":
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
@@ -186,6 +197,7 @@ if mode in ("staged", "stall", "crash-loading"):
         publish(ready=True, capturing=True)
 else:
     publish()
+note("published")
 print("Ассистент: http://127.0.0.1:%d/" % srv.server_address[1], flush=True)
 stop.wait()
 if mode == "hang":
