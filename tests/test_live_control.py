@@ -238,6 +238,17 @@ def _child_log_tail() -> str:
         out += f"\nродители pid {info.get('pid')}: {[p.pid for p in psutil.Process(info['pid']).parents()]}"
     except Exception as e:  # диагностика не должна ронять сам тест
         out += f"\nэндпоинт не прочитан: {type(e).__name__}: {e}"
+    try:
+        import psutil
+
+        for child in psutil.Process().children(recursive=True):
+            with child.oneshot():
+                out += f"\nребёнок {child.pid} {child.status()}: {' '.join(child.cmdline())[:300]}"
+    except Exception as e:
+        out += f"\nдети не прочитаны: {type(e).__name__}: {e}"
+    notes = live_control.endpoint_path().parent.parent / "notes"
+    if notes.is_dir():
+        out += f"\nзаметки заглушки: {sorted(p.name for p in notes.iterdir())}"
     return out
 
 

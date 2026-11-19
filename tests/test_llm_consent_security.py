@@ -237,6 +237,7 @@ def test_mcp_arguments_with_network_paths_need_a_card(env):
     assert gate.decide("mcp__fs__read_file", {"path": r"\\evil.example\share\x"}).outcome == DENY
 
 
+@windows_only
 def test_working_folders_on_a_network_share_still_work_without_touching_the_network(env):
     """База знаний на сетевом диске (`\\\\nas\\kb`), настроенная человеком:
     сравнение — по тексту пути, без обращения к сети; закрытая папка внутри — закрыта."""
