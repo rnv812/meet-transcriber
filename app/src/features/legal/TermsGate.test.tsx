@@ -44,7 +44,8 @@ test("условия не приняты — заслонка поверх ок�
   expect(box).toHaveAttribute("aria-modal", "true");
   expect(box).toHaveClass("sheet");
   expect(box.closest(".backdrop")).toHaveClass("backdrop--modal");
-  expect(screen.getByText("Окно Meet", { selector: "button" }).closest("[inert]")).not.toBeNull();
+  // inert ставит эффект после первой отрисовки заслонки — ждём, а не проверяем сразу.
+  await waitFor(() => expect(screen.getByText("Окно Meet", { selector: "button" }).closest("[inert]")).not.toBeNull());
   for (const s of TERMS_SECTIONS) expect(within(box).getByRole("heading", { name: s.title })).toBeInTheDocument();
   expect(getSettings).toHaveBeenCalledWith(ep);
 });

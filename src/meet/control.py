@@ -130,6 +130,7 @@ import queue
 import re
 import secrets
 import socket
+import socketserver
 import threading
 import urllib.error
 import urllib.request
@@ -262,9 +263,16 @@ class _QuietServer(ThreadingHTTPServer):
     if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
         allow_reuse_address = False
 
-        def server_bind(self) -> None:
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            super().server_bind()
+        # Не HTTPServer.server_bind: тот ещё спрашивает socket.getfqdn(host) —
+        # обратный DNS для 127.0.0.1, который на Mac с медленным DNS (VPN,
+        # корпоративная сеть, раннер CI) держит старт резидента десятки секунд.
+        # Имя сервера нужно только CGI — у нас его нет.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = host, port
 
     def handle_error(self, request, client_address) -> None:
         import sys

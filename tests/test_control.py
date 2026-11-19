@@ -1512,3 +1512,21 @@ def test_temporary_meeting_routes_reach_state(server):
     server.state_obj.recording = True
     assert _post(server, "/recording/keep")["action"] == "kept"
     assert server.state_obj.calls == ["live.start.temporary", "keep", "keep"]
+
+
+def test_start_does_not_ask_reverse_dns(monkeypatch, tmp_path):
+    """Старт API не спрашивает socket.getfqdn (обратный DNS для 127.0.0.1):
+    на Mac с медленным DNS он держал старт резидента десятки секунд."""
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    import socket
+
+    def no_dns(*a, **kw):
+        raise AssertionError("getfqdn при старте API")
+
+    monkeypatch.setattr(socket, "getfqdn", no_dns)
+    srv = control.ControlServer(FakeState(), port=0)
+    port = srv.start(pid=1)
+    try:
+        assert port > 0 and control.alive() is True
+    finally:
+        srv.stop(pid=1)

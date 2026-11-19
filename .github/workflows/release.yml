@@ -313,7 +313,8 @@ jobs:
             echo "### Python на macOS, кусок ${MEET_TEST_SHARD}"
             echo '```'
             grep -E "passed|failed|error" build/macos-report/pytest.txt | tail -n 1
-            grep -E "^(FAILED|ERROR) " build/macos-report/pytest.txt | head -n 80
+            # Без упавших grep ничего не находит: с pipefail это не сбой шага.
+            grep -E "^(FAILED|ERROR) " build/macos-report/pytest.txt | head -n 80 || true
             echo '```'
             echo "Самые медленные:"
             echo '```'
