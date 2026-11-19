@@ -224,11 +224,21 @@ def _wait_for(predicate, timeout: float = 10.0) -> None:
 def _child_log_tail() -> str:
     """Хвост журнала ребёнка (live.log) — в текст сбоя: на раннере CI иначе не
     видно, на чём ассистент остановился."""
+    out = ""
     try:
         text = live_control.log_path().read_text(encoding="utf-8", errors="replace")
+        out += "\nжурнал ребёнка:\n" + text[-3000:]
     except OSError:
-        return ""
-    return "\nжурнал ребёнка:\n" + text[-3000:] if text.strip() else ""
+        pass
+    try:
+        info = json.loads(live_control.endpoint_path().read_text(encoding="utf-8"))
+        out += f"\nэндпоинт: {info}"
+        import psutil
+
+        out += f"\nродители pid {info.get('pid')}: {[p.pid for p in psutil.Process(info['pid']).parents()]}"
+    except Exception as e:  # диагностика не должна ронять сам тест
+        out += f"\nэндпоинт не прочитан: {type(e).__name__}: {e}"
+    return out
 
 
 class Stub:
