@@ -343,7 +343,7 @@ def test_attach_routes_end_to_end(resident, monkeypatch, tmp_path):
         e.value.close()
         assert resident.stub.argv is None
         status, reply = _call(srv, "/live/attach")
-        assert status == 200 and reply["attached"] is True
+        assert status == 200 and reply["attached"] is True, reply
         _wait_for(lambda: _call(srv, "/state", method="GET")[1]["live"]["active"])
         status, reply = _call(srv, "/live/detach")
         assert status == 200 and reply["ok"] is True
