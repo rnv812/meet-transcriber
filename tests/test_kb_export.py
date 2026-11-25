@@ -715,8 +715,12 @@ def test_folder_outside_meetings_dir_is_left_as_before(tmp_path, vault):
     old.rename(personal)
     library.write_meta(folder, {"kb_export": {**library.read_meta(folder)["kb_export"],
                                               "path": str(personal)}})
-    kb_export.export_recording(folder, _cfg(vault, folder_template="{year}/{title}"))
+    got = kb_export.export_recording(folder, _cfg(vault, folder_template="{year}/{title}"))
+    # Выгрузка — в его папку, по шаблону она не переезжает и копии в папке для встреч нет.
+    assert got["path"] == str(personal) and got["notes"] == []
     assert sorted(p.name for p in personal.iterdir()) == ["Итоги.md", "Транскрипт.md"]
+    assert not (vault / "2026").exists() and not old.exists()
+    assert kb_export.relocation(folder.parent, _cfg(vault, folder_template="{year}/{title}"))["count"] == 0
 
 
 def test_failed_move_exports_into_old_folder(tmp_path, vault, monkeypatch):

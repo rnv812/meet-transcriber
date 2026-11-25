@@ -336,12 +336,24 @@ def _inside(path: Path, root: Path) -> bool:
 def _previous(record, root: Path) -> Path | None:
     """Папка прошлой выгрузки — если она есть и лежит внутри папки для встреч
     (но не она сама). Вне её — встречу человек перенёс сам (например, личную
-    в другое хранилище): её не трогаем, выгрузка — по шаблону, как раньше."""
+    в другое хранилище): её не трогаем, выгрузка идёт туда (`_moved_out`)."""
     path = record.get("path") if isinstance(record, dict) else None
     if not isinstance(path, str) or not path:
         return None
     prev = Path(path)
     if prev.is_dir() and _inside(prev, root) and not _same(prev, root):
+        return prev
+    return None
+
+
+def _moved_out(record, root: Path) -> Path | None:
+    """Папка прошлой выгрузки, которую человек перенёс за пределы папки для
+    встреч (есть на диске, вне неё); иначе None."""
+    path = record.get("path") if isinstance(record, dict) else None
+    if not isinstance(path, str) or not path:
+        return None
+    prev = Path(path)
+    if prev.is_dir() and not _inside(prev, root) and not _inside(root, prev):
         return prev
     return None
 
@@ -497,6 +509,12 @@ def _place(root: Path, cfg, folder: Path, title: str, start: datetime) -> tuple[
     идёт на место по шаблону, а прежняя папка остаётся как есть."""
     record = library.read_meta(folder).get("kb_export")
     record = record if isinstance(record, dict) else {}
+    moved_out = _moved_out(record, root)
+    if moved_out is not None:
+        # Человек сам перенёс папку встречи за пределы папки для встреч (личную —
+        # в другое хранилище) и поправил kb_export.path: выгрузка — туда, без
+        # переезда по шаблону и без второй копии в папке для встреч.
+        return moved_out, [], False
     old = _previous(record, root)
     # Обычный случай — папка на месте по шаблону: meta.json всей библиотеки
     # (кто какое место занял) читать незачем.
