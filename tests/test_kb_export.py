@@ -231,19 +231,17 @@ def test_custom_file_names_with_tokens(tmp_path, vault):
     assert got["files"] == ["2026-09-30 Транскрипт.md", "Итоги Планирование спринта.md"]
 
 
-def test_reexport_goes_to_recorded_folder_after_title_change(tmp_path, vault):
+def test_reexport_goes_to_recorded_folder(tmp_path, vault):
     folder = _recording(tmp_path)
     first = kb_export.export_recording(folder, _cfg(vault))
     target = Path(first["path"])
     (target / "Мои заметки.md").write_text("своё", encoding="utf-8")
-    library.write_meta(folder, {"title": "Новое название"})
     (folder / "summary.md").write_text("# Итоги\n", encoding="utf-8")
     second = kb_export.export_recording(folder, _cfg(vault))
-    assert second["path"] == first["path"]
+    assert second["path"] == first["path"] and second["notes"] == []
     assert sorted(p.name for p in vault.iterdir()) == [target.name]
     assert (target / "Мои заметки.md").read_text(encoding="utf-8") == "своё"
     assert (target / "Итоги.md").exists()
-    assert "# Новое название" in (target / "Транскрипт.md").read_text(encoding="utf-8")
 
 
 def test_recorded_folder_gone_means_template_again(tmp_path, vault):
@@ -400,6 +398,8 @@ def test_reexport_keeps_files_edited_by_hand(tmp_path, vault):
     (folder / "summary.md").write_text("# Итоги v2\n", encoding="utf-8")
     library.write_meta(folder, {"title": "Новое название"})
     got = kb_export.export_recording(folder, _cfg(vault))
+    target = Path(got["path"])  # папка переехала вслед за названием
+    assert target.name == "2026-09-30 - Новое название"
     assert got["kept"] == ["Итоги.md"]
     assert got["files"] == ["Транскрипт.md"]
     assert "Мои пометки." in (target / "Итоги.md").read_text(encoding="utf-8")
@@ -438,8 +438,8 @@ def test_export_of_older_version_without_hashes_is_still_ours(tmp_path, vault):
                                               "files": ["Транскрипт.md"]}})
     library.write_meta(folder, {"title": "Ретро"})
     got = kb_export.export_recording(folder, _cfg(vault))
-    assert got["kept"] == []
-    assert "# Ретро" in (target / "Транскрипт.md").read_text(encoding="utf-8")
+    assert got["kept"] == [] and got["path"] == str(vault / "2026-09-30 - Ретро")
+    assert "# Ретро" in (Path(got["path"]) / "Транскрипт.md").read_text(encoding="utf-8")
 
 
 def test_remember_error_survives_broken_meta(tmp_path, monkeypatch):
@@ -614,3 +614,198 @@ def test_same_folder_across_unicode_forms_on_mac_only(monkeypatch, tmp_path):
     assert not kb_export._same(a, b)  # Windows: как раньше — разные имена
     if __import__("os").name == "nt":  # регистр снимает normcase самой Windows
         assert kb_export._same(a, tmp_path / unicodedata.normalize("NFC", "ВСТРЕЧИ Й"))
+
+
+# --- шаблон сменили: папка встречи переезжает по шаблону -----------------------------------
+
+
+def test_changed_template_moves_exported_folder_on_reexport(tmp_path, vault):
+    """Ошибка: после смены шаблона повторная выгрузка шла в прежнюю папку."""
+    folder, old = _exported(tmp_path, vault)
+    (old / "Мои заметки.md").write_text("своё", encoding="utf-8")
+    cfg = _cfg(vault, folder_template="{year}/{date} - {title}")
+    got = kb_export.export_recording(folder, cfg)
+    new = vault / "2026" / "2026-09-30 - Планирование спринта"
+    assert got["path"] == str(new)
+    assert not old.exists()
+    assert sorted(p.name for p in new.iterdir()) == ["Итоги.md", "Мои заметки.md", "Транскрипт.md"]
+    assert (new / "Мои заметки.md").read_text(encoding="utf-8") == "своё"
+    assert got["kept"] == [] and got["notes"] == [kb_export.MOVED_NOTE.format(old)]
+    assert library.read_meta(folder)["kb_export"]["path"] == str(new)
+    assert [p.name for p in vault.iterdir()] == ["2026"]
+
+
+def test_title_change_moves_folder_with_notes_on_reexport(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    (old / "Мои заметки.md").write_text("своё", encoding="utf-8")
+    library.write_meta(folder, {"title": "Ретроспектива"})
+    got = kb_export.export_recording(folder, _cfg(vault))
+    new = vault / "2026-09-30 - Ретроспектива"
+    assert got["path"] == str(new) and not old.exists()
+    assert (new / "Мои заметки.md").read_text(encoding="utf-8") == "своё"
+    assert "# Ретроспектива" in (new / "Транскрипт.md").read_text(encoding="utf-8")
+
+
+def test_files_with_title_follow_on_relocation(tmp_path, vault):
+    names = {"summary_name": "Итоги {title}", "transcript_name": "{title}"}
+    folder, old = _exported(tmp_path, vault, **names)
+    library.write_meta(folder, {"title": "Ретро"})
+    got = kb_export.export_recording(folder, _cfg(vault, folder_template="{title}", **names))
+    new = vault / "Ретро"
+    assert got["path"] == str(new) and got["kept"] == []
+    assert sorted(p.name for p in new.iterdir()) == ["Итоги Ретро.md", "Ретро.md"]
+    assert set(library.read_meta(folder)["kb_export"]["files"]) == {"Итоги Ретро.md", "Ретро.md"}
+
+
+def test_files_of_older_export_without_kinds_follow_too(tmp_path, vault):
+    """Прежняя выгрузка не помнила, какой файл чей: тексты — по порядку записи."""
+    names = {"summary_name": "Итоги {title}", "transcript_name": "{title}"}
+    folder, old = _exported(tmp_path, vault, **names)
+    library.update_meta(folder, lambda meta: {**meta, "kb_export": {
+        k: v for k, v in meta["kb_export"].items() if k != "kinds"}})
+    library.write_meta(folder, {"title": "Ретро"})
+    got = kb_export.export_recording(folder, _cfg(vault, **names))
+    assert sorted(p.name for p in Path(got["path"]).iterdir()) == ["Итоги Ретро.md", "Ретро.md"]
+
+
+def test_edited_file_moves_along_and_stays_protected(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    (old / "Итоги.md").write_text("# Итоги\n\nМои пометки.\n", encoding="utf-8")
+    got = kb_export.export_recording(folder, _cfg(vault, folder_template="{year}/{title}"))
+    new = Path(got["path"])
+    assert got["kept"] == ["Итоги.md"]
+    assert "Мои пометки." in (new / "Итоги.md").read_text(encoding="utf-8")
+
+
+def test_taken_template_place_leaves_old_folder(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    taken = vault / "2026" / "2026-09-30 - Планирование спринта"
+    taken.mkdir(parents=True)
+    (taken / "Транскрипт.md").write_text("чужое", encoding="utf-8")
+    cfg = _cfg(vault, folder_template="{year}/{date} - {title}")
+    got = kb_export.export_recording(folder, cfg)
+    assert got["path"] == str(taken)
+    assert got["notes"] == [f"Прежняя папка оставлена: {old}"]
+    assert old.is_dir() and sorted(p.name for p in old.iterdir()) == ["Итоги.md", "Транскрипт.md"]
+    assert (taken / "Транскрипт.md").read_text(encoding="utf-8") == "чужое"
+    assert got["kept"] == ["Транскрипт.md"]
+    assert library.read_meta(folder)["kb_export"]["path"] == str(taken)
+    # Дальше — уже по шаблону, без строки о прежней папке.
+    assert kb_export.export_recording(folder, cfg)["notes"] == []
+
+
+def test_place_of_another_meeting_means_the_suffixed_place(tmp_path, vault):
+    first = _recording(tmp_path, rid="2026-09-30_10-15")
+    second = _recording(tmp_path, rid="2026-09-30_16-00", title="Ретро")
+    a = Path(kb_export.export_recording(first, _cfg(vault))["path"])
+    b_old = Path(kb_export.export_recording(second, _cfg(vault))["path"])
+    # Второй дали то же название: место по шаблону занято первой встречей.
+    library.write_meta(second, {"title": "Планирование спринта"})
+    got = kb_export.export_recording(second, _cfg(vault))
+    assert Path(got["path"]).name == "2026-09-30 - Планирование спринта (2)"
+    assert not b_old.exists()  # своё место с суффиксом свободно — папка переехала туда
+    assert sorted(p.name for p in a.iterdir()) == ["Транскрипт.md"]
+
+
+def test_folder_outside_meetings_dir_is_left_as_before(tmp_path, vault):
+    """Личную встречу человек перенёс сам за пределы папки для встреч."""
+    folder, old = _exported(tmp_path, vault)
+    personal = tmp_path / "Personal" / old.name
+    personal.parent.mkdir()
+    old.rename(personal)
+    library.write_meta(folder, {"kb_export": {**library.read_meta(folder)["kb_export"],
+                                              "path": str(personal)}})
+    kb_export.export_recording(folder, _cfg(vault, folder_template="{year}/{title}"))
+    assert sorted(p.name for p in personal.iterdir()) == ["Итоги.md", "Транскрипт.md"]
+
+
+def test_failed_move_exports_into_old_folder(tmp_path, vault, monkeypatch):
+    folder, old = _exported(tmp_path, vault)
+
+    def busy(src, dst):
+        raise PermissionError("папка открыта в проводнике")
+
+    monkeypatch.setattr(kb_export.os, "rename", busy)
+    got = kb_export.export_recording(folder, _cfg(vault, folder_template="{year}/{title}"))
+    assert got["path"] == str(old)
+    assert got["notes"] == [kb_export.NOT_MOVED_NOTE.format(old)]
+    assert not (vault / "2026").exists()
+
+
+def test_emptied_folders_of_the_old_template_are_removed(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault, folder_template="{year}/{month}/{title}")
+    (vault / "2026" / "Сводка.md").write_text("своё", encoding="utf-8")
+    kb_export.export_recording(folder, _cfg(vault))
+    assert not (vault / "2026" / "09").exists()  # опустела — убрана
+    assert (vault / "2026" / "Сводка.md").exists()  # в ней своё — осталась
+
+
+def test_folder_holding_another_meeting_does_not_move(tmp_path, vault):
+    first = _recording(tmp_path, rid="2026-09-30_10-15")
+    second = _recording(tmp_path, rid="2026-09-30_16-00", title="Ретро")
+    outer = Path(kb_export.export_recording(first, _cfg(vault))["path"])
+    nested = _cfg(vault, folder_template="{date} - Планирование спринта/{title}")
+    inner = Path(kb_export.export_recording(second, nested)["path"])
+    assert inner.parent == outer
+    got = kb_export.export_recording(first, _cfg(vault, folder_template="{year}/{title}"))
+    assert outer.is_dir() and inner.is_dir()
+    assert got["notes"] == [f"Прежняя папка оставлена: {outer}"]
+
+
+def test_meetings_dir_itself_is_never_moved(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    library.write_meta(folder, {"kb_export": {**library.read_meta(folder)["kb_export"], "path": str(vault)}})
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert vault.is_dir() and got["path"] == str(old)
+
+
+# --- «Переложить по шаблону» в настройках ---------------------------------------------------
+
+
+def _library(tmp_path, vault):
+    a = _recording(tmp_path, rid="2026-09-30_10-15")
+    b = _recording(tmp_path, rid="2026-10-01_09-00", title="Ретро")
+    c = _recording(tmp_path, rid="2026-10-02_09-00", title="Личное")
+    d = _recording(tmp_path, rid="2026-10-03_09-00", title="Не выгружалась")
+    for f in (a, b, c):
+        kb_export.export_recording(f, _cfg(vault))
+    personal = tmp_path / "Personal"
+    personal.mkdir()
+    c_old = Path(library.read_meta(c)["kb_export"]["path"])
+    c_new = c_old.rename(personal / c_old.name)
+    library.write_meta(c, {"kb_export": {**library.read_meta(c)["kb_export"], "path": str(c_new)}})
+    return tmp_path / "rec", (a, b, c, d)
+
+
+def test_relocation_counts_only_exported_folders_off_template(tmp_path, vault):
+    lib, _ = _library(tmp_path, vault)
+    assert kb_export.relocation(lib, _cfg(vault)) == {"count": 0}
+    assert kb_export.relocation(lib, _cfg(vault, folder_template="{year}/{title}")) == {"count": 2}
+    assert kb_export.relocation(lib, _cfg(None)) == {"count": 0}
+
+
+def test_relocate_all_moves_folders_and_reports_what_stayed(tmp_path, vault):
+    lib, (a, b, c, d) = _library(tmp_path, vault)
+    (vault / "2026" / "Ретро").mkdir(parents=True)  # место второй занято
+    cfg = _cfg(vault, folder_template="{year}/{title}")
+    moved = []
+    got = kb_export.relocate_all(lib, cfg, on_moved=moved.append)
+    assert got == {"moved": 1, "left": 1, "reasons": [{"reason": kb_export.TAKEN, "count": 1}]}
+    assert moved == [a]
+    assert library.read_meta(a)["kb_export"]["path"] == str(vault / "2026" / "Планирование спринта")
+    assert (vault / "2026" / "Планирование спринта" / "Транскрипт.md").exists()
+    assert library.read_meta(b)["kb_export"]["path"] == str(vault / "2026-10-01 - Ретро")
+    assert (tmp_path / "Personal" / "2026-10-02 - Личное").is_dir()
+    assert "kb_export" not in library.read_meta(d)
+    assert kb_export.relocation(lib, cfg) == {"count": 1}
+
+
+def test_relocate_all_gives_two_meetings_with_one_name_their_own_folders(tmp_path, vault):
+    a = _recording(tmp_path, rid="2026-09-30_10-15")
+    b = _recording(tmp_path, rid="2026-09-30_16-00")
+    kb_export.export_recording(a, _cfg(vault))
+    kb_export.export_recording(b, _cfg(vault))
+    got = kb_export.relocate_all(tmp_path / "rec", _cfg(vault, folder_template="{year}/{title}"))
+    assert got["moved"] == 2
+    assert sorted(p.name for p in (vault / "2026").iterdir()) == [
+        "Планирование спринта", "Планирование спринта (2)"]

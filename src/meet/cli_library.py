@@ -578,6 +578,8 @@ def _kb_export(args, cfg) -> None:
         raise CliError(f"{e}{hint}")
     except (RuntimeError, OSError) as e:
         raise CliError(f"Не удалось выгрузить встречу: {e}")
+    for note in result.get("notes") or []:
+        _say(note)  # папка перенесена по шаблону, прежняя оставлена…
     _result(args, result, f"{result['path']}\n")
 
 

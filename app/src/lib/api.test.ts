@@ -58,6 +58,17 @@ test("предпросмотр выгрузки: значения чернови
   expect(url.searchParams.get("include_srt")).toBe("true");
 });
 
+test("«Переложить по шаблону»: счётчик — GET, перенос — POST на /export/relocate", async () => {
+  const f = okFetch();
+  await api.getExportRelocation(ep);
+  await api.relocateExports(ep);
+  const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit | undefined)?.method ?? "GET"]);
+  expect(calls).toEqual([
+    ["http://h/export/relocate", "GET"],
+    ["http://h/export/relocate", "POST"],
+  ]);
+});
+
 test("getAgentContext: GET — что получит агент, без записи файлов", async () => {
   const f = okFetch();
   await api.getAgentContext(ep, "a b");

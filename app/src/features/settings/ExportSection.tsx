@@ -9,12 +9,18 @@
  *
  * Проверка шаблона здесь повторяет `meet.kb_export.check_folder_template`
  * (тексты те же): «Сохранить» недоступно сразу, не дожидаясь ответа резидента.
+ *
+ * «Переложить по шаблону» (`GET`/`POST /export/relocate`): сколько уже
+ * выгруженных встреч лежит не по сохранённому шаблону, и перенос их папок
+ * туда. Считается только по сохранённым настройкам, поэтому, пока шаблон или
+ * папка для встреч не сохранены, кнопка недоступна.
  */
 
 import { useEffect, useState } from "react";
-import { type Endpoint, getExportPreview } from "../../lib/api";
+import { type Endpoint, getExportPreview, getExportRelocation, relocateExports } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import type { ExportPreview } from "../../lib/types";
+import type { ExportPreview, ExportRelocated } from "../../lib/types";
+import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { fieldClass } from "./fields";
 import { FolderRow, Row, Switch, type Raw, type SetFn } from "./Section";
@@ -108,6 +114,62 @@ export function cleanSetting(group: string, key: string, value: unknown): unknow
   return group === "export" && TEXT_KEYS.includes(key) && typeof value === "string" ? value.trim() : value;
 }
 
+/** Итог «Переложить по шаблону» одной строкой: сколько перенесено, сколько осталось и почему. */
+export function relocatedText(r: ExportRelocated): string {
+  const moved = `Перенесено: ${r.moved}`;
+  if (!r.left) return moved;
+  const why = r.reasons.map((x) => `${x.reason} — ${x.count}`).join("; ");
+  return `${moved}. Оставлено: ${r.left}${why ? ` (${why})` : ""}`;
+}
+
+/**
+ * Строка «Папки выгруженных встреч»: счётчик встреч не по сохранённому
+ * шаблону и кнопка «Переложить по шаблону». Видна, когда папка для встреч
+ * сохранена и резидент ответил.
+ */
+function RelocateRow({ endpoint, savedDir, savedTemplate, unsaved }: {
+  endpoint: Endpoint; savedDir: string | null; savedTemplate: string; unsaved: boolean;
+}) {
+  const [tick, setTick] = useState(0);
+  const [counted, setCounted] = useState<{ key: string; count: number } | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const key = JSON.stringify([savedDir, savedTemplate, tick]);
+
+  useEffect(() => {
+    if (!savedDir) return;
+    let live = true;
+    getExportRelocation(endpoint)
+      .then((r) => { if (live) setCounted({ key, count: r.count }); })
+      .catch(() => { /* старый резидент или сбой — строки просто нет */ });
+    return () => { live = false; };
+  }, [endpoint, key, savedDir]);
+
+  if (!savedDir || counted === null) return null;
+  const count = counted.count;
+
+  const relocate = async () => {
+    try {
+      setResult(relocatedText(await relocateExports(endpoint)));
+    } catch (e) {
+      setResult(`Не удалось переложить: ${errorText(e)}`);
+    }
+    setTick((t) => t + 1);
+  };
+
+  const hint = unsaved ? "Сначала сохраните шаблон"
+    : count > 0 ? "Папки переедут на места по шаблону целиком, вместе с вашими заметками"
+      : "Все выгруженные встречи лежат по шаблону";
+  return (
+    <Row label="Папки выгруженных встреч" hint={hint}>
+      <span className="export__relocate">
+        {count > 0 && <span>Выгруженных встреч не по шаблону: {count}</span>}
+        <Button disabled={unsaved || count === 0} onClick={relocate}>Переложить по шаблону</Button>
+        {result && <span className="muted" role="status">{result}</span>}
+      </span>
+    </Row>
+  );
+}
+
 /** «?» со списком подстановок. */
 function TokenHelp() {
   return (
@@ -120,9 +182,14 @@ function TokenHelp() {
   );
 }
 
-export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint: Endpoint }) {
+export function ExportSection({ draft, saved = {}, set, endpoint }: {
+  draft: Raw; saved?: Raw; set: SetFn; endpoint: Endpoint;
+}) {
   const v = (k: string) => draft.export?.[k];
   const template = String(v("folder_template") ?? "");
+  const savedTemplate = String(saved.export?.folder_template ?? "");
+  const savedDir = (saved.export?.meetings_dir as string | null | undefined) ?? null;
+  const unsaved = template !== savedTemplate || ((v("meetings_dir") as string | null | undefined) ?? null) !== savedDir;
   const transcriptName = String(v("transcript_name") ?? "");
   const summaryName = String(v("summary_name") ?? "");
   const flags = Object.fromEntries(FLAGS.map((f) => [f.key, Boolean(v(f.key))]));
@@ -170,6 +237,7 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
               ) : null}
         </span>
       </Row>
+      <RelocateRow endpoint={endpoint} savedDir={savedDir} savedTemplate={savedTemplate} unsaved={unsaved} />
       <Row label="Имя файла расшифровки" htmlFor="export-transcript-name" hint="Те же подстановки; расширение .md добавляется автоматически">
         <input id="export-transcript-name" type="text" className={fieldClass()} value={transcriptName}
           onChange={(e) => set("export", "transcript_name", e.target.value)} />

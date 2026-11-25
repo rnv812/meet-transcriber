@@ -689,7 +689,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           ) : section === "export" ? (
             <>
               <SettingsCard title="Выгрузка в базу знаний">
-                <ExportSection draft={draft} set={set} endpoint={endpoint} />
+                <ExportSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
               </SettingsCard>
               <JiraSection draft={draft} set={set} />
             </>

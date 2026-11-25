@@ -301,6 +301,15 @@ class FakeState:
         return {"folder": "2026-09-30 - Планирование спринта", "files": ["Транскрипт.md"],
                 "error": None}
 
+    def export_relocation(self):
+        return {"count": 2}
+
+    def export_relocate(self):
+        if not self.meetings_dir:
+            raise control.BadRequest("Папка для встреч не задана")
+        self.calls.append(("relocate",))
+        return {"moved": 1, "left": 1, "reasons": [{"reason": "место по шаблону уже занято", "count": 1}]}
+
     def agent_context(self, rid, body=None):
         if rid == "нет":
             return {"error": "записи нет"}
@@ -1345,6 +1354,15 @@ def test_export_preview_route_passes_query(server):
     assert got["error"] is None and got["folder"] == "2026-09-30 - Планирование спринта"
     assert ("preview", {"folder_template": "{year}/{date} - {title}",
                         "include_srt": "true"}) in server.state_obj.calls
+
+
+def test_export_relocate_routes(server):
+    assert _get(server, "/export/relocate") == {"count": 2}
+    assert _post(server, "/export/relocate", expect=400) == {"error": "Папка для встреч не задана"}
+    server.state_obj.meetings_dir = "D:/kb"
+    assert _post(server, "/export/relocate") == {
+        "moved": 1, "left": 1, "reasons": [{"reason": "место по шаблону уже занято", "count": 1}]}
+    assert ("relocate",) in server.state_obj.calls
 
 
 def test_assistant_routes(server):

@@ -96,6 +96,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     profiles_removed() / dismiss_...()    отметка «профили людей убраны» и «Понятно»
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
+    export_relocation() -> dict           сколько выгруженных встреч не по шаблону {"count"}
+    export_relocate() -> dict             переложить их по шаблону {"moved", "left", "reasons"}
     assistant() -> dict                   кто отвечает, что установлено, папки
     check_provider(body) -> dict          проверить провайдера коротким вызовом
     local_models(body) -> dict            модели локального сервера {"base_url", "model"}
@@ -930,6 +932,9 @@ _ROUTES = {
     ("GET", "/export/preview"): lambda h, p: _server_of(h).state.export_preview(
         {k: v[0] for k, v in p.items() if k != "token" and v}
     ),
+    # «Переложить по шаблону»: сколько выгруженных встреч не на месте и перенос.
+    ("GET", "/export/relocate"): lambda h, p: _server_of(h).state.export_relocation(),
+    ("POST", "/export/relocate"): lambda h, p: _server_of(h).state.export_relocate(),
 }
 
 # Маршруты с параметром в пути. Регулярка, а не роутер: их считаные штуки, и

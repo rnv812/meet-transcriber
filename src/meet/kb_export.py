@@ -7,9 +7,15 @@
 
 Правила, ради которых модуль устроен так, а не проще:
 
-* **Повторная выгрузка идёт туда же.** Путь первой выгрузки хранится в
-  meta.json записи (`kb_export.path`); пока папка существует, итоги, сделанные
-  позже, и переименование встречи не плодят вторую папку.
+* **Повторная выгрузка идёт туда же — на место по шаблону.** Путь выгрузки
+  хранится в meta.json записи (`kb_export.path`); итоги, сделанные позже, не
+  плодят вторую папку. Если прежняя папка не на месте по текущему шаблону
+  (шаблон сменили или встречу переименовали), выгрузка сначала переносит её
+  туда целиком, `os.rename`, вместе с заметками человека (`_place`). Место
+  занято — выгрузка идёт на место по шаблону, а прежняя папка остаётся как
+  была (строка «Прежняя папка оставлена» в ответе). Папку вне папки для
+  встреч человек перенёс сам — её не трогаем. Все выгруженные встречи разом —
+  «Переложить по шаблону» в настройках (`relocate_all`).
 * **Чужое и правленое не трогаем.** Перезаписываются только наши файлы, и
   только пока их не меняли: в meta.json (`kb_export.files`) лежит SHA-256
   каждого записанного файла. Файл правили в базе знаний (хеш другой) или он
@@ -18,9 +24,9 @@
   свежей версии, а новую всегда можно получить, удалив файл. Заметки рядом и
   уже существующая папка с тем же именем остаются как были. Папка, занятая
   другой встречей, получает суффикс « (2)».
-* **Переименовали встречу — папка следует за названием** (`follow_title`),
-  но только своя: в ней ровно наши файлы прошлой выгрузки, а папки с новым
-  именем ещё нет. Иначе папка остаётся прежней, и выгрузка идёт в неё.
+* **Переименовали встречу — папка следует за названием** сразу
+  (`follow_title`), если она своя: в ней ровно наши файлы прошлой выгрузки, а
+  папки с новым именем ещё нет. Иначе её перенесёт следующая выгрузка (выше).
 * **Запись атомарная:** временный файл рядом и `os.replace` — база знаний
   (синхронизация, индексатор Obsidian) не увидит половину файла.
 """
@@ -274,24 +280,50 @@ def _write_audio(folder: Path, sources: list[Path], target: Path, mix) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _key(path: Path) -> str | None:
+    try:
+        return plat.path_key(path.resolve())
+    except OSError:
+        return None
+
+
 def _same(a: Path, b: Path) -> bool:
+    key = _key(a)
+    return key is not None and key == _key(b)
+
+
+def _claims(lib_root: Path) -> dict[str, set[str]]:
+    """Папки базы знаний, которые заняли встречи библиотеки (их
+    `kb_export.path`): ключ пути → имена папок записей. Считается один раз на
+    выгрузку или на весь перенос, а не на каждое сравнение."""
+    claims: dict[str, set[str]] = {}
     try:
-        return plat.path_key(a.resolve()) == plat.path_key(b.resolve())
+        entries = [p for p in Path(lib_root).iterdir() if p.is_dir()]
     except OSError:
-        return False
+        return claims
+    for rec in entries:
+        path = (library.read_meta(rec).get("kb_export") or {}).get("path")
+        key = _key(Path(path)) if isinstance(path, str) and path else None
+        if key:
+            claims.setdefault(key, set()).add(rec.name)
+    return claims
 
 
-def _claimed_by_other(candidate: Path, folder: Path) -> bool:
+def _claimed_by_other(candidate: Path, folder: Path, claims: dict | None = None) -> bool:
     """Папку уже заняла другая встреча библиотеки (её kb_export.path)."""
-    try:
-        siblings = [p for p in folder.parent.iterdir() if p.is_dir() and p.name != folder.name]
-    except OSError:
-        return False
-    for other in siblings:
-        path = (library.read_meta(other).get("kb_export") or {}).get("path")
-        if isinstance(path, str) and path and _same(Path(path), candidate):
-            return True
-    return False
+    if claims is None:
+        claims = _claims(folder.parent)
+    return bool(claims.get(_key(candidate) or "", set()) - {folder.name})
+
+
+def _holds_other(old: Path, folder: Path, claims: dict) -> bool:
+    """Внутри папки лежит папка другой встречи (шаблон с подпапками по
+    названию): такую папку целиком не переносим."""
+    key = _key(old)
+    if key is None:
+        return True
+    prefix = key.rstrip("\\/") + os.sep
+    return any(k.startswith(prefix) and names - {folder.name} for k, names in claims.items())
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -301,21 +333,186 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def _target(root: Path, cfg, folder: Path, title: str, start: datetime) -> Path:
-    previous = (library.read_meta(folder).get("kb_export") or {}).get("path")
-    if isinstance(previous, str) and previous:
-        prev = Path(previous)
-        if prev.is_dir() and _inside(prev, root):
-            return prev
+def _previous(record, root: Path) -> Path | None:
+    """Папка прошлой выгрузки — если она есть и лежит внутри папки для встреч
+    (но не она сама). Вне её — встречу человек перенёс сам (например, личную
+    в другое хранилище): её не трогаем, выгрузка — по шаблону, как раньше."""
+    path = record.get("path") if isinstance(record, dict) else None
+    if not isinstance(path, str) or not path:
+        return None
+    prev = Path(path)
+    if prev.is_dir() and _inside(prev, root) and not _same(prev, root):
+        return prev
+    return None
+
+
+def _by_template(root: Path, cfg, folder: Path, title: str, start: datetime,
+                 claims: dict | None = None) -> Path:
+    """Место встречи по шаблону; занятое другой встречей — с суффиксом « (2)»."""
     parts = render_folder(cfg.folder_template, title, start)
     base = root.joinpath(*parts)
     if not _inside(base, root):  # ссылка (junction) наружу
         raise ValueError("Шаблон папки выводит за пределы папки для встреч")
+    if claims is None:
+        claims = _claims(folder.parent)
     candidate, n = base, 2
-    while _claimed_by_other(candidate, folder):
+    while _claimed_by_other(candidate, folder, claims):
         candidate = base.with_name(f"{base.name} ({n})")
         n += 1
     return candidate
+
+
+# --- перенос папки встречи (шаблон или название изменились) ---------------------------
+
+MOVED = "moved"
+# Почему папка осталась на прежнем месте — для человека (счётчики в ответе
+# «Переложить по шаблону», без названий встреч).
+TAKEN = "место по шаблону уже занято"
+NESTED = "папки встреч вложены одна в другую"
+FAILED = "папку не удалось переименовать — возможно, она открыта в другой программе"
+MOVED_NOTE = "Папка перенесена по шаблону, прежняя: {}"
+LEFT_NOTE = "Прежняя папка оставлена: {}"
+NOT_MOVED_NOTE = "Папку не удалось перенести по шаблону — выгрузка в прежнюю: {}"
+
+
+def _kinds(record: dict, recorded: dict) -> dict[str, str]:
+    """Какой из наших файлов чей: {вид: имя}. Прежние выгрузки этого не
+    помнили — тогда субтитры и запись узнаются по имени, а тексты — по порядку
+    записи (расшифровка всегда раньше итогов)."""
+    kinds = record.get("kinds") if isinstance(record, dict) else None
+    if isinstance(kinds, dict):
+        return {str(k): v for k, v in kinds.items() if isinstance(v, str) and v in recorded}
+    guess: dict[str, str] = {}
+    texts = []
+    for name in recorded:
+        if name == SRT_NAME:
+            guess["srt"] = name
+        elif Path(name).stem == AUDIO_STEM:
+            guess["audio"] = name
+        elif name.lower().endswith(".md"):
+            texts.append(name)
+    if len(texts) == 2:
+        guess["transcript"], guess["summary"] = texts
+    elif len(texts) == 1:
+        guess["transcript"] = texts[0]
+    return guess
+
+
+def _drop_empty(path: Path, root: Path) -> None:
+    """Опустевшие папки прежнего шаблона (год, месяц) — убрать, вверх до папки
+    для встреч, её саму не трогая. `rmdir` удаляет только пустую папку."""
+    while path != path.parent and _inside(path, root) and not _same(path, root):
+        try:
+            path.rmdir()
+        except OSError:
+            return
+        path = path.parent
+
+
+def _move_folder(folder: Path, root: Path, record: dict, old: Path, new: Path,
+                 renames: list[tuple[str, str, str]]) -> bool:
+    """Папку встречи old → new одним `os.rename` (атомарно; заметки человека
+    едут вместе с ней). Родительские папки шаблона создаются, при отказе —
+    убираются. Затем наши файлы с `{title}` в имени: `renames` — (вид,
+    прежнее имя, новое); переименовывается только наш файл и только если
+    нового ещё нет. Затем — путь в meta.json. Не переименовалось — False, всё
+    на месте; meta.json не записался — всё назад и исключение (иначе следующая
+    выгрузка завела бы вторую папку)."""
+    recorded = _recorded(record)
+    kinds = _kinds(record, recorded)
+    created, parent = [], new.parent
+    while not parent.exists() and parent != parent.parent:
+        created.append(parent)
+        parent = parent.parent
+
+    def drop_created() -> None:
+        for path in created:  # от глубокой к верхней
+            try:
+                path.rmdir()
+            except OSError:
+                break
+
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(old, new)
+    except OSError:
+        drop_created()
+        return False
+    files = dict(recorded)
+    moved: list[tuple[str, str]] = []
+    for kind, was, name in renames:
+        if was == name or was not in files or (new / name).exists():
+            continue
+        try:
+            os.rename(new / was, new / name)
+        except OSError:
+            continue
+        files[name] = files.pop(was)
+        kinds[kind] = name
+        moved.append((was, name))
+
+    def change(meta: dict) -> dict:
+        current = meta.get("kb_export")
+        current = dict(current) if isinstance(current, dict) else {}
+        current.update(path=str(new), files=files, kinds=kinds)
+        return {**meta, "kb_export": current}
+
+    try:
+        library.update_meta(folder, change)
+    except Exception:
+        for was, name in reversed(moved):
+            try:
+                os.rename(new / name, new / was)
+            except OSError:
+                pass
+        try:
+            os.rename(new, old)
+        except OSError:
+            pass
+        else:
+            drop_created()
+        raise
+    _drop_empty(old.parent, root)
+    return True
+
+
+def _relocate(folder: Path, root: Path, cfg, record: dict, old: Path, new: Path,
+              title: str, start: datetime, claims: dict) -> str:
+    """Перенести папку встречи на место по шаблону: MOVED или почему нет
+    (TAKEN, NESTED, FAILED). Чужое не трогается: занятое место — не наше."""
+    if new.exists():
+        return TAKEN
+    if _inside(new, old) or _holds_other(old, folder, claims):
+        return NESTED
+    now = dict(_plan(cfg, title, start, True, _audio_name(_audio_sources(folder))))
+    kinds = _kinds(record, _recorded(record))
+    renames = [(kind, was, now[kind]) for kind, was in kinds.items() if kind in now]
+    return MOVED if _move_folder(folder, root, record, old, new, renames) else FAILED
+
+
+def _place(root: Path, cfg, folder: Path, title: str, start: datetime) -> tuple[Path, list[str], bool]:
+    """Куда выгружать: (папка, строки для человека, учёт наших файлов —
+    заново). Прежняя папка не на месте по шаблону (шаблон или название
+    сменились) — сначала переезжает туда целиком; место занято — выгрузка
+    идёт на место по шаблону, а прежняя папка остаётся как есть."""
+    record = library.read_meta(folder).get("kb_export")
+    record = record if isinstance(record, dict) else {}
+    old = _previous(record, root)
+    # Обычный случай — папка на месте по шаблону: meta.json всей библиотеки
+    # (кто какое место занял) читать незачем.
+    if old is not None and _same(old, _by_template(root, cfg, folder, title, start, {})):
+        return old, [], False
+    claims = _claims(folder.parent)
+    new = _by_template(root, cfg, folder, title, start, claims)
+    if old is None or _same(old, new):
+        return old or new, [], False
+    outcome = _relocate(folder, root, cfg, record, old, new, title, start, claims)
+    if outcome == MOVED:
+        return new, [MOVED_NOTE.format(old)], False
+    if outcome == FAILED:
+        return old, [NOT_MOVED_NOTE.format(old)], False
+    # В новом месте файлы с нашими именами — не наши: учёт с нуля.
+    return new, [LEFT_NOTE.format(old)], True
 
 
 def _transcript_md(data: dict, title: str, start: datetime, folder: Path | None = None,
@@ -378,12 +575,13 @@ def _export(folder: Path, cfg, mix, category: str | None = None) -> dict:
     summary_path = folder / assistant.SUMMARY_MD
     sources = _audio_sources(folder)
     plan = _plan(cfg, title, start, summary_path.is_file(), _audio_name(sources))
-    target = _target(root, cfg, folder, title, start)
+    target, notes, fresh = _place(root, cfg, folder, title, start)
     target.mkdir(parents=True, exist_ok=True)
     previous = library.read_meta(folder).get("kb_export")
-    recorded = _recorded(previous if isinstance(previous, dict) else {})
-    notes = []
-    if not (isinstance(previous, dict) and previous.get("path")):
+    previous = previous if isinstance(previous, dict) else {}
+    recorded = {} if fresh else _recorded(previous)
+    kinds = {} if fresh else _kinds(previous, recorded)
+    if not previous.get("path"):
         # Первая выгрузка встречи, у которой есть заметка прежней версии: новая
         # папка — рядом, а заметку не трогаем (её могли дописать) и говорим о ней.
         old_note = _old_note(root, folder, data, title, start)
@@ -409,8 +607,11 @@ def _export(folder: Path, cfg, mix, category: str | None = None) -> dict:
             _write_bytes(path, content)
             recorded[name] = _sha(content)
         written.append(name)
+    # `kinds` — какой файл чей: при переносе папки файлы с {title} в имени
+    # переименовываются вслед за названием.
     library.write_meta(folder, {"kb_export": {"path": str(target), "at": time.time(),
-                                              "files": recorded, "kept": kept}})
+                                              "files": recorded, "kept": kept,
+                                              "kinds": {**kinds, **dict(plan)}}})
     return {"path": str(target), "files": written, "kept": kept, "notes": notes}
 
 
@@ -484,65 +685,85 @@ def follow_title(folder, cfg, old_title: str) -> Path | None:
     if (_same(new, old) or new.exists() or not _inside(new, root)
             or _claimed_by_other(new, folder)):
         return None
-    # Родительские папки, которых ещё нет (шаблон с подпапками): при отказе — убрать.
-    created, parent = [], new.parent
-    while not parent.exists() and parent != parent.parent:
-        created.append(parent)
-        parent = parent.parent
-
-    def drop_created() -> None:
-        for path in created:  # от глубокой к верхней
-            try:
-                path.rmdir()
-            except OSError:
-                break
-
-    try:
-        new.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(old, new)
-    except OSError:
-        drop_created()
-        return None
     # Файлы с {title} в имени: та же раскладка по старому и новому названию.
     audio = _audio_name(_audio_sources(folder))
     before = dict(_plan(cfg, old_title, start, True, audio))
-    files = dict(recorded)
-    moved: list[tuple[str, str]] = []
-    for kind, name in _plan(cfg, title, start, True, audio):
-        was = before.get(kind)
-        if not was or was == name or was not in files or (new / name).exists():
+    renames = [(kind, before[kind], name) for kind, name in _plan(cfg, title, start, True, audio)
+               if kind in before]
+    return new if _move_folder(folder, root, record, old, new, renames) else None
+
+
+# --- «Переложить по шаблону» (настройки) ---------------------------------------------
+
+
+def _meetings_root(cfg) -> Path:
+    if not cfg.meetings_dir:
+        raise ValueError(NOT_SET)
+    root = Path(cfg.meetings_dir)
+    if not root.is_dir():
+        raise ValueError(f"Папка для встреч не найдена: {root}")
+    return root
+
+
+def _off_template(lib_root: Path, root: Path, cfg, claims: dict):
+    """Выгруженные встречи, чьи папки внутри папки для встреч, но не на месте
+    по шаблону: (запись, kb_export, папка, место по шаблону, название, начало).
+    Место считается в момент обхода — по `claims`, которые обход обновляет."""
+    for rec in library.recording_folders(lib_root):
+        record = library.read_meta(rec).get("kb_export")
+        old = _previous(record, root)
+        if old is None:
             continue
         try:
-            os.rename(new / was, new / name)
-        except OSError:
+            title, start = meeting(rec)
+            new = _by_template(root, cfg, rec, title, start, claims)
+        except (OSError, ValueError):
             continue
-        files[name] = files.pop(was)
-        moved.append((was, name))
+        if not _same(old, new):
+            yield rec, record, old, new, title, start
 
-    def change(meta: dict) -> dict:
-        current = meta.get("kb_export")
-        current = dict(current) if isinstance(current, dict) else {}
-        current.update(path=str(new), files=files)
-        return {**meta, "kb_export": current}
 
+def relocation(lib_root, cfg) -> dict:
+    """Сколько выгруженных встреч лежит не по сохранённому шаблону —
+    `{"count": N}` для строки над кнопкой «Переложить по шаблону». Папки вне
+    папки для встреч (перенесённые человеком) не считаются."""
+    cfg = getattr(cfg, "export", cfg)
     try:
-        library.update_meta(folder, change)
-    except Exception:
-        # meta.json не записался — он по-прежнему указывает на старую папку:
-        # вернуть всё как было, иначе следующая выгрузка завела бы вторую папку.
-        for was, name in reversed(moved):
-            try:
-                os.rename(new / name, new / was)
-            except OSError:
-                pass
+        root = _meetings_root(cfg)
+    except ValueError:
+        return {"count": 0}
+    lib_root = Path(lib_root)
+    return {"count": sum(1 for _ in _off_template(lib_root, root, cfg, _claims(lib_root)))}
+
+
+def relocate_all(lib_root, cfg, *, on_moved=None) -> dict:
+    """«Переложить по шаблону»: папки выгруженных встреч библиотеки, которые
+    лежат внутри папки для встреч не на месте по шаблону, переезжают туда
+    целиком (как при выгрузке), meta.json правится. Ответ — счётчики без
+    названий встреч: `{"moved": N, "left": M, "reasons": [{"reason", "count"}]}`.
+    `on_moved(папка записи)` — после каждого переноса (окну — обновить карточку)."""
+    cfg = getattr(cfg, "export", cfg)
+    root = _meetings_root(cfg)
+    lib_root = Path(lib_root)
+    claims = _claims(lib_root)
+    moved, left = 0, {}
+    for rec, record, old, new, title, start in _off_template(lib_root, root, cfg, claims):
         try:
-            os.rename(new, old)
-        except OSError:
-            pass
-        else:
-            drop_created()
-        raise
-    return new
+            outcome = _relocate(rec, root, cfg, record, old, new, title, start, claims)
+        except Exception:
+            outcome = FAILED  # meta.json не записался — папка возвращена на место
+        if outcome != MOVED:
+            left[outcome] = left.get(outcome, 0) + 1
+            continue
+        moved += 1
+        # Место занято этой встречей — следующая с тем же названием получит « (2)».
+        for names in claims.values():
+            names.discard(rec.name)
+        claims.setdefault(_key(new) or str(new), set()).add(rec.name)
+        if on_moved is not None:
+            on_moved(rec)
+    return {"moved": moved, "left": sum(left.values()),
+            "reasons": [{"reason": reason, "count": count} for reason, count in left.items()]}
 
 
 # --- предпросмотр ------------------------------------------------------------------

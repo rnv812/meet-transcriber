@@ -341,6 +341,12 @@ export type KbExport = { path: string; files: string[]; kept: string[]; notes?: 
 /** `GET /export/preview`: как назовётся папка (относительно папки для встреч) и что в ней будет. */
 export type ExportPreview = { folder: string | null; files: string[]; error: string | null };
 
+/** `GET /export/relocate`: сколько выгруженных встреч лежит не по сохранённому шаблону папки. */
+export type ExportRelocation = { count: number };
+
+/** `POST /export/relocate`: сколько папок перенесено по шаблону, сколько осталось и почему (без названий встреч). */
+export type ExportRelocated = { moved: number; left: number; reasons: { reason: string; count: number }[] };
+
 export type Segment = {
   start: number;
   end: number;

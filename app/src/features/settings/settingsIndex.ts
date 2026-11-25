@@ -191,6 +191,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "categories", label: "Категории встреч", hint: "Названия, цвета и описания для ИИ", keywords: ["категория", "цвет"] },
   { section: "export", label: "Папка для встреч", hint: "Куда выгружаются встречи в базе знаний", keywords: ["obsidian", "база знаний", "выгрузка"] },
   { section: "export", label: "Шаблон имени папки", keys: ["export.folder_template"], keywords: ["подстановки", "выгрузка"] },
+  { section: "export", label: "Папки выгруженных встреч", hint: "Переложить по шаблону", keywords: ["выгрузка", "перенести", "шаблон"] },
   { section: "export", label: "Имя файла расшифровки", keys: ["export.transcript_name"], keywords: ["выгрузка"] },
   { section: "export", label: "Имя файла итогов", keys: ["export.summary_name"], keywords: ["выгрузка"] },
   { section: "export", label: "Что выгружать", keys: ["export.include_transcript", "export.include_summary", "export.include_audio", "export.include_srt"], hint: "Расшифровку, итоги, звук", keywords: ["выгрузка", "аудио"] },

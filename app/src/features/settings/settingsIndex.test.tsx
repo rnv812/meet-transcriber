@@ -22,6 +22,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getStorage: vi.fn(),
   getCategoriesInfo: vi.fn(),
   getExportPreview: vi.fn(),
+  getExportRelocation: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -79,6 +80,7 @@ beforeEach(() => {
   } as api.StorageInfo);
   vi.mocked(api.getCategoriesInfo).mockResolvedValue({ categories: [], defaults: [], counts: {}, none: 0 });
   vi.mocked(api.getExportPreview).mockResolvedValue({ folder: "x", files: [], error: null });
+  vi.mocked(api.getExportRelocation).mockResolvedValue({ count: 2 });
 });
 
 /** Подписи строк в открытом разделе: `Row`, `Switch`, `Radio` и составные строки (`.srow__label`). */
@@ -139,6 +141,7 @@ test("каждая подпись строки в каждом разделе е
   expect(first.get("asr")).toContain("Расположение");
   expect(first.get("app")).toContain("Тема");
   expect(first.get("export")).toContain("Адрес Jira");
+  expect(first.get("export")).toContain("Папки выгруженных встреч");
 }, 60_000);
 
 test("индекс: известные разделы, без повторов; «Тонкая настройка» помечена advanced", () => {
