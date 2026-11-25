@@ -62,7 +62,7 @@ OpenAI-совместимый сервер; `src/meet/llm/`).
   Наборы — `llm.PROVIDERS`, `AUTO_PROVIDERS` (без `agy`), `VISION_PROVIDERS`,
   `STREAMING_PROVIDERS` (Codex, `agy`), `RESUME_PROVIDERS`,
   `DENY_ENFORCED_PROVIDERS`.
-- Модели и уровни рассуждений из самих CLI (0.6.2) — `llm/cli_models.py`,
+- Модели и уровни рассуждений из самих CLI (0.6.3) — `llm/cli_models.py`,
   `GET /assistant/models?provider=…[&refresh=1]` (кэш 5 мин): Codex —
   `model/list` app-server (`codex_app.list_models`, запасной `codex debug
   models`), `agy` — ответ служебного `session/new` (`antigravity.list_models`:
@@ -100,7 +100,7 @@ OpenAI-совместимый сервер; `src/meet/llm/`).
   прогон — workflow_dispatch с `macos_only`; подпись с hardened runtime —
   `MEET_HARDENED_RUNTIME=1`, вход `hardened_trial`). Модули Windows (winreg,
   ctypes.windll, pyaudiowpatch) импортировать только на Windows.
-- macOS, 0.6.2 (тоже не проверено на Mac): одна выбранная модель на все
+- macOS, 0.6.2–0.6.3 (тоже не проверено на Mac): одна выбранная модель (0.6.3) на все
   встречи, без деления по языку встречи и без определения языка
   (`asr._choose_mac`, `live_asr._pick_mac`; ключи строки процессора —
   `asr.cpu_backend` + `cpu_model`/`gigaam_model`; GigaAM при явном языке
@@ -317,7 +317,7 @@ git не попадают.
   агенту и пересоздание сеанса: Claude Code — с продолжением, Codex и
   OpenCode — новый с затравкой), хранится в `assistant/sessions.json`
   (`ChatLog.profile`).
-- **YOLO (0.6.2)** — режим одной встречи, по умолчанию выключен (в
+- **YOLO (0.6.3)** — режим одной встречи, по умолчанию выключен (в
   `config.json` не пишется): `PUT /live/yolo {"on"}` → ребёнку `PUT /agent/yolo`
   → `Participant.set_yolo` (строка `system` `notice: "yolo"`, пометка агенту
   `pp.YOLO_ON`/`YOLO_OFF`, в `view` — `yolo`, `yolo_available`). Ворота
