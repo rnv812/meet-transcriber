@@ -19,6 +19,9 @@ from meet import asr, events, gigaam_asr, jobs, library
 from meet.asr import Segment, Word
 from meet.diarize import Diarization
 
+# Поведение Windows (CUDA, язык, откат) — и на раннере macOS (conftest.windows_asr).
+pytestmark = pytest.mark.usefixtures("windows_asr")
+
 
 def _engine(monkeypatch, tmp_path, profile="cuda", *, libs=True, gpu=False, device="auto"):
     """Движок профиля `profile`; библиотеки CUDA есть/нет; карта видна/нет."""

@@ -152,6 +152,19 @@ def _windows_recording_path_on_mac(monkeypatch):
                         lambda: sys.modules.get("pyaudiowpatch") or real_backend())
 
 
+@pytest.fixture
+def windows_asr(monkeypatch):
+    """Выбор движка распознавания — по правилам Windows (CUDA, определение
+    языка, откат GigaAM → Whisper): тесты этого поведения на раннере macOS
+    иначе пошли бы веткой Mac (`asr._choose_mac`, MPS всегда). Тесты Mac
+    ставят `plat.is_macos` сами."""
+    if sys.platform != "darwin":
+        return
+    from meet import plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_agent_homes(monkeypatch, tmp_path_factory):
     """Папки настроек Claude Code, Codex и OpenCode — временные: «Остановить без

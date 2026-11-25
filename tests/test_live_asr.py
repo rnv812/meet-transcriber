@@ -66,7 +66,7 @@ def test_pick_gigaam_for_russian_when_installed_and_downloaded(whisper, monkeypa
     ("не скачана", {"downloaded": False}, {}),
     ("так в настройках", {}, {"live_asr": "whisper"}),
 ])
-def test_pick_whisper_otherwise(whisper, monkeypatch, why, patch, cfg):
+def test_pick_whisper_otherwise(whisper, monkeypatch, why, patch, cfg, windows_asr):
     monkeypatch.setattr(gigaam_asr, "installed", lambda: patch.get("installed", True))
     monkeypatch.setattr(gigaam_asr, "downloaded", lambda name: patch.get("downloaded", True))
     logs = []

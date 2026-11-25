@@ -14,6 +14,9 @@ from meet import asr, engine, gigaam_asr, library, live_asr, settings
 from meet.asr import Segment, Word
 from meet.diarize import Diarization
 
+# Поведение Windows (CUDA, язык, откат) — и на раннере macOS (conftest.windows_asr).
+pytestmark = pytest.mark.usefixtures("windows_asr")
+
 CUBLAS_ERROR = "Library cublas64_12.dll is not found or cannot be loaded"
 
 

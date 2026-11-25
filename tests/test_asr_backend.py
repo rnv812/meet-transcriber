@@ -10,6 +10,9 @@ import pytest
 from meet import asr, gigaam_asr, settings
 from meet.asr import CPU_MODEL_NAME
 
+# Поведение Windows (CUDA, язык, откат) — и на раннере macOS (conftest.windows_asr).
+pytestmark = pytest.mark.usefixtures("windows_asr")
+
 
 def _config(tmp_path, monkeypatch, asr_section=None, extra=None):
     """Конфиг приложения в своей папке данных."""
