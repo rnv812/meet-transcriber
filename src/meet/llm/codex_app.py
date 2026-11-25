@@ -29,7 +29,8 @@ JSON-RPC 2.0 построчно по stdio, без поля "jsonrpc" (Codex 0.1
    пользователю, расширение прав);
 5. `item/started` / `item/completed` → строки хода работы по мере хода
    (`codex.ToolStream`), решение ворот — событием `gate` в строку вызова;
-6. ответ — текст последнего `agentMessage`, конец — `turn/completed`.
+6. ответ — текст последнего `agentMessage` (по ходу — дельты
+   `item/agentMessage/delta` в `on_text`), конец — `turn/completed`.
 
 «Стоп» и таймаут — `turn/interrupt`, через INTERRUPT_GRACE_S — гашение дерева
 процессов. Пока ход не начался, любой сбой (процесс не запустился, нет
@@ -262,11 +263,17 @@ class _Peer:
 
 
 class _Turn:
-    """Состояние хода: элементы, строки хода работы, текст, конец."""
+    """Состояние хода: элементы, строки хода работы, текст, конец.
+    `on_text(кусок)` — текст модели по ходу (`item/agentMessage/delta`; без
+    дельт — целиком по `item/completed`), `on_text(None)` — началось новое
+    сообщение модели; зовётся из потока чтения."""
 
-    def __init__(self, approver, emit) -> None:
+    def __init__(self, approver, emit, on_text=None) -> None:
         self.approver = approver
         self.emit = emit or (lambda _e: None)
+        self.on_text = on_text
+        self._message: str | None = None       # id сообщения, текст которого идёт по ходу
+        self._streamed: set[str] = set()
         self.peer: _Peer | None = None
         self.thread_id: str | None = None
         self.turn_id: str | None = None
@@ -284,9 +291,27 @@ class _Turn:
         for event in events:
             self.emit(event)
 
+    def _say(self, iid, piece: str) -> None:
+        """Кусок текста сообщения `iid` по ходу; другое сообщение — сначала None."""
+        if self.on_text is None or not piece:
+            return
+        try:
+            if self._message is not None and iid != self._message:
+                self.on_text(None)
+            self._message = iid
+            self.on_text(piece)
+        except Exception:
+            pass
+
     def notify(self, msg: dict) -> None:
         method = msg.get("method")
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        if method == "item/agentMessage/delta":
+            iid = params.get("itemId")
+            if isinstance(iid, str) and isinstance(params.get("delta"), str):
+                self._streamed.add(iid)
+                self._say(iid, params["delta"])
+            return
         if method in ("item/started", "item/completed"):
             item = params.get("item") if isinstance(params.get("item"), dict) else {}
             iid = item.get("id")
@@ -295,6 +320,8 @@ class _Turn:
                     self.items[iid] = item
             if method == "item/completed" and item.get("type") == "agentMessage":
                 self.text = str(item.get("text") or "")
+                if iid not in self._streamed:
+                    self._say(iid, self.text)
             kind = "item.started" if method == "item/started" else "item.completed"
             self._emit_all(self.tools.item(kind, _exec_shape(item)))
             if method == "item/started" and item.get("type") == "mcpToolCall" and isinstance(iid, str):
@@ -447,18 +474,19 @@ def _inputs(text: str, images) -> list[dict]:
 
 def run_turn(cmd: list[str], *, env: dict | None, cwd: str, text: str, images=(), resume: str | None = None,
              keep_session: bool = False, policy: dict, model: str | None = None, effort: str | None = None,
-             approver=None, emit=None, timeout_s: float = 180.0, call=None) -> AgentReply:
+             approver=None, emit=None, timeout_s: float = 180.0, call=None, on_text=None) -> AgentReply:
     """Один ход через app-server (блокирующее; см. модуль). Не подошёл до
     начала хода — `Unavailable`. `approver(метод, params, элемент) -> (ответ,
     решение ворот)`; `emit` — события хода работы (`tool_use`, `gate`,
-    `tool_result`); `call` — `codex._Call` для «Стоп» из цикла событий."""
+    `tool_result`); `on_text` — текст модели по ходу (`_Turn`); `call` —
+    `codex._Call` для «Стоп» из цикла событий."""
     deadline = time.monotonic() + timeout_s
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=env, **popen_kwargs())
     except OSError as e:
         raise Unavailable(f"не запустился ({type(e).__name__})") from None
-    turn = _Turn(approver, emit)
+    turn = _Turn(approver, emit, on_text)
     peer = _Peer(proc, on_notify=turn.notify, on_request=turn.request)
     turn.peer = peer
     stopper = _Stopper(peer, proc, turn)

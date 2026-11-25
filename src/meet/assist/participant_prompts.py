@@ -1343,11 +1343,39 @@ def _known(obj) -> bool:
     return isinstance(obj, dict) and any(k in obj for k in ACTION_KINDS)
 
 
+# Сообщение не тем ключом (так отвечают не-Claude модели): `{"message": "…"}`,
+# `{"type": "say", "content": "…"}`. Только объект из этих полей — вызов
+# инструмента или служебный JSON с другими полями сообщением не станет.
+_SAY_ALIASES = ("text", "message", "reply", "response", "answer")
+_SAY_TYPES = ("say", "message", "text", "reply", "answer")
+_ALIAS_EXTRA = frozenset(("type", "buttons", "pin", "explains"))
+
+
+def _alias(obj) -> dict | None:
+    """Объект с сообщением под другим ключом → объект протокола; иначе None."""
+    if not isinstance(obj, dict) or _known(obj):
+        return None
+    kind = obj.get("type")
+    if kind == "silent" and set(obj) <= _ALIAS_EXTRA:
+        return {"silent": True}
+    keys = [k for k in obj if k not in _ALIAS_EXTRA]
+    allowed = _SAY_ALIASES + (("content",) if kind in _SAY_TYPES else ())
+    if len(keys) != 1 or keys[0] not in allowed or not isinstance(obj[keys[0]], str):
+        return None
+    if kind is not None and kind not in _SAY_TYPES:
+        return None
+    return {"say": obj[keys[0]], **{k: obj[k] for k in ("buttons", "pin", "explains") if k in obj}}
+
+
 def _expand(obj, depth: int = _UNWRAP_DEPTH) -> list[dict]:
     """Обёртка без полей протокола (`{"actions": [...]}`,
-    `{"reply": {"actions": [...]}}`) → её объекты протокола, до трёх уровней."""
+    `{"reply": {"actions": [...]}}`) → её объекты протокола, до трёх уровней;
+    сообщение не тем ключом (`_alias`) — объектом `say`."""
     if _known(obj):
         return [obj]
+    alias = _alias(obj)
+    if alias is not None:
+        return [alias]
     if depth <= 0:
         return []
     values = obj.values() if isinstance(obj, dict) else obj if isinstance(obj, list) else ()
@@ -1385,6 +1413,76 @@ def _limit(actions: list[Action], notes: list[str]) -> list[Action]:
         notes.append(f"лишних действий {dropped} отброшено (сообщений ≤ {SAYS_MAX}, "
                      f"запросов ≤ {REQUESTS_MAX}, всего ≤ {ACTIONS_MAX})")
     return out
+
+
+_SMART_QUOTES = str.maketrans({"“": '"', "”": '"', "„": '"'})
+_LENIENT_SPANS = 20
+_LENIENT_SPAN_MAX = 16_000
+
+
+def _brace_spans(text: str) -> list[str]:
+    """Отрезки `{…}` верхнего уровня (скобки без учёта строк), не больше
+    `_LENIENT_SPANS`: для разбора не-JSON объектов (`_lenient_objects`)."""
+    out: list[str] = []
+    depth, start = 0, -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                if i + 1 - start <= _LENIENT_SPAN_MAX:
+                    out.append(text[start:i + 1])
+                if len(out) >= _LENIENT_SPANS:
+                    break
+    return out
+
+
+def _lenient_objects(text: str) -> list[dict]:
+    """Объекты, которые не JSON, но понятны: словарь Python (одинарные
+    кавычки, True/False/None — `ast.literal_eval`, без исполнения) и
+    «типографские» кавычки вокруг ключей и строк. Только объекты протокола."""
+    import ast
+    import json
+
+    out: list[dict] = []
+    for span in _brace_spans(text):
+        obj = None
+        for candidate in (span, span.translate(_SMART_QUOTES)):
+            try:
+                obj = json.loads(candidate)
+            except ValueError:
+                try:
+                    obj = ast.literal_eval(candidate)
+                except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                    obj = None
+            if isinstance(obj, dict):
+                break
+        if isinstance(obj, dict):
+            out += _expand(obj)
+    return out
+
+
+# Конец строки `say` в битом JSON (кавычки внутри текста не экранированы):
+# кавычка, за которой идёт следующее поле протокола или конец объекта.
+_SAY_END = re.compile(r'"\s*(?:,\s*"(?:buttons|pin|explains)"\s*:|\})')
+
+
+def _say_fragment(plain: str) -> tuple[str, bool] | None:
+    """Текст `say` из JSON, который не разбирается → (текст, строка закрыта);
+    нет `"say": "` — None. Неэкранированные кавычки внутри текста — часть
+    текста: конец — кавычка перед следующим полем протокола или `}`."""
+    m = _SAY_FRAGMENT.search(plain)
+    if not m:
+        return None
+    if not m.group(2):
+        return m.group(1), False
+    end = _SAY_END.search(plain, m.start(1))
+    if end:
+        return plain[m.start(1):end.start()], True
+    return m.group(1), True
 
 
 def _unescape(fragment: str) -> str:
@@ -1449,6 +1547,10 @@ def _parse(text, plain_text_as_say, notes, done, silent) -> list[Action]:
     objects: list[dict] = []
     for obj in iter_objects(body):
         objects += _expand(obj)
+    if not objects and "{" in body:
+        objects = _lenient_objects(body)
+        if objects:
+            notes.append("ответ не JSON, но объект понятен — разобран")
     if objects:
         actions: list[Action] = []
         seen_say: set[str] = set()
@@ -1474,10 +1576,10 @@ def _parse(text, plain_text_as_say, notes, done, silent) -> list[Action]:
     if _SILENCE.match(plain):
         return done([Action("silent", note="молчание обычным текстом")])
     if plain.startswith(("{", "[")) or _JSON_KEY.search(plain):
-        m = _SAY_FRAGMENT.search(plain)
-        say = _cut_say(_unescape(m.group(1))) if m else ""
+        found = _say_fragment(plain)
+        say = _cut_say(_unescape(found[0])) if found else ""
         if say:
-            if m.group(2):          # строка закрыта — текст целый, «…» не нужно
+            if found[1]:            # строка закрыта — текст целый, «…» не нужно
                 notes.append("JSON не разбирается — взят текст say")
                 return done([Action("say", text=say)])
             notes.append("JSON оборван — взят текст say")

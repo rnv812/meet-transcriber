@@ -352,6 +352,21 @@ def _kinds(actions):
     ('<think>долго думаю', [("silent", "", (), False)]),
     # оборванный say — текст спасается
     ('{"say": "Я посмотрел пла', [("say", "Я посмотрел пла…", (), False)]),
+    # так отвечают не-Claude модели: сообщение не тем ключом, словарь Python,
+    # «типографские» кавычки, неэкранированные кавычки внутри текста
+    ('{"message": "Срок 15.11", "buttons": ["Глянь"]}', [("say", "Срок 15.11", ("Глянь",), False)]),
+    ('```json\n{"type": "say", "content": "Срок 15.11"}\n```', [("say", "Срок 15.11", (), False)]),
+    ('{"type": "silent"}', [("silent", "", (), False)]),
+    ("{'say': 'Срок 15.11', 'pin': True}", [("say", "Срок 15.11", (), True)]),
+    ("{'silent': True}", [("silent", "", (), False)]),
+    ('{“say”: “Срок 15.11”}', [("say", "Срок 15.11", (), False)]),
+    ('{"say": "Олег сказал "да" и ушёл", "buttons": ["Ок?"]}',
+     [("say", 'Олег сказал "да" и ушёл', (), False)]),
+    # служебное не показывается: лишние поля, чужой тип, не строка
+    ('{"text": "rm -rf x", "tool": "bash"}', [("silent", "", (), False)]),
+    ('{"type": "tool_call", "text": "x"}', [("silent", "", (), False)]),
+    ('{"content": "без типа"}', [("silent", "", (), False)]),
+    ('{"message": {"role": "assistant"}}', [("silent", "", (), False)]),
 ])
 def test_parse_reply_table(reply, expected):
     actions = parse_reply(reply)

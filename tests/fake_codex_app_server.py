@@ -32,9 +32,11 @@
                        с параметрами из json);
   HANG               — ждёт `turn/interrupt`, затем `turn/completed` со
                        статусом `interrupted`;
-  FAIL <текст>       — `turn/completed` со статусом `failed`.
+  FAIL <текст>       — `turn/completed` со статусом `failed`;
+  SAY <текст>        — сообщение модели: `item/started` (agentMessage), две дельты
+                       `item/agentMessage/delta`, `item/completed`.
 Ответ модели — `agentMessage`: JSON-список решений клиента по запросам хода
-(или «ok», если запросов не было), затем `turn/completed`.
+(или «ok», если запросов не было), затем `turn/completed`; с SAY — без него.
 """
 
 import json
@@ -106,14 +108,25 @@ class Server:
         decisions = []
         status, error = "completed", None
         n = -1
+        said = False
         for line in text.splitlines():
             head, _, rest = line.partition(" ")
-            if head not in ("CMD", "RUN", "PATCH", "ASK", "MCP", "ELICIT", "HANG", "FAIL"):
+            if head not in ("CMD", "RUN", "PATCH", "ASK", "MCP", "ELICIT", "HANG", "FAIL", "SAY"):
                 continue
             n += 1
             iid = f"item-{n}"
             base = {"threadId": thread, "turnId": turn_id}
-            if head in ("CMD", "RUN"):
+            if head == "SAY":
+                said = True
+                item = {"type": "agentMessage", "id": iid, "text": "", "phase": None, "memoryCitation": None,
+                        "delivery": None, "questions": None}
+                send({"method": "item/started", "params": {**base, "item": item, "startedAtMs": 1}})
+                half = len(rest) // 2
+                for piece in (rest[:half], rest[half:]):
+                    send({"method": "item/agentMessage/delta", "params": {**base, "itemId": iid, "delta": piece}})
+                send({"method": "item/completed", "params": {**base, "item": {**item, "text": rest},
+                                                             "completedAtMs": 2}})
+            elif head in ("CMD", "RUN"):
                 item = {"type": "commandExecution", "id": iid, "command": rest, "cwd": params.get("cwd") or "",
                         "processId": None, "source": "agent", "status": "inProgress", "commandActions": [],
                         "aggregatedOutput": None, "exitCode": None, "durationMs": None}
@@ -176,7 +189,7 @@ class Server:
             elif head == "FAIL":
                 status, error = "failed", {"message": rest, "codexErrorInfo": None, "additionalDetails": None}
                 break
-        if status == "completed":
+        if status == "completed" and not said:
             reply = json.dumps(decisions, ensure_ascii=False) if decisions else "ok"
             send({"method": "item/completed", "params": {
                 "threadId": thread, "turnId": turn_id, "completedAtMs": 3,

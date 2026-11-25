@@ -526,3 +526,39 @@ def test_login_status_reads_auth_required_without_a_model(monkeypatch, tmp_path)
                (tmp_path / "peer.jsonl").read_text(encoding="utf-8").splitlines()]
     assert "session/prompt" not in methods and "session/close" in methods
 
+
+# --- текст модели: по ходу, сообщения, ответ ------------------------------------------------
+
+
+def test_text_streams_and_a_message_after_a_tool_is_the_answer(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    pieces: list = []
+    note = h.meeting / "a.md"
+    reply = h.run(f"SAY Посмотрю заметку.\nREAD {note.as_posix()}\nSAY {{\"say\": \"Готово\"}}",
+                  level=consent.NONE, on_text=pieces.append)
+    assert reply.error is None and reply.text == '{"say": "Готово"}'
+    # Пояснение по ходу, новое сообщение (None) после вызова, ответ — кусками.
+    assert pieces[:2] == ["Посмотрю", " заметку."] and pieces[2] is None
+    assert "".join(p for p in pieces[3:] if p) == '{"say": "Готово"}'
+
+
+def test_thought_does_not_split_the_message(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    pieces: list = []
+    reply = h.run("THINK\nSAY {\"say\": \"Срок 15.11\"}", level=consent.NONE, on_text=pieces.append)
+    assert reply.text == '{"say": "Срок 15.11"}' and None not in pieces
+
+
+def test_turn_cancelled_by_agy_itself_is_a_failure_not_a_stop(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    reply = h.run("SELFCANCEL", level=consent.NONE)
+    assert not reply.cancelled and reply.error == agy.SELF_CANCELLED
+
+
+def test_turn_without_text_is_an_empty_answer_error(monkeypatch, tmp_path):
+    from meet.llm.base import EMPTY_ERROR
+
+    h = Harness(monkeypatch, tmp_path)
+    reply = h.run("EMPTY", level=consent.NONE)
+    assert reply.error == EMPTY_ERROR and not reply.text
+
