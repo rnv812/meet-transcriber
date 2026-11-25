@@ -255,6 +255,8 @@
 
 /* «Экспорт встреч»: пример имени папки под полем шаблона и «?» с подстановками. */
 .export__preview { flex-basis: 100%; display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); }
+/* «Переложить по шаблону»: счётчик, кнопка и итог переноса — столбиком. */
+.export__relocate { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2); font-size: var(--text-sm); }
 
 /* «Звук»: [список на всю ширину] [уровень] [Проверить], под ними — итог проверки одной строкой. */
 .sound__pick { display: flex; align-items: center; gap: var(--s-3); width: 100%; min-width: 0; }

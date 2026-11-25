@@ -14,7 +14,7 @@ import type { SegmentWords } from "./words";
 import type {
   AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
   ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, KbDocs, RecordingChat,
-  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
+  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, ExportRelocated, ExportRelocation, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript, LlmOrigin,
@@ -673,6 +673,13 @@ export function getExportPreview(ep: Endpoint, values: Record<string, string | b
   for (const [key, value] of Object.entries(values)) q.set(key, String(value));
   return json<ExportPreview>(ep, `/export/preview?${q}`);
 }
+
+/** Сколько выгруженных встреч лежит не по сохранённому шаблону папки. */
+export const getExportRelocation = (ep: Endpoint) => json<ExportRelocation>(ep, "/export/relocate");
+
+/** «Переложить по шаблону»: папки выгруженных встреч — на места по сохранённому шаблону. */
+export const relocateExports = (ep: Endpoint) =>
+  json<ExportRelocated>(ep, "/export/relocate", { method: "POST" });
 
 // --- живой режим ---------------------------------------------------------------
 

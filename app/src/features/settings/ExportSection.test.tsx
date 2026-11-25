@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { folderTemplateError } from "./ExportSection";
+import { folderTemplateError, relocatedText } from "./ExportSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 
@@ -12,6 +12,8 @@ vi.mock("../../lib/api", async (orig) => ({
   getDevices: vi.fn(),
   getProcesses: vi.fn(),
   getExportPreview: vi.fn(),
+  getExportRelocation: vi.fn(),
+  relocateExports: vi.fn(),
 }));
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
@@ -52,6 +54,7 @@ beforeEach(() => {
     error: null,
   }));
   vi.mocked(shell.pickFolder).mockResolvedValue(null);
+  vi.mocked(api.getExportRelocation).mockResolvedValue({ count: 0 });
 });
 
 const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="export" />);
@@ -161,4 +164,63 @@ test("одинаковые имена файлов — объяснение и �
 test("подсказка автоматики говорит, что ручные правки не перезаписываются", async () => {
   open();
   expect(await screen.findByText(/Изменённые вами файлы не перезаписываются/)).toBeInTheDocument();
+});
+
+// --- «Переложить по шаблону» ------------------------------------------------------------
+
+const withVault = () => {
+  const saved = structuredClone(settings);
+  saved.export.meetings_dir = "E:\Vault\Встречи" as never;
+  vi.mocked(api.getSettings).mockResolvedValue(saved);
+  vi.mocked(api.patchSettings).mockImplementation(async (_e, u) => ({
+    settings: merge(saved as Patch, u as Patch), restart_required: [],
+  }));
+};
+
+test("встречи не по шаблону: счётчик и «Переложить по шаблону» с итогом", async () => {
+  withVault();
+  vi.mocked(api.getExportRelocation).mockResolvedValueOnce({ count: 3 }).mockResolvedValue({ count: 1 });
+  vi.mocked(api.relocateExports).mockResolvedValue({
+    moved: 2, left: 1, reasons: [{ reason: "место по шаблону уже занято", count: 1 }],
+  });
+  open();
+  expect(await screen.findByText("Выгруженных встреч не по шаблону: 3")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Переложить по шаблону" }));
+  expect(await screen.findByText("Перенесено: 2. Оставлено: 1 (место по шаблону уже занято — 1)"))
+    .toHaveAttribute("role", "status");
+  expect(api.relocateExports).toHaveBeenCalledWith(ep);
+  // Счётчик перечитан после переноса.
+  expect(await screen.findByText("Выгруженных встреч не по шаблону: 1")).toBeInTheDocument();
+});
+
+test("несохранённый шаблон: кнопка недоступна до сохранения, счётчик — по сохранённому", async () => {
+  withVault();
+  vi.mocked(api.getExportRelocation).mockResolvedValueOnce({ count: 0 }).mockResolvedValue({ count: 4 });
+  open();
+  const button = await screen.findByRole("button", { name: "Переложить по шаблону" });
+  expect(button).toBeDisabled();
+  expect(screen.getByText("Все выгруженные встречи лежат по шаблону")).toBeInTheDocument();
+  const input = screen.getByLabelText("Шаблон имени папки");
+  await userEvent.clear(input);
+  await userEvent.type(input, "{{year}/{{title}");
+  expect(screen.getByText("Сначала сохраните шаблон")).toBeInTheDocument();
+  expect(api.getExportRelocation).toHaveBeenCalledTimes(1);
+  await save();
+  expect(await screen.findByText("Выгруженных встреч не по шаблону: 4")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Переложить по шаблону" })).toBeEnabled();
+  expect(screen.queryByText("Сначала сохраните шаблон")).toBeNull();
+});
+
+test("без папки для встреч строки переноса нет", async () => {
+  open();
+  await screen.findByLabelText("Шаблон имени папки");
+  expect(screen.queryByRole("button", { name: "Переложить по шаблону" })).toBeNull();
+  expect(api.getExportRelocation).not.toHaveBeenCalled();
+});
+
+test("итог переноса одной строкой", () => {
+  expect(relocatedText({ moved: 3, left: 0, reasons: [] })).toBe("Перенесено: 3");
+  expect(relocatedText({ moved: 0, left: 2, reasons: [
+    { reason: "место по шаблону уже занято", count: 1 }, { reason: "папки встреч вложены одна в другую", count: 1 },
+  ] })).toBe("Перенесено: 0. Оставлено: 2 (место по шаблону уже занято — 1; папки встреч вложены одна в другую — 1)");
 });

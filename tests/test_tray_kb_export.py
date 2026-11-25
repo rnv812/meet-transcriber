@@ -168,10 +168,12 @@ def test_summary_reexports_when_auto(app, state, tmp_path, vault):
 
 def test_summary_reexports_a_manually_exported_meeting(app, state, tmp_path, vault):
     _write_config(tmp_path, {"meetings_dir": str(vault), "auto_export": False})
-    target = Path(state.kb_export(RID)["path"])
+    state.kb_export(RID)
     library.write_meta(_folder(tmp_path), {"title": "Ретроспектива"})
     (_folder(tmp_path) / "summary.md").write_text("# Итоги\n", encoding="utf-8")
     _done(app, jobs.SUMMARY, _folder(tmp_path))
+    # Название сменили без окна: папка переехала по шаблону при выгрузке.
+    target = vault / "2026-09-30 - Ретроспектива"
     assert (target / "Итоги.md").exists()
     assert [p.name for p in vault.iterdir()] == [target.name]
 
@@ -226,16 +228,55 @@ def test_rename_moves_exported_folder_and_reexports(app, state, tmp_path, vault,
     assert any("переименована" in line and new.name in line for line in lines)
 
 
-def test_rename_with_foreign_files_reexports_into_old_folder(app, state, tmp_path, vault):
+def test_rename_with_foreign_files_moves_the_whole_folder(app, state, tmp_path, vault):
+    """Папку с заметками человека follow_title не трогает, но выгрузка
+    следом переносит её на место по шаблону целиком, с заметками."""
     _write_config(tmp_path, {"meetings_dir": str(vault)})
     old = Path(state.kb_export(RID)["path"])
     (old / "Заметки.md").write_text("своё", encoding="utf-8")
     state.update_recording(RID, {"title": "Ретроспектива"})
-    assert [p.name for p in vault.iterdir()] == [old.name]
-    assert "# Ретроспектива" in (old / "Транскрипт.md").read_text(encoding="utf-8")
+    new = vault / "2026-09-30 - Ретроспектива"
+    assert [p.name for p in vault.iterdir()] == [new.name]
+    assert (new / "Заметки.md").read_text(encoding="utf-8") == "своё"
+    assert "# Ретроспектива" in (new / "Транскрипт.md").read_text(encoding="utf-8")
 
 
 def test_rename_of_never_exported_meeting_exports_nothing(app, state, tmp_path, vault):
     _write_config(tmp_path, {"meetings_dir": str(vault)})
     state.update_recording(RID, {"title": "Ретроспектива"})
     assert list(vault.iterdir()) == []
+
+
+# --- «Переложить по шаблону» ---------------------------------------------------------
+
+
+def test_relocation_counts_and_moves_by_saved_template(app, state, tmp_path, vault, monkeypatch):
+    _write_config(tmp_path, {"meetings_dir": str(vault)})
+    old = Path(state.kb_export(RID)["path"])
+    assert state.export_relocation() == {"count": 0}
+    _write_config(tmp_path, {"meetings_dir": str(vault), "folder_template": "{year}/{date} - {title}"})
+    assert state.export_relocation() == {"count": 1}
+    updated = []
+    monkeypatch.setattr(state, "_updated", updated.append)
+    assert state.export_relocate() == {"moved": 1, "left": 0, "reasons": []}
+    new = vault / "2026" / "2026-09-30 - Планирование спринта"
+    assert not old.exists() and (new / "Транскрипт.md").exists()
+    assert state.recording(RID)["kb_export"]["path"] == str(new)
+    assert updated == [_folder(tmp_path)]
+    assert state.export_relocation() == {"count": 0}
+
+
+def test_relocate_reports_what_stayed(state, tmp_path, vault):
+    _write_config(tmp_path, {"meetings_dir": str(vault)})
+    old = Path(state.kb_export(RID)["path"])
+    (vault / "2026" / "Планирование спринта").mkdir(parents=True)
+    _write_config(tmp_path, {"meetings_dir": str(vault), "folder_template": "{year}/{title}"})
+    assert state.export_relocate() == {"moved": 0, "left": 1,
+                                       "reasons": [{"reason": kb_export.TAKEN, "count": 1}]}
+    assert old.is_dir()
+
+
+def test_relocate_without_meetings_dir_is_400(state):
+    assert state.export_relocation() == {"count": 0}
+    with pytest.raises(control.BadRequest, match="Папка для встреч не задана"):
+        state.export_relocate()

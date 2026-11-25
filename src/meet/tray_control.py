@@ -4835,6 +4835,31 @@ class TrayControl:
 
         return kb_export.preview(settings.load(), self._root(), dict(params or {}))
 
+    def export_relocation(self) -> dict:
+        """Сколько выгруженных встреч лежит не по сохранённому шаблону папки
+        (`{"count": N}`) — строка над кнопкой «Переложить по шаблону»."""
+        from meet import kb_export
+
+        return kb_export.relocation(self._root(), settings.load())
+
+    def export_relocate(self) -> dict:
+        """«Переложить по шаблону»: папки выгруженных встреч — на места по
+        сохранённому шаблону. Это переименования папок, без копирования —
+        синхронно; ответ — сколько перенесено и почему остальные остались."""
+        from meet import kb_export
+
+        cfg = settings.load()
+        try:
+            with self._kb_lock:
+                got = kb_export.relocate_all(self._root(), cfg, on_moved=self._updated)
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except OSError as e:
+            raise RuntimeError(f"не удалось переложить папки встреч: {e}") from e
+        self.tray.log(f"папки встреч в базе знаний переложены по шаблону: перенесено {got['moved']}, "
+                      f"оставлено {got['left']}")
+        return got
+
     def assistant(self, probe_local: bool = True) -> dict:
         """Кто ответит и что для этого есть. Не ждёт проверки входа в CLI:
         `checking` — ответ ещё считается в фоне (см. ProviderCache).
