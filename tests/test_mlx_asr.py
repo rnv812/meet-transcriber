@@ -197,24 +197,15 @@ def mac_ready(monkeypatch, tmp_path):
     monkeypatch.setattr(asr, "cpu_reason", lambda setting=None: None)
 
 
-def test_mac_14_english_chooses_mlx(mac_ready, monkeypatch, tmp_path):
-    _config(tmp_path, monkeypatch, {"language": "en"})
+# Mac 0.6.2: выбранная модель на все встречи (подробнее — test_mac_asr.py).
+MAC_TURBO = {"cpu_backend": "faster-whisper", "cpu_model": mlx_asr.MODEL}
+
+
+@pytest.mark.parametrize("language", ["ru", "en", "auto"])
+def test_mac_14_turbo_chosen_goes_to_mlx_for_any_language(mac_ready, monkeypatch, tmp_path, language):
+    _config(tmp_path, monkeypatch, {**MAC_TURBO, "language": language})
     choice = asr.choose()
-    assert (choice.backend, choice.device, choice.note) == ("mlx-whisper", "mps", asr.NOT_RUSSIAN)
-
-
-def test_mac_detected_english_chooses_mlx(mac_ready, monkeypatch, tmp_path):
-    _config(tmp_path, monkeypatch, {"language": "auto"})
-    assert asr.choose(tmp_path / "a.wav", detect=lambda p: ("en", 0.95)).backend == "mlx-whisper"
-    assert asr.choose(tmp_path / "a.wav", detect=lambda p: ("ru", 0.99)).backend == "gigaam"
-
-
-def test_mac_whisper_setting_with_english_chooses_mlx(mac_ready, monkeypatch, tmp_path):
-    _config(tmp_path, monkeypatch, {"cpu_backend": "faster-whisper", "language": "en"})
-    assert asr.choose().backend == "mlx-whisper"
-    # язык «определить по записи» — неизвестен: как раньше
-    _config(tmp_path, monkeypatch, {"cpu_backend": "faster-whisper", "language": "auto"})
-    assert asr.choose().backend == "faster-whisper"
+    assert (choice.backend, choice.device, choice.model, choice.note) == ("mlx-whisper", "mps", mlx_asr.MODEL, None)
 
 
 def test_mac_russian_stays_on_gigaam(mac_ready, monkeypatch, tmp_path):
@@ -224,13 +215,13 @@ def test_mac_russian_stays_on_gigaam(mac_ready, monkeypatch, tmp_path):
 
 def test_macos_13_keeps_faster_whisper(mac_ready, monkeypatch, tmp_path):
     _mac(monkeypatch, "13.6")
-    _config(tmp_path, monkeypatch, {"language": "en"})
+    _config(tmp_path, monkeypatch, {**MAC_TURBO, "language": "en"})
     assert asr.choose().backend == "faster-whisper"
 
 
 def test_windows_keeps_faster_whisper(mac_ready, monkeypatch, tmp_path):
     monkeypatch.setattr(plat, "is_macos", lambda: False)
-    _config(tmp_path, monkeypatch, {"language": "en"})
+    _config(tmp_path, monkeypatch, {**MAC_TURBO, "language": "en"})
     assert asr.choose().backend == "faster-whisper"
 
 
@@ -240,22 +231,16 @@ def test_model_missing_keeps_faster_whisper(monkeypatch, tmp_path, capsys):
     _fake(monkeypatch)
     monkeypatch.setattr(gigaam_asr, "installed", lambda: True)
     monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
-    _config(tmp_path, monkeypatch, {"language": "en"})
+    _config(tmp_path, monkeypatch, {**MAC_TURBO, "language": "en"})
     assert asr.choose().backend == "faster-whisper"
     assert "модель MLX Whisper не скачана" in capsys.readouterr().out
 
 
 def test_mlx_not_installed_keeps_faster_whisper(mac_ready, monkeypatch, tmp_path, capsys):
     monkeypatch.setitem(sys.modules, "mlx_whisper", None)  # import падает
-    _config(tmp_path, monkeypatch, {"language": "en"})
+    _config(tmp_path, monkeypatch, {**MAC_TURBO, "language": "en"})
     assert asr.choose().backend == "faster-whisper"
     assert "MLX Whisper не установлен" in capsys.readouterr().out
-
-
-def test_gpu_choice_is_untouched(mac_ready, monkeypatch, tmp_path):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
-    _config(tmp_path, monkeypatch, {"language": "en"})
-    assert asr.choose().backend == "faster-whisper"
 
 
 def test_transcribe_wav_routes_mlx_choice(monkeypatch, tmp_path):
@@ -383,13 +368,13 @@ class FakeWhisper:
         return [Segment(offset_s, offset_s + 1.0, "whisper")]
 
 
-def _live_cfg(language):
-    return settings.Settings.from_raw({"asr": {"language": language}})
+def _live_cfg(language, **asr_raw):
+    return settings.Settings.from_raw({"asr": {"language": language, **asr_raw}})
 
 
 def test_live_pick_mlx_on_mac_for_english(mac_ready, monkeypatch):
     monkeypatch.setattr(asr, "Transcriber", FakeWhisper)
-    chosen = live_asr.pick(_live_cfg("en"), log=lambda _l: None)
+    chosen = live_asr.pick(_live_cfg("en", **MAC_TURBO), log=lambda _l: None)
     assert isinstance(chosen, live_asr.MlxLive) and chosen.policy == live_asr.MLX_POLICY
     assert chosen.policy.max_s < live_asr.whisper_policy().max_s  # окна короче, чем у Whisper
     assert chosen.latin_pass is False

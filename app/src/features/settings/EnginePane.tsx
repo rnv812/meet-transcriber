@@ -19,6 +19,7 @@ import { ModelsPane } from "./ModelsPane";
 import { PathText, Row, SeeAlso, SettingsCard, type Raw } from "./Section";
 import { StoragePane } from "./StoragePane";
 import { modelUsage } from "./AsrSection";
+import { IS_MAC } from "../../lib/platform";
 
 export function EnginePane({ endpoint, onReinstall }: {
   endpoint: Endpoint;
@@ -94,7 +95,7 @@ export function EngineSection({ endpoint, draft, onReinstall, onOpenSpeakers }: 
         <StoragePane endpoint={endpoint} />
       </SettingsCard>
       <SettingsCard title="Модели распознавания">
-        <ModelsPane endpoint={endpoint} usage={modelUsage(draft)} />
+        <ModelsPane endpoint={endpoint} usage={modelUsage(draft, IS_MAC)} />
         <SeeAlso>
           Токен Hugging Face для закрытых моделей — в разделе{" "}
           <Button variant="link" onClick={onOpenSpeakers}>«Спикеры»</Button>.

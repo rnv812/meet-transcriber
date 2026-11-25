@@ -321,12 +321,17 @@ def torch_device(setting: str | None = None) -> str:
     процессоре) — не повод гнать диаризацию часовой встречи процессором, там
     она в десятки раз дольше. Движок профиля CPU (torch процессорный), сбой
     CUDA у torch в этом процессе, torch не импортируется — процессор. Профиль
-    mac (Apple Silicon): MPS, если torch его видит — GigaAM, выравнивание и
-    голоса; сбой операции на MPS повторяется на процессоре у самого шага
-    (`memory.mps_failed`). Диаризацию на MPS ведёт `diarize.pick_device`."""
-    if _torch_failure is not None or device_setting(setting) == "cpu":
+    mac (Apple Silicon, 0.6.2): MPS всегда, если torch его видит, — GigaAM,
+    выравнивание и голоса; `asr.device` на Mac не участвует (видеокарты
+    NVIDIA там нет, «Процессор» прежних версий видеоядра не выключает). Сбой
+    операции на MPS повторяется на процессоре у самого шага
+    (`memory.mps_failed`) — страховка, а не настройка. Диаризацию на MPS
+    ведёт `diarize.pick_device`."""
+    if _torch_failure is not None:
         return "cpu"
     profile = engine_profile()
+    if profile != "mac" and device_setting(setting) == "cpu":
+        return "cpu"
     try:
         import torch
 
@@ -361,10 +366,14 @@ def torch_cpu_reason(setting: str | None = None) -> str | None:
 
 
 def _cpu_model_setting() -> str:
+    """Модель faster-whisper процессора. Выбрана модель только MLX (Mac:
+    turbo каталога, своя папка MLX) — faster-whisper её не загрузит: его
+    модель для процессора по умолчанию (запасной путь без MLX)."""
     try:
-        from meet import settings
+        from meet import mlx_asr, settings
 
-        return settings.load().asr.cpu_model or CPU_MODEL_NAME
+        model = settings.load().asr.cpu_model or CPU_MODEL_NAME
+        return CPU_MODEL_NAME if mlx_asr.mlx_only(model) else model
     except Exception:
         return CPU_MODEL_NAME
 
@@ -663,8 +672,9 @@ class Choice:
     """Чем распознавать встречу: движок, устройство, модель GigaAM и, если
     движок не тот, что выбран в настройках, — почему (`note`).
 
-    Движки: "faster-whisper", "gigaam", "mlx-whisper" (Mac 14+, нерусская
-    встреча, устройство "mps" — видеоядра Apple, `meet.mlx_asr`)."""
+    Движки: "faster-whisper", "gigaam", "mlx-whisper" (Mac 14+, модель с
+    чекпоинтом MLX, устройство "mps" — видеоядра Apple, `meet.mlx_asr`;
+    `model` — чекпоинт MLX)."""
 
     backend: str = "faster-whisper"
     device: str = "cpu"
@@ -672,6 +682,7 @@ class Choice:
     note: str | None = None
     # Движок умеет видеокарту, а распознаёт процессор — почему (`cpu_reason`).
     cpu_reason: str | None = None
+    model: str | None = None
 
 
 # Запасной Whisper на процессоре — от лёгкого к тяжёлому; large-v3 (кроме
@@ -817,18 +828,44 @@ def detect_language(path: Path, *, model_factory=None, regions=None) -> tuple[st
         return None
 
 
-def _on_mlx(choice: Choice, language: str) -> Choice:
-    """Whisper на процессоре для нерусской встречи на Mac — MLX Whisper на
-    видеоядрах, если он есть (`mlx_asr.usable`: macOS 14+, пакет, модель).
-    Иначе выбор не меняется."""
-    if choice.backend != "faster-whisper" or choice.device != "cpu" or language in ("ru", AUTO_LANGUAGE):
-        return choice
+def _mac_whisper(cfg, note: str | None = None) -> Choice:
+    """Whisper строки процессора на Mac: есть чекпоинт MLX модели и MLX
+    доступен (`mlx_asr.usable`: macOS 14+, пакет, чекпоинт скачан) — MLX
+    Whisper на видеоядрах; иначе faster-whisper на процессоре (видеоядер он
+    не умеет)."""
     from meet import mlx_asr
 
-    if not mlx_asr.usable():
-        return choice
-    print("распознаёт MLX Whisper на видеоядрах")
-    return Choice(MLX_WHISPER, mlx_asr.DEVICE, note=choice.note, cpu_reason=choice.cpu_reason)
+    checkpoint = mlx_asr.checkpoint(cfg.cpu_model)
+    if checkpoint and mlx_asr.usable(checkpoint):
+        print("распознаёт MLX Whisper на видеоядрах")
+        return Choice(MLX_WHISPER, mlx_asr.DEVICE, note=note, model=checkpoint)
+    return Choice("faster-whisper", "cpu", note=note)
+
+
+def _choose_mac(cfg) -> Choice:
+    """Mac (0.6.2): одна выбранная модель на все встречи — строка процессора
+    (`cpu_backend`, `cpu_model` / `gigaam_model`), без деления по языку
+    встречи и без определения языка. Устройство — не выбор: torch-шаги на
+    видеоядрах (`torch_device`), Whisper — MLX, если у модели есть чекпоинт.
+
+    Одна страховка от потери распознавания: выбрана GigaAM, а язык речи в
+    настройках явно не русский (не `ru` и не `auto`) — GigaAM его не
+    понимает, распознаёт Whisper строки процессора (NOT_RUSSIAN). GigaAM нет
+    в движке — тоже Whisper."""
+    from meet import gigaam_asr
+
+    if cfg.cpu_backend != "gigaam":
+        return _mac_whisper(cfg)
+    language = (cfg.language or DEFAULT_LANGUAGE).strip().lower()
+    if language not in ("ru", AUTO_LANGUAGE):
+        print(f"GigaAM понимает только русский, а язык речи в настройках — {language}: "
+              "распознаёт Whisper")
+        return _mac_whisper(cfg, NOT_RUSSIAN)
+    if not gigaam_asr.installed():
+        print("GigaAM не установлен в движке — распознаёт Whisper "
+              "(переустановите движок в настройках)")
+        return _mac_whisper(cfg)
+    return Choice("gigaam", "cpu", cfg.gigaam_model)
 
 
 def choose(path: Path | None = None, *, detect=None) -> Choice:
@@ -839,20 +876,20 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     распознаёт Whisper, с пометкой NOT_RUSSIAN. Неуверенный ответ детектора —
     русский. Пакета GigaAM нет в движке (старая установка) — тоже Whisper.
 
-    Whisper на процессоре для нерусской встречи на Mac 14+ с MLX и
-    скачанной моделью — MLX Whisper (`_on_mlx`); язык `auto` без
-    определения (выбран Whisper) — как раньше."""
-    from meet import gigaam_asr, settings
+    Mac — свои правила (`_choose_mac`): выбранная модель на все встречи,
+    Whisper с чекпоинтом MLX — MLX на видеоядрах."""
+    from meet import gigaam_asr, plat, settings
 
-    device = resolve_device()
-    reason = cpu_reason() if device == "cpu" else None
     try:
         cfg = settings.load().asr
     except Exception:
         cfg = settings.Asr()
+    if plat.is_macos():
+        return _choose_mac(cfg)
+    device = resolve_device()
+    reason = cpu_reason() if device == "cpu" else None
     if cfg.backend_for(device) != "gigaam":
-        return _on_mlx(Choice("faster-whisper", device, cpu_reason=reason),
-                       (cfg.language or DEFAULT_LANGUAGE).strip().lower())
+        return Choice("faster-whisper", device, cpu_reason=reason)
     language = (cfg.language or DEFAULT_LANGUAGE).strip().lower()
     if language == AUTO_LANGUAGE:
         found = (detect or detect_language)(path) if path is not None else None
@@ -865,7 +902,7 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     if language != "ru":
         print(f"GigaAM распознаёт только русский, а язык записи — {language}: "
               "распознаёт Whisper")
-        return _on_mlx(Choice("faster-whisper", device, note=NOT_RUSSIAN, cpu_reason=reason), language)
+        return Choice("faster-whisper", device, note=NOT_RUSSIAN, cpu_reason=reason)
     if not gigaam_asr.installed():
         print("GigaAM не установлен в движке — распознаёт Whisper "
               "(переустановите движок в настройках)")
@@ -895,16 +932,17 @@ def transcribe_wav(
     `choice` (asr.choose) с движком GigaAM — распознаёт GigaAM (подсказок
     у него нет: `hotwords` не нужны, термины чинит пайплайн после).
 
-    `choice` с движком MLX Whisper — `mlx_asr` (подсказки — затравкой
-    initial_prompt); его сбой ловит вызывающий (откат на faster-whisper).
+    `choice` с движком MLX Whisper — `mlx_asr`, чекпоинт `choice.model`
+    (подсказки — затравкой initial_prompt); его сбой ловит вызывающий
+    (откат на faster-whisper).
 
     `on_progress(доля)` — ход распознавания 0…1: у Whisper — по концу
     последнего сегмента от длительности записи, у GigaAM — по кускам."""
     if choice is not None and choice.backend == MLX_WHISPER:
         from meet import mlx_asr
 
-        return mlx_asr.transcribe(path, mlx_asr.MODEL, whisper_language(language or _asr_settings()[1]),
-                                  hotwords, on_progress)
+        return mlx_asr.transcribe(path, choice.model or mlx_asr.MODEL,
+                                  whisper_language(language or _asr_settings()[1]), hotwords, on_progress)
     if choice is not None and choice.backend == "gigaam":
         from meet import gigaam_asr
 

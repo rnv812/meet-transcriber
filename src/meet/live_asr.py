@@ -13,9 +13,10 @@
   процессе, без запуска ffmpeg на каждое окно (`gigaam_asr.in_process_wav`).
   Окно без речи (Silero VAD) модель не видит вовсе. Подсказок (hotwords) у
   GigaAM нет: термины чинят правила замены и возврат латиницы (`TextFixes`);
-* **MLX Whisper** (Mac 14+, `meet.mlx_asr`) — язык встречи не русский (и не
-  `auto`), MLX и его модель на месте: короткие окна ~8–10 с на видеоядрах,
-  без меток слов. Не загрузился или трижды подряд не распознал окно — Whisper;
+* **MLX Whisper** (Mac 14+, `meet.mlx_asr`) — на Mac выбрана Whisper-модель
+  с чекпоинтом MLX, MLX и чекпоинт на месте (язык встречи не важен,
+  `_pick_mac`): короткие окна ~8–10 с на видеоядрах, без меток слов. Не
+  загрузился или трижды подряд не распознал окно — Whisper;
 * **Whisper** — язык встречи не русский, GigaAM не установлена или не
   скачана, выбран `assist.live_asr = whisper`, или GigaAM не загрузилась /
   трижды подряд не распознала окно. Окна ~15–20 с: на коротких Whisper
@@ -228,11 +229,11 @@ class MlxLive:
     слов, тишину отсекает тот же VAD. `fallback()` — Whisper на процессоре на
     случай, если MLX не загрузился или трижды подряд не распознал окно."""
 
-    def __init__(self, language: str | None, *, fallback=None, log=print) -> None:
+    def __init__(self, language: str | None, *, model: str | None = None, fallback=None, log=print) -> None:
         from meet import mlx_asr
 
         self.language = language
-        self.model_name = mlx_asr.MODEL
+        self.model_name = model or mlx_asr.MODEL
         self.device = mlx_asr.DEVICE
         self._fallback_factory = fallback
         self._fallback = None
@@ -451,10 +452,42 @@ def _looks_missing(error: BaseException) -> bool:
     return False
 
 
+def _gigaam_live(cfg, whisper, log):
+    """GigaAM живого режима: нет в движке или модель не скачана — Whisper."""
+    from meet import asr, gigaam_asr
+
+    if not gigaam_asr.installed():
+        log("живой режим: GigaAM не установлена в движке — распознаёт Whisper")
+        return whisper()
+    name = cfg.asr.gigaam_model or gigaam_asr.MODEL_NAME
+    if not gigaam_asr.downloaded(name):
+        log("живой режим: модель GigaAM не скачана — распознаёт Whisper "
+            "(скачать: «Распознавание» → «Модели распознавания»)")
+        return whisper()
+    device = asr.resolve_device(cfg.asr.device)
+    return GigaamLive(name, device, fallback=whisper, log=log)
+
+
+def _pick_mac(cfg, language: str, whisper, log):
+    """Mac (0.6.2): выбранная модель (строка процессора) на любой встрече, как
+    у расшифровки (`asr._choose_mac`): GigaAM — GigaAM (язык речи в
+    настройках явно не русский — Whisper); Whisper с чекпоинтом MLX и
+    доступным MLX — MLX Whisper на видеоядрах; иначе Whisper на процессоре."""
+    from meet import asr, mlx_asr
+
+    if cfg.asr.cpu_backend == "gigaam" and language in ("ru", asr.AUTO_LANGUAGE):
+        return _gigaam_live(cfg, whisper, log)
+    checkpoint = mlx_asr.checkpoint(cfg.asr.cpu_model)
+    if checkpoint and mlx_asr.usable(checkpoint, log=log):
+        return MlxLive(asr.whisper_language(language), model=checkpoint, fallback=whisper, log=log)
+    log("живой режим: распознаёт Whisper на процессоре")
+    return whisper()
+
+
 def pick(cfg=None, *, log=print):
     """Движок распознавания живого режима по настройкам (см. модуль).
     Whisper, которого нет на диске, — ModelMissing (не качаем, см. выше)."""
-    from meet import asr, gigaam_asr, settings
+    from meet import asr, settings
 
     if cfg is None:
         cfg = settings.load()
@@ -475,21 +508,11 @@ def pick(cfg=None, *, log=print):
         log("живой режим: распознаёт Whisper (так в настройках)")
         return whisper()
     language = (cfg.asr.language or asr.DEFAULT_LANGUAGE).strip().lower()
-    if language not in ("ru", asr.AUTO_LANGUAGE):
-        from meet import mlx_asr
+    from meet import plat
 
-        if mlx_asr.usable(log=log):
-            return MlxLive(language, fallback=whisper, log=log)
+    if plat.is_macos():
+        return _pick_mac(cfg, language, whisper, log)
     if language != "ru":
         log(f"живой режим: язык распознавания «{language}» — распознаёт Whisper")
         return whisper()
-    if not gigaam_asr.installed():
-        log("живой режим: GigaAM не установлена в движке — распознаёт Whisper")
-        return whisper()
-    name = cfg.asr.gigaam_model or gigaam_asr.MODEL_NAME
-    if not gigaam_asr.downloaded(name):
-        log("живой режим: модель GigaAM не скачана — распознаёт Whisper "
-            "(скачать: «Распознавание» → «Модели распознавания»)")
-        return whisper()
-    device = asr.resolve_device(cfg.asr.device)
-    return GigaamLive(name, device, fallback=whisper, log=log)
+    return _gigaam_live(cfg, whisper, log)

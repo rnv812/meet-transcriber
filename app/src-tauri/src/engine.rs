@@ -1622,6 +1622,45 @@ fn settle_optional(
 /// установленное окружение текущей версии. Резидент не останавливается —
 /// пакет новый, его файлы никто не держит.
 pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
+    retry_optional(app, &GIGAAM_STEP, |uv, env, wheel, profile, resources| {
+        let constraints =
+            constraints_file(resources, profile).map(|file| file.to_string_lossy().into_owned());
+        Ok(uv_gigaam_step(
+            uv,
+            env,
+            wheel,
+            profile,
+            constraints.as_deref(),
+        ))
+    })
+}
+
+/// «Установить» MLX Whisper из «Распознавания» (Mac, 0.6.2): тот же
+/// необязательный шаг, что при установке движка, — только на macOS 14+ и в
+/// движок для Apple Silicon. Как `retry_gigaam`: резидент не останавливается.
+pub fn retry_mlx(app: &AppHandle) -> Result<(), String> {
+    let macos = platform::macos_major();
+    retry_optional(app, &MLX_STEP, move |uv, env, wheel, profile, resources| {
+        if !mlx_step_wanted(profile, macos) {
+            return Err(MLX_NOT_HERE.into());
+        }
+        let constraints = constraints_file(resources, MLX_CONSTRAINTS_PROFILE)
+            .map(|file| file.to_string_lossy().into_owned());
+        Ok(uv_mlx_step(uv, env, wheel, profile, constraints.as_deref()))
+    })
+}
+
+/// MLX Whisper здесь не ставится: не Mac, не Apple Silicon или macOS старше 14.
+pub const MLX_NOT_HERE: &str =
+    "MLX Whisper ставится только в движок для Apple Silicon на macOS 14 или новее";
+
+/// Повтор необязательного шага в установленное окружение текущей версии:
+/// `argv(uv, env, wheel, profile, resources)` — команда шага или отказ.
+fn retry_optional(
+    app: &AppHandle,
+    step: &'static OptionalStep,
+    argv: impl FnOnce(&str, &str, &str, &str, &Path) -> Result<Vec<String>, String>,
+) -> Result<(), String> {
     let _busy = begin_install()?;
     let data = resident::data_dir();
     storage::ready(&data)?;
@@ -1633,26 +1672,25 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
         .ok_or("Движок не установлен")?;
     let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
     let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
-    let _lock = InstallLock::acquire(&engine_root(&home))?;
-    let constraints = constraints_file(&resources, &marker.profile)
-        .map(|file| file.to_string_lossy().into_owned());
-    let argv = uv_gigaam_step(
+    let argv = argv(
         &resources.join(UV).to_string_lossy(),
         &env.to_string_lossy(),
         &wheel.to_string_lossy(),
         &marker.profile,
-        constraints.as_deref(),
-    );
+        &resources,
+    )?;
+    let _lock = InstallLock::acquire(&engine_root(&home))?;
     let mut envs = uv_env(&home, &data);
     envs.extend(crate::netproxy::system_proxy_env());
     let mut log = InstallLog::open(&data);
     log.write(&format!(
-        "--- повторная установка GigaAM в {}",
+        "--- повторная установка {} в {}",
+        step.name,
         env.display()
     ));
     run_optional(
         app,
-        &GIGAAM_STEP,
+        step,
         &argv,
         &envs,
         &engine_root(&home),
@@ -1858,6 +1896,14 @@ pub async fn reinstall_engine(app: AppHandle, profile: String) -> Result<(), Str
 #[tauri::command]
 pub async fn retry_gigaam_install(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || retry_gigaam(&app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// «Установить» MLX Whisper (Mac, раздел «Распознавание»).
+#[tauri::command]
+pub async fn retry_mlx_install(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || retry_mlx(&app))
         .await
         .map_err(|error| error.to_string())?
 }

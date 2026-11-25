@@ -1,8 +1,11 @@
 """MLX Whisper — распознавание на видеоядрах Apple Silicon (macOS 14+).
 
-Распознаёт нерусские встречи на Mac (русские — GigaAM): `asr.choose` берёт
-этот движок, если Mac на macOS 14 или новее, пакет `mlx_whisper` ставится и
-модель `MODEL` скачана; иначе — как раньше, faster-whisper на процессоре.
+На Mac распознаёт одна выбранная модель (`asr.cpu_backend` + `asr.cpu_model`),
+без деления по языку встречи. У Whisper-модели есть чекпоинт MLX
+(`checkpoint`: модель MLX каталога, чекпоинт модели faster-whisper по
+каталогу — поле `mlx`, или уже скачанная папка/репозиторий в формате MLX),
+Mac на macOS 14 или новее, пакет `mlx_whisper` ставится, чекпоинт скачан —
+`asr.choose` берёт этот движок; иначе — faster-whisper на процессоре.
 
 Отличия от faster-whisper, которые закрывает обвязка:
 
@@ -26,6 +29,8 @@ from meet import plat
 
 BACKEND = "mlx-whisper"
 MODEL = "mlx-community/whisper-large-v3-turbo"
+# Модели MLX каталога (`models.CATALOGUE`, backend "mlx-whisper"; тест следит).
+MODELS = (MODEL, "mlx-community/whisper-large-v3-mlx", "mlx-community/whisper-medium-mlx")
 # Устройство в выборе движка (`asr.Choice.device`): видеоядра Apple (Metal).
 # Свой ключ, а не «cpu»: замеры шагов MLX не смешиваются с Whisper на процессоре.
 DEVICE = "mps"
@@ -79,11 +84,43 @@ def model_path(model: str = MODEL) -> Path | None:
 
     folder = Path(model)
     if folder.is_dir():
-        return folder
+        return folder if _mlx_layout(folder) else None
     snapshot = models.local_snapshot(model, required=(CONFIG,))
     if snapshot is None or not any((snapshot / name).is_file() for name in WEIGHTS):
         return None
     return snapshot
+
+
+def _mlx_layout(folder: Path | None) -> bool:
+    """Папка — чекпоинт MLX: настройки и веса MLX (у faster-whisper — model.bin)."""
+    return folder is not None and (folder / CONFIG).is_file() and any((folder / w).is_file() for w in WEIGHTS)
+
+
+def checkpoint(model: str) -> str | None:
+    """Чекпоинт MLX выбранной модели: модель MLX каталога — она сама; модель
+    faster-whisper каталога — её чекпоинт (`mlx`), если он есть; своя папка
+    или репозиторий в кэше в формате MLX — они сами. Нет — None."""
+    from meet import models
+
+    model = (model or "").strip()
+    if not model:
+        return None
+    for item in models.CATALOGUE:
+        if item["id"] == model:
+            return model if item.get("backend") == BACKEND else item.get("mlx")
+    folder = Path(model)
+    if folder.is_dir():
+        return model if _mlx_layout(folder) else None
+    try:
+        snapshot = models.local_snapshot(model, required=(CONFIG,))
+    except (OSError, ValueError):
+        return None
+    return model if _mlx_layout(snapshot) else None
+
+
+def mlx_only(model: str) -> bool:
+    """Модель есть только в формате MLX: faster-whisper её не загрузит."""
+    return bool(model) and checkpoint(model) == model
 
 
 def usable(model: str = MODEL, *, log=print) -> bool:
@@ -96,7 +133,7 @@ def usable(model: str = MODEL, *, log=print) -> bool:
         return False
     if model_path(model) is None:
         log("модель MLX Whisper не скачана — распознаёт Whisper на процессоре "
-            "(скачать: «Распознавание» → «Модели распознавания»)")
+            "(скачать: «Распознавание» → «Модель распознавания»)")
         return False
     return True
 

@@ -199,6 +199,11 @@ export async function retryGigaamInstall(): Promise<void> {
   await invoke<void>("retry_gigaam_install");
 }
 
+/** Установить MLX Whisper в установленный движок (Mac 14+, только в приложении): тот же необязательный шаг. */
+export async function retryMlxInstall(): Promise<void> {
+  await invoke<void>("retry_mlx_install");
+}
+
 export async function installEngine(profile: "cuda" | "cpu" | "mac", fresh: boolean): Promise<void> {
   await invoke<void>(fresh ? "reinstall_engine" : "install_engine", { profile });
 }

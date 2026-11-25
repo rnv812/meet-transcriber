@@ -3,7 +3,8 @@
 Записывает встречу двумя дорожками (системный звук через WASAPI loopback и
 микрофон) и расшифровывает её локально: на процессоре по умолчанию GigaAM
 (`gigaam_asr.py`), на видеокарте и для не русской речи — Whisper
-(faster-whisper), на Mac с macOS 14+ — MLX Whisper (`mlx_asr.py`); разделение
+(faster-whisper), на Mac — выбранная модель на видеоядрах (MPS; Whisper с
+чекпоинтом MLX на macOS 14+ — MLX Whisper, `mlx_asr.py`); разделение
 на спикеров (pyannote), узнавание голосов из базы.
 Анализ встречи, итоги, названия, «Улучшить расшифровку» и живой ассистент —
 через подключённую модель (Claude Code, Codex, OpenCode, Antigravity CLI или
@@ -99,11 +100,20 @@ OpenAI-совместимый сервер; `src/meet/llm/`).
   прогон — workflow_dispatch с `macos_only`; подпись с hardened runtime —
   `MEET_HARDENED_RUNTIME=1`, вход `hardened_trial`). Модули Windows (winreg,
   ctypes.windll, pyaudiowpatch) импортировать только на Windows.
-- macOS, 0.6.2 (тоже не проверено на Mac): нерусская речь на macOS 14+ —
-  MLX Whisper (`mlx_asr.py`; extra `mlx` — необязательный шаг установки
-  движка, на 13 пропускается; сбой — faster-whisper на процессоре); GigaAM,
-  выравнивание и голоса — на MPS с откатом на процессор
-  (`asr.torch_device`); тяжёлые задачи — `nice`, потоки — по
+- macOS, 0.6.2 (тоже не проверено на Mac): одна выбранная модель на все
+  встречи, без деления по языку встречи и без определения языка
+  (`asr._choose_mac`, `live_asr._pick_mac`; ключи строки процессора —
+  `asr.cpu_backend` + `cpu_model`/`gigaam_model`; GigaAM при явном языке
+  речи не ru/auto — Whisper, чтобы не потерять распознавание). Whisper с
+  чекпоинтом MLX (`mlx_asr.checkpoint`: модель MLX каталога, поле `mlx` у
+  модели faster-whisper, своя папка MLX) — MLX Whisper на macOS 14+
+  (`Choice.model`; extra `mlx` — необязательный шаг установки движка, на 13
+  пропускается, «Установить» в окне — `retry_mlx_install`; сбой — faster-whisper
+  на процессоре), иначе faster-whisper на процессоре. GigaAM, выравнивание,
+  голоса, диаризация — на MPS всегда (`asr.device` на Mac не участвует),
+  откат на процессор при сбое операции (`asr.torch_device`). Окно —
+  `MacAsr.tsx`/`macRoute.ts` (у модели — через что пойдёт, «Скачать»
+  чекпоинт), сведения — `/engine` `mac` (`engine.mac_state`); тяжёлые задачи — `nice`, потоки — по
   производительным ядрам (`plat.perf_cores`). Окно получает звук в WebM
   (`lib/audioUrl.ts`, `format=webm` у `/recordings/{id}/audio`). Process tap
   (14.4+) — необязательный режим `recording.mac_capture` только после проверки
