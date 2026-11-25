@@ -1,9 +1,12 @@
 /**
  * «Модели и анализ» (0.6.2; 0.4 — «Модели ИИ», прежде — верх раздела
- * «Ассистент»): какие модели включены и какая по умолчанию, модель Claude Code,
- * OpenCode и Antigravity CLI (0.6.2: с предупреждением об условиях Google для
- * потребительских тарифов), локальная модель, прокси; ниже — блок «Анализ встречи»
- * (`children`); в «Тонкой настройке» внизу — «Локальную модель — через прокси».
+ * «Ассистент»): какие модели включены и какая по умолчанию; под таблицей —
+ * карточка настроек ОДНОЙ модели (`ModelCard`, 0.6.2): модели по умолчанию
+ * (у «Авто» — той, что он выбрал бы сейчас, иначе первой включённой) или той,
+ * что выбрана в таблице («Настроить» или щелчок по строке); поиск по
+ * настройкам открывает карточку своей строки (`jump`). Затем прокси (общий),
+ * блок «Анализ встречи» (`children`); в «Тонкой настройке» внизу — «Локальную
+ * модель — через прокси».
  *
  * «Модели» (0.3.4): включённые модели (`llm.enabled`) можно выбрать у действий
  * карточки — «Переанализировать», «Итоги», «Улучшить расшифровку», «Предложить
@@ -26,19 +29,18 @@
  * выключается: её сервер может быть просто не запущен.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { type Endpoint, checkProvider, getAssistant } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { openUrl } from "../../lib/shell";
 import type { AssistantInfo, ProxyInfo } from "../../lib/types";
-import { CLAUDE_EFFORTS, CODEX_EFFORTS, EFFORT_DEFAULT, effortOptions } from "../../lib/effort";
 import { Button } from "../../ui/Button";
-import { Select } from "../../ui/Select";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Tip } from "../../ui/Tip";
 import { fieldClass } from "./fields";
 import { FineTuning, FitPanel, NowLine, Radio, Row, SettingsCard, type FitPlan, type NowPart, type Raw, type SetFn } from "./Section";
-import { LocalModelRows, LocalViaProxyRow } from "./LocalModelRows";
+import { LocalViaProxyRow } from "./LocalModelRows";
+import { ModelCard, agyModelError, cardOfLabel, codexModelError, opencodeModelError } from "./ModelCard";
 import { ProviderTip } from "./tips";
 import { PRIVACY_CLOUD, PRIVACY_LOCAL } from "../../lib/llm";
 
@@ -62,7 +64,8 @@ const CONCRETE = PROVIDERS.filter((p) => p.value !== "auto").map((p) => p.value)
 /** Кандидаты «Авто» — его выбор у конфига без списка включённых. */
 const AUTO_CANDIDATES = ["claude-code", "codex", "openai-compatible"];
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
-const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "agy_model", "enabled", "local_via_proxy"];
+const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "agy_model", "codex_model",
+  "enabled", "local_via_proxy"];
 
 /**
  * Включённые модели из черновика `llm`: список резидента, а у конфига без него
@@ -96,102 +99,10 @@ export function privacyLine(provider: string, baseUrl: string): string {
   return `сервер в сети — текст встречи уходит на ${host}`;
 }
 
-/** Подпись `llm.model`: на неё ссылаются подсказки других разделов. */
-export const MODEL_LABEL = "Модель Claude Code";
-/** Уровень рассуждений (0.5): у Claude Code — в строке модели, у Codex — своей строкой. */
-export const EFFORT_LABEL = "Уровень рассуждений Claude Code";
-export const CODEX_EFFORT_LABEL = "Уровень рассуждений Codex";
-const CLAUDE_EFFORT_OPTIONS = effortOptions(CLAUDE_EFFORTS);
-const CODEX_EFFORT_OPTIONS = effortOptions(CODEX_EFFORTS);
-
-function ModelTip() {
-  return (
-    <HelpTip label="Какая модель отвечает" title={MODEL_LABEL}>
-      <TipLine>
-        Модель, на которой Claude Code готовит итоги, анализ и названия, отвечает на вопросы, ведёт
-        живого ассистента и работает во вкладке «Агент» (и в «Продолжить прошлую»): sonnet, opus, haiku или
-        полное имя модели. Пусто — sonnet. «Проверить» у Claude Code проверяет и эту модель.
-      </TipLine>
-      <TipLine>
-        Живые подсказки в режиме «Быстрее» идут на Haiku. Во вкладке «Агент» модель можно сменить своим{" "}
-        <code>--model</code> в параметрах запуска. Codex берёт модель из своего конфига, локальная модель
-        задаётся отдельно.
-      </TipLine>
-    </HelpTip>
-  );
-}
-
-/** Подпись `llm.opencode_model`. */
-export const OPENCODE_MODEL_LABEL = "Модель OpenCode";
-const OPENCODE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._:@+-][A-Za-z0-9._:@+/-]*$/;
-
-/**
- * Значение `llm.opencode_model` нельзя сохранить: текст для человека, иначе
- * null. Та же проверка, что у резидента (`meet.settings.opencode_model_error`).
- */
-export function opencodeModelError(value: string): string | null {
-  const text = value.trim();
-  if (!text) return null;
-  if (!/^[A-Za-z0-9._:@+/-]*$/.test(text)) {
-    return "В имени модели OpenCode недопустимые символы: только латиница, цифры и . _ - : @ + /";
-  }
-  if (!OPENCODE_MODEL_RE.test(text)) return "Модель OpenCode — в виде провайдер/модель, например anthropic/claude-sonnet-4-5";
-  return null;
-}
-
-function OpencodeModelTip() {
-  return (
-    <HelpTip label="Какая модель OpenCode отвечает" title={OPENCODE_MODEL_LABEL}>
-      <TipLine>
-        Модель, на которой OpenCode готовит итоги, анализ и названия, отвечает на вопросы и ведёт живого
-        ассистента, — в виде провайдер/модель, как её показывает <code>opencode models</code>: например
-        anthropic/claude-sonnet-4-5 или ollama/qwen3:8b. Пусто — модель из настроек самого OpenCode.
-      </TipLine>
-      <TipLine>
-        «Проверить» не тратит запросы к модели: смотрит, что OpenCode установлен, что вход выполнен
-        (<code>opencode auth login</code>) и что эта модель у него есть. Годен ли сам ключ, покажет первый ответ.
-      </TipLine>
-      <TipLine>
-        Фоновые задачи OpenCode только читают: файлы не меняет, команды не выполняет, база знаний — для чтения.
-      </TipLine>
-    </HelpTip>
-  );
-}
-
-/** Подпись `llm.agy_model` (0.6.2). */
-export const AGY_MODEL_LABEL = "Модель Antigravity CLI";
-const AGY_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}$/;
-/** Условия Google: на потребительских тарифах встраивание agy в чужие программы не поддерживается. */
-export const AGY_PLAN_NOTICE = "На личных (потребительских) тарифах Google встраивание Antigravity CLI в другие программы "
-  + "не поддерживается. Для Meet рекомендуем ключ API Gemini или корпоративный вход Gemini Enterprise.";
-
-/**
- * Значение `llm.agy_model` нельзя сохранить: текст для человека, иначе null.
- * Та же проверка, что у резидента (`meet.settings.agy_model_error`).
- */
-export function agyModelError(value: string): string | null {
-  const text = value.trim();
-  if (!text || AGY_MODEL_RE.test(text)) return null;
-  return "В имени модели Antigravity CLI недопустимые символы: только латиница, цифры и . _ - : @ + /";
-}
-
-function AgyModelTip() {
-  return (
-    <HelpTip label="Как Meet работает с Antigravity CLI" title={AGY_MODEL_LABEL}>
-      <TipLine>
-        Модель, на которой Antigravity CLI (<code>agy</code>) готовит итоги, анализ и названия, отвечает на вопросы
-        и ведёт живого ассистента, — имя, как его показывает <code>agy models</code>, например gemini-3-pro. Пусто —
-        модель из настроек самого agy.
-      </TipLine>
-      <TipLine>
-        Meet запускает agy со своей папкой настроек: ваши правила и MCP-серверы agy он не меняет, а действия
-        ассистента спрашивает карточкой, как у Claude Code. Вход для Meet — один раз в терминале командой
-        <code> agy acp --login</code> с папкой, которую назовёт «Проверить».
-      </TipLine>
-      <TipLine>{AGY_PLAN_NOTICE}</TipLine>
-    </HelpTip>
-  );
-}
+export {
+  AGY_EFFORT_LABEL, AGY_MODEL_LABEL, AGY_PLAN_NOTICE, CODEX_EFFORT_LABEL, CODEX_MODEL_LABEL, EFFORT_LABEL, MODEL_LABEL,
+  OPENCODE_MODEL_LABEL, agyModelError, codexModelError, opencodeModelError,
+} from "./ModelCard";
 
 const PROXY_LABEL = "Прокси для подключения к моделям";
 const PROXY_HELP = "Claude Code, Codex, OpenCode и Antigravity CLI сами не используют системный прокси Windows — приложение передаёт его им. "
@@ -247,7 +158,7 @@ export function socksLocalError(llm: Record<string, unknown> | undefined): strin
 }
 
 /**
- * Правки раздела нельзя сохранить: прокси, модель OpenCode или Antigravity CLI, SOCKS у
+ * Правки раздела нельзя сохранить: прокси, модель OpenCode, Codex или Antigravity CLI, SOCKS у
  * локальной модели вне правил. Смотрим только изменённое (`changes` — то, что
  * уйдёт в PATCH): значение, уже лежащее в файле, не должно запирать
  * «Сохранить» для остальных разделов.
@@ -256,9 +167,11 @@ export function modelsChangesInvalid(changes: Raw, draft?: Raw): boolean {
   const proxy = changes.llm?.proxy;
   const ocModel = changes.llm?.opencode_model;
   const agyModel = changes.llm?.agy_model;
+  const codexModel = changes.llm?.codex_model;
   return (typeof proxy === "string" && proxyError(proxy) !== null)
     || (typeof ocModel === "string" && opencodeModelError(ocModel) !== null)
     || (typeof agyModel === "string" && agyModelError(agyModel) !== null)
+    || (typeof codexModel === "string" && codexModelError(codexModel) !== null)
     || ((changes.llm?.local_via_proxy !== undefined || changes.llm?.proxy !== undefined)
       && socksLocalError(draft?.llm ?? changes.llm) !== null);
 }
@@ -380,8 +293,26 @@ export function currentProvider(info: AssistantInfo | null, draft: Raw): string 
   return info?.provider ?? (chosen === "auto" ? null : chosen);
 }
 
-export function ModelsSection({ draft, saved, set, endpoint, children }: {
+/**
+ * Чья карточка настроек под таблицей без выбора в таблице: модель по умолчанию;
+ * у «Авто» — та, что он выбрал бы сейчас (`info.provider`), иначе первая
+ * включённая.
+ */
+export function defaultCard(llm: Record<string, unknown> | undefined, info: AssistantInfo | null): string {
+  const chosen = String(llm?.provider ?? "auto");
+  if (chosen !== "auto" && CONCRETE.includes(chosen)) return chosen;
+  const enabled = enabledOf(llm);
+  if (info?.setting === "auto" && info.provider && CONCRETE.includes(info.provider)) return info.provider;
+  return enabled[0] ?? CLAUDE;
+}
+
+/** Щелчок по строке таблицы — не по её переключателям, кнопкам и ссылкам. */
+const ROW_CONTROLS = "button, input, a, [role=switch], [role=radio]";
+
+export function ModelsSection({ draft, saved, set, endpoint, jump, children }: {
   draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint;
+  /** Поиск по настройкам ведёт к строке (подпись, номер просьбы): открыть карточку её модели. */
+  jump?: { label: string; tick: number } | null;
   /** Блоки раздела перед «Тонкой настройкой» (анализ встречи). */
   children?: ReactNode;
 }) {
@@ -410,6 +341,17 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
   const llm = (k: string) => draft.llm?.[k];
   const chosen = String(llm("provider") ?? "auto");
   const enabled = enabledOf(draft.llm);
+  // Карточка какой модели открыта: выбранная в таблице, иначе — по умолчанию (`defaultCard`).
+  const [picked, setPicked] = useState<string | null>(null);
+  // Поиск ведёт к строке карточки другой модели — открыть её (состояние по ходу рендера:
+  // строка появляется в том же кадре, и поиск находит её сразу).
+  const [seenJump, setSeenJump] = useState(0);
+  if (jump && jump.tick !== seenJump) {
+    setSeenJump(jump.tick);
+    const target = cardOfLabel(jump.label);
+    if (target) setPicked(target);
+  }
+  const shown = picked ?? defaultCard(draft.llm, info);
   const on = (name: string) => enabled.includes(name);
   /**
    * «Авто» выбирает только из своих включённых (Claude Code, Codex, локальная):
@@ -421,6 +363,7 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
   /** Модель по умолчанию — она же включена. */
   const makeDefault = (name: string) => {
     set("llm", "provider", name);
+    setPicked(null);          // карточка — новой модели по умолчанию
     if (name !== "auto" && !on(name)) set("llm", "enabled", CONCRETE.filter((p) => p === name || on(p)));
   };
   /**
@@ -446,10 +389,13 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
   const [customProxy, setCustomProxy] = useState<string | null>(null);
   const customStart = customProxy ?? (savedProxy === "system" || savedProxy === "none" ? "" : savedProxy);
   const proxyProblem = proxyMode === "custom" ? proxyError(proxy) : null;
-  const ocModel = String(llm("opencode_model") ?? "");
-  const ocModelProblem = opencodeModelError(ocModel);
-  const agyModel = String(llm("agy_model") ?? "");
-  const agyModelProblem = agyModelError(agyModel);
+  const pickRow = (name: string) => (e: MouseEvent<HTMLTableRowElement>) => {
+    if (name === "auto" || (e.target instanceof Element && e.target.closest(ROW_CONTROLS))) return;
+    setPicked(name);
+  };
+  const cardNote = shown === chosen ? "Модель по умолчанию"
+    : chosen === "auto" && shown === defaultCard(draft.llm, info) ? "Её сейчас выбирает «Авто»"
+      : `Выбрана в таблице; по умолчанию — ${chosen === "auto" ? "Авто" : titleOf(chosen)}`;
 
   const fit = info ? modelsFit(draft.llm, info) : null;
   return (
@@ -482,7 +428,8 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
                     ? (autoBlocked && chosen !== "auto" ? autoBlocked : AUTO_SHORT)
                     : missing ? null : on(p.value) ? privacyLine(p.value, baseUrl) : null;
                   return (
-                    <tr key={p.value} aria-label={p.label}>
+                    <tr key={p.value} aria-label={p.label} onClick={pickRow(p.value)}
+                      className={concrete ? `mtable__row${shown === p.value ? " mtable__row--on" : ""}` : undefined}>
                       <td className="mtable__model">
                         <span className="mtable__head">
                           <span className="mtable__name">{p.label}</span>
@@ -524,9 +471,17 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
                         ) : <span className="muted">—</span>}
                       </td>
                       <td className="mtable__act">
-                        <Button onClick={() => void check(p.value)} disabled={c?.busy}>
-                          {c?.busy ? "Проверяю…" : "Проверить"}
-                        </Button>
+                        <span className="mtable__btns">
+                          {concrete && (
+                            <Button variant="ghost" aria-pressed={shown === p.value}
+                              aria-label={`Настроить: ${p.label}`} onClick={() => setPicked(p.value)}>
+                              Настроить
+                            </Button>
+                          )}
+                          <Button onClick={() => void check(p.value)} disabled={c?.busy}>
+                            {c?.busy ? "Проверяю…" : "Проверить"}
+                          </Button>
+                        </span>
                       </td>
                     </tr>
                   );
@@ -537,54 +492,11 @@ export function ModelsSection({ draft, saved, set, endpoint, children }: {
           {infoError && <span className="error mtable__foot">Сведения о провайдерах недоступны: {infoError}</span>}
           {llmDirty && <span className="muted mtable__foot">Проверяются сохранённые настройки — сначала сохраните изменения</span>}
         </Row>
-        {on(CLAUDE) && (
-          <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
-            hint="Готовит итоги и анализ, отвечает на вопросы и ведёт живого ассистента">
-            <span className="model-effort">
-              <input id="llm-model" type="text" className={fieldClass()} placeholder="sonnet"
-                value={String(llm("model") ?? "")}
-                onChange={(e) => set("llm", "model", e.target.value)} />
-              {/* Уровень рассуждений — рядом с моделью (0.5). */}
-              <Select aria-label={EFFORT_LABEL} options={CLAUDE_EFFORT_OPTIONS}
-                value={String(llm("effort") || EFFORT_DEFAULT)}
-                onChange={(v) => set("llm", "effort", v === EFFORT_DEFAULT ? "" : v)} />
-            </span>
-          </Row>
-        )}
-        {on(CODEX) && (
-          <Row label={CODEX_EFFORT_LABEL} hint="Сколько Codex думает над ответом: дольше — точнее">
-            <Select aria-label={CODEX_EFFORT_LABEL} options={CODEX_EFFORT_OPTIONS}
-              value={String(llm("codex_effort") || EFFORT_DEFAULT)}
-              onChange={(v) => set("llm", "codex_effort", v === EFFORT_DEFAULT ? "" : v)} />
-          </Row>
-        )}
-        {on(OPENCODE) && (
-          <Row label={OPENCODE_MODEL_LABEL} htmlFor="llm-opencode-model" help={<OpencodeModelTip />}
-            hint="Провайдер/модель, как в opencode models. Пусто — модель из настроек OpenCode">
-            <input id="llm-opencode-model" type="text" className={fieldClass({ mono: true })} spellCheck={false}
-              placeholder="anthropic/claude-sonnet-4-5" aria-invalid={ocModelProblem ? true : undefined}
-              value={ocModel} onChange={(e) => set("llm", "opencode_model", e.target.value)} />
-            {ocModelProblem && <span className="error proxy__error">{ocModelProblem}</span>}
-          </Row>
-        )}
-        {on(AGY) && (
-          <Row label={AGY_MODEL_LABEL} htmlFor="llm-agy-model" help={<AgyModelTip />}
-            hint="Имя, как в agy models. Пусто — модель из настроек Antigravity CLI">
-            <input id="llm-agy-model" type="text" className={fieldClass({ mono: true })} spellCheck={false}
-              placeholder="gemini-3-pro" aria-invalid={agyModelProblem ? true : undefined}
-              value={agyModel} onChange={(e) => set("llm", "agy_model", e.target.value)} />
-            {agyModelProblem && <span className="error proxy__error">{agyModelProblem}</span>}
-            <span className="muted proxy__error">{AGY_PLAN_NOTICE}</span>
-          </Row>
-        )}
       </SettingsCard>
-      {on(LOCAL) && (
-        <SettingsCard title="Локальная модель">
-          <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
-          <LocalModelRows baseUrl={baseUrl} model={String(llm("local_model") ?? "")} set={set} endpoint={endpoint}
-            viaProxy={llm("local_via_proxy") === true} />
-          {socksLocalError(draft.llm) && <span className="error" role="alert">{socksLocalError(draft.llm)}</span>}
-        </SettingsCard>
+      <ModelCard key={shown} provider={shown} title={`Настройки: ${titleOf(shown)}`} note={cardNote}
+        llm={draft.llm} set={set} endpoint={endpoint} />
+      {shown === LOCAL && socksLocalError(draft.llm) && (
+        <span className="error" role="alert">{socksLocalError(draft.llm)}</span>
       )}
       <SettingsCard title="Подключение">
         <Radio label={PROXY_LABEL} hint="Через него Claude Code, Codex, OpenCode и Antigravity CLI подключаются к своим сервисам"

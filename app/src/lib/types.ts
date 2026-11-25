@@ -760,6 +760,32 @@ export type ProviderCheck = {
   detail?: string | null;
 };
 
+/** Уровень рассуждений модели из CLI (`id` — значение настройки). */
+export type CliEffort = { id: string; label?: string; description?: string };
+
+/** Модель из самого CLI (0.6.2, `GET /assistant/models`). */
+export type CliModel = {
+  id: string;
+  label: string;
+  description?: string;
+  /** Модель, которую CLI берёт по умолчанию. */
+  default?: boolean;
+  /** Уровни рассуждений этой модели; пусто — CLI их не сообщил. */
+  efforts: CliEffort[];
+  default_effort?: string;
+};
+
+/** `GET /assistant/models?provider=…`: модели CLI или почему их нет. */
+export type CliModels = {
+  models: CliModel[];
+  /** Текст для человека: список не получен (окно предлагает ввести имя вручную). */
+  error?: string | null;
+  /** Antigravity CLI без входа: команда входа для терминала. */
+  login?: string | null;
+  /** Ответ из кэша резидента (несколько минут). */
+  cached?: boolean;
+};
+
 /** Модель на локальном сервере: размер (байты) и число параметров — у Ollama, контекст — у vLLM. */
 export type LocalModel = { id: string; size?: number | null; params?: string | null; context?: number | null };
 

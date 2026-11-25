@@ -21,7 +21,11 @@
  * - «Действия ассистента» (`assist.agent_mode`, 0.4, при расширенных возможностях):
  *   «Сам, рискованное — спрашивает» (`auto`, по умолчанию — автомод Claude Code) или
  *   «Спрашивать каждое» (`confirm`, как 0.3.7);
- * - какие модели видят картинки (пометка).
+ * - видит ли картинки модель, которая ведёт ассистента (пометка).
+ *
+ * Пометки об одной модели (0.6.2) — только для той, что ведёт ассистента
+ * сейчас (`provider`): строка про OpenCode не видна, когда ведёт Claude Code,
+ * и наоборот; модель неизвестна — общая строка.
  *
  * «Только сводка» (`assist.activity: summary`) выключает и агента — если она
  * осталась от прежнего режима, видно предупреждение с «Вернуть чат».
@@ -61,7 +65,8 @@ const DENY_BY_PROMPT: Record<string, string> = { codex: "Codex", opencode: "Open
 /** Кто видит картинки (как `llm.VISION_PROVIDERS`). */
 const VISION: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex" };
 const LABELS: Record<string, string> = {
-  "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", "openai-compatible": "Локальная модель",
+  "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", agy: "Antigravity CLI",
+  "openai-compatible": "Локальная модель",
 };
 export const PARTICIPANT_LABEL = "Ассистент — участник встречи";
 export const KB_MAP_LABEL = "Показывать ассистенту карту: базу знаний и прошлые встречи группы";
@@ -69,7 +74,17 @@ export const KB_MAP_LABEL = "Показывать ассистенту карт�
 export const VOICE_BUTTONS_LABEL = "Нажимать кнопки ассистента голосом";
 export const VOICE_BUTTONS_HINT = "Скажите вслух надпись кнопки под последним сообщением (в течение 30 с) — "
   + "Meet нажмёт её через 10 с, отменить можно в чате. Слушается только ваш микрофон";
-export const VISION_NOTE = "Картинки видят Claude Code и Codex; OpenCode и локальная модель получают только текст сообщения";
+/** Модель неизвестна — общая строка о картинках. */
+export const VISION_NOTE = "Картинки видят Claude Code и Codex; OpenCode, Antigravity CLI и локальная модель получают "
+  + "только текст сообщения";
+
+/** О картинках — только про модель, которая ведёт ассистента; неизвестна — общая строка. */
+export function visionNote(provider: string | null): string {
+  if (!provider) return VISION_NOTE;
+  const name = LABELS[provider] ?? provider;
+  return provider in VISION ? `${name} видит картинки из ваших сообщений`
+    : `${name} картинки не видит — получает только текст сообщения`;
+}
 export const DENY_NOTE = "исключения — только просьба";
 export const FREEDOM_LABEL = "Расширенные возможности ассистента (файлы вне встречи, MCP, веб) — по согласию";
 /** Подсказка под переключателем — одна строка; подробности и оговорки — в «?» (FreedomTip). */
@@ -88,17 +103,20 @@ export const AGENT_MODE_HINTS: Record<AgentMode, string> = {
     + "рабочих папок, отправка наружу). Ход по одной речи встречи ничего не меняет",
   confirm: "Каждое действие — карточкой «Разрешить» в чате, как в 0.3.7. Ход по одной речи встречи ничего не меняет",
 };
-/** Codex/OpenCode по уровню «Действия ассистента»: в автомоде действуют по просьбе, с подтверждением — только читают. */
-export const FREEDOM_FILES_NOTE = "Codex/OpenCode: только чтение файлов по вашей просьбе; MCP, веб и действия — только с Claude Code";
-export const FREEDOM_ACT_NOTE = "Codex/OpenCode: по вашей просьбе правят рабочие папки и выполняют команды; MCP — только с Claude Code";
+/** OpenCode по уровню «Действия ассистента»: в автомоде действует по просьбе, с подтверждением — только читает. */
+export const FREEDOM_FILES_NOTE = "OpenCode: только чтение файлов по вашей просьбе; MCP, веб и действия ему недоступны";
+export const FREEDOM_ACT_NOTE = "OpenCode: по вашей просьбе правит рабочие папки и выполняет команды; MCP ему недоступен";
 /** Закрытые папки и чувствительные пути у моделей без проверки каждого вызова. */
 export const FREEDOM_CLOSED_NOTE: Record<string, string> = {
   codex: "У Codex закрытые папки и ключи с паролями закрыты только правилом в инструкции — песочница читает весь диск",
   opencode: "У OpenCode закрытые папки и ключи с паролями закрыты его правами (не проверено на живом OpenCode)",
 };
 export const FREEDOM_OFF_HINT = "Выключено: как в 0.3.6 — ассистент читает эту встречу, базу знаний и прошлые встречи";
-/** Модели без проверки каждого вызова: со свободой им дают только чтение файлов. */
-const FILES_ONLY: Record<string, string> = { codex: "Codex", opencode: "OpenCode" };
+/**
+ * Модели без проверки каждого вызова: со свободой им дают только чтение файлов.
+ * Codex (0.6.2, app-server) и Antigravity CLI (ACP) спрашивают через ворота Meet, как Claude Code.
+ */
+const FILES_ONLY: Record<string, string> = { opencode: "OpenCode" };
 
 function ParticipantTip() {
   return (
@@ -117,11 +135,12 @@ function ParticipantTip() {
   );
 }
 
-function FreedomTip() {
+function FreedomTip({ provider }: { provider: string | null }) {
+  const claude = !provider || provider === "claude-code";
   return (
     <HelpTip label="Что дают расширенные возможности" title={FREEDOM_LABEL}>
       <TipLine>
-        С Claude Code ассистент получает всё, что умеет модель на этом компьютере: файлы вне встречи (например,
+        Ассистент получает всё, что умеет модель на этом компьютере: файлы вне встречи (например,
         «Загрузки»), веб, ваши MCP-серверы с вашими доступами и команды. Он спрашивает вас кнопками: «Я тоже гляну
         этот файл?», «Проверить задачу ABC-123 в Jira?».
       </TipLine>
@@ -144,20 +163,26 @@ function FreedomTip() {
       <TipLine>
         Закрыто всегда: папки «Не показывать ассистенту», ключи и пароли (SSH, облака, настройки Claude Code и
         Codex, профили браузеров, служебные файлы Meet, .env), подагенты и фоновые команды, локальные адреса.
-        Собственные хуки Claude Code не запускаются; ваши CLAUDE.md, навыки и плагины ассистент видит.
+        {claude && " Собственные хуки Claude Code не запускаются; ваши CLAUDE.md, навыки и плагины ассистент видит."}
       </TipLine>
-      <TipLine>
-        Codex и OpenCode остановить вызов до вашего решения не дают: по вашей просьбе они правят рабочие папки и
-        выполняют команды сами (удаление и отправку наружу у Codex удерживают только инструкция и его проверка,
-        у OpenCode — правила разрешений); без просьбы — только чтение. MCP — только с Claude Code.
-        У Codex и закрытые папки, и ключи с паролями закрыты только правилом в инструкции: его песочница читает
-        весь диск.
-      </TipLine>
+      {provider === "opencode" && (
+        <TipLine>
+          OpenCode остановить вызов до вашего решения не даёт: по вашей просьбе он правит рабочие папки и
+          выполняет команды сам (удаление и отправку наружу удерживают его правила разрешений); без просьбы —
+          только чтение. MCP ему недоступен.
+        </TipLine>
+      )}
+      {provider === "codex" && (
+        <TipLine>
+          Codex спрашивает через Meet всё, что выходит за его песочницу. Закрытые папки и ключи с паролями у него
+          закрыты только правилом в инструкции: его песочница читает весь диск.
+        </TipLine>
+      )}
       <TipLine>
         Риск: текст файлов, страниц и задач может пытаться командовать ассистентом. Без вашей просьбы он ничего
         не прочтёт вне встречи, без карточки ничего не сделает; разрешённое выполняет с вашими правами.
-        Выключено — как в 0.3.6: ассистент читает встречу, базу знаний и прошлые встречи; Codex и тогда загружает
-        свои MCP-серверы, как в 0.3.6.
+        Выключено — как в 0.3.6: ассистент читает встречу, базу знаний и прошлые встречи
+        {provider === "codex" ? "; Codex и тогда загружает свои MCP-серверы, как в 0.3.6." : "."}
       </TipLine>
     </HelpTip>
   );
@@ -235,7 +260,6 @@ export function ParticipantRows({ draft, set, provider }: {
   const on = assist.participant !== false;
   const frequency = (FREQUENCIES.some((f) => f.value === assist.frequency) ? assist.frequency : "more") as Frequency;
   const profile = profileOf(assist.profile);
-  const sees = provider ? provider in VISION : null;
   const freedom = assist.agent_freedom !== false;
   const agentMode: AgentMode = assist.agent_mode === "confirm" ? "confirm" : "auto";
   const filesOnly = provider ? FILES_ONLY[provider] : undefined;
@@ -260,12 +284,13 @@ export function ParticipantRows({ draft, set, provider }: {
           <Segmented label="Как часто писать" value={frequency} options={FREQUENCIES}
             hint="Просьба к ассистенту в инструкции; меняется и в панели встречи"
             onChange={(v) => set("assist", "frequency", v)} />
-          <Switch label={FREEDOM_LABEL} help={<FreedomTip />} value={freedom}
+          <Switch label={FREEDOM_LABEL} help={<FreedomTip provider={provider} />} value={freedom}
             onChange={(v) => set("assist", "agent_freedom", v)}
             hint={freedom
               ? (filesOnly && provider
                 ? `${draft.assist?.agent_mode === "confirm" ? FREEDOM_FILES_NOTE : FREEDOM_ACT_NOTE}. ${FREEDOM_CLOSED_NOTE[provider]}`
-                : FREEDOM_ON_HINT)
+                : provider && FREEDOM_CLOSED_NOTE[provider] ? `${FREEDOM_ON_HINT}. ${FREEDOM_CLOSED_NOTE[provider]}`
+                  : FREEDOM_ON_HINT)
               : FREEDOM_OFF_HINT} />
           {/* Как действует по просьбе (`assist.agent_mode`, 0.4) — только с расширенными возможностями. */}
           {freedom && (
@@ -274,10 +299,7 @@ export function ParticipantRows({ draft, set, provider }: {
           )}
           <Switch label={VOICE_BUTTONS_LABEL} value={assist.voice_buttons !== false} hint={VOICE_BUTTONS_HINT}
             onChange={(v) => set("assist", "voice_buttons", v)} />
-          <p className="muted sdesc participant__vision">
-            {VISION_NOTE}
-            {sees === false && provider ? `. ${LABELS[provider] ?? provider} картинки не видит` : ""}
-          </p>
+          <p className="muted sdesc participant__vision">{visionNote(provider)}</p>
         </>
       )}
     </>

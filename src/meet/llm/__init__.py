@@ -70,7 +70,7 @@ def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> di
     """Что добавить к вызову модели для уровня `tier` (`agent` — как у
     агента, `fast` — быстрее). «Быстрее»: Claude — модель haiku без
     размышлений, Codex — низкое усилие рассуждения. «Как у агента»: Claude — модель из настроек
-    (`model` — `llm.model`); Codex берёт модель из своего конфига, OpenCode —
+    (`model` — `llm.model`); Codex — `llm.codex_model` в самом runner, OpenCode —
     `llm.opencode_model` в самом runner (уровни моделей у его провайдеров
     разные — «Быстрее» ему ничего не меняет), локальная модель одна — им
     добавлять нечего. Claude Code получает модель всегда: пустая `model` —
@@ -88,18 +88,21 @@ def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> di
 
 def agent_model(provider: str | None, cfg: "Settings") -> str | None:
     """Модель агента для явной передачи в вызов: `llm.model` у Claude Code,
-    None у остальных (Codex — модель из своего конфига, OpenCode —
+    None у остальных (Codex — `llm.codex_model` в runner, OpenCode —
     `llm.opencode_model`, локальная — `llm.local_model` в самом runner)."""
     return tier_kwargs(provider, "agent", cfg.llm.model).get("model")
 
 
 def agent_effort(provider: str | None, cfg: "Settings") -> str | None:
     """Уровень рассуждений из настроек (0.5): Claude Code — `llm.effort`, Codex —
-    `llm.codex_effort`; у остальных и «по умолчанию» — None (флаг не передаётся)."""
+    `llm.codex_effort`, Antigravity CLI — `llm.agy_effort` (0.6.2); у остальных
+    и «по умолчанию» — None (флаг не передаётся)."""
     if provider == "claude-code":
         return cfg.llm.effort or None
     if provider == "codex":
         return cfg.llm.codex_effort or None
+    if provider == "agy":
+        return cfg.llm.agy_effort or None
     return None
 
 
@@ -116,13 +119,15 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
                        effort=cfg.llm.effort or None)
     if name == "codex":
         from meet.llm import codex
-        return partial(_call, codex, proxy=cfg.llm.proxy, effort=cfg.llm.codex_effort or None)
+        return partial(_call, codex, proxy=cfg.llm.proxy, model=cfg.llm.codex_model or None,
+                       effort=cfg.llm.codex_effort or None)
     if name == "opencode":
         from meet.llm import opencode
         return partial(_call, opencode, proxy=cfg.llm.proxy, model=cfg.llm.opencode_model or None)
     if name == "agy":
         from meet.llm import antigravity
-        return partial(_call, antigravity, proxy=cfg.llm.proxy, model=cfg.llm.agy_model or None)
+        return partial(_call, antigravity, proxy=cfg.llm.proxy, model=cfg.llm.agy_model or None,
+                       effort=cfg.llm.agy_effort or None)
     if name == "openai-compatible":
         from meet.llm import openai_compat
         return partial(openai_compat.run, base_url=cfg.llm.base_url,
@@ -231,10 +236,12 @@ def not_found(name: str, cfg: "Settings") -> str:
 
 def describe(provider: str | None, cfg: "Settings") -> dict:
     """Происхождение результата: {"provider", "model"} — какая модель его
-    сделала. `model` — имя из настроек (у Codex — из его конфига: None)."""
+    сделала. `model` — имя из настроек (пусто у Codex и agy — модель из их конфига: None)."""
     model = None
     if provider == "claude-code":
         model = claude_model(cfg.llm.model)
+    elif provider == "codex":
+        model = cfg.llm.codex_model or None
     elif provider == "opencode":
         model = cfg.llm.opencode_model or None
     elif provider == "agy":

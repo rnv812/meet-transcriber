@@ -68,8 +68,12 @@ async def _check_codex() -> str | None:
     ok, why = detect.logged_in("codex", path)
     if not ok:
         return f"не авторизован: {why}"
-    reply = await codex.run(PROBE_PROMPT, system_prompt=PROBE_SYSTEM,
-                            max_turns=1, timeout_s=PROBE_TIMEOUT_S, proxy=_proxy())
+    from meet import settings
+
+    llm = settings.load().llm
+    # Той же моделью и уровнем, что работа (`llm.codex_model`, `llm.codex_effort`).
+    reply = await codex.run(PROBE_PROMPT, system_prompt=PROBE_SYSTEM, max_turns=1, timeout_s=PROBE_TIMEOUT_S,
+                            proxy=llm.proxy, model=llm.codex_model or None, effort=llm.codex_effort or None)
     return reply.error
 
 
@@ -115,7 +119,7 @@ async def _check_agy() -> str | None:
     if not ok:
         return why
     reply = await antigravity.run(PROBE_PROMPT, system_prompt=PROBE_SYSTEM, model=model, max_turns=1,
-                                  timeout_s=PROBE_TIMEOUT_S, proxy=llm.proxy)
+                                  timeout_s=PROBE_TIMEOUT_S, proxy=llm.proxy, effort=llm.agy_effort or None)
     return reply.error
 
 

@@ -343,6 +343,35 @@ def test_codex_supports_what_is_meaningful(tmp_path, monkeypatch):
 
 
 
+def test_codex_model_list_comes_from_the_cli_once(tmp_path, monkeypatch):
+    """0.6.2: `/model` у Codex и agy — список из самого CLI (`cli_models`, как в
+    настройках), один раз за сессию; он же — дополнение в строке ввода."""
+    from meet.assist import participant
+
+    asked = []
+
+    def fake_list(provider):
+        asked.append(provider)
+        return {"models": [{"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra"}, {"id": "gpt-6-luna"}]}
+
+    monkeypatch.setattr(participant.Participant, "_list_models", staticmethod(fake_list))
+    runner = FakeRunner([SILENT])
+    h = _make(tmp_path, provider="codex", runner=runner, freedom=True)
+
+    async def main():
+        await h.p.start()
+        await _post(h, "/model")
+        await _post(h, "/model")
+        await h.p.shutdown()
+
+    run(main())
+    first, _again = _lines(h, "model")
+    assert "Можно: gpt-6.1-terra, gpt-6-luna" in first["text"]
+    assert asked == ["codex"]
+    assert h.p.view()["models"] == [{"value": "gpt-6.1-terra", "label": "GPT-6.1 Terra"},
+                                    {"value": "gpt-6-luna", "label": ""}]
+
+
 @pytest.mark.parametrize("bad", ["gpt&calc", "gpt%PATH%"])
 def test_codex_model_with_shell_characters_is_refused(tmp_path, bad):
     """Имя модели уходит в командную строку Codex (`-m`): знаки cmd.exe — отказ

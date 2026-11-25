@@ -277,6 +277,23 @@ def test_local_models_asks_the_drafted_address(state, monkeypatch):
     assert seen_proxy[-1] is True
 
 
+def test_assistant_models_asks_the_cli_list_with_saved_settings(state, monkeypatch):
+    from meet.llm import cli_models
+
+    seen = []
+
+    def fake_list(provider, cfg, refresh=False):
+        seen.append((provider, cfg.llm.provider, refresh))
+        return {"models": [{"id": "gpt-6.1-terra"}]}
+
+    monkeypatch.setattr(cli_models, "list_for", fake_list)
+    assert state.assistant_models("codex") == {"models": [{"id": "gpt-6.1-terra"}]}
+    state.assistant_models("agy", refresh=True)
+    assert seen == [("codex", "auto", False), ("agy", "auto", True)]
+    with pytest.raises(control.BadRequest):
+        state.assistant_models("gpt")
+
+
 def test_local_models_rejects_a_non_string_address(state):
     with pytest.raises(control.BadRequest):
         state.local_models({"base_url": ["x"]})

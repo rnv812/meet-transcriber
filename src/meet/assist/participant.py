@@ -633,6 +633,7 @@ class Participant:
         # модели `/model`, затравка после хода-команды или `/clear`.
         self._cli_cmds: list[dict] = []
         self._models: list[dict] = []
+        self._cli_models_asked = False      # список моделей Codex/agy для `/model` уже спрашивали
         self._servers: list[dict] = []
         self.model_override: str | None = None
         self._model_configured = self._model
@@ -2223,12 +2224,38 @@ class Participant:
     def model_choices(self) -> list[str]:
         return [m["value"] for m in self._models]
 
+    async def _load_cli_models(self) -> None:
+        """Модели Codex и Antigravity CLI для `/model` (0.6.2) — тот же список
+        из CLI, что в настройках (`cli_models`), один раз за сессию; не вышло
+        — без списка (в журнал — только причина)."""
+        if self.provider not in ("codex", "agy") or self._models or self._cli_models_asked:
+            return
+        self._cli_models_asked = True
+        try:
+            got = await asyncio.to_thread(self._list_models, self.provider)
+        except Exception as e:
+            self._log(f"агент: список моделей не получен ({type(e).__name__})")
+            return
+        models = [{"value": str(m["id"]), "label": str(m.get("label") or "")}
+                  for m in got.get("models") or () if isinstance(m, dict) and m.get("id")]
+        if models:
+            self._models = models
+            self._changed()
+
+    @staticmethod
+    def _list_models(provider: str) -> dict:
+        from meet import settings
+        from meet.llm import cli_models
+
+        return cli_models.list_for(provider, settings.load())
+
     async def model_text(self) -> str:
         if self.provider == "claude-code":
             await self.cli_commands()       # список моделей — из того же `initialize`
             lines = [f"Модель: {self.model_actual or self._model}",
                      f"В настройках: {self._model_configured}"]
         else:
+            await self._load_cli_models()
             current = self._call_kwargs.get("model") or "как в настройках"
             lines = [f"Модель: {current}"]
         choices = self.model_choices()

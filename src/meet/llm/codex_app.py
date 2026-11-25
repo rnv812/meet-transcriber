@@ -621,3 +621,48 @@ def _close(peer: _Peer, proc, grace: float = CLOSE_GRACE_S) -> None:
         except (subprocess.TimeoutExpired, OSError):
             pass
     peer.join(timeout=5)
+
+
+# --- список моделей ------------------------------------------------------------------------
+
+MODELS_TIMEOUT_S = 30.0      # весь опрос `model/list` (запуск app-server — секунды)
+_MODEL_PAGES = 10
+
+
+def list_models(cmd: list[str], *, env: dict | None, timeout_s: float = MODELS_TIMEOUT_S) -> list[dict]:
+    """Модели Codex для окна настроек: `initialize` → `model/list` по всем
+    страницам (`nextCursor`, не больше _MODEL_PAGES), без скрытых
+    (`includeHidden` не просим, скрытые пропускает и разбор). → сырые записи
+    `Model` (id, model, displayName, description, hidden, isDefault,
+    defaultReasoningEffort, supportedReasoningEfforts). Сеанс не
+    начинается, модель не зовётся. Не запустился, нет ответа, ошибка — `Unavailable`."""
+    deadline = time.monotonic() + timeout_s
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=env, **popen_kwargs())
+    except OSError as e:
+        raise Unavailable(f"не запустился ({type(e).__name__})") from None
+    peer = _Peer(proc, on_notify=lambda _m: None,
+                 on_request=lambda m: peer.respond(m.get("id"), error={"code": -32601, "message": "нет"}))
+    try:
+        try:
+            peer.call("initialize", {"clientInfo": {"name": "meet", "title": "Meet", "version": _client_version()},
+                                     "capabilities": {"experimentalApi": False, "requestAttestation": False}},
+                      _left(deadline, INIT_TIMEOUT_S))
+            peer.notify("initialized")
+            models: list[dict] = []
+            cursor = None
+            for _page in range(_MODEL_PAGES):
+                result = peer.call("model/list", {"cursor": cursor} if cursor else {},
+                                   _left(deadline, REQUEST_TIMEOUT_S))
+                models += [m for m in result.get("data") or () if isinstance(m, dict)]
+                cursor = result.get("nextCursor")
+                if not isinstance(cursor, str) or not cursor:
+                    break
+        except _NoAnswer as e:
+            raise Unavailable(f"нет ответа на {e}") from None
+        except _RpcError as e:
+            raise Unavailable(f"ошибка {e.code} в model/list") from None
+        return models
+    finally:
+        _close(peer, proc)

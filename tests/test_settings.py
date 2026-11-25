@@ -1158,14 +1158,41 @@ def test_effort_defaults_empty_round_trips_and_garbage_is_default(tmp_path):
     assert (again.llm.effort, again.llm.codex_effort) == ("high", "xhigh")
     for bad in ("ultra", 3, "minimal"):          # minimal — только у Codex
         assert settings.Settings.from_raw({"llm": {"effort": bad}}).llm.effort == ""
-    assert settings.Settings.from_raw({"llm": {"codex_effort": "max"}}).llm.codex_effort == ""
+    # Codex (0.6.2): уровни — из списка самого CLI (`model/list`: low…max, ultra), любое годное имя.
+    assert settings.Settings.from_raw({"llm": {"codex_effort": "ultra"}}).llm.codex_effort == "ultra"
+    for bad in ("Max", "a b", 'x"', 3, "-x"):
+        assert settings.Settings.from_raw({"llm": {"codex_effort": bad}}).llm.codex_effort == ""
     f = tmp_path / "config.json"
     assert settings.patch({"llm": {"effort": "max"}}, f).llm.effort == "max"
     assert settings.patch({"llm": {"effort": ""}}, f).llm.effort == ""
+    assert settings.patch({"llm": {"codex_effort": "max"}}, f).llm.codex_effort == "max"
     with pytest.raises(ValueError, match="уровень рассуждений"):
         settings.patch({"llm": {"effort": "ultra"}}, f)
     with pytest.raises(ValueError, match="уровень рассуждений"):
-        settings.patch({"llm": {"codex_effort": "max"}}, f)
+        settings.patch({"llm": {"codex_effort": 'high" --x'}}, f)
+
+
+def test_codex_model_and_agy_effort_round_trip_check_and_stay_out_of_the_file(tmp_path):
+    """0.6.2: модель Codex (`-m`, `thread/start`) и уровень Antigravity CLI — пусто —
+    как в самом CLI; пустые в файл не пишутся, пока их там нет."""
+    cfg = settings.Settings.from_raw({})
+    assert (cfg.llm.codex_model, cfg.llm.agy_effort) == ("", "")
+    f = tmp_path / "config.json"
+    settings.save(cfg, f)
+    raw = settings.read_raw(f)["llm"]
+    assert "codex_model" not in raw and "agy_effort" not in raw
+    got = settings.patch({"llm": {"codex_model": " gpt-6.1-terra ", "agy_effort": "high"}}, f)
+    assert (got.llm.codex_model, got.llm.agy_effort) == ("gpt-6.1-terra", "high")
+    assert settings.read_raw(f)["llm"]["codex_model"] == "gpt-6.1-terra"
+    with pytest.raises(ValueError, match="модели Codex"):
+        settings.patch({"llm": {"codex_model": "gpt&calc"}}, f)
+    with pytest.raises(ValueError, match="уровень рассуждений"):
+        settings.patch({"llm": {"agy_effort": "очень"}}, f)
+    # Испорчено руками — пусто.
+    bad = settings.Settings.from_raw({"llm": {"codex_model": "-x", "agy_effort": "A B"}})
+    assert (bad.llm.codex_model, bad.llm.agy_effort) == ("", "")
+    # Сброс раздела знает новые ключи.
+    assert settings.resettable("llm.codex_model") and settings.resettable("llm.agy_effort")
 
 
 def test_opencode_model_default_empty_and_round_trip():

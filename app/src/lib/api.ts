@@ -15,7 +15,7 @@ import type {
   AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
   ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, KbDocs, RecordingChat,
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
-  Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  Category, CliModels, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript, LlmOrigin,
 } from "./types";
@@ -618,6 +618,12 @@ export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistan
 /** Короткий вызов модели — до полутора минут. */
 export const checkProvider = (ep: Endpoint, provider: string) =>
   json<ProviderCheck>(ep, "/assistant/check", body("POST", { provider }));
+/**
+ * Модели и уровни рассуждений из самого CLI провайдера (0.6.2): у резидента кэш на
+ * несколько минут, `refresh` — спросить CLI заново. Ошибка CLI — в ответе (`error`).
+ */
+export const getCliModels = (ep: Endpoint, provider: string, refresh = false) =>
+  json<CliModels>(ep, `/assistant/models?provider=${enc(provider)}${refresh ? "&refresh=1" : ""}`);
 /**
  * Модели локального OpenAI-совместимого сервера по адресу из окна (может быть
  * не сохранён); `model` — выбранная. Ошибка сервера модели — в ответе, не исключением.

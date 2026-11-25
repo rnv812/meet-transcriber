@@ -34,6 +34,7 @@ export function fastMeaning(provider: string | null | undefined): string {
   if (provider === "claude-code") return "Claude Code: модель Haiku без размышлений";
   if (provider === "codex") return "Codex: низкое усилие рассуждения";
   if (provider === "opencode") return "OpenCode: без изменений, модель из настройки «Модель OpenCode»";
+  if (provider === "agy") return "Antigravity CLI: без изменений, модель и уровень из его настроек";
   if (provider === "openai-compatible") return "Локальная модель: без изменений, модель одна";
   return "Claude Code — модель Haiku без размышлений, Codex — низкое усилие рассуждения, OpenCode — без изменений";
 }

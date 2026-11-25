@@ -676,7 +676,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           ) : section === "dictionary" ? (
             <DictionarySection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "models" ? (
-            <ModelsSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}>
+            <ModelsSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}
+              jump={jump ? { label: jump.entry.label, tick: jump.tick } : null}>
               <AnalysisSection draft={draft} set={set} onOpenJira={() => openBlock("export", "jira")} />
             </ModelsSection>
           ) : section === "assistant" ? (

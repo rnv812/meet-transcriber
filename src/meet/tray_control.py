@@ -4879,6 +4879,18 @@ class TrayControl:
         self._providers.invalidate()
         return result
 
+    def assistant_models(self, provider: str, refresh: bool = False) -> dict:
+        """Модели и уровни рассуждений провайдера из самого CLI (0.6.2, «Модели
+        и анализ»): `{"models": [...], "error"?, "login"?}`, кэш на несколько
+        минут, `refresh` — спросить CLI заново (см. meet.llm.cli_models). Ошибка
+        CLI — в ответе, не исключением; неизвестный провайдер — 400."""
+        from meet import llm
+        from meet.llm import cli_models
+
+        if provider not in llm.PROVIDERS:
+            raise _bad_request(f"неизвестный провайдер: {provider}")
+        return cli_models.list_for(provider, settings.load(), refresh=refresh)
+
     def local_models(self, body: dict | None) -> dict:
         """«Найти модели»: список моделей локального сервера по адресу из окна
         (может быть ещё не сохранён; нет — из настроек; `via_proxy` — так же).

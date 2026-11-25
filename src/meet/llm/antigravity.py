@@ -75,7 +75,10 @@ Client Protocol), действия — с согласия через ворот
 3. `session/resume` (или `session/load`) с id из `sessions.json`, иначе
    `session/new`; рабочая папка сеанса — служебная `keep_dir()`; режим
    сеанса не Default — `session/set_mode default` (не вышло — хода нет);
-   модель — `session/set_model`;
+   модель — `session/set_model`; уровень рассуждений (`llm.agy_effort`,
+   0.6.2) — `session/set_config_option` опции категории `thought_level` из
+   ответа сеанса (опции нет или уровень не принят — ход без него, строка в
+   журнал без текста встречи);
 4. `session/prompt` — системный промпт Meet в начале первого сообщения
    нового сеанса (как у Codex), дальше — только сообщение;
 5. `session/update` → строки хода работы по ходу (`tool_use`, `gate`,
@@ -138,6 +141,12 @@ SHIM_UNSAFE = ("Antigravity CLI найден только как сценари�
                "которые cmd.exe понимает как команды: нужна программа agy.exe (установщик Antigravity "
                "CLI ставит её в %LOCALAPPDATA%\\agy\\bin)")
 SOFT_DENIED = "отклонено: нужно согласие"
+# Уровни рассуждений `agy --effort` (запасной путь `-p`, `agy --help` 1.5.11).
+PRINT_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_EFFORT = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+# Опции сеанса ACP (`configOptions`): запасные id опций модели и уровня.
+_MODEL_OPTION_IDS = ("model",)
+_THOUGHT_OPTION_IDS = ("thought_level", "thinking_level", "reasoning_effort", "effort")
 _SOFT_DENY = re.compile(r"(\d+)?\s*tool\(s\)\s+required approval that headless mode cannot prompt for",
                         re.IGNORECASE)
 PERMISSION = "session/request_permission"
@@ -197,10 +206,15 @@ def user_config_dir() -> Path:
     return Path.home() / ".gemini" / "config"
 
 
-def login_hint(exe: str | None = None) -> str:
+def login_command(exe: str | None = None) -> str:
+    """Команда входа в agy для Meet (со своей папкой данных)."""
     exe = exe or find_agy() or "agy"
-    return (f'Antigravity CLI: вход не выполнен — войдите один раз в терминале: "{exe}" acp --login '
-            f'--gemini-dir "{home()}" (Meet запускает agy со своей папкой настроек)')
+    return f'"{exe}" acp --login --gemini-dir "{home()}"'
+
+
+def login_hint(exe: str | None = None) -> str:
+    return (f"Antigravity CLI: вход не выполнен — войдите один раз в терминале: {login_command(exe)} "
+            "(Meet запускает agy со своей папкой настроек)")
 
 
 def command(exe: str, flags) -> list[str]:
@@ -535,12 +549,13 @@ class _Outcome:
     session_id: str | None = None        # сеанс хода (для уборки разового)
     auth: bool = False
     closable: bool = False
+    note: str | None = None              # строка в журнал (без текста встречи)
 
 
 def run_turn(cmd: list[str], *, env: dict | None, cwd: str, text: str, resume: str | None = None,
              keep_session: bool = False, model: str | None = None, mcp: dict | None = None,
              approver=None, emit=None, timeout_s: float = 180.0, call: _Call | None = None,
-             exe: str | None = None) -> _Outcome:
+             exe: str | None = None, effort: str | None = None) -> _Outcome:
     """Один ход через `agy acp` (блокирующее; см. модуль). Не подошёл до
     начала сеанса — `Unavailable`. `approver(toolCall) -> (разрешить?,
     решение ворот | None)`; `emit` — события хода работы."""
@@ -562,7 +577,7 @@ def run_turn(cmd: list[str], *, env: dict | None, cwd: str, text: str, resume: s
     outcome = None
     try:
         outcome = _drive(peer, turn, stopper, cwd=cwd, text=text, resume=resume, keep_session=keep_session,
-                         model=model, mcp=mcp or {}, deadline=deadline, call=call, exe=exe)
+                         model=model, mcp=mcp or {}, deadline=deadline, call=call, exe=exe, effort=effort)
         if outcome.closable and outcome.session_id and not keep_session and not resume:
             try:
                 _call(peer, "session/close", {"sessionId": outcome.session_id}, 5.0)
@@ -574,7 +589,7 @@ def run_turn(cmd: list[str], *, env: dict | None, cwd: str, text: str, resume: s
 
 
 def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, resume, keep_session, model, mcp,
-           deadline: float, call, exe) -> _Outcome:
+           deadline: float, call, exe, effort=None) -> _Outcome:
     cancelled = (lambda: bool(call is not None and call.cancelled))
     sid_out = (lambda sid: sid if (keep_session or resume) else None)
     # 1. Рукопожатие.
@@ -635,10 +650,14 @@ def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, resume, ke
         except (codex_app._NoAnswer, codex_app._RpcError):
             return _Outcome(AgentReply(text="", error="Antigravity не перешёл в режим с вопросами — ход не начат",
                                        session_id=sid_out(sid)), sid, closable=closable)
+    options = result.get("configOptions")
     if model:
         try:
-            _call(peer, "session/set_model", {"sessionId": sid, "modelId": model},
-                  _left(deadline, REQUEST_TIMEOUT_S))
+            changed = _call(peer, "session/set_model", {"sessionId": sid, "modelId": model},
+                            _left(deadline, REQUEST_TIMEOUT_S))
+            # Опции сеанса после смены модели (у другой модели — свои уровни).
+            if isinstance(changed.get("configOptions"), list):
+                options = changed["configOptions"]
         except codex_app._NoAnswer:
             return _Outcome(AgentReply(text="", error=TIMEOUT_ERROR, session_id=sid_out(sid)), sid,
                             closable=closable)
@@ -646,9 +665,39 @@ def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, resume, ke
             return _Outcome(AgentReply(text="", error=f"Antigravity не принял модель {model}: "
                                                       f"{e.message[-_ERR_LIMIT:]}", session_id=sid_out(sid)),
                             sid, closable=closable)
+    note = _apply_effort(peer, sid, options, effort, deadline) if effort else None
     if cancelled():
         return _Outcome(AgentReply(text="", error=CANCELLED_ERROR, cancelled=True, session_id=sid_out(sid)),
-                        sid, closable=closable)
+                        sid, closable=closable, note=note)
+    outcome = _prompt(peer, turn, stopper, sid=sid, sid_out=sid_out, closable=closable, text=text,
+                      deadline=deadline, cancelled=cancelled, exe=exe)
+    outcome.note = note
+    return outcome
+
+
+def _apply_effort(peer: _Peer, sid: str, options, effort: str, deadline: float) -> str | None:
+    """Уровень рассуждений сеанса — `session/set_config_option` опции
+    категории `thought_level`. Опции нет или agy уровень не принял — ход без
+    него; → строка для журнала (без текста встречи) или None."""
+    option = config_option(options, "thought_level", _THOUGHT_OPTION_IDS)
+    if option is None:
+        return "Antigravity: уровень рассуждений не задан — agy не сообщил такой опции сеанса"
+    values = [o["value"] for o in option_values(option.get("options"))]
+    if values and effort not in values:
+        return f"Antigravity: уровня рассуждений {effort} нет у этой модели — ход без него"
+    try:
+        _call(peer, "session/set_config_option", {"sessionId": sid, "configId": option["id"], "value": effort},
+              _left(deadline, REQUEST_TIMEOUT_S))
+    except codex_app._NoAnswer:
+        return "Antigravity: нет ответа на смену уровня рассуждений — ход без него"
+    except codex_app._RpcError as e:
+        return f"Antigravity: уровень рассуждений не принят (ошибка {e.code}) — ход без него"
+    return None
+
+
+def _prompt(peer: _Peer, turn: _Turn, stopper: _Stopper, *, sid, sid_out, closable, text, deadline, cancelled,
+            exe) -> _Outcome:
+    """Ход в готовом сеансе: `session/prompt` и ожидание ответа."""
     # 3. Ход.
     slot = peer.start("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": text}]})
     timed_out = False
@@ -859,7 +908,7 @@ def _print_run(exe: str, argv: list[str], stdin_text: str, timeout_s: float, env
 
 def _print_turn(exe: str, *, env: dict, text: str, resume: str | None, keep_session: bool, model: str | None,
                 access: str | None, add_dirs: list[str], sensitive, deny_paths, timeout_s: float,
-                call: _Call, emit) -> AgentReply:
+                call: _Call, emit, effort: str | None = None) -> AgentReply:
     """Ход через `agy -p` (ACP недоступен): спросить человека agy здесь не
     может — несогласованное отклоняет сам; ход по просьбе — только чтение и
     разрешённое правилами. Настройки пользователя `-p` загружает (флага
@@ -876,6 +925,8 @@ def _print_turn(exe: str, *, env: dict, text: str, resume: str | None, keep_sess
     argv = ["-p", "", "--input-format", "text", "--output-format", "stream-json", "--settings", str(path)]
     if model:
         argv += ["--model", model]
+    if effort in PRINT_EFFORTS:
+        argv += ["--effort", effort]
     if resume:
         argv += ["--conversation", resume]
     for d in add_dirs:
@@ -961,8 +1012,9 @@ async def run(
     `on_event` — ход работы по ходу вызова (`tool_use`, `gate`,
     `tool_result`). Изображения agy не уходят (пометка в тексте и
     `notes`). Отмена задачи («Стоп») — `session/cancel`, затем дерево
-    процессов. `effort`, `max_turns`, `on_text`, `session_id`, `cwd` — не
-    используются. ACP не подошёл до начала сеанса — ход через `agy -p`
+    процессов. `effort` — уровень рассуждений (опция сеанса `thought_level`,
+    в `-p` — `--effort`; негодное имя не передаётся). `max_turns`, `on_text`,
+    `session_id`, `cwd` — не используются. ACP не подошёл до начала сеанса — ход через `agy -p`
     (`_print_turn`), в `log` — строка с причиной (без текста встречи)."""
     from meet.llm import consent
 
@@ -971,6 +1023,7 @@ async def run(
     if model_error(model):
         return AgentReply(text="", error=model_error(model))
     model = model.strip() if isinstance(model, str) and model.strip() else None
+    effort = effort if isinstance(effort, str) and _EFFORT.fullmatch(effort) else None
     exe = find_agy()
     if exe is None:
         return AgentReply(text="", error=AGY_NOT_FOUND)
@@ -1009,7 +1062,7 @@ async def run(
             outcome = await asyncio.to_thread(
                 run_turn, command(exe, flags), env=env, cwd=workdir, text=text, resume=resume,
                 keep_session=keep_session, model=model, mcp=mcp, approver=approver, emit=emit,
-                timeout_s=timeout_s, call=call, exe=exe)
+                timeout_s=timeout_s, call=call, exe=exe, effort=effort)
         except Unavailable as e:
             if log is not None:
                 try:
@@ -1019,7 +1072,7 @@ async def run(
             reply = await asyncio.to_thread(
                 _print_turn, exe, env=env, text=text, resume=resume, keep_session=keep_session, model=model,
                 access=access, add_dirs=add_dirs, sensitive=sensitive, deny_paths=deny_paths,
-                timeout_s=timeout_s, call=call, emit=emit)
+                timeout_s=timeout_s, call=call, emit=emit, effort=effort)
             reply.error = netproxy.with_hint(reply.error)
             reply.dropped_images, reply.notes = dropped, notes
             return reply
@@ -1030,6 +1083,11 @@ async def run(
         await asyncio.to_thread(_drop_run, run_folder)
         if outcome is not None and outcome.session_id and not keep_session and not resume:
             await asyncio.to_thread(forget_session, outcome.session_id)
+    if outcome.note and log is not None:
+        try:
+            log(outcome.note)
+        except Exception:
+            pass
     reply = outcome.reply
     reply.error = netproxy.with_hint(reply.error)
     reply.dropped_images, reply.notes = dropped, notes
@@ -1039,14 +1097,14 @@ async def run(
 # --- вход и удаление сеансов --------------------------------------------------------------
 
 
-def login_status(exe: str) -> tuple[bool, str | None]:
-    """Есть ли вход в agy для Meet — без модели: `initialize` и `session/new`
-    в своей папке данных (без входа — -32000 «Authentication required»);
-    созданный сеанс закрывается и удаляется. → (True, None) или (False, текст)."""
+def _probe_session(exe: str, proxy: str | None = None) -> tuple[dict | None, str | None, bool]:
+    """Служебный сеанс без модели: `initialize` и `session/new` в своей папке
+    данных Meet; созданный сеанс закрывается и удаляется. → (ответ
+    `session/new`, None, False) или (None, текст ошибки, нет ли входа)."""
     shim = launch_error(exe)
     if shim:
-        return False, shim
-    env = netproxy.child_env(None)
+        return None, shim, False
+    env = netproxy.child_env(proxy)
     drop_session_markers(env)
     flags = ["--gemini-dir", str(home()), "--disable-telemetry"]
     probe = str(Path(tempdirs.system_temp()) / KEEP_WORKDIR)
@@ -1055,7 +1113,7 @@ def login_status(exe: str) -> tuple[bool, str | None]:
         proc = subprocess.Popen(command(exe, flags), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, env=env, **popen_kwargs())
     except OSError as e:
-        return False, f"Antigravity CLI не запустился ({type(e).__name__})"
+        return None, f"Antigravity CLI не запустился ({type(e).__name__})", False
     peer = _Peer(proc, on_notify=lambda _m: None,
                  on_request=lambda m: peer.respond(m.get("id"), error={"code": -32601, "message": "нет"}))
     sid = None
@@ -1066,22 +1124,122 @@ def login_status(exe: str) -> tuple[bool, str | None]:
                   LOGIN_TIMEOUT_S)
             result = _call(peer, "session/new", {"cwd": probe, "mcpServers": []}, LOGIN_TIMEOUT_S)
         except codex_app._NoAnswer:
-            return False, "Antigravity CLI не ответил (agy acp)"
+            return None, "Antigravity CLI не ответил (agy acp)", False
         except codex_app._RpcError as e:
             if _auth_error(e):
-                return False, login_hint(exe)
-            return False, (e.message or f"ошибка {e.code}")[-_ERR_LIMIT:]
+                return None, login_hint(exe), True
+            return None, (e.message or f"ошибка {e.code}")[-_ERR_LIMIT:], False
         sid = result.get("sessionId") if isinstance(result.get("sessionId"), str) else None
         if sid:
             try:
                 _call(peer, "session/close", {"sessionId": sid}, 5.0)
             except (codex_app._NoAnswer, codex_app._RpcError):
                 pass
-        return True, None
+        return result, None, False
     finally:
         _close(peer, proc)
         if sid:
             forget_session(sid)
+
+
+def login_status(exe: str) -> tuple[bool, str | None]:
+    """Есть ли вход в agy для Meet — без модели: `initialize` и `session/new`
+    в своей папке данных (без входа — -32000 «Authentication required»);
+    созданный сеанс закрывается и удаляется. → (True, None) или (False, текст)."""
+    result, error, _auth = _probe_session(exe)
+    return (True, None) if result is not None else (False, error)
+
+
+# --- модели и уровни рассуждений ----------------------------------------------------------
+
+
+def option_values(options) -> list[dict]:
+    """Значения опции сеанса ACP: плоский список `{value, name, description}`
+    или группы `{group, name, options: [...]}` — одним списком."""
+    out: list[dict] = []
+    for item in options if isinstance(options, list) else ():
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("options"), list):
+            out += option_values(item["options"])
+        elif isinstance(item.get("value"), str) and item["value"]:
+            out.append({"value": item["value"], "name": str(item.get("name") or item["value"]),
+                        "description": str(item.get("description") or "")})
+    return out
+
+
+def config_option(options, category: str, ids=()) -> dict | None:
+    """Опция сеанса ACP (`configOptions`) нужной категории (`model`,
+    `thought_level`); у опции без категории — по id. Нет — None."""
+    items = [o for o in options if isinstance(o, dict) and isinstance(o.get("id"), str)] \
+        if isinstance(options, list) else []
+    for item in items:
+        if item.get("category") == category:
+            return item
+    for item in items:
+        if item.get("id") in ids and not item.get("category"):
+            return item
+    return None
+
+
+def session_models(result: dict) -> dict:
+    """Модели и уровни рассуждений из ответа `session/new`: `models`
+    (`currentModelId`, `availableModels: [{modelId, name, description}]`) и/или
+    `configOptions` (категории `model` и `thought_level`). → `{"models": [{id,
+    label, description?, default, efforts, default_effort?}]}`; уровни —
+    опции сеанса, у всех моделей одни, текущий — у модели по умолчанию.
+    Имена вне правил (`model_error`, `_EFFORT`) пропускаются."""
+    options = result.get("configOptions") if isinstance(result, dict) else None
+    found: dict[str, dict] = {}
+    current = None
+    state = result.get("models") if isinstance(result, dict) and isinstance(result.get("models"), dict) else {}
+    for item in state.get("availableModels") or ():
+        if isinstance(item, dict) and isinstance(item.get("modelId"), str):
+            found.setdefault(item["modelId"], {"name": str(item.get("name") or item["modelId"]),
+                                               "description": str(item.get("description") or "")})
+    if isinstance(state.get("currentModelId"), str):
+        current = state["currentModelId"]
+    model_opt = config_option(options, "model", _MODEL_OPTION_IDS)
+    if model_opt is not None:
+        for item in option_values(model_opt.get("options")):
+            found.setdefault(item["value"], {"name": item["name"], "description": item["description"]})
+        if isinstance(model_opt.get("currentValue"), str):
+            current = current or model_opt["currentValue"]
+    thought = config_option(options, "thought_level", _THOUGHT_OPTION_IDS)
+    efforts = []
+    effort_now = None
+    if thought is not None:
+        efforts = [{"id": o["value"], "label": o["name"],
+                    **({"description": o["description"]} if o["description"] else {})}
+                   for o in option_values(thought.get("options")) if _EFFORT.fullmatch(o["value"])]
+        value = thought.get("currentValue")
+        effort_now = value if isinstance(value, str) and any(e["id"] == value for e in efforts) else None
+    models = []
+    for mid, info in found.items():
+        if model_error(mid) or not mid.strip():
+            continue
+        entry = {"id": mid, "label": info["name"], "default": mid == current, "efforts": list(efforts)}
+        if info["description"]:
+            entry["description"] = info["description"]
+        if mid == current and effort_now:
+            entry["default_effort"] = effort_now
+        models.append(entry)
+    return {"models": models}
+
+
+def list_models(exe: str, proxy: str | None = None) -> dict:
+    """Модели и уровни рассуждений agy для окна настроек — из ответа служебного
+    `session/new` (без модели, как `login_status`). → `{"models": [...]}` или
+    `{"models": [], "error": текст}`; нет входа — ещё `login` (команда входа).
+    Запасного пути нет: `agy models` не принимает `--gemini-dir` (1.5.11), а
+    без неё показал бы модели не той папки данных."""
+    result, error, auth = _probe_session(exe, proxy)
+    if result is None:
+        return {"models": [], "error": error, **({"login": login_command(exe)} if auth else {})}
+    got = session_models(result)
+    if not got["models"]:
+        return {"models": [], "error": "Antigravity CLI не сообщил список моделей — задайте имя вручную"}
+    return got
 
 
 def forget_session(session_id: str) -> int:
