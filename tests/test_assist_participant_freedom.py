@@ -994,3 +994,18 @@ def test_the_real_claude_command_is_the_same_for_both_profiles(tmp_path, profile
     assert "--strict-mcp-config" not in cmd
     dirs = [cmd[i + 1] for i, w in enumerate(cmd) if w == "--add-dir"]
     assert dirs == [str(folder), str(kb.root), str(folder.parent)]
+
+
+@pytest.mark.parametrize("provider,longer", [("claude-code", True), ("codex", True), ("agy", True),
+                                             ("opencode", False)])
+def test_turn_with_a_possible_card_gets_time_for_it(tmp_path, provider, longer):
+    """Codex и agy со свободой тоже ждут карточку в воротах: срок хода — с запасом на неё."""
+    from meet.assist import participant as part
+    from meet.assist.participant import Participant
+
+    folder = tmp_path / "lib" / "2026-10-07_10-00"
+    folder.mkdir(parents=True)
+    p = Participant(TranscriptBus(), ChatLog(folder, log=lambda _m: None), provider=provider, folder=folder,
+                    runner=lambda *a, **k: None, library_root=folder.parent, log=lambda _m: None, freedom=True)
+    want = part.TURN_TIMEOUT_S + consent.CONFIRM_TIMEOUT_S if longer else part.TURN_TIMEOUT_S
+    assert p._turn_timeout == want

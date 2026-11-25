@@ -602,8 +602,9 @@ class Participant:
         self._cards: dict[str, asyncio.Event] = {}     # карточки, которые ждут решения
         self._grant_ids: dict[str, str] = {}           # id записи журнала → ключ разрешения
         self._grant_labels: dict[str, str] = {}
-        if self.freedom and provider == "claude-code":
-            # Ход может ждать карточку подтверждения (до CONFIRM_TIMEOUT_S).
+        if self.freedom and provider in ("claude-code", "codex", "agy"):
+            # Ход может ждать карточку подтверждения (до CONFIRM_TIMEOUT_S): у Claude
+            # Code — хук, у Codex (app-server) и agy (ACP) — запросы одобрения в воротах.
             self._turn_timeout = max(turn_timeout_s, TURN_TIMEOUT_S + consent.CONFIRM_TIMEOUT_S)
         self.vision = llm.vision(provider)
         self.ephemeral = bool(ephemeral)
