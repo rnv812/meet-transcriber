@@ -1520,9 +1520,11 @@ def parse_reply(text, *, plain_text_as_say: bool = True,
                     pass
         return actions
 
-    def silent(why: str) -> list[Action]:
+    def silent(why: str, sample: str = "") -> list[Action]:
+        # В журнал процесса — только причина; кусок ответа модели (`sample`)
+        # — лишь в пометку скрытой реплики чата (CLAUDE.md: без текста встреч в логах).
         notes.append(why)
-        return done([Action("silent", note=why)])
+        return done([Action("silent", note=f"{why}: {sample}" if sample else why)])
 
     try:
         return _parse(text, plain_text_as_say, notes, done, silent)
@@ -1584,11 +1586,11 @@ def _parse(text, plain_text_as_say, notes, done, silent) -> list[Action]:
                 return done([Action("say", text=say)])
             notes.append("JSON оборван — взят текст say")
             return done([Action("say", text=_cut_say(say.rstrip() + "…"))])
-        return silent(f"JSON не разбирается: {_flat(plain, 80)}")
+        return silent("JSON не разбирается", _flat(plain, 80))
     if not plain_text_as_say:
-        return silent(f"не JSON: {_flat(plain, 80)}")
+        return silent("не JSON", _flat(plain, 80))
     if not _LETTER.search(plain):
-        return silent(f"мусор: {_flat(plain, 80)}")
+        return silent("мусор", _flat(plain, 80))
     say = _cut_say(plain)
     if not say:
         return silent("мусор: только невидимые символы")

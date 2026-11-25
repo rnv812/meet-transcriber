@@ -764,3 +764,12 @@ def test_agy_prompt_cards_mcp_and_never_delete_or_send():
     personal = pp.build_system(folders={"Эта встреча": "D:/m"}, freedom=True, actions=False, cards="agy",
                                profile=pp.PERSONAL)
     assert "Meet тебе не даст" in personal
+
+
+def test_unparsed_reply_text_goes_to_the_note_but_not_to_the_process_log():
+    logged: list[str] = []
+    secret = "секретная реплика встречи"
+    for raw in (f'"silent": нет {secret}', f"<<<{secret}>>>"):
+        actions = pp.parse_reply(raw, log=logged.append, plain_text_as_say=False)
+        assert actions[0].kind == "silent" and secret in (actions[0].note or "")
+    assert logged and all(secret not in line for line in logged)
