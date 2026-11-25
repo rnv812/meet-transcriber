@@ -53,6 +53,16 @@ OpenAI-совместимый сервер; `src/meet/llm/`).
   Наборы — `llm.PROVIDERS`, `AUTO_PROVIDERS` (без `agy`), `VISION_PROVIDERS`,
   `STREAMING_PROVIDERS` (Codex, `agy`), `RESUME_PROVIDERS`,
   `DENY_ENFORCED_PROVIDERS`.
+- Модели и уровни рассуждений из самих CLI (0.6.2) — `llm/cli_models.py`,
+  `GET /assistant/models?provider=…[&refresh=1]` (кэш 5 мин): Codex —
+  `model/list` app-server (`codex_app.list_models`, запасной `codex debug
+  models`), `agy` — ответ служебного `session/new` (`antigravity.list_models`:
+  `models`/`configOptions`; нет входа — `login`), Claude Code — постоянный
+  список, OpenCode — `opencode models`. Ключи `llm.codex_model` (`-m`,
+  `thread/start`), `llm.agy_effort` (`session/set_config_option` опции
+  `thought_level`, в `-p` — `--effort`); `llm.codex_effort` — любое имя
+  уровня из CLI. Окно: «Модели и анализ» — карточка одной модели
+  (`features/settings/ModelCard.tsx`), `/model` у Codex и agy — тот же список.
 - `app/` — окно приложения: React + TypeScript (Vite, тесты — Vitest).
 - Настройки окна (0.6.2) — 13 разделов (`features/settings/settingsIndex.ts`,
   `MENU_GROUPS`): Общее; Звук, Автозапись; Распознавание (с движком), Спикеры,

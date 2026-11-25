@@ -96,6 +96,17 @@ test("итоги, вопросы, база знаний, ассистент: а�
   expect(f.mock.calls[5]![1]).toMatchObject({ body: JSON.stringify({ provider: "codex" }) });
 });
 
+test("getCliModels: GET со своим провайдером, обновление — мимо кэша", async () => {
+  const f = okFetch();
+  await api.getCliModels(ep, "codex");
+  await api.getCliModels(ep, "openai-compatible", true);
+  const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method ?? "GET"]);
+  expect(calls).toEqual([
+    ["http://h/assistant/models?provider=codex", "GET"],
+    ["http://h/assistant/models?provider=openai-compatible&refresh=1", "GET"],
+  ]);
+});
+
 test("409 без провайдера приходит текстом", async () => {
   globalThis.fetch = vi.fn().mockResolvedValue(new Response(
     JSON.stringify({ error: "Подключите Claude Code, Codex или OpenCode в настройках" }), { status: 409 }));

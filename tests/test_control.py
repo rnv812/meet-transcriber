@@ -336,6 +336,10 @@ class FakeState:
         self.calls.append(("local-models", body))
         return {"ok": True, "models": [{"id": "qwen3:8b"}]}
 
+    def assistant_models(self, provider, refresh=False):
+        self.calls.append(("assistant-models", provider, refresh))
+        return {"models": [{"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra", "efforts": []}]}
+
     # --- живой режим ---
 
     live_active = False
@@ -1376,6 +1380,11 @@ def test_assistant_routes(server):
     got = _post(server, "/assistant/local-models", {"base_url": "http://localhost:11434/v1"})
     assert got["models"] == [{"id": "qwen3:8b"}]
     assert ("local-models", {"base_url": "http://localhost:11434/v1"}) in server.state_obj.calls
+    got = _get(server, "/assistant/models?provider=codex")
+    assert got["models"][0]["id"] == "gpt-6.1-terra"
+    _get(server, "/assistant/models?provider=agy&refresh=1")
+    assert [c for c in server.state_obj.calls if c[0] == "assistant-models"] == [
+        ("assistant-models", "codex", False), ("assistant-models", "agy", True)]
 
 
 # --- живой режим -------------------------------------------------------------

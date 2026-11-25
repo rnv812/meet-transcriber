@@ -926,6 +926,25 @@ def agy_model_error(value) -> str | None:
     return None
 
 
+# Модель Codex (`llm.codex_model`, 0.6.2): имя из `codex app-server` `model/list`
+# (gpt-5.5…), уходит в `codex exec -m` (в том числе через codex.cmd — cmd.exe) и в
+# `thread/start`. Те же символы, что у `codex.model_error`.
+_CODEX_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}")
+CODEX_MODEL_EXAMPLE = "например gpt-5.5"
+
+
+def codex_model_error(value) -> str | None:
+    """Негодная модель Codex — текст для человека; пусто — годится (Codex
+    возьмёт модель из своего конфига)."""
+    if not isinstance(value, str):
+        return f"Модель Codex — строка, {CODEX_MODEL_EXAMPLE}"
+    text = value.strip()
+    if text and not _CODEX_MODEL.fullmatch(text):
+        return ("В имени модели Codex недопустимые символы: только латиница, цифры "
+                f"и . _ - : @ + /, {CODEX_MODEL_EXAMPLE}")
+    return None
+
+
 # urllib не умеет SOCKS: локальная модель «через прокси» с таким адресом не пойдёт.
 SOCKS_LOCAL_ERROR = ("SOCKS-прокси для локальной модели не поддерживается — укажите HTTP-прокси "
                      "или выключите «Локальную модель — через прокси»")
@@ -957,7 +976,11 @@ class Llm:
     конфига OpenCode.
 
     `agy_model` — модель Antigravity CLI (`agy`, 0.6.2); пусто — модель из
-    настроек agy. В файл не пишется, пока пустое (`save`).
+    настроек agy. `agy_effort` — его уровень рассуждений (опция сеанса ACP
+    категории `thought_level`); `codex_model` — модель Codex (`-m`,
+    `thread/start`); пусто — как в настройках самого CLI. Списки моделей и
+    уровней окно берёт из самих CLI (`meet.llm.cli_models`). Пустые в файл не
+    пишутся, пока их там нет (`save`).
 
     `local_via_proxy` — «Локальную модель — через прокси»: по умолчанию
     сервер локальной модели в своей сети (localhost, частные адреса) идёт
@@ -972,6 +995,8 @@ class Llm:
     proxy: str = "system"
     opencode_model: str = ""
     agy_model: str = ""
+    agy_effort: str = ""
+    codex_model: str = ""
     enabled: tuple[str, ...] = LLM_AUTO_ORDER
     local_via_proxy: bool = False
     # Уровень рассуждений (0.5): Claude Code (`--effort`, все вызовы и ассистент) и
@@ -1005,10 +1030,12 @@ class Llm:
             proxy=netproxy.normalize(raw.get("proxy")),
             opencode_model=_opencode_model(raw.get("opencode_model")),
             agy_model=_agy_model(raw.get("agy_model")),
+            agy_effort=_cli_effort(raw.get("agy_effort")),
+            codex_model=_codex_model(raw.get("codex_model")),
             enabled=tuple(enabled),
             local_via_proxy=raw.get("local_via_proxy") is True,
             effort=_effort(raw.get("effort"), CLAUDE_EFFORTS),
-            codex_effort=_effort(raw.get("codex_effort"), CODEX_EFFORTS),
+            codex_effort=_cli_effort(raw.get("codex_effort")),
         )
 
     @staticmethod
@@ -1029,6 +1056,10 @@ class Llm:
             error = agy_model_error(update["agy_model"])
             if error:
                 raise ValueError(error)
+        if "codex_model" in update and update["codex_model"] is not None:
+            error = codex_model_error(update["codex_model"])
+            if error:
+                raise ValueError(error)
         if "enabled" in update:
             enabled = update["enabled"]
             if not isinstance(enabled, list):
@@ -1038,9 +1069,12 @@ class Llm:
                 raise ValueError(f"неизвестная модель: {', '.join(unknown)}")
         if "local_via_proxy" in update and not isinstance(update["local_via_proxy"], bool):
             raise ValueError("«Локальную модель — через прокси» — да или нет")
-        for key, allowed in (("effort", CLAUDE_EFFORTS), ("codex_effort", CODEX_EFFORTS)):
-            if key in update and update[key] not in ("", None, *allowed):
-                raise ValueError(f"неизвестный уровень рассуждений: {update[key]}")
+        if "effort" in update and update["effort"] not in ("", None, *CLAUDE_EFFORTS):
+            raise ValueError(f"неизвестный уровень рассуждений: {update['effort']}")
+        for key in ("codex_effort", "agy_effort"):
+            value = update.get(key)
+            if key in update and value not in ("", None) and _cli_effort(value) != value:
+                raise ValueError(f"неизвестный уровень рассуждений: {value}")
 
     @staticmethod
     def check_merged(merged: dict) -> None:
@@ -1065,6 +1099,8 @@ class Llm:
             "proxy": self.proxy,
             "opencode_model": self.opencode_model,
             "agy_model": self.agy_model,
+            "agy_effort": self.agy_effort,
+            "codex_model": self.codex_model,
             "enabled": list(self.enabled),
             "local_via_proxy": self.local_via_proxy,
             "effort": self.effort,
@@ -1074,7 +1110,20 @@ class Llm:
 
 # Уровни рассуждений (0.5): Claude Code `--effort`, Codex `model_reasoning_effort`.
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Codex (0.6.2): список уровней — у каждой модели свой, из `codex app-server`
+# `model/list` (`supportedReasoningEfforts`: low…max, ultra); это — запасной
+# список окна, когда CLI не ответил. Принимается любое имя уровня (`_CLI_EFFORT`).
 CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+# Имя уровня рассуждений Codex и Antigravity CLI из списка CLI: уходит в
+# `-c model_reasoning_effort="…"` (cmd.exe у codex.cmd) и в протокол — только
+# безопасные знаки.
+_CLI_EFFORT = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+def _cli_effort(value) -> str:
+    """Уровень Codex или agy из файла или окна: годное имя — оно, иначе "" (по
+    умолчанию CLI)."""
+    return value if isinstance(value, str) and _CLI_EFFORT.fullmatch(value) else ""
 
 
 def _effort(value, allowed: tuple[str, ...]) -> str:
@@ -1094,6 +1143,13 @@ def _enabled(values, provider: str) -> tuple[str, ...]:
 def _agy_model(value) -> str:
     """`llm.agy_model` из файла: негодное (испорчено руками) — пусто."""
     if not isinstance(value, str) or agy_model_error(value) is not None:
+        return ""
+    return value.strip()
+
+
+def _codex_model(value) -> str:
+    """`llm.codex_model` из файла: негодное (испорчено руками) — пусто."""
+    if not isinstance(value, str) or codex_model_error(value) is not None:
         return ""
     return value.strip()
 
@@ -2102,13 +2158,21 @@ def _keep_default_recording_unset(merged: dict, before: dict) -> None:
             recording.pop(key, None)
 
 
+# Ключи `llm` (0.6.2), которые пустыми в файл не пишутся, пока их там нет.
+_UNSET_LLM_EMPTY = ("agy_model", "agy_effort", "codex_model")
+
+
 def _keep_default_agy_model_unset(merged: dict, before: dict) -> None:
-    """`llm.agy_model` (0.6.2) пустым в файл не пишется, пока его там нет: у
-    того, кто Antigravity CLI не настраивал, в файле не появляется новый ключ."""
+    """`llm.agy_model`, `llm.agy_effort` и `llm.codex_model` (0.6.2) пустыми в
+    файл не пишутся, пока их там нет: у того, кто их не настраивал, в файле не
+    появляется новый ключ."""
     section = merged.get("llm")
     had = before.get("llm") if isinstance(before.get("llm"), dict) else {}
-    if isinstance(section, dict) and section.get("agy_model") == "" and "agy_model" not in had:
-        section.pop("agy_model", None)
+    if not isinstance(section, dict):
+        return
+    for key in _UNSET_LLM_EMPTY:
+        if section.get(key) == "" and key not in had:
+            section.pop(key, None)
 
 
 def _keep_default_terms_unset(merged: dict, before: dict) -> None:

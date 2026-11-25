@@ -538,7 +538,10 @@ def test_outgoing_messages_match_the_saved_schema(monkeypatch, tmp_path):
 def test_schema_excerpt_covers_the_methods_the_client_uses():
     names = {v["properties"]["method"]["enum"][0] for v in SCHEMA["client_request"]["oneOf"]}
     assert names == {"initialize", "thread/start", "thread/resume", "turn/start", "turn/interrupt",
-                     "mcpServerStatus/list"}
+                     "mcpServerStatus/list", "model/list"}
+    model = SCHEMA["model_list_response"]["definitions"]["Model"]
+    assert {"id", "model", "displayName", "hidden", "isDefault", "defaultReasoningEffort",
+            "supportedReasoningEfforts"} <= set(model["required"])
     assert "codex-cli 0.160.0" in SCHEMA["source"]
 
 

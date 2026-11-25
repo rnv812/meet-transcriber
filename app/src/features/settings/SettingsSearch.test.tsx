@@ -20,6 +20,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getProcesses: vi.fn(),
   getHfStatus: vi.fn(),
   listLocalModels: vi.fn(),
+  getCliModels: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -55,6 +56,7 @@ beforeEach(() => {
     available: { "claude-code": { found: true, path: "claude" } },
   });
   vi.mocked(api.listLocalModels).mockResolvedValue({ ok: true, models: [], error: null } as never);
+  vi.mocked(api.getCliModels).mockResolvedValue({ models: [] });
 });
 
 afterEach(() => {
@@ -236,4 +238,13 @@ test("видимая строка: подсказки нет, поведение
   const target = await screen.findByRole("switch", { name: "Нажимать кнопки ассистента голосом" });
   await waitFor(() => expect(target.closest(".srow")).toHaveClass("setting-found"));
   expect(screen.queryByText(/^Включите «/)).toBeNull();
+});
+
+test("0.6.2: строка карточки другой модели — поиск открывает её карточку и находит строку", async () => {
+  await pickFound("рассуждений codex", "Модели и анализ › Уровень рассуждений Codex");
+  const effort = await screen.findByRole("combobox", { name: "Уровень рассуждений Codex" });
+  await waitFor(() => expect(effort.closest(".srow")).toHaveClass("setting-found"));
+  expect(screen.getByRole("heading", { name: "Настройки: Codex" })).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
+  expect(api.getCliModels).toHaveBeenCalledWith(ep, "codex", false);
 });

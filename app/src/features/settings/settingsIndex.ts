@@ -142,9 +142,12 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   // ИИ
   { section: "models", label: "Модели", hint: "Какие включены и какая по умолчанию", keywords: ["провайдер", "claude", "codex", "opencode", "antigravity", "agy", "gemini", "локальная"] },
   { section: "models", label: "Модель Claude Code", keys: ["llm.model", "llm.effort"], keywords: ["sonnet", "opus", "haiku", "уровень рассуждений", "effort"] },
+  // Строки карточки одной модели (0.6.2): поиск открывает карточку своей модели (`ModelCard.cardOfLabel`).
+  { section: "models", label: "Модель Codex", keys: ["llm.codex_model"], hint: "Список моделей — из самого Codex", keywords: ["codex", "gpt", "openai", "model"] },
   { section: "models", label: "Уровень рассуждений Codex", keys: ["llm.codex_effort"], keywords: ["effort", "reasoning", "думает"] },
   { section: "models", label: "Модель OpenCode", keys: ["llm.opencode_model"] },
   { section: "models", label: "Модель Antigravity CLI", keys: ["llm.agy_model"], keywords: ["agy", "gemini", "antigravity"] },
+  { section: "models", label: "Уровень рассуждений Antigravity CLI", keys: ["llm.agy_effort"], keywords: ["agy", "gemini", "effort", "thinking", "думает"] },
   { section: "models", label: "Адрес сервера", keys: ["llm.base_url"], hint: "Локальная модель: LM Studio, Ollama, vLLM", keywords: ["ollama", "lm studio", "url"] },
   { section: "models", label: "Имя модели", keys: ["llm.local_model"], hint: "Локальная модель", keywords: ["ollama", "qwen"] },
   { section: "models", label: "Прокси для подключения к моделям", keys: ["llm.proxy"], keywords: ["proxy", "сеть"] },

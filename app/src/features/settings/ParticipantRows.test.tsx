@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
   AGENT_MODE_HINTS, AGENT_MODE_LABEL, FREEDOM_ACT_NOTE, FREEDOM_FILES_NOTE, FREEDOM_LABEL, FREEDOM_OFF_HINT, KB_MAP_LABEL, PARTICIPANT_LABEL, PROFILE_DEFAULT_LABEL,
-  VISION_NOTE,
+  VISION_NOTE, visionNote,
 } from "./ParticipantRows";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
@@ -66,7 +66,7 @@ test("участник включён (по умолчанию): частота,
   expect(within(freq).getByRole("radio", { name: "чаще" })).toBeChecked();
   expect(screen.getByRole("switch", { name: KB_MAP_LABEL })).toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("list", { name: "Исключённые папки базы знаний" })).toHaveTextContent("Личное/");
-  expect(screen.getByText(VISION_NOTE)).toBeInTheDocument();
+  expect(await screen.findByText(visionNote("claude-code"))).toBeInTheDocument();
   // Прежние подсказки и их ритм скрыты; «Не отвлекать по умолчанию» — общее, в «Тонкой настройке».
   await userEvent.click(screen.getByRole("button", { name: "Тонкая настройка" }));
   expect(screen.queryByRole("radiogroup", { name: "Активность подсказок" })).toBeNull();
@@ -146,11 +146,13 @@ test("без базы знаний — выбрать папку нельзя, �
   expect(screen.getByText(/Сначала задайте базу знаний выше/)).toBeInTheDocument();
 });
 
-test("модель по умолчанию — Codex: «исключения — только просьба» и без пометки о картинках", async () => {
+test("модель по умолчанию — Codex: «исключения — только просьба», о картинках — только про Codex", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue(info("codex"));
   open();
   expect(await screen.findByText("Codex: исключения — только просьба")).toBeInTheDocument();
-  expect(screen.getByText(VISION_NOTE)).toBeInTheDocument();
+  expect(screen.getByText(visionNote("codex"))).toBeInTheDocument();
+  expect(visionNote("codex")).toBe("Codex видит картинки из ваших сообщений");
+  expect(screen.queryByText(VISION_NOTE)).toBeNull();
 });
 
 test("Claude Code — пометки «только просьба» нет", async () => {
@@ -162,7 +164,8 @@ test("Claude Code — пометки «только просьба» нет", as
 test("локальная модель по умолчанию — пометка, что она не видит картинки", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue(info("openai-compatible"));
   open();
-  expect(await screen.findByText(`${VISION_NOTE}. Локальная модель картинки не видит`)).toBeInTheDocument();
+  expect(await screen.findByText("Локальная модель картинки не видит — получает только текст сообщения")).toBeInTheDocument();
+  expect(visionNote(null)).toBe(VISION_NOTE);
 });
 
 test("осталась «Только сводка» прежнего ассистента — предупреждение и «Вернуть чат»", async () => {
@@ -224,11 +227,27 @@ test("0.4: «Действия ассистента» — «Действует с
     assist: expect.objectContaining({ agent_mode: "confirm" }) }));
 });
 
-test("расширенные возможности у Codex: в автомоде правит и выполняет по просьбе; с подтверждением — только чтение", async () => {
-  vi.mocked(api.getAssistant).mockResolvedValue(info("codex"));
+test("расширенные возможности у OpenCode: в автомоде правит и выполняет по просьбе; с подтверждением — только чтение", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(info("opencode"));
   open();
   const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
   await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_ACT_NOTE));
   await userEvent.click(screen.getByRole("radio", { name: /Спрашивает каждое/ }));
   await waitFor(() => expect(sw.closest(".srow")!).toHaveTextContent(FREEDOM_FILES_NOTE));
+  expect(sw.closest(".srow")!).not.toHaveTextContent("Claude Code");
+});
+
+test("0.6.2: у Codex пометки только о Codex — спрашивает через Meet, закрытое — правилом в инструкции", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(info("codex"));
+  open();
+  const sw = await screen.findByRole("switch", { name: FREEDOM_LABEL });
+  const row = sw.closest(".srow")!;
+  await waitFor(() => expect(row).toHaveTextContent("песочница читает весь диск"));
+  expect(row).not.toHaveTextContent("OpenCode");
+  expect(row).not.toHaveTextContent("Claude Code");
+  await userEvent.click(within(row as HTMLElement).getByRole("button", { name: "Что дают расширенные возможности" }));
+  const tip = screen.getByRole("tooltip");
+  expect(tip).toHaveTextContent("Codex спрашивает через Meet");
+  expect(tip).not.toHaveTextContent("OpenCode");
+  expect(tip).not.toHaveTextContent("хуки Claude Code");
 });

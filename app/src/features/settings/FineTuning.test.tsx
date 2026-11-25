@@ -94,6 +94,9 @@ test("основные строки остаются на виду: «Звонк
   expect(await screen.findByLabelText("Язык речи")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Модели и анализ" }));
   expect(await screen.findByRole("table", { name: "Модели" })).toBeInTheDocument();
+  // Под таблицей — карточка одной модели (0.6.2): по умолчанию Claude Code, локальная — по «Настроить».
+  expect(screen.getByRole("textbox", { name: "Модель Claude Code" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Настроить: Локальная (LM Studio / Ollama)" }));
   expect(screen.getByLabelText("Адрес сервера")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Дополнительно" }));
   expect(screen.getByRole("switch", { name: "Сообщать другим программам о занятости видеокарты" })).toBeInTheDocument();

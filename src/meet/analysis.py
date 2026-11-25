@@ -980,10 +980,12 @@ def _kb_excerpts(knowledge_dir, lines: list[tuple[int, str]]) -> list[dict]:
 
 
 def model_label(provider: str | None, cfg) -> str:
-    """Чем размечено: «claude-code:sonnet», «codex», «opencode:провайдер/модель»,
+    """Чем размечено: «claude-code:sonnet», «codex[:модель]», «opencode:провайдер/модель»,
     «agy:модель», «openai-compatible:имя»."""
     if provider == "claude-code":
         return f"claude-code:{cfg.llm.model}"
+    if provider == "codex":
+        return f"codex:{cfg.llm.codex_model}" if cfg.llm.codex_model else "codex"
     if provider == "opencode":
         return f"opencode:{cfg.llm.opencode_model}" if cfg.llm.opencode_model else "opencode"
     if provider == "agy":

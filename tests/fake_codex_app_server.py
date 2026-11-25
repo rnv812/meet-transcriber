@@ -13,7 +13,10 @@
   FAKE_CODEX_REVIEWER — что ответить в `approvalsReviewer` (по умолчанию —
                        то, что прислал клиент);
   FAKE_CODEX_TOOLS   — JSON `{сервер: {инструмент: readOnlyHint}}` для ответа на
-                       `mcpServerStatus/list` (аннотации инструментов MCP).
+                       `mcpServerStatus/list` (аннотации инструментов MCP);
+  FAKE_CODEX_MODELS  — JSON: список страниц ответа `model/list` (каждая — список
+                       записей `Model`); страница N+1 — по `cursor` "pN"; нет —
+                       одна страница MODELS; `error` — ошибка -32601.
 
 Ход (`turn/start`) — по строкам текста первого ввода:
   CMD <команда>      — `item/started` (commandExecution), запрос
@@ -230,6 +233,28 @@ def thread_result(params: dict, tid: str) -> dict:
             "sandbox": sandbox, "cwd": params.get("cwd") or ""}
 
 
+MODELS = [
+    {"id": "gpt-6.1-terra", "model": "gpt-6.1-terra", "displayName": "GPT-6.1 Terra", "description": "Быстрая",
+     "hidden": False, "isDefault": True, "defaultReasoningEffort": "low",
+     "supportedReasoningEfforts": [{"reasoningEffort": "low", "description": "Fast"},
+                                   {"reasoningEffort": "high", "description": "Deep"},
+                                   {"reasoningEffort": "ultra", "description": "Deepest"}]},
+    {"id": "gpt-reserve", "model": "gpt-reserve", "displayName": "Reserve", "description": "", "hidden": True,
+     "isDefault": False, "defaultReasoningEffort": "medium",
+     "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": ""}]},
+]
+
+
+def model_list(params: dict):
+    raw = os.environ.get("FAKE_CODEX_MODELS")
+    if raw == "error":
+        return None
+    pages = json.loads(raw) if raw else [MODELS]
+    cursor = params.get("cursor")
+    index = int(cursor[1:]) if isinstance(cursor, str) and cursor.startswith("p") else 0
+    return {"data": pages[index], "nextCursor": f"p{index + 1}" if index + 1 < len(pages) else None}
+
+
 def main() -> int:
     log({"argv": sys.argv[1:], "pid": os.getpid()})
     init = os.environ.get("FAKE_CODEX_INIT", "")
@@ -267,6 +292,12 @@ def main() -> int:
             send({"id": msg["id"], "result": thread_result(msg["params"], thread)})
         elif method == "turn/start":
             server.turn(msg, thread or THREAD)
+        elif method == "model/list":
+            got = model_list(msg.get("params") or {})
+            if got is None:
+                send({"id": msg["id"], "error": {"code": -32601, "message": "unknown method model/list"}})
+            else:
+                send({"id": msg["id"], "result": got})
         elif method == "turn/interrupt":
             send({"id": msg["id"], "result": {}})
         else:

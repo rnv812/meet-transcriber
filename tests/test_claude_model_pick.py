@@ -126,6 +126,38 @@ def test_effort_from_settings_reaches_claude_and_codex_calls(monkeypatch):
     assert seen[-1].get("effort") is None
 
 
+def test_codex_model_and_agy_effort_reach_the_calls(monkeypatch):
+    """0.6.2: `llm.codex_model` — в каждый вызов Codex (`/model` ассистента его
+    перекрывает), `llm.agy_effort` — в каждый вызов Antigravity CLI."""
+    from meet.llm import antigravity, codex
+
+    seen = []
+
+    async def fake_run(prompt, **kwargs):
+        seen.append(kwargs)
+        return AgentReply(text="ок")
+
+    monkeypatch.setattr(codex, "run", fake_run)
+    monkeypatch.setattr(antigravity, "run", fake_run)
+    cfg = Settings.from_raw({"llm": {"codex_model": "gpt-6.1-terra", "agy_model": "gemini-3-pro",
+                                     "agy_effort": "high"}})
+    asyncio.run(llm.runner_for("codex", cfg)("x", system_prompt="s"))
+    assert seen[-1]["model"] == "gpt-6.1-terra"
+    asyncio.run(llm.runner_for("codex", cfg)("x", system_prompt="s", model="gpt-5.6-luna"))
+    assert seen[-1]["model"] == "gpt-5.6-luna"
+    asyncio.run(llm.runner_for("agy", cfg)("x", system_prompt="s"))
+    assert seen[-1]["effort"] == "high" and seen[-1]["model"] == "gemini-3-pro"
+    assert llm.agent_effort("agy", cfg) == "high"
+    assert llm.describe("codex", cfg) == {"provider": "codex", "model": "gpt-6.1-terra"}
+    from meet import analysis
+
+    assert analysis.model_label("codex", cfg) == "codex:gpt-6.1-terra"
+    assert analysis.model_label("codex", Settings.from_raw({})) == "codex"
+    # Пусто — модель из конфига Codex (флага нет).
+    asyncio.run(llm.runner_for("codex", Settings.from_raw({}))("x", system_prompt="s"))
+    assert seen[-1].get("model") is None
+
+
 # --- SDK: итоги, анализ, названия, вопросы, «Проверить» ---
 
 def _sdk_command(monkeypatch, init_model=None, **kw):

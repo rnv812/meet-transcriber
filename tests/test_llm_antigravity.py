@@ -242,6 +242,45 @@ def test_model_is_set_for_the_session(monkeypatch, tmp_path):
     assert h.sent("session/set_model") == [{"sessionId": SID, "modelId": "gemini-3-pro"}]
 
 
+def test_effort_is_set_through_the_thought_level_option(monkeypatch, tmp_path):
+    """0.6.2: уровень рассуждений — `session/set_config_option` опции категории
+    `thought_level` (id из ответа сеанса), после смены модели."""
+    h = Harness(monkeypatch, tmp_path)
+    monkeypatch.setenv("FAKE_AGY_MODELS", "config")
+    h.run("привет", model="gemini-3-flash", effort="low")
+    assert h.sent("session/set_config_option") == [{"sessionId": SID, "configId": "thinking_level", "value": "low"}]
+    methods = [e["in"].get("method") for e in h.entries() if "in" in e]
+    assert methods.index("session/set_model") < methods.index("session/set_config_option")         < methods.index("session/prompt")
+    assert not h.lines
+
+
+@pytest.mark.parametrize("models, effort, why", [
+    ("", "high", "не сообщил"), ("nothought", "high", "не сообщил"), ("config", "ultra", "нет у этой модели")])
+def test_effort_without_the_option_is_skipped_with_a_log_line(monkeypatch, tmp_path, models, effort, why):
+    h = Harness(monkeypatch, tmp_path)
+    monkeypatch.setenv("FAKE_AGY_MODELS", models)
+    reply = h.run("СЕКРЕТНАЯ РЕПЛИКА", effort=effort)
+    assert reply.error is None and reply.text
+    assert h.sent("session/set_config_option") == []
+    assert len(h.lines) == 1 and why in h.lines[0] and "СЕКРЕТН" not in h.lines[0]
+
+
+def test_effort_refused_by_agy_does_not_stop_the_turn(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    monkeypatch.setenv("FAKE_AGY_MODELS", "config")
+    monkeypatch.setenv("FAKE_AGY_SETCFG", "error")
+    reply = h.run("привет", effort="high")
+    assert reply.error is None and reply.text == "ok"
+    assert len(h.lines) == 1 and "не принят" in h.lines[0]
+
+
+def test_unsafe_effort_is_not_sent(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    monkeypatch.setenv("FAKE_AGY_MODELS", "config")
+    h.run("привет", effort='high" & calc')
+    assert h.sent("session/set_config_option") == [] and not h.lines
+
+
 # --- ворота согласия: уровни и карточки ----------------------------------------------------
 
 
@@ -468,6 +507,18 @@ def test_acp_unavailable_falls_back_to_print_mode(monkeypatch, tmp_path, init):
     assert "--settings" in argv and "--dangerously-skip-permissions" not in argv
     assert h.print_calls[0]["stdin"].startswith("СИСТЕМА")
     assert any("agy acp не подошёл" in line for line in h.lines)
+    assert "--effort" not in argv
+
+
+def test_print_mode_passes_a_known_effort(monkeypatch, tmp_path):
+    """Запасной путь `-p`: уровень — флагом `--effort` (только из `agy --help`: low…max)."""
+    h = Harness(monkeypatch, tmp_path)
+    monkeypatch.setenv("FAKE_AGY_INIT", "error")
+    h.run("привет", level=consent.NONE, effort="xhigh")
+    h.run("привет", level=consent.NONE, effort="ultra")
+    first, second = (c["argv"] for c in h.print_calls)
+    assert first[first.index("--effort") + 1] == "xhigh"
+    assert "--effort" not in second
 
 
 def test_stream_json_init_steps_and_result():

@@ -13,7 +13,14 @@ stdio, как Antigravity CLI 1.5.11) — для тестов `meet.llm.antigrav
   FAKE_AGY_KNOWN  — id сеансов через запятую, которые продолжаются
                     (`session/resume`, `session/load`); иначе — ошибка;
   FAKE_AGY_OTHER=1 — продолжает, но отвечает другим id (OTHER_SID);
-  FAKE_AGY_MODE   — текущий режим нового сеанса (по умолчанию `default`).
+  FAKE_AGY_MODE   — текущий режим нового сеанса (по умолчанию `default`);
+  FAKE_AGY_MODELS — что сообщить о моделях в ответе `session/new` (и
+                    `session/set_model`): `acp` — поле `models` (ACP
+                    `currentModelId`/`availableModels`), `config` —
+                    `configOptions` (категории `model`, `thought_level`, `mode`,
+                    значения модели — группами), `both` — оба, `nothought` —
+                    `configOptions` без уровня; пусто — ничего;
+  FAKE_AGY_SETCFG=error — `session/set_config_option` отвечает ошибкой.
 
 Ход (`session/prompt`) — по строкам текста первого блока:
   EXEC <команда>  — `tool_call` (kind execute) и `session/request_permission`;
@@ -78,6 +85,37 @@ def _settings(argv: list[str]):
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+MODELS = {"currentModelId": "gemini-3-pro",
+          "availableModels": [{"modelId": "gemini-3-pro", "name": "Gemini 3 Pro", "description": "умная"},
+                              {"modelId": "gemini-3-flash", "name": "Gemini 3 Flash"},
+                              {"modelId": "bad name&", "name": "негодная"}]}
+THOUGHT = {"id": "thinking_level", "name": "Thinking", "category": "thought_level", "type": "select",
+           "currentValue": "high",
+           "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High", "description": "дольше"}]}
+
+
+def config_options(models: str) -> list:
+    out = [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "gemini-3-pro",
+            "options": [{"group": "google", "name": "Google", "options": [
+                {"value": "gemini-3-pro", "name": "Gemini 3 Pro"},
+                {"value": "gemini-3-flash", "name": "Gemini 3 Flash", "description": "быстрая"}]},
+                        {"value": "claude-x", "name": "Claude X"}]},
+           {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default",
+            "options": [{"value": "default", "name": "Default"}]}]
+    if models != "nothought":
+        out.append(THOUGHT)
+    return out
+
+
+def model_fields(models: str) -> dict:
+    out = {}
+    if models in ("acp", "both"):
+        out["models"] = MODELS
+    if models in ("config", "both", "nothought"):
+        out["configOptions"] = config_options(models)
+    return out
 
 
 class Server:
@@ -223,7 +261,8 @@ def main() -> int:
                 continue
             if method == "session/new":
                 server.sid = SID
-                send({"id": msg["id"], "result": {"sessionId": SID, "modes": modes}})
+                send({"id": msg["id"], "result": {"sessionId": SID, "modes": modes,
+                                                  **model_fields(os.environ.get("FAKE_AGY_MODELS", ""))}})
                 continue
             wanted = (msg.get("params") or {}).get("sessionId")
             if wanted not in known:
@@ -233,7 +272,16 @@ def main() -> int:
             server.sid = OTHER_SID if os.environ.get("FAKE_AGY_OTHER") == "1" else wanted
             send({"id": msg["id"], "result": {"sessionId": server.sid,
                                               "modes": {**modes, "currentModeId": "default"}}})
-        elif method in ("session/set_mode", "session/set_model", "session/close"):
+        elif method == "session/set_model":
+            fields = model_fields(os.environ.get("FAKE_AGY_MODELS", ""))
+            send({"id": msg["id"], "result": {k: v for k, v in fields.items() if k == "configOptions"}})
+        elif method == "session/set_config_option":
+            if os.environ.get("FAKE_AGY_SETCFG") == "error":
+                send({"id": msg["id"], "error": {"code": -32602, "message": "Invalid value"}})
+            else:
+                send({"id": msg["id"], "result": {"configOptions": config_options(
+                    os.environ.get("FAKE_AGY_MODELS", ""))}})
+        elif method in ("session/set_mode", "session/close"):
             send({"id": msg["id"], "result": {}})
         elif method == "session/prompt":
             server.prompt(msg)

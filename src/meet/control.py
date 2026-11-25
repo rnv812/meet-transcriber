@@ -101,6 +101,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     assistant() -> dict                   кто отвечает, что установлено, папки
     check_provider(body) -> dict          проверить провайдера коротким вызовом
     local_models(body) -> dict            модели локального сервера {"base_url", "model"}
+    assistant_models(provider, refresh) -> dict  модели и уровни из CLI провайдера (кэш)
     live_start(body) -> dict              живой режим (409 без провайдера, 400 при записи);
                                          {"temporary": true} — временная встреча
     live_stop() -> dict                   остановить живой режим (ответ сразу)
@@ -908,6 +909,9 @@ _ROUTES = {
         h._body()
     ),
     ("POST", "/assistant/local-models"): lambda h, p: _server_of(h).state.local_models(h._body()),
+    # Модели и уровни рассуждений из самого CLI (0.6.2); `refresh=1` — мимо кэша.
+    ("GET", "/assistant/models"): lambda h, p: _server_of(h).state.assistant_models(
+        (p.get("provider") or [""])[0], refresh=(p.get("refresh") or ["0"])[0] == "1"),
     # `{"profile"?}` — профиль сессии ассистента (0.3.7); без тела — по умолчанию.
     # {"temporary": true} — временная встреча с ассистентом (meet.temp_meeting).
     ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(h._body()),

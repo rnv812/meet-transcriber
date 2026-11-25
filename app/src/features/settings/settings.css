@@ -247,6 +247,11 @@
 .mtable__act { width: 1%; text-align: right; }
 .mtable__act .btn { min-width: 104px; }
 .mtable__foot { display: block; margin-top: var(--s-2); font-size: var(--text-sm); }
+/* Строка модели выбирает карточку её настроек под таблицей (0.6.2); выбранная — подложкой. */
+.mtable .mtable__row { cursor: pointer; }
+.mtable tbody tr.mtable__row--on td { background: var(--surface-2); }
+.mtable__btns { display: inline-flex; align-items: center; gap: var(--s-2); }
+.mtable__act .mtable__btns .btn--ghost { min-width: 0; }
 .provider__link {
   padding: 0; border: 0; background: none; font: inherit; color: var(--ink-2);
   text-decoration: underline; text-underline-offset: 2px; cursor: pointer;

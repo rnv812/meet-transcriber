@@ -2,12 +2,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import {
-  AGY_PLAN_NOTICE, AUTO_ORDER, AUTO_SHORT, RECHECK_MS, RECHECK_TRIES, agyModelError, enabledOf, loopback,
-  opencodeModelError, privacyLine, proxyError,
+  AGY_PLAN_NOTICE, AUTO_ORDER, AUTO_SHORT, RECHECK_MS, RECHECK_TRIES, agyModelError, codexModelError, defaultCard,
+  enabledOf, loopback, opencodeModelError, privacyLine, proxyError,
 } from "./ModelsSection";
+import { cardOfLabel } from "./ModelCard";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
-import type { AssistantInfo, ProviderCheck } from "../../lib/types";
+import type { AssistantInfo, CliModels, ProviderCheck } from "../../lib/types";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -18,6 +19,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getAssistant: vi.fn(),
   checkProvider: vi.fn(),
   listLocalModels: vi.fn(),
+  getCliModels: vi.fn(),
 }));
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
@@ -64,8 +66,18 @@ beforeEach(() => {
   vi.mocked(api.getAssistant).mockResolvedValue(structuredClone(info));
   vi.mocked(api.checkProvider).mockResolvedValue({ ok: true, error: null, provider: "codex" });
   vi.mocked(api.listLocalModels).mockResolvedValue({ ok: true, models: [] });
+  vi.mocked(api.getCliModels).mockResolvedValue({ models: [] });
   vi.mocked(shell.pickFolder).mockResolvedValue(null);
 });
+
+/** Модели Codex из CLI (`model/list`): у каждой свои уровни. */
+const CODEX_LIST: CliModels = {
+  models: [
+    { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", default: true, default_effort: "low",
+      efforts: [{ id: "low" }, { id: "high" }, { id: "ultra" }] },
+    { id: "gpt-6-luna", label: "GPT-6-Luna", efforts: [{ id: "medium" }, { id: "max" }] },
+  ],
+};
 
 /** «Модели и анализ» (0.6.2; 0.4 — «Модели ИИ»): провайдеры, модели Claude Code и OpenCode, локальная модель, прокси. */
 const open = () => render(<SettingsPane endpoint={ep} recordingsDir={null} initial="models" />);
@@ -427,22 +439,37 @@ test("«Только сводка» — число подсказок не вы�
   }
 });
 
-test("модель Claude Code: правка уходит в llm.model; Claude Code выключен — поля нет", async () => {
+test("модель Claude Code: правка уходит в llm.model; под таблицей — карточка только выбранной модели", async () => {
   open();
   const model = await screen.findByRole("textbox", { name: "Модель Claude Code" });
   expect(model).toHaveValue("sonnet");
+  // Карточка одной модели: «Авто» сейчас выбирает Claude Code — его и показываем.
+  expect(screen.getByRole("heading", { name: "Настройки: Claude Code" })).toBeInTheDocument();
+  expect(screen.getByText("Её сейчас выбирает «Авто»")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Модель Codex" })).toBeNull();
   await userEvent.clear(model);
   await userEvent.type(model, "opus");
+  // Список Claude Code следует за полем.
+  expect(screen.getByRole("combobox", { name: "Список: Модель Claude Code" })).toHaveTextContent("Opus");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { model: "opus" } }));
+  // Модель по умолчанию — Codex: карточка — его.
   await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
-  // Модель по умолчанию — Codex, но Claude Code включён: его модель всё ещё задаётся.
-  expect(screen.getByRole("textbox", { name: "Модель Claude Code" })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("switch", { name: "Включить: Claude Code" }));
   expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Модель Codex" })).toBeInTheDocument();
+  expect(screen.getByText("Модель по умолчанию")).toBeInTheDocument();
+  // «Настроить» у строки — карточка этой модели, выбранная строка отмечена.
+  await userEvent.click(screen.getByRole("button", { name: "Настроить: Claude Code" }));
+  expect(screen.getByRole("textbox", { name: "Модель Claude Code" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Настроить: Claude Code" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("Выбрана в таблице; по умолчанию — Codex")).toBeInTheDocument();
+  // Щелчок по строке — тоже.
+  await userEvent.click(within(option("Antigravity CLI")).getByText("Antigravity CLI"));
+  expect(screen.getByRole("textbox", { name: "Модель Antigravity CLI" })).toBeInTheDocument();
+  expect(option("Antigravity CLI")).toHaveClass("mtable__row--on");
 });
 
-test("0.5: уровень рассуждений — рядом с моделью Claude Code и строкой у Codex; «по умолчанию» — пусто", async () => {
+test("0.5: уровень рассуждений — рядом с моделью Claude Code; «по умолчанию» — пусто", async () => {
   open();
   const effort = await screen.findByRole("combobox", { name: "Уровень рассуждений Claude Code" });
   expect(effort).toHaveTextContent("По умолчанию");
@@ -451,15 +478,60 @@ test("0.5: уровень рассуждений — рядом с модель�
   await userEvent.click(screen.getByRole("option", { name: /^высокий/ }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { effort: "high" } }));
-  // Codex включён — своя строка с его уровнями (есть «минимальный», нет «максимального»).
-  if (!screen.queryByRole("combobox", { name: "Уровень рассуждений Codex" })) {
-    await userEvent.click(screen.getByRole("switch", { name: "Включить: Codex" }));
-  }
-  const codex = screen.getByRole("combobox", { name: "Уровень рассуждений Codex" });
-  await userEvent.click(codex);
-  const names = screen.getAllByRole("option").map((o) => o.textContent);
-  expect(names.some((n) => n?.startsWith("минимальный"))).toBe(true);
-  expect(names.some((n) => n?.startsWith("максимальный"))).toBe(false);
+  expect(api.getCliModels).not.toHaveBeenCalled();          // у Claude Code список постоянный
+});
+
+/** Список уровней (открыть и прочесть пункты, закрыть). */
+async function optionsOf(name: string): Promise<string[]> {
+  await userEvent.click(screen.getByRole("combobox", { name }));
+  const names = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+  await userEvent.keyboard("{Escape}");
+  return names;
+}
+
+test("0.6.2: Codex — модели и уровни из CLI; уровень вне списка модели сбрасывается на «по умолчанию»", async () => {
+  vi.mocked(api.getCliModels).mockResolvedValue(structuredClone(CODEX_LIST));
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { llm: { provider: "codex", codex_effort: "high" } }));
+  open();
+  const list = await screen.findByRole("combobox", { name: "Список: Модель Codex" });
+  expect(api.getCliModels).toHaveBeenCalledWith(ep, "codex", false);
+  expect(list).toHaveTextContent("По умолчанию");
+  expect(screen.getByText("Моделей в списке: 2")).toBeInTheDocument();
+  // Без своей модели уровни — модели CLI по умолчанию (terra): low, high, ultra; «сейчас: низкий».
+  let names = await optionsOf("Уровень рассуждений Codex");
+  expect(names).toEqual(["По умолчаниюсейчас: низкий", "низкий", "высокий", "ультра"]);
+  expect(screen.getByRole("combobox", { name: "Уровень рассуждений Codex" })).toHaveTextContent("высокий");
+  // Другая модель: у неё нет «высокого» — уровень в черновике становится «по умолчанию».
+  await userEvent.click(list);
+  await userEvent.click(screen.getByRole("option", { name: /^GPT-6-Luna/ }));
+  expect(screen.getByRole("textbox", { name: "Модель Codex" })).toHaveValue("gpt-6-luna");
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Уровень рассуждений Codex" })).toHaveTextContent("По умолчанию"));
+  names = await optionsOf("Уровень рассуждений Codex");
+  expect(names.slice(1)).toEqual(["средний", "максимальный"]);
+  // «Обновить список» — мимо кэша резидента.
+  await userEvent.click(screen.getByRole("button", { name: "Обновить список" }));
+  await waitFor(() => expect(api.getCliModels).toHaveBeenCalledWith(ep, "codex", true));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    llm: { codex_model: "gpt-6-luna", codex_effort: "" } }));
+});
+
+test("0.6.2: Codex — список не получен: ошибка текстом, имя вписывается в поле, уровни запасные", async () => {
+  vi.mocked(api.getCliModels).mockResolvedValue({ models: [], error: "codex app-server: нет ответа" });
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { llm: { provider: "codex" } }));
+  open();
+  expect(await screen.findByText(/Список моделей не получен: codex app-server: нет ответа/)).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Список: Модель Codex" })).toBeNull();
+  const model = screen.getByRole("textbox", { name: "Модель Codex" });
+  await userEvent.type(model, "gpt&calc");
+  expect(screen.getByText(/недопустимые символы/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.clear(model);
+  await userEvent.type(model, "gpt-5.5");
+  const names = await optionsOf("Уровень рассуждений Codex");
+  expect(names.some((n) => n.startsWith("минимальный"))).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { codex_model: "gpt-5.5" } }));
 });
 
 test("OpenCode: не найден — ссылка opencode.ai/docs/; найден — путь", async () => {
@@ -528,6 +600,27 @@ test("Antigravity CLI: не найден — ссылка на установк�
   expect(shell.openUrl).toHaveBeenCalledWith("https://antigravity.google/docs/cli");
 });
 
+test("0.6.2: Antigravity CLI — без входа строка с командой входа; уровни из CLI", async () => {
+  vi.mocked(api.getCliModels).mockResolvedValueOnce({
+    models: [], error: "Antigravity CLI: вход не выполнен", login: '"agy" acp --login --gemini-dir "C:\\meet\\agy"' });
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { llm: { provider: "agy", agy_effort: "high" } }));
+  open();
+  expect(await screen.findByText('"agy" acp --login --gemini-dir "C:\\meet\\agy"')).toBeInTheDocument();
+  expect(screen.getByText(AGY_PLAN_NOTICE)).toBeInTheDocument();
+  vi.mocked(api.getCliModels).mockResolvedValueOnce({ models: [
+    { id: "gemini-3-pro", label: "Gemini 3 Pro", default: true, default_effort: "high",
+      efforts: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }] });
+  await userEvent.click(screen.getByRole("button", { name: "Обновить список" }));
+  expect(await screen.findByRole("combobox", { name: "Список: Модель Antigravity CLI" })).toHaveTextContent("По умолчанию");
+  expect(api.getCliModels).toHaveBeenLastCalledWith(ep, "agy", true);
+  const names = await optionsOf("Уровень рассуждений Antigravity CLI");
+  expect(names).toEqual(["По умолчаниюсейчас: высокий", "низкий", "высокий"]);
+  await userEvent.click(screen.getByRole("combobox", { name: "Уровень рассуждений Antigravity CLI" }));
+  await userEvent.click(screen.getByRole("option", { name: /^низкий/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { agy_effort: "low" } }));
+});
+
 test("Antigravity CLI: поле модели, проверка на месте и предупреждение о тарифах", async () => {
   open();
   await screen.findByText("сейчас: Claude Code");
@@ -556,6 +649,21 @@ test("agyModelError — как у резидента", () => {
   expect(agyModelError("gem ini")).toMatch(/недопустимые символы/);
   expect(agyModelError("a%PATH%")).toMatch(/недопустимые символы/);
   expect(agyModelError("a^b")).toMatch(/недопустимые символы/);
+});
+
+test("0.6.2: чья карточка без выбора в таблице; строка поиска — карточка своей модели; имя модели Codex", () => {
+  expect(defaultCard({ provider: "codex" }, null)).toBe("codex");
+  expect(defaultCard({ provider: "auto", enabled: ["codex", "openai-compatible"] }, null)).toBe("codex");
+  expect(defaultCard({ provider: "auto", enabled: ["claude-code", "codex"] },
+    { ...info, setting: "auto", provider: "codex" })).toBe("codex");
+  expect(defaultCard(undefined, null)).toBe("claude-code");
+  expect(cardOfLabel("Уровень рассуждений Antigravity CLI")).toBe("agy");
+  expect(cardOfLabel("Адрес сервера")).toBe("openai-compatible");
+  expect(cardOfLabel("Прокси для подключения к моделям")).toBeNull();
+  expect(codexModelError("")).toBeNull();
+  expect(codexModelError("gpt-6.1-terra")).toBeNull();
+  expect(codexModelError("gpt 6")).toMatch(/недопустимые символы/);
+  expect(codexModelError("-x")).toMatch(/недопустимые символы/);
 });
 
 test("«Проверить» Antigravity CLI уходит провайдеру agy", async () => {
