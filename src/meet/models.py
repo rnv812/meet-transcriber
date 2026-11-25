@@ -152,14 +152,15 @@ def cache_root() -> Path:
     модели HF» для всех процессов Meet (резидент, задачи, ассистент, проба
     устройств).
 
-    Без выбранной папки (`paths.storage_root`) — общий кэш: свой заводить
-    нельзя, иначе уже скачанное качалось бы заново. С выбранной папкой —
-    свой кэш `<папка>/models/hf` в той же раскладке: туда перенос копирует
-    модели каталога из общего кэша (`meet.storage`), там их ищут и туда качают.
+    Без выбранной папки (ни движка, ни моделей, `paths.own_hf_cache`) —
+    общий кэш: свой заводить нельзя, иначе уже скачанное качалось бы заново.
+    С выбранной папкой — свой кэш `<папка моделей>/hf` в той же раскладке:
+    туда перенос копирует модели каталога из общего кэша (`meet.storage`),
+    там их ищут и туда качают.
     """
     from meet import paths
 
-    if paths.storage_root() is not None:
+    if paths.own_hf_cache():
         return paths.models_dir() / "hf"
     return shared_cache_root()
 
@@ -172,7 +173,7 @@ def use_meet_cache() -> None:
     включая HF_HOME/HF_HUB_CACHE, заданные человеком."""
     from meet import paths
 
-    if paths.storage_root() is None:
+    if not paths.own_hf_cache():
         return
     os.environ.setdefault(USER_HF_HUB_CACHE, os.environ.get("HF_HUB_CACHE", ""))
     os.environ["HF_HUB_CACHE"] = str(cache_root())
@@ -498,10 +499,11 @@ def download(repo_id: str, on_line=None) -> int:
     known = {model["id"] for model in catalogue()}
     from meet import paths
 
-    if (missing := paths.storage_missing()) is not None:
+    if (missing := paths.models_unavailable()) is not None:
         # Внешний диск отключён: молча качать гигабайты на системный нельзя.
         if on_line:
-            on_line(f"папка движка и моделей недоступна: {missing} — подключите диск "
+            what = "моделей" if missing == paths.models_missing() else "движка и моделей"
+            on_line(f"папка {what} недоступна: {missing} — подключите диск "
                     "или выберите папку в окне Meet")
         return 4
     if repo_id not in known:

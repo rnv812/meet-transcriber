@@ -15,7 +15,14 @@ Hugging Face.
     <папка>/models/xet        — кэш кусков загрузчика Xet
 
 Без выбранной папки — как до 0.3.3: движок и GigaAM в data_dir, модели HF в
-общем кэше (`models.shared_cache_root`). Чужие модели общего кэша не
+общем кэше (`models.shared_cache_root`).
+
+Модели можно вынести и отдельно от движка (0.6.3, `paths.models_root`):
+оболочка (`storage_models.rs`) зовёт `python -m meet.storage copy-models
+--to <папка>` (без `--to` — обратно рядом с движком) интерпретатором
+нынешнего движка, переключает `storage-models.json` и перезапускает
+резидент. Раскладка папки моделей — `hf`, `gigaam`, `xet` прямо в ней.
+Общий перенос при отдельной папке моделей двигает только движок. Чужие модели общего кэша не
 копируются и не удаляются никогда; свои — удаляются из общего кэша только с
 согласия человека (`answer_leftovers`), когда копия в новой папке на месте.
 
@@ -44,6 +51,8 @@ from meet.control import Conflict
 # прерван и будет доведён/откачен при следующем запуске оболочки: модели в это
 # время не качаются, иначе новая модель легла бы в старое место мимо копии.
 JOURNAL_FILE = "storage-move.json"
+# Журнал переноса одних моделей (`storage_models.rs`) — те же шаги и смысл.
+MODELS_JOURNAL_FILE = "storage-models-move.json"
 # После переезда из общего кэша оболочка оставляет этот файл: окно один раз
 # спрашивает, удалить ли модели Meet из общего кэша (`answer_leftovers`).
 LEFTOVERS_FILE = "storage-leftovers.json"
@@ -62,14 +71,10 @@ class CopyError(RuntimeError):
 
 @dataclass(frozen=True)
 class Layout:
-    """Где лежат модели Meet при данной папке (None — по умолчанию)."""
+    """Где лежат модели Meet: папка моделей и свой ли кэш HF (иначе — общий)."""
 
-    home: Path
+    models: Path
     custom: bool
-
-    @property
-    def models(self) -> Path:
-        return self.home / "models"
 
     @property
     def gigaam(self) -> Path:
@@ -81,11 +86,22 @@ class Layout:
 
 
 def layout(root: Path | None) -> Layout:
-    return Layout(home=root, custom=True) if root is not None else Layout(paths.data_dir(), False)
+    """Модели рядом с движком в папке `root` (None — по умолчанию: папка
+    данных и общий кэш HF)."""
+    if root is not None:
+        return Layout(models=Path(root) / "models", custom=True)
+    return Layout(models=paths.data_dir() / "models", custom=False)
+
+
+def models_layout(folder: Path | None) -> Layout:
+    """Модели в отдельной папке `folder` (None — обратно рядом с движком)."""
+    if folder is not None:
+        return Layout(models=Path(folder), custom=True)
+    return layout(paths.storage_root())
 
 
 def current() -> Layout:
-    return layout(paths.storage_root())
+    return Layout(models=paths.models_dir(), custom=paths.own_hf_cache())
 
 
 def _same(a: Path, b: Path) -> bool:
@@ -230,19 +246,33 @@ def _gb(n: int) -> str:
 
 
 def copy_models(to_root: Path, on_progress=None) -> dict:
-    """Скопировать модели Meet из текущего места в раскладку папки `to_root`.
+    """Перенос движка: скопировать модели Meet из текущего места в раскладку
+    папки движка `to_root`. Модели в отдельной папке остаются, где есть, —
+    копировать нечего.
 
     `on_progress(сделано, всего)` — байты. Источник не меняется. → {"files",
     "bytes", "copied"}; сбой — CopyError с текстом для человека."""
-    pairs = _pairs(current(), layout(Path(to_root)))
+    dst = current() if paths.models_root() is not None else layout(Path(to_root))
+    return copy_to(dst, on_progress)
+
+
+def copy_models_to(folder: Path | None, on_progress=None) -> dict:
+    """Перенос одних моделей: в отдельную папку `folder` (None — обратно
+    рядом с движком). Остальное — как у `copy_models`."""
+    return copy_to(models_layout(folder), on_progress)
+
+
+def copy_to(dst: Layout, on_progress=None) -> dict:
+    """Скопировать модели Meet из текущего места в раскладку `dst`."""
+    pairs = _pairs(current(), dst)
     total = sum(size for _, _, size in pairs)
-    missing = sum(size for src, dst, size in pairs
-                  if not dst.is_file() or dst.stat().st_size != size)
-    target = Path(to_root) / "models"
+    missing = sum(size for src, dst_path, size in pairs
+                  if not dst_path.is_file() or dst_path.stat().st_size != size)
+    target = dst.models
     try:
         free = _free_bytes(target)
     except OSError as e:
-        raise CopyError(f"папка {to_root} недоступна: {e.strerror or type(e).__name__}") from e
+        raise CopyError(f"папка {target} недоступна: {e.strerror or type(e).__name__}") from e
     if missing and free < missing + SPACE_MARGIN:
         raise CopyError(f"Недостаточно места для моделей: нужно {_gb(missing + SPACE_MARGIN)} ГБ, "
                         f"свободно {_gb(free)} ГБ")
@@ -351,10 +381,16 @@ HOLD = Hold()
 
 
 def moving() -> bool:
-    """Идёт перенос (до переключения на новую папку). Нечитаемый журнал —
-    считаем, что идёт: оболочка при старте откладывает такой в `.bad`."""
+    """Идёт перенос движка или моделей (до переключения на новую папку).
+    Нечитаемый журнал — считаем, что идёт: оболочка при старте откладывает
+    такой в `.bad`."""
+    return any(_journal_moving(paths.data_dir() / name)
+               for name in (JOURNAL_FILE, MODELS_JOURNAL_FILE))
+
+
+def _journal_moving(path: Path) -> bool:
     try:
-        raw = json.loads((paths.data_dir() / JOURNAL_FILE).read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return False
     except (OSError, ValueError):
@@ -407,7 +443,7 @@ def leftovers() -> dict | None:
     """Модели Meet, оставшиеся в общем кэше HF после переезда в свою папку, —
     только те, чья копия в своём кэше цела. Вопроса нет (не переезжали, уже
     ответили, общий кэш и есть свой) — None."""
-    if not (paths.data_dir() / LEFTOVERS_FILE).exists() or paths.storage_root() is None:
+    if not (paths.data_dir() / LEFTOVERS_FILE).exists() or not paths.own_hf_cache():
         return None
     shared = models.shared_cache_root()
     if _same(shared, models.cache_root()):
@@ -451,12 +487,18 @@ def info() -> dict:
     """Где сейчас движок и модели — для окна и оболочки."""
     root = paths.storage_root()
     here = current()
+    separate = paths.models_root()
     return {
         "root": str(root) if root is not None else None,
         "custom": root is not None,
-        "home": str(here.home),
+        "home": str(paths.storage_home()),
         "engine_dir": str(paths.engine_dir()),
         "models_dir": str(paths.models_dir()),
+        # Отдельная папка моделей (None — модели рядом с движком), куда они
+        # вернутся без неё, и нет ли её сейчас (диск отключён).
+        "models_root": str(separate) if separate is not None else None,
+        "models_default": str(paths.default_models_dir()),
+        "models_missing": str(m) if (m := paths.models_missing()) is not None else None,
         "hf_cache": str(here.hf),
         "shared_cache": str(models.shared_cache_root()),
         "missing": str(m) if (m := paths.storage_missing()) is not None else None,
@@ -480,12 +522,16 @@ def _emit(payload: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`copy --to <папка>`: построчный JSON — `{"done", "total"}` по ходу (не
-    чаще 5 раз в секунду), в конце `{"ok": true, "bytes"}` или `{"error"}`."""
+    """`copy --to <папка движка>` (перенос движка) и `copy-models [--to
+    <папка моделей>]` (перенос моделей; без `--to` — обратно рядом с
+    движком): построчный JSON — `{"done", "total"}` по ходу (не чаще 5 раз в
+    секунду), в конце `{"ok": true, "bytes"}` или `{"error"}`."""
     parser = argparse.ArgumentParser(prog="python -m meet.storage")
     sub = parser.add_subparsers(dest="command", required=True)
     p_copy = sub.add_parser("copy")
     p_copy.add_argument("--to", required=True)
+    p_models = sub.add_parser("copy-models")
+    p_models.add_argument("--to", default=None)
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -498,7 +544,10 @@ def main(argv: list[str] | None = None) -> int:
             _emit({"done": done, "total": total})
 
     try:
-        result = copy_models(Path(args.to), on_progress=progress)
+        if args.command == "copy":
+            result = copy_models(Path(args.to), on_progress=progress)
+        else:
+            result = copy_models_to(Path(args.to) if args.to else None, on_progress=progress)
     except CopyError as e:
         _emit({"error": str(e)})
         return 1

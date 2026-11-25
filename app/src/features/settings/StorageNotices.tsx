@@ -6,16 +6,19 @@
  * - Итог переноса: «перенесены в …».
  * - Остатки в общем кэше Hugging Face: удалить ли модели Meet оттуда
  *   (главная кнопка — «Удалить»; фокус и Esc — на «Позже»).
- * - Прерванный перенос (сбой, выключение): «Продолжить» / «Отменить перенос».
+ * - Прерванный перенос (сбой, выключение): «Продолжить» / «Отменить перенос» —
+ *   и для переноса движка, и для переноса одних моделей.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type StorageInfo, answerLeftovers, getStorage } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { type StorageStatus, storageAbandon, storageStatus } from "../../lib/shell";
+import { type StorageStatus, modelsStorageAbandon, storageAbandon, storageStatus } from "../../lib/shell";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { gb } from "../wizard/gate";
-import { bumpStorage, dismissNotice, startMove, useMove, useNotices, useStorageTick } from "./storageMove";
+import {
+  bumpStorage, dismissNotice, startModelsMove, startMove, useMove, useNotices, useStorageTick,
+} from "./storageMove";
 
 const GB = 1024 ** 3;
 
@@ -61,12 +64,13 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
 
   if (move.kind === "running") return null;
   const donePath = move.kind === "done" ? move.path : null;
+  const doneTitle = move.kind === "done" && move.what === "models" ? "Модели перенесены" : "Движок и модели перенесены";
   const left = info?.leftovers;
 
   if (left && !later.leftovers) {
     return (
       <ConfirmDialog
-        title={donePath ? "Движок и модели перенесены" : "Модели Meet в общем кэше"}
+        title={donePath ? doneTitle : "Модели Meet в общем кэше"}
         message={<>
           {donePath && <p>Теперь они в {donePath}.</p>}
           <p>
@@ -100,7 +104,7 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
   if (donePath && later.done !== donePath) {
     return (
       <ConfirmDialog
-        title="Движок и модели перенесены"
+        title={doneTitle}
         message={<p>Теперь они в {donePath}. Прежние удалены.</p>}
         confirmLabel="Показать в настройках"
         danger={false}
@@ -135,6 +139,34 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
           void startMove(stopped);
         }}
         onCancel={() => dismissNotice({ interrupted: stopped })}
+      />
+    );
+  }
+
+  const models = status?.models_interrupted;
+  if (models && later.models_interrupted !== models.to_dir) {
+    return (
+      <ConfirmDialog
+        title="Перенос моделей прерван"
+        message={<>
+          {move.kind === "failed" && <p className="error">{move.error}</p>}
+          <p>
+            Перенос моделей в {models.to_dir} не закончен — модели работают из прежней папки. Скопированное
+            сохранено: «Продолжить» докопирует недостающее.
+          </p>
+          {error && <p className="error">{error}</p>}
+        </>}
+        confirmLabel="Продолжить"
+        danger={false}
+        cancelLabel="Позже"
+        alt={{ label: "Отменить перенос", onClick: () => act(() => modelsStorageAbandon()) }}
+        busy={busy}
+        onConfirm={() => {
+          dismissNotice({ models_interrupted: models.to_dir });
+          onOpenEngine();
+          void startModelsMove(models.to);
+        }}
+        onCancel={() => dismissNotice({ models_interrupted: models.to_dir })}
       />
     );
   }

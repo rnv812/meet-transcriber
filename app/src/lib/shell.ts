@@ -232,6 +232,19 @@ export type StorageStatus = {
   interrupted?: string | null;
   /** Недоделанное ещё удаляется (файлы были заняты). */
   discarding?: boolean;
+  /** Какой перенос идёт: движок (с моделями) или одни модели; null — никакой. */
+  moving_kind?: "engine" | "models" | null;
+  /** Отдельная папка моделей; null — модели рядом с движком. */
+  models_root?: string | null;
+  /** Где модели сейчас и куда вернутся без отдельной папки. */
+  models_dir?: string;
+  models_default?: string;
+  /** Отдельной папки моделей нет (диск отключён). */
+  models_missing?: string | null;
+  /** Файл выбора папки моделей не прочитан. */
+  models_unreadable?: boolean;
+  /** Перенос моделей прерван: куда (`to` null — обратно к движку). */
+  models_interrupted?: { to: string | null; to_dir: string } | null;
 };
 /** `storage_check`: куда на самом деле, сколько места и можно ли сейчас. */
 export type StorageCheck = {
@@ -266,6 +279,14 @@ export const storageReset = () => invoke<void>("storage_reset");
 /** Диск подключили: проверить папку и запустить службу снова. */
 export const storageRetry = () => invoke<void>("storage_retry");
 export const onStorageProgress = (cb: (p: StorageProgress) => void) => listenShell("storage-progress", cb);
+/** Перенос одних моделей: куда (null — обратно в папку по умолчанию, рядом с движком). */
+export const modelsStorageCheck = (target: string | null) => invoke<StorageCheck>("models_storage_check", { target });
+/** Перенести модели (минуты). Ответ — папка моделей. Ход — `storage-progress`, отмена — `storageCancel`. */
+export const modelsStorageMove = (target: string | null) => invoke<string>("models_storage_move", { target });
+/** «Отменить» прерванный перенос моделей: скопированное в новую папку удаляется. */
+export const modelsStorageAbandon = () => invoke<void>("models_storage_abandon");
+/** Папки моделей нет или выбор не прочитан: модели снова рядом с движком (скачаются заново). */
+export const modelsStorageReset = () => invoke<void>("models_storage_reset");
 
 // --- обновление по кнопке («О программе») ------------------------------------
 

@@ -31,6 +31,14 @@ OpenAI-совместимый сервер; `src/meet/llm/`).
   сбой — прежний loopback), macOS — помощник `--exclude-pid`;
   `MEET_PROCESS_LOOPBACK=0` выключает. Копия настроек перед откатом версии —
   `backup.py` (`POST /backup`, «О программе» → «Другие версии»).
+- Где движок и модели: перенос «движок и модели» — `storage.rs`
+  (`storage.json`, журнал `storage-move.json`); отдельная папка моделей
+  (0.6.3) — `storage/models_move.rs` (`storage-models.json`: `hf`, `gigaam`,
+  `xet` прямо в папке; журнал `storage-models-move.json`; нет файла — модели
+  рядом с движком), Python — `paths.models_root`/`models_dir`/`own_hf_cache`,
+  копия — `python -m meet.storage copy-models [--to]`; окно — «Папка моделей»
+  (`ModelsFolder.tsx`). При отдельных моделях общий перенос двигает только
+  движок; переносы — по одному.
 - Синхронизация дорожек (0.6.2): обе дорожки считают время от одного начала
   сессии; медленный старт потока (рукопожатие помощника Mac, активация process
   loopback) — тишина до первых данных (хук before-data); доливка — по времени

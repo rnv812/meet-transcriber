@@ -117,13 +117,14 @@ def storage_file() -> Path:
 STORAGE_VERSION = 1
 
 
-def _read_storage() -> tuple[str, Path | None]:
-    """("absent" | "ok" | "bad", папка). "bad" — файл есть, но не прочитан:
-    оборванная запись, чужой формат, пустой или относительный путь."""
+def _read_pointer(path: Path) -> tuple[str, Path | None]:
+    """("absent" | "ok" | "bad", папка) из файла выбора папки (`storage.json`,
+    `storage-models.json`). "bad" — файл есть, но не прочитан: оборванная
+    запись, чужой формат, пустой или относительный путь."""
     import json
 
     try:
-        text = storage_file().read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return "absent", None
     except (OSError, UnicodeError):
@@ -141,6 +142,10 @@ def _read_storage() -> tuple[str, Path | None]:
     # Относительный путь значил бы «от рабочей папки» — разное место у
     # разных процессов.
     return ("ok", root) if root.is_absolute() else ("bad", None)
+
+
+def _read_storage() -> tuple[str, Path | None]:
+    return _read_pointer(storage_file())
 
 
 def storage_root() -> Path | None:
@@ -174,12 +179,67 @@ def storage_missing() -> Path | None:
     return root if root is not None and not root.is_dir() else None
 
 
-def models_dir() -> Path:
-    """Модели, которые качает приложение: GigaAM, а при выбранной папке — и
-    свой кэш Hugging Face (`models/hf`, см. `models.cache_root`). Без выбора
-    faster-whisper и pyannote живут в общем кэше HF, как раньше: уже скачанные
-    гигабайты не качаются заново."""
+# Отдельная папка моделей (0.6.3): модели Meet (свой кэш HF, GigaAM, Xet) —
+# на другом диске, независимо от движка. Файл пишет оболочка (перенос моделей,
+# `storage_models.rs`); формат — как у storage.json. Нет файла — модели там
+# же, где движок (`<папка движка>/models`, без выбранной папки движка модели HF
+# — в общем кэше). Раскладка выбранной папки моделей:
+#
+#     <папка>/hf      — свой кэш HF: только модели каталога Meet
+#     <папка>/gigaam  — веса GigaAM
+#     <папка>/xet     — кэш кусков загрузчика Xet
+MODELS_STORAGE_FILE = "storage-models.json"
+
+
+def models_storage_file() -> Path:
+    return data_dir() / MODELS_STORAGE_FILE
+
+
+def models_root() -> Path | None:
+    """Отдельно выбранная папка моделей или None (модели рядом с движком)."""
+    return _read_pointer(models_storage_file())[1]
+
+
+def models_unreadable() -> bool:
+    """storage-models.json есть, но не прочитан: где модели — неизвестно,
+    качать некуда (решает человек в окне)."""
+    return _read_pointer(models_storage_file())[0] == "bad"
+
+
+def models_missing() -> Path | None:
+    """Отдельная папка моделей, которой сейчас нет (диск отключён), или файл
+    выбора, если он не прочитан; иначе None. Папку не создаём — как и папку
+    движка (`storage_missing`)."""
+    state, root = _read_pointer(models_storage_file())
+    if state == "bad":
+        return models_storage_file()
+    return root if root is not None and not root.is_dir() else None
+
+
+def models_unavailable() -> Path | None:
+    """Модели некуда класть и неоткуда брать: нет папки движка или папки
+    моделей (или их файлы выбора не прочитаны). Качать в это время нельзя —
+    гигабайты молча уехали бы на системный диск."""
+    return storage_missing() or models_missing()
+
+
+def default_models_dir() -> Path:
+    """Где модели без отдельной папки: рядом с движком."""
     return storage_home() / "models"
+
+
+def models_dir() -> Path:
+    """Модели, которые качает приложение: GigaAM, а при выбранной папке
+    (движка или моделей) — и свой кэш Hugging Face (`hf`, см.
+    `models.cache_root`). Без выбора faster-whisper и pyannote живут в общем
+    кэше HF, как раньше: уже скачанные гигабайты не качаются заново."""
+    return models_root() or default_models_dir()
+
+
+def own_hf_cache() -> bool:
+    """У Meet свой кэш HF (`models_dir()/hf`): выбрана папка движка или
+    отдельная папка моделей. Иначе — общий кэш HF."""
+    return storage_root() is not None or models_root() is not None
 
 
 def logs_dir() -> Path:
