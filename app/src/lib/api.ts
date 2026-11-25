@@ -387,13 +387,32 @@ export type EngineState = {
   cuda_ok?: boolean;
   /** Почему видеокарта не годится: «видеокарта NVIDIA не найдена», «установлен движок для процессора», … */
   cuda_reason?: string | null;
+  /** Только macOS (0.6.2): что умеет этот Mac для распознавания; нет у старых резидентов. */
+  mac?: MacEngine;
+};
+/** Видеоядра (MPS) для torch и MLX Whisper на этом Mac — и почему нет. */
+export type MacEngine = {
+  /** Версия macOS («14.4.1»); не прочиталась — null. */
+  macos: string | null;
+  /** Видеоядра Apple для GigaAM, спикеров, времени слов и голосов. */
+  mps: boolean;
+  mps_reason: string | null;
+  /** macOS 14+: MLX Whisper здесь ставится. */
+  mlx_supported: boolean;
+  mlx_installed: boolean;
+  /** Почему MLX Whisper недоступен: «нужна macOS 14 или новее», ошибка установки, … */
+  mlx_reason: string | null;
 };
 export type Model = {
   id: string;
   kind: "asr" | "diarization" | "align";
   /** Движок модели распознавания: "faster-whisper", "gigaam" (id с префиксом «gigaam/») или
-   *  "mlx-whisper" (только Mac: движок берёт её сам, в выборе модели Whisper её нет). */
+   *  "mlx-whisper" (только Mac: модель или чекпоинт MLX, на Windows в выборе модели Whisper её нет). */
   backend?: string;
+  /** Модель faster-whisper: id её чекпоинта MLX (Mac 14+ — с ним она идёт на видеоядрах). */
+  mlx?: string;
+  /** Чекпоинт MLX: id модели faster-whisper, чей он (не отдельная модель для выбора). */
+  mlx_of?: string;
   title: string;
   note: string;
   size_gb: number;

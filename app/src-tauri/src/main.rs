@@ -175,6 +175,7 @@ fn main() {
             engine::install_engine,
             engine::reinstall_engine,
             engine::retry_gigaam_install,
+            engine::retry_mlx_install,
             engine::gpu_info,
             // macOS: токен Hugging Face в связке ключей от имени Meet.app.
             hf_token::hf_token_save,

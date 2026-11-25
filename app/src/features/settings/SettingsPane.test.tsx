@@ -1127,21 +1127,24 @@ describe("«Подобрать под этот компьютер» и «Как 
     expect(await savedPatch()).toEqual({ asr: { device: "auto", cpu_backend: "gigaam", cpu_model: "medium" } });
   });
 
-  test("Mac: GigaAM и MLX Whisper для записей не на русском — скачать модель MLX", async () => {
+  test("Mac (движок для Apple Silicon): одна модель на все встречи — GigaAM на видеоядрах, без строк видеокарты", async () => {
     await open({ flavor: "mac", gpu: { available: false, name: null }, cuda_ok: false, cuda_reason: "видеокарта NVIDIA не найдена" },
-      { device: "auto", cpu_backend: "faster-whisper", cpu_model: "medium" }, fullCatalogue({ mlx: true }));
+      { device: "auto", cpu_backend: "faster-whisper", cpu_model: "medium" }, fullCatalogue({ mlx: true, gigaam: false }));
     const button = await fitButton();
     await waitFor(() => expect(button).toBeEnabled());
+    // Устройство и строки видеокарты и процессора — только на Windows.
+    expect(screen.queryByRole("radiogroup", { name: "Устройство" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Видеокарта" })).toBeNull();
     await userEvent.click(button);
-    expect(screen.getByText(/Mac/, { selector: ".fit__title" })).toHaveTextContent("MLX Whisper");
+    expect(screen.getByText(/Mac/, { selector: ".fit__title" })).toHaveTextContent("GigaAM на видеоядрах (MPS)");
     const changes = screen.getByRole("list", { name: "Что изменится" });
-    expect(changes).toHaveTextContent("Движок на процессоре: Whisper → GigaAM");
+    expect(changes).toHaveTextContent("Модель распознавания: Whisper medium → GigaAM v3 — русский");
     expect(changes).not.toHaveTextContent("Устройство");
     const downloads = screen.getByRole("list", { name: "Что скачать" });
-    expect(downloads).toHaveTextContent("Whisper large-v3 turbo — MLX (Mac) — 1,6 ГБ");
-    // На Mac 14+ записи не на русском берёт MLX — Whisper процессора не скачиваем.
-    expect(downloads).not.toHaveTextContent("Whisper medium");
+    expect(downloads).toHaveTextContent("GigaAM v3 — русский — 0,45 ГБ");
+    expect(downloads).not.toHaveTextContent("MLX");
     expect(api.patchSettings).not.toHaveBeenCalled();
+    expect(await savedPatch()).toEqual({ asr: { cpu_backend: "gigaam" } });
   });
 
   test("NVIDIA с CUDA: GigaAM для русского, многоязычный Whisper на видеокарте для остальных", async () => {

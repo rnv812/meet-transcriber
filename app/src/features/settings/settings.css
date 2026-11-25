@@ -394,6 +394,12 @@
 .asr-model { display: flex; flex-direction: column; gap: 6px; width: 100%; }
 .asr-fallback { margin: 0; padding: 10px 0 14px; font-size: var(--text-sm); color: var(--ink-3); }
 .asr-fallback__model { color: var(--ink-2); }
+/* Mac: через что пойдёт модель («MLX, видеоядра», «процессор») и кнопка «Скачать» / «Установить» рядом. */
+.asr-route {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2);
+  margin: 0; font-size: var(--text-sm); line-height: 1.45; color: var(--ink-2);
+}
+.asr-route__error { flex-basis: 100%; }
 
 /* «Где хранить движок и модели»: папка, проверка перед переносом, ход, вопрос об остатках. */
 .storage { display: flex; flex-direction: column; gap: var(--s-2); width: 100%; min-width: 0; }

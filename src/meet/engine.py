@@ -13,6 +13,7 @@ venv репозитория, в установленном приложении 
 """
 
 import importlib.util
+import platform
 import shutil
 import subprocess
 import sys
@@ -269,8 +270,48 @@ def _mlx_item() -> dict:
     return item
 
 
+# Видеоядра Apple (MPS) у torch: Apple Silicon и macOS 12.3+ (так у torch).
+MPS_MIN_MACOS = (12, 3)
+MLX_NOT_INSTALLED = "MLX Whisper не установлен в движке"
+
+
+def mac_state() -> dict:
+    """Что умеет этот Mac — для «Распознавания» (0.6.2): версия macOS,
+    видеоядра для torch (MPS) и MLX Whisper, и почему нет. Без импорта torch
+    и mlx (`find_spec`): state() зовут в резиденте. MPS здесь — ожидание по
+    машине; сбой операции на видеоядрах шаг всё равно повторяет на процессоре."""
+    from meet import mlx_asr
+
+    version = mlx_asr.macos_version()
+    if platform.machine() != "arm64":
+        mps_reason = "нужен Mac с Apple Silicon (приложение запущено не для arm64)"
+    elif not version or tuple(version) < MPS_MIN_MACOS:
+        mps_reason = "нужна macOS 12.3 или новее"
+    elif not installed("torch"):
+        mps_reason = "PyTorch не установлен в движке"
+    else:
+        mps_reason = None
+    supported = mlx_step_wanted(MAC_PROFILE, version)
+    mlx = installed(MLX_COMPONENT[0])
+    if not supported:
+        mlx_reason = MLX_NEEDS_MACOS
+    elif not mlx:
+        mlx_reason = mlx_install_error() or MLX_NOT_INSTALLED
+    else:
+        mlx_reason = None
+    return {
+        "macos": ".".join(str(part) for part in version) if version else None,
+        "mps": mps_reason is None,
+        "mps_reason": mps_reason,
+        "mlx_supported": supported,
+        "mlx_installed": mlx,
+        "mlx_reason": mlx_reason,
+    }
+
+
 def state() -> dict:
-    """Состояние движка для настроек: чего не хватает и куда встанет."""
+    """Состояние движка для настроек: чего не хватает и куда встанет; на
+    macOS ещё `mac` — видеоядра и MLX (`mac_state`)."""
     components = []
     for module, title in COMPONENTS:
         item = {"module": module, "title": title, "installed": installed(module)}
@@ -286,7 +327,9 @@ def state() -> dict:
     card = gpu()
     device = _device(card["available"])
     cuda_ok, cuda_reason = cuda_status(card["available"])
+    extra = {"mac": mac_state()} if plat.is_macos() else {}
     return {
+        **extra,
         "installed": not missing,
         "missing": missing,
         "components": components,

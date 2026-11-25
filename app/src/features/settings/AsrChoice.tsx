@@ -81,8 +81,8 @@ function secondaryNote(row: AsrDevice, device: string, gpu: GpuState): string {
   return "Запасной вариант, если видеокарта недоступна";
 }
 
-// Модели faster-whisper: без GigaAM и без MLX Whisper (Mac) — её движок берёт
-// сам для встреч не на русском, faster-whisper её не загрузит.
+// Модели faster-whisper: без GigaAM и без моделей MLX — faster-whisper их не
+// загрузит (на Mac модель выбирают в MacModel, `MacAsr.tsx`).
 const whisperModels = (models: ModelsState | null) =>
   (models?.items ?? []).filter((m) => m.kind === "asr" && !isGigaam(m) && m.backend !== "mlx-whisper");
 

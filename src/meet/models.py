@@ -54,6 +54,8 @@ CATALOGUE = (
         "note": "многоязычная; на русском слабее fine-tune, но берёт другие языки",
         "size_gb": 3.1,
         "language": "multi",
+        # Чекпоинт MLX той же модели (Mac 14+): с ним она идёт на видеоядрах.
+        "mlx": "mlx-community/whisper-large-v3-mlx",
     },
     {
         "id": "Systran/faster-whisper-medium",
@@ -63,6 +65,7 @@ CATALOGUE = (
         "note": "вдвое быстрее и легче; на терминах и именах ошибается заметно чаще",
         "size_gb": 1.5,
         "language": "multi",
+        "mlx": "mlx-community/whisper-medium-mlx",
     },
     {
         "id": GIGAAM_PREFIX + "v3_e2e_rnnt",
@@ -83,18 +86,42 @@ CATALOGUE = (
         "language": "ru",
     },
     {
-        # MLX Whisper (meet.mlx_asr) — нерусские встречи на видеоядрах Apple
-        # Silicon. Только Mac (`platform`): на других машинах её не видно и не
-        # скачать. Выбирать её не нужно: движок берёт её сам, если она скачана.
+        # MLX Whisper (meet.mlx_asr) — модели на видеоядрах Apple Silicon. Только
+        # Mac (`platform`): на других машинах их не видно и не скачать. turbo —
+        # отдельная модель (только MLX); остальные — чекпоинты MLX моделей
+        # faster-whisper выше (`mlx_of`, у модели — `mlx`): выбрана такая модель
+        # и чекпоинт скачан — на Mac 14+ она идёт через MLX.
         "id": "mlx-community/whisper-large-v3-turbo",
         "kind": ASR,
         "backend": "mlx-whisper",
         "title": "Whisper large-v3 turbo — MLX (Mac)",
-        "note": "встречи не на русском — на видеоядрах Apple Silicon, в разы быстрее процессора; "
+        "note": "многоязычная, на видеоядрах Apple Silicon — в разы быстрее процессора; "
                 "нужна macOS 14 или новее",
         "size_gb": 1.6,
         "language": "multi",
         "platform": "macos",
+    },
+    {
+        "id": "mlx-community/whisper-large-v3-mlx",
+        "kind": ASR,
+        "backend": "mlx-whisper",
+        "title": "Whisper large-v3 — чекпоинт MLX (Mac)",
+        "note": "стоковая large-v3 на видеоядрах Apple Silicon; нужна macOS 14 или новее",
+        "size_gb": 3.1,
+        "language": "multi",
+        "platform": "macos",
+        "mlx_of": "Systran/faster-whisper-large-v3",
+    },
+    {
+        "id": "mlx-community/whisper-medium-mlx",
+        "kind": ASR,
+        "backend": "mlx-whisper",
+        "title": "Whisper medium — чекпоинт MLX (Mac)",
+        "note": "Whisper medium на видеоядрах Apple Silicon; нужна macOS 14 или новее",
+        "size_gb": 1.5,
+        "language": "multi",
+        "platform": "macos",
+        "mlx_of": "Systran/faster-whisper-medium",
     },
     {
         "id": "pyannote/speaker-diarization-community-1",

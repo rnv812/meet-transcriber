@@ -8,9 +8,10 @@
  * - без годной NVIDIA — GigaAM на процессоре (`asr.cpu_backend`);
  * - NVIDIA с CUDA — GigaAM для русского на видеокарте (`asr.backend`),
  *   записи не на русском — Whisper на видеокарте;
- * - Mac — GigaAM (видеоядра Apple берёт сам движок), записи не на русском —
- *   MLX Whisper: отдельной настройки нет, движок берёт его сам, если модель
- *   скачана (macOS 14+), — поэтому в подборе это только скачивание.
+ * - Mac (`macFit`, 0.6.2) — одна модель на все встречи: язык речи русский
+ *   или «auto» — GigaAM на видеоядрах (MPS); другой язык — многоязычный
+ *   Whisper с чекпоинтом MLX (macOS 14+), иначе самый лёгкий многоязычный на
+ *   процессоре. Скачать — модель и её чекпоинт MLX.
  *
  * Whisper при GigaAM распознаёт только записи не на русском: модель «только
  * русский» по каталогу (`language: "ru"`) меняется на многоязычную — на
@@ -24,6 +25,7 @@ import { type EngineState, type ModelsState, GIGAAM_PREFIX } from "../../lib/api
 import {
   type AsrDevice, DEFAULT_GIGAAM, backendOf, deviceInEffect, gigaamTitle, gpuState, modelTitle,
 } from "./AsrChoice";
+import { macModelOf, macModelValues, macRoute, mlxCheckpoint } from "./macRoute";
 import type { FitDownload, FitPlan, NowPart, Raw } from "./Section";
 
 export type Machine = "cuda" | "cpu" | "mac";
@@ -52,9 +54,6 @@ function multilingual(models: ModelsState | null, row: AsrDevice): string {
 }
 
 function machineTitle(machine: Machine, engine: EngineState): string {
-  if (machine === "mac") {
-    return "Mac с Apple Silicon: русскую речь распознаёт GigaAM, остальные языки — MLX Whisper на видеоядрах Apple";
-  }
   if (machine === "cuda") {
     const name = engine.gpu.name ? ` (${engine.gpu.name})` : "";
     return `Компьютер с видеокартой NVIDIA${name}: русскую речь распознаёт GigaAM, остальные языки — Whisper на видеокарте`;
@@ -69,9 +68,62 @@ function machineTitle(machine: Machine, engine: EngineState): string {
 /** Подбор: значения `asr` для черновика и как они выглядят списком. */
 export type AsrFit = { plan: FitPlan; values: Record<string, unknown> };
 
+/** Модель на Mac словами: GigaAM — по имени, Whisper — по каталогу. */
+export function macModelTitle(models: ModelsState | null, id: string): string {
+  return id.startsWith(GIGAAM_PREFIX) ? gigaamTitle(models, id.slice(GIGAAM_PREFIX.length)) : modelTitle(models, id) || "не выбрана";
+}
+
+/** Многоязычный Whisper для Mac: с чекпоинтом MLX — самый крупный; без MLX — самый лёгкий. */
+function macWhisper(models: ModelsState | null, mlx: boolean): string {
+  const list = (models?.items ?? [])
+    .filter((m) => m.kind === "asr" && m.backend === "faster-whisper" && m.language && m.language !== "ru")
+    .sort((a, b) => a.size_gb - b.size_gb);
+  const withMlx = list.filter((m) => m.mlx);
+  const pick = mlx && withMlx.length > 0 ? withMlx.at(-1) : list[0];
+  return pick?.id ?? FALLBACK_WHISPER.cpu;
+}
+
+/** Подбор на Mac: одна модель на все встречи — по языку речи из настроек (см. модуль). */
+function macFit(engine: EngineState, a: Raw[string], models: ModelsState | null): AsrFit {
+  const mac = engine.mac;
+  const mlx = !mac || mac.mlx_supported;
+  const values: Record<string, unknown> = {};
+  const changes: string[] = [];
+  const current = macModelOf(a);
+  const lang = String(a.language ?? "ru").trim().toLowerCase() || "ru";
+  const russian = lang === "ru" || lang === "auto";
+  const currentRu = current.startsWith(GIGAAM_PREFIX) || models?.items.find((m) => m.id === current)?.language === "ru";
+  let target = current;
+  if (russian && !current.startsWith(GIGAAM_PREFIX)) target = GIGAAM_PREFIX + String(a.gigaam_model ?? DEFAULT_GIGAAM);
+  else if (!russian && currentRu) target = macWhisper(models, mlx);
+  if (target !== current) {
+    // GigaAM — та, что уже в черновике (`gigaam_model` не трогаем): меняется только движок.
+    Object.assign(values, target.startsWith(GIGAAM_PREFIX) ? { cpu_backend: "gigaam" } : macModelValues(target));
+    changes.push(`Модель распознавания: ${macModelTitle(models, current)} → ${macModelTitle(models, target)}`);
+  }
+  const needs = [target];
+  const checkpoint = mlxCheckpoint(models, target);
+  if (checkpoint && checkpoint.id !== target && mlx) needs.push(checkpoint.id);
+  const downloads: FitDownload[] | null = models === null ? null : needs.flatMap((id) => {
+    const m = models.items.find((x) => x.id === id);
+    const why = m?.mlx_of ? "чекпоинт MLX — на видеоядрах" : "модель распознавания";
+    return m && !m.downloaded ? [{ id, title: m.title, size_gb: m.size_gb, why }] : [];
+  });
+  const route = target.startsWith(GIGAAM_PREFIX)
+    ? (mac && !mac.mps ? "GigaAM на процессоре (видеоядра недоступны)" : "GigaAM на видеоядрах (MPS)")
+    : mlx && checkpoint ? "Whisper с чекпоинтом MLX на видеоядрах" : "Whisper на процессоре";
+  let title = `Mac с Apple Silicon: одна модель на все встречи — ${route}`;
+  if (!russian) title += `, язык речи ${lang}`;
+  if (mac?.mlx_supported && !mac.mlx_installed && !target.startsWith(GIGAAM_PREFIX)) {
+    title += ". MLX Whisper ещё не установлен — «Установить» в строке «MLX Whisper»";
+  }
+  return { plan: { title, changes, downloads }, values };
+}
+
 /** Подбор под машину по черновику `asr`: только отличия от черновика. */
 export function asrFit(engine: EngineState, asr: Raw[string] | undefined, models: ModelsState | null): AsrFit {
   const machine = machineOf(engine);
+  if (machine === "mac") return macFit(engine, asr ?? {}, models);
   const row: AsrDevice = machine === "cuda" ? "cuda" : "cpu";
   const a = asr ?? {};
   const values: Record<string, unknown> = {};
@@ -101,13 +153,10 @@ export function asrFit(engine: EngineState, asr: Raw[string] | undefined, models
   }
 
   // Что понадобится скачать под подобранные значения.
-  const needs = [{ id: GIGAAM_PREFIX + String(a.gigaam_model ?? DEFAULT_GIGAAM), why: "русская речь" }];
-  if (machine === "mac") {
-    const mlx = models?.items.find((m) => m.backend === "mlx-whisper");
-    if (mlx) needs.push({ id: mlx.id, why: "записи не на русском, macOS 14 и новее" });
-  } else {
-    needs.push({ id: whisperAfter, why: "записи не на русском" });
-  }
+  const needs = [
+    { id: GIGAAM_PREFIX + String(a.gigaam_model ?? DEFAULT_GIGAAM), why: "русская речь" },
+    { id: whisperAfter, why: "записи не на русском" },
+  ];
   const downloads: FitDownload[] | null = models === null ? null : needs.flatMap(({ id, why }) => {
     const m = models.items.find((x) => x.id === id);
     return m && !m.downloaded ? [{ id, title: m.title, size_gb: m.size_gb, why }] : [];
@@ -128,13 +177,22 @@ function languageText(raw: unknown): string {
  * движок и модель его строки, запасной Whisper для записей не на русском и
  * язык. Ссылки на движок и модели — внутри строки этого устройства.
  */
-export function asrNow(saved: Raw, engine: EngineState | null, models: ModelsState | null): NowPart[] {
+export function asrNow(saved: Raw, engine: EngineState | null, models: ModelsState | null, mac = false): NowPart[] {
   const a = saved.asr ?? {};
+  if (mac) {
+    // Mac: модель и через что она пойдёт сейчас (по сведениям резидента), язык.
+    const id = macModelOf(a);
+    return [
+      { text: "Mac", to: "Видеоядра Apple" },
+      { text: macModelTitle(models, id), to: "Модель распознавания" },
+      { text: macRoute(id, engine, models).short, to: "Модель распознавания" },
+      { text: languageText(a.language), to: "Язык речи" },
+    ];
+  }
   const gpu = gpuState(engine);
   const effect = deviceInEffect(String(a.device ?? "auto"), gpu);
-  const mac = engine?.flavor === "mac";
   const parts: NowPart[] = [{
-    text: mac ? "Mac" : effect === "cuda" ? `видеокарта${gpu?.name ? ` (${gpu.name})` : ""}`
+    text: effect === "cuda" ? `видеокарта${gpu?.name ? ` (${gpu.name})` : ""}`
       : effect === "cpu" ? "процессор" : "видеокарта или процессор",
     to: "Устройство",
   }];
@@ -143,8 +201,7 @@ export function asrNow(saved: Raw, engine: EngineState | null, models: ModelsSta
     const whisper = String(a[effect === "cuda" ? "model" : "cpu_model"] ?? "");
     if (backendOf(a, effect) === "gigaam") {
       parts.push({ text: gigaamTitle(models, String(a.gigaam_model ?? DEFAULT_GIGAAM)), to: "Движок", scope });
-      const mlx = mac && models?.items.some((m) => m.backend === "mlx-whisper" && m.downloaded);
-      parts.push({ text: `не на русском — ${mlx ? "MLX Whisper" : modelTitle(models, whisper)}`, to: "Модель GigaAM", scope });
+      parts.push({ text: `не на русском — ${modelTitle(models, whisper)}`, to: "Модель GigaAM", scope });
     } else {
       parts.push({ text: modelTitle(models, whisper), to: "Модель Whisper", scope });
     }

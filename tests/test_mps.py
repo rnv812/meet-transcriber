@@ -49,13 +49,14 @@ def test_mac_profile_with_mps_gives_mps_to_torch_steps(monkeypatch):
     assert voice_id._embedder_device() == "mps"
 
 
-def test_mac_without_mps_or_with_cpu_setting_or_after_failure_stays_on_cpu(monkeypatch):
+def test_mac_without_mps_or_after_failure_stays_on_cpu_whatever_the_setting(monkeypatch):
     _profile(monkeypatch, "mac")
     _torch(monkeypatch, mps=False)
     assert asr.torch_device() == "cpu"
     _torch(monkeypatch, mps=True)
+    # 0.6.2: на Mac видеоядра всегда — «Процессор» прежних версий их не выключает.
     monkeypatch.setattr(asr, "device_setting", lambda setting=None: "cpu")
-    assert asr.torch_device() == "cpu"
+    assert asr.torch_device() == "mps"
     monkeypatch.setattr(asr, "device_setting", lambda setting=None: "auto")
     monkeypatch.setattr(asr, "_torch_failure", "сбой")
     assert asr.torch_device() == "cpu"

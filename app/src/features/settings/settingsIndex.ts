@@ -78,6 +78,36 @@ export type SettingsEntry = {
 
 const UNDER_PARTICIPANT = [PARTICIPANT_LABEL];
 
+/** «Распознавание» на Windows: устройство, движок и модель для видеокарты и процессора. */
+const WINDOWS_ASR: SettingsEntry[] = [
+  { section: "asr", label: "Устройство", keys: ["asr.device"], hint: "Видеокарта или процессор", keywords: ["gpu", "cpu", "cuda", "видеокарта", "процессор"] },
+  { section: "asr", label: "Движок", keys: ["asr.backend", "asr.cpu_backend"], hint: "Whisper или GigaAM", keywords: ["whisper", "gigaam"] },
+  { section: "asr", label: "Модель Whisper", keys: ["asr.model", "asr.cpu_model"], keywords: ["whisper", "large", "small"] },
+  { section: "asr", label: "Модель Whisper для записей не на русском", keys: ["asr.model", "asr.cpu_model"], keywords: ["whisper", "английский", "язык"] },
+  { section: "asr", label: "Модель GigaAM", keys: ["asr.gigaam_model"], keywords: ["gigaam", "русский"] },
+];
+
+/**
+ * «Распознавание» на Mac (0.6.2): видеоядра и MLX — сведения с кнопкой
+ * «Установить», не переключатели (строки видны всегда, `requires` не нужен);
+ * модель — одна на все встречи (ключи строки процессора).
+ */
+const MAC_ASR: SettingsEntry[] = [
+  {
+    section: "asr", label: "Видеоядра Apple", hint: "GigaAM, спикеры, время слов и голоса — на видеоядрах (MPS)",
+    keywords: ["mps", "metal", "apple silicon", "видеоядра", "видеокарта", "gpu", "ускорение", "процессор"],
+  },
+  {
+    section: "asr", label: "MLX Whisper", hint: "Whisper на видеоядрах Apple, macOS 14 и новее",
+    keywords: ["mlx", "видеоядра", "установить", "ускорение", "whisper"],
+  },
+  {
+    section: "asr", label: "Модель распознавания", keys: ["asr.cpu_backend", "asr.cpu_model", "asr.gigaam_model"],
+    hint: "Одна модель на все встречи; видно, пойдёт ли она через MLX или на видеоядрах",
+    keywords: ["whisper", "gigaam", "mlx", "mps", "видеоядра", "turbo", "large", "medium", "чекпоинт", "скачать"],
+  },
+];
+
 export const SETTINGS_INDEX: SettingsEntry[] = [
   // Общее
   { section: "app", label: "Тема", hint: "Системная, светлая или тёмная", keywords: ["тёмная", "светлая", "dark", "light"] },
@@ -108,12 +138,9 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: ["строгий режим", "диктовка"], advanced: true,
   },
   { section: "auto", label: "Сайты звонков", keys: ["auto_record.call_sites"], hint: "Google Meet, Телемост и другие", keywords: ["meet", "телемост", "заголовок окна"], advanced: true },
-  // Расшифровка
-  { section: "asr", label: "Устройство", keys: ["asr.device"], hint: "Видеокарта или процессор", keywords: ["gpu", "cpu", "cuda", "видеокарта", "процессор"] },
-  { section: "asr", label: "Движок", keys: ["asr.backend", "asr.cpu_backend"], hint: "Whisper или GigaAM", keywords: ["whisper", "gigaam"] },
-  { section: "asr", label: "Модель Whisper", keys: ["asr.model", "asr.cpu_model"], keywords: ["whisper", "large", "small"] },
-  { section: "asr", label: "Модель Whisper для записей не на русском", keys: ["asr.model", "asr.cpu_model"], keywords: ["whisper", "английский", "язык"] },
-  { section: "asr", label: "Модель GigaAM", keys: ["asr.gigaam_model"], keywords: ["gigaam", "русский"] },
+  // Расшифровка. На Windows — устройство и строки видеокарты и процессора; на
+  // Mac (0.6.2) — что умеет Mac (видеоядра, MLX) и одна модель на все встречи.
+  ...(IS_MAC ? MAC_ASR : WINDOWS_ASR),
   { section: "asr", label: "Язык речи", keys: ["asr.language"], hint: "ru, en или auto", keywords: ["язык", "language"] },
   {
     section: "asr", label: "Уточнять время каждого слова", keys: ["asr.align"], hint: "Точнее границы реплик",
