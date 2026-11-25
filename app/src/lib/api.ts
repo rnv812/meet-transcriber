@@ -459,6 +459,8 @@ export type StorageInfo = {
   home: string;
   engine_dir: string;
   models_dir: string;
+  /** Отдельная папка моделей; null — модели рядом с движком. */
+  models_root?: string | null;
   /** Кэш HF, которым пользуется Meet (общий или свой `models/hf`). */
   hf_cache: string;
   shared_cache: string;

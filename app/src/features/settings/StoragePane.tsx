@@ -20,24 +20,35 @@ import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { gb } from "../wizard/gate";
 import { PathText, Row } from "./Section";
-import { attachMove, bumpStorage, clearMove, moveState, startMove, useMove, useStorageTick } from "./storageMove";
+import {
+  type MoveWhat, attachMove, bumpStorage, clearMove, moveState, startMove, useMove, useStorageTick,
+} from "./storageMove";
 
 const GB = 1024 ** 3;
 
-const PHASES: Record<string, string> = {
-  engine: "Установка движка в новую папку",
-  models: "Копирование моделей",
-  switching: "Перезапуск службы записи из новой папки",
-  cleanup: "Удаление движка и моделей из прежней папки",
-  rollback: "Возвращаю всё на прежнее место",
+const PHASES: Record<MoveWhat, Record<string, string>> = {
+  engine: {
+    engine: "Установка движка в новую папку",
+    models: "Копирование моделей",
+    switching: "Перезапуск службы записи из новой папки",
+    cleanup: "Удаление движка и моделей из прежней папки",
+    rollback: "Возвращаю всё на прежнее место",
+  },
+  models: {
+    models: "Копирование моделей",
+    switching: "Перезапуск службы записи с новой папкой моделей",
+    cleanup: "Удаление моделей из прежней папки",
+    rollback: "Возвращаю модели на прежнее место",
+  },
 };
 
-function MoveProgress({ cancellable }: { cancellable: boolean }) {
+/** Ход переноса `what` (движка или одних моделей) с «Отменить» до переключения. */
+export function MoveProgress({ cancellable, what = "engine" }: { cancellable: boolean; what?: MoveWhat }) {
   const move = useMove();
-  if (move.kind !== "running") return null;
+  if (move.kind !== "running" || move.what !== what) return null;
   const { progress, engine } = move;
-  const phase = progress?.phase ?? "engine";
-  const label = phase === "waiting" ? progress?.text ?? "" : PHASES[phase] ?? progress?.text ?? "Перенос";
+  const phase = progress?.phase ?? (what === "engine" ? "engine" : "models");
+  const label = phase === "waiting" ? progress?.text ?? "" : PHASES[what][phase] ?? progress?.text ?? "Перенос";
   let value: number | null = null;
   let detail: string | null = null;
   if (phase === "models" && progress && progress.total > 0) {
@@ -58,13 +69,19 @@ function MoveProgress({ cancellable }: { cancellable: boolean }) {
   );
 }
 
-function PlanBox({ plan, onStart, onCancel }: { plan: StorageCheck; onStart: () => void; onCancel: () => void }) {
+function PlanBox({ plan, separateModels, onStart, onCancel }: {
+  plan: StorageCheck;
+  /** Модели в отдельной папке: переносится только движок. */
+  separateModels: boolean;
+  onStart: () => void; onCancel: () => void;
+}) {
   const blocked = Boolean(plan.busy || plan.error);
   return (
     <div className="storage__plan" role="group" aria-label="Перенос">
       <span>Перенести в <PathText path={plan.target} /></span>
       <span>
-        Нужно около {gb(plan.needs_gb)} ГБ (движок — {gb(plan.engine_gb)} ГБ, модели — {gb(plan.models_gb)} ГБ)
+        Нужно около {gb(plan.needs_gb)} ГБ
+        {separateModels ? "" : ` (движок — ${gb(plan.engine_gb)} ГБ, модели — ${gb(plan.models_gb)} ГБ)`}
         {plan.free_gb !== null && <>, свободно {gb(plan.free_gb)} ГБ</>}.
       </span>
       {plan.busy && <p className="error">Перенести сейчас нельзя: {plan.busy}. Повторите, когда закончится.</p>}
@@ -72,10 +89,13 @@ function PlanBox({ plan, onStart, onCancel }: { plan: StorageCheck; onStart: () 
       <p className="muted">
         {plan.resume ? "Продолжение прерванного переноса: скопированное уже на месте. " : ""}
         Движок установится в новую папку заново: его пакеты (около 3 ГБ для видеокарты) скачаются один раз в
-        эту папку — нужен интернет. Модели скопируются и проверятся. Прежние удалятся, только когда служба
-        записи заработает из новой папки; при сбое всё останется на прежнем месте, а скопированное — для
-        «Продолжить». Записи не переносятся — их папка задаётся в «Записи». Модели не из каталога (заданные
-        вручную) скачаются заново при первой расшифровке.
+        эту папку — нужен интернет.{" "}
+        {separateModels
+          ? "Модели не переносятся — у них своя папка (блок «Модели распознавания»). Прежний движок удалится"
+          : "Модели скопируются и проверятся. Прежние удалятся"}
+        , только когда служба записи заработает из новой папки; при сбое всё останется на прежнем месте, а
+        скопированное — для «Продолжить». Записи не переносятся — их папка задаётся в «Записи».
+        {separateModels ? "" : " Модели не из каталога (заданные вручную) скачаются заново при первой расшифровке."}
       </p>
       <span className="storage__actions">
         <Button variant="primary" disabled={blocked} onClick={onStart}>
@@ -150,7 +170,9 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
     if (nextInfo) setInfo(nextInfo);
     setStatus(nextStatus);
     // Перенос начат в закрытом с тех пор окне — подключиться к его ходу.
-    if (nextStatus?.moving && moveState().kind === "idle") void attachMove().then(() => void load());
+    if (nextStatus?.moving && moveState().kind === "idle") {
+      void attachMove(nextStatus.moving_kind ?? "engine").then(() => void load());
+    }
   }, [endpoint]);
 
   // И когда сведения поменялись в другом месте (ответ об остатках в окне).
@@ -206,13 +228,20 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
   const running = move.kind === "running";
   const system = onSystemDisk(info, status);
   const stopped = !running ? status?.interrupted ?? null : null;
+  const separate = info.models_root ?? status?.models_root ?? null;
+  const mine = move.kind !== "idle" && move.what === "engine";
   return (
     <>
       <Row label="Где хранить движок и модели" stack
         hint="Движок — несколько гигабайт, модели — ещё столько же: их можно держать на другом диске">
         <div className="storage">
           <span className="folder"><PathText path={info.home} /></span>
-          {info.custom && !system ? (
+          {separate ? (
+            <span className="srow__hint">
+              Движок — в этой папке. Модели — отдельно, в <code className="path">{separate}</code>: их переносят в
+              блоке «Модели распознавания»
+            </span>
+          ) : info.custom && !system ? (
             <span className="srow__hint">Движок, модели Whisper, разделения на спикеров и GigaAM — в этой папке</span>
           ) : info.custom ? (
             <span className="srow__hint">Системный диск: движок и все модели Meet — в папке Meet</span>
@@ -243,10 +272,12 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
               )}
             </span>
           )}
-          {plan && <PlanBox plan={plan} onStart={start} onCancel={() => setPlan(null)} />}
-          <MoveProgress cancellable={Boolean(status?.cancellable)} />
-          {move.kind === "done" && <p className="notice">Готово: движок и модели — в {move.path}</p>}
-          {move.kind === "failed" && <p className="error">{move.error}</p>}
+          {plan && (
+            <PlanBox plan={plan} separateModels={Boolean(separate)} onStart={start} onCancel={() => setPlan(null)} />
+          )}
+          <MoveProgress cancellable={Boolean(status?.cancellable)} what="engine" />
+          {mine && move.kind === "done" && <p className="notice">Готово: движок и модели — в {move.path}</p>}
+          {mine && move.kind === "failed" && <p className="error">{move.error}</p>}
           {error && <p className="error">{error}</p>}
         </div>
       </Row>

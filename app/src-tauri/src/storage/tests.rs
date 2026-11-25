@@ -62,6 +62,8 @@ struct FakeEnv<'a> {
     calls: RefCell<Vec<String>>,
     stopped: RefCell<Vec<PathBuf>>,
     drained: Cell<u32>,
+    /// Куда «копируются» модели при переносе обратно к движку (`to` = None).
+    models_copy_into: RefCell<Option<PathBuf>>,
 }
 
 impl FakeEnv<'_> {
@@ -82,6 +84,52 @@ impl Recover for FakeEnv<'_> {
     fn stop_resident_in(&self, dir: &Path) -> bool {
         self.stopped.borrow_mut().push(dir.to_path_buf());
         !self.resident_stuck
+    }
+}
+
+impl SwitchEnv for FakeEnv<'_> {
+    fn hold(&self) -> Result<Option<String>, String> {
+        self.log("hold");
+        if self.hold_errors.get() > 0 {
+            self.hold_errors.set(self.hold_errors.get() - 1);
+            return Err("Служба записи не ответила: таймаут".into());
+        }
+        let answer = self.busy.borrow_mut().pop_front();
+        if answer.is_none() && self.cancel_in_hold {
+            assert!(self.control.unwrap().cancel());
+        }
+        Ok(answer)
+    }
+
+    fn release(&self) {
+        self.log("release");
+    }
+
+    fn respawn(&self) {
+        self.log("respawn");
+    }
+
+    fn emit(&self, phase: &'static str, _text: &str, _done: u64, _total: u64) {
+        self.log(format!("emit {phase}"));
+    }
+
+    fn pause(&self, _duration: Duration) {
+        self.log("pause");
+        if self.cancel_in_pause {
+            self.control.unwrap().cancel();
+        }
+    }
+
+    fn drain(&self, data_dir: &Path) {
+        self.drained.set(self.drained.get() + 1);
+        drain_once(data_dir, self);
+    }
+
+    fn checkpoint(&self, what: &'static str) {
+        self.log(format!("checkpoint {what}"));
+        if self.kill_at == Some(what) {
+            panic!("процесс убит на шаге {what}");
+        }
     }
 }
 
@@ -129,23 +177,6 @@ impl MoveEnv for FakeEnv<'_> {
         Ok(())
     }
 
-    fn hold(&self) -> Result<Option<String>, String> {
-        self.log("hold");
-        if self.hold_errors.get() > 0 {
-            self.hold_errors.set(self.hold_errors.get() - 1);
-            return Err("Служба записи не ответила: таймаут".into());
-        }
-        let answer = self.busy.borrow_mut().pop_front();
-        if answer.is_none() && self.cancel_in_hold {
-            assert!(self.control.unwrap().cancel());
-        }
-        Ok(answer)
-    }
-
-    fn release(&self) {
-        self.log("release");
-    }
-
     fn restart_from(&self, env: &Path) -> bool {
         self.log(format!("restart {}", env.display()));
         if self.cancel_in_restart {
@@ -154,32 +185,40 @@ impl MoveEnv for FakeEnv<'_> {
         }
         !self.restart_fails
     }
+}
 
-    fn respawn(&self) {
-        self.log("respawn");
-    }
-
-    fn emit(&self, phase: &'static str, _text: &str, _done: u64, _total: u64) {
-        self.log(format!("emit {phase}"));
-    }
-
-    fn pause(&self, _duration: Duration) {
-        self.log("pause");
-        if self.cancel_in_pause {
-            self.control.unwrap().cancel();
+impl models_move::ModelsEnv for FakeEnv<'_> {
+    fn copy_models_to(&self, to: Option<&Path>) -> Result<(), String> {
+        self.log(match to {
+            Some(to) => format!("copy-models {}", to.display()),
+            None => "copy-models default".to_string(),
+        });
+        let dir = to
+            .map(Path::to_path_buf)
+            .or_else(|| self.models_copy_into.borrow().clone());
+        if let Some(dir) = dir {
+            for file in ["hf/models--a--b/snapshots/r/model.bin", "gigaam/v3.ckpt"] {
+                let path = dir.join(file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, "m").unwrap();
+            }
         }
-    }
-
-    fn drain(&self, data_dir: &Path) {
-        self.drained.set(self.drained.get() + 1);
-        drain_once(data_dir, self);
-    }
-
-    fn checkpoint(&self, what: &'static str) {
-        self.log(format!("checkpoint {what}"));
-        if self.kill_at == Some(what) {
-            panic!("процесс убит на шаге {what}");
+        self.checkpoint("copy-models");
+        if self.cancel_in_install {
+            assert!(self.control.unwrap().cancel());
         }
+        if self.fail_copy {
+            return Err("Недостаточно места для моделей".into());
+        }
+        Ok(())
+    }
+
+    fn restart_with_models(&self, models_dir: &Path) -> bool {
+        self.log(format!("restart-models {}", models_dir.display()));
+        if self.cancel_in_restart {
+            assert!(!self.control.unwrap().cancel());
+        }
+        !self.restart_fails
     }
 }
 
@@ -1708,4 +1747,487 @@ fn link_into_a_marked_folder_is_refused_too() {
         Err(INSIDE_OURS.to_string())
     );
     let _ = fs::remove_dir(&link);
+}
+
+// --- отдельная папка моделей (models_move) -------------------------------------------
+
+use models_move::{
+    abandon_models, begin_models_move, check_models_default, check_models_target, default_dir,
+    execute_models, finish_models, models_blocked, models_dir, models_pointer, models_root,
+    read_models_journal, recover_models_journal, reset_models, resolve_models_target,
+    write_models_journal, write_models_pointer, ModelsJournal, CANCELLED_MODELS,
+    ENGINE_INTERRUPTED, MODELS_HERE, MODELS_INTERRUPTED, MODELS_JOURNAL, MODELS_POINTER,
+    START_FAILED_MODELS,
+};
+
+/// Папка данных с движком и моделями по умолчанию и пустая помеченная папка
+/// для моделей (`to`).
+fn models_world(name: &str) -> World {
+    let w = world(name);
+    let to = w.to.parent().unwrap().join("Models");
+    fs::create_dir_all(&to).unwrap();
+    write_mark(&to, &w.data).unwrap();
+    World { to, ..w }
+}
+
+fn run_models(
+    w: &World,
+    env: &FakeEnv,
+    control: &MoveControl,
+    to: Option<&Path>,
+) -> Result<(), String> {
+    let journal = ModelsJournal::new(&w.data, to.map(Path::to_path_buf));
+    execute_models(env, control, &w.data, journal)
+}
+
+fn models_phase(data: &Path) -> Option<Phase> {
+    read_models_journal(data).map(|journal| journal.phase)
+}
+
+/// «Убить» перенос моделей на шаге `at`, затем восстановиться при старте.
+fn kill_models_then_recover(w: &World, at: &'static str) {
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        kill_at: Some(at),
+        ..Default::default()
+    };
+    let died = catch_unwind(AssertUnwindSafe(|| {
+        run_models(w, &env, &control, Some(&w.to))
+    }));
+    assert!(died.is_err(), "должен был «умереть» на {at}");
+    if let Some(journal) = recover_models_journal(&w.data) {
+        finish_models(&w.data, &journal).unwrap();
+    }
+}
+
+fn put(dir: &Path, relative: &str) {
+    let path = dir.join(relative);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, "m").unwrap();
+}
+
+#[test]
+fn without_models_choice_models_live_with_the_engine() {
+    let w = models_world("m-default");
+    assert_eq!(models_pointer(&w.data), Pointer::Absent);
+    assert_eq!(models_dir(&w.data), w.data.join("models"));
+    let engine = w.to.parent().unwrap().join("Meet");
+    write_pointer(&w.data, Some(&engine)).unwrap();
+    assert_eq!(models_dir(&w.data), engine.join("models"));
+    assert_eq!(models_blocked(&w.data), None);
+}
+
+#[test]
+fn models_choice_is_read_back_and_a_broken_one_blocks() {
+    let w = models_world("m-pointer");
+    write_models_pointer(&w.data, Some(&w.to)).unwrap();
+    assert_eq!(models_root(&w.data), Some(w.to.clone()));
+    assert_eq!(models_dir(&w.data), w.to);
+    let raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(w.data.join(MODELS_POINTER)).unwrap()).unwrap();
+    assert_eq!(raw["version"], 1);
+    assert!(raw["folder"].is_string(), "id папки из её метки");
+    assert_eq!(root(&w.data), None, "выбор движка не тронут");
+    fs::write(w.data.join(MODELS_POINTER), "{").unwrap();
+    assert_eq!(models_blocked(&w.data), Some(Blocked::Unreadable));
+    assert_eq!(models_root(&w.data), None);
+    let gone = w.to.parent().unwrap().join("unplugged");
+    write_models_pointer(&w.data, Some(&gone)).unwrap();
+    assert_eq!(
+        models_blocked(&w.data),
+        Some(Blocked::Missing(gone.clone()))
+    );
+    assert!(!gone.exists());
+    write_models_pointer(&w.data, None).unwrap();
+    assert_eq!(models_pointer(&w.data), Pointer::Absent);
+}
+
+#[test]
+fn models_move_switches_after_the_hold_and_removes_the_old_models() {
+    let w = models_world("m-happy");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        busy: RefCell::new(VecDeque::from(["скачиваются модели".to_string()])),
+        ..Default::default()
+    };
+    run_models(&w, &env, &control, Some(&w.to)).unwrap();
+    assert_eq!(models_root(&w.data), Some(w.to.clone()));
+    assert_eq!(root(&w.data), None, "движок не переезжает");
+    assert_eq!(read_models_journal(&w.data), None);
+    assert!(
+        w.data.join(LEFTOVERS).is_file(),
+        "из общего кэша — вопрос об остатках"
+    );
+    assert!(w.to.join("gigaam").join("v3.ckpt").is_file());
+    assert!(
+        !w.data.join("models").exists(),
+        "прежние модели Meet удалены"
+    );
+    assert!(w.data.join("engine").join("0.3.3").is_dir(), "движок цел");
+    assert!(w.data.join("config.json").is_file());
+    let calls = env.calls.borrow().clone();
+    assert_eq!(env.called("install"), 0);
+    assert_eq!(env.called("hold"), 2, "занят — ждём и спрашиваем снова");
+    let hold = calls.iter().rposition(|c| c == "hold").unwrap();
+    let pointer = calls
+        .iter()
+        .position(|c| c == "checkpoint pointer")
+        .unwrap();
+    assert!(
+        hold < pointer,
+        "выбор пишется только после удержания: {calls:?}"
+    );
+    assert!(calls.contains(&format!("restart-models {}", w.to.display())));
+    assert!(
+        env.stopped.borrow().is_empty(),
+        "резидент из папки моделей не гасится"
+    );
+}
+
+#[test]
+fn models_move_between_folders_and_back_to_the_engine() {
+    let w = models_world("m-back");
+    let control = MoveControl::new();
+    run_models(&w, &FakeEnv::default(), &control, Some(&w.to)).unwrap();
+    // В другую отдельную папку: прежняя убирается целиком (метка, папка).
+    let second = w.to.parent().unwrap().join("G").join("Models");
+    fs::create_dir_all(&second).unwrap();
+    write_mark(&second, &w.data).unwrap();
+    run_models(&w, &FakeEnv::default(), &control, Some(&second)).unwrap();
+    assert_eq!(models_root(&w.data), Some(second.clone()));
+    assert!(!w.to.exists(), "прежняя отдельная папка убрана");
+    // Обратно к движку.
+    let env = FakeEnv {
+        models_copy_into: RefCell::new(Some(default_dir(&w.data))),
+        ..Default::default()
+    };
+    assert_eq!(check_models_default(&w.data), Ok(w.data.join("models")));
+    run_models(&w, &env, &control, None).unwrap();
+    assert_eq!(models_pointer(&w.data), Pointer::Absent);
+    assert_eq!(models_dir(&w.data), w.data.join("models"));
+    assert!(w
+        .data
+        .join("models")
+        .join("gigaam")
+        .join("v3.ckpt")
+        .is_file());
+    assert!(!second.exists());
+    assert_eq!(env.called("copy-models default"), 1);
+    assert_eq!(
+        check_models_default(&w.data),
+        Err("Модели уже в папке по умолчанию".to_string())
+    );
+}
+
+/// Журнал моделей говорит «перенос идёт» (так его читает `meet.storage.moving`).
+fn models_moving(data: &Path) -> bool {
+    read_models_journal(data).is_some_and(|journal| journal.phase.moving())
+}
+
+#[test]
+fn killed_before_the_switch_keeps_the_old_models_live() {
+    for at in ["models", "copy-models", "switching"] {
+        let w = models_world(&format!("m-kill-{at}"));
+        kill_models_then_recover(&w, at);
+        assert_eq!(
+            models_root(&w.data),
+            None,
+            "{at}: прежняя папка снова главная"
+        );
+        assert_eq!(models_phase(&w.data), Some(Phase::Interrupted), "{at}");
+        assert!(
+            w.data
+                .join("models")
+                .join("gigaam")
+                .join("v3.ckpt")
+                .is_file(),
+            "{at}"
+        );
+        assert!(
+            !models_moving(&w.data),
+            "{at}: прерванный — модели снова качаются"
+        );
+    }
+}
+
+#[test]
+fn killed_after_the_pointer_brings_the_old_folder_back_and_continues_later() {
+    let w = models_world("m-kill-pointer");
+    kill_models_then_recover(&w, "pointer");
+    assert_eq!(
+        models_root(&w.data),
+        None,
+        "новый резидент не ответил — выбор прежний"
+    );
+    assert!(!w.data.join(LEFTOVERS).exists());
+    assert_eq!(models_phase(&w.data), Some(Phase::Interrupted));
+    assert!(
+        w.to.join("gigaam").join("v3.ckpt").is_file(),
+        "скопированное ждёт «Продолжить»"
+    );
+    // «Продолжить»: та же папка не отменяется.
+    let env = FakeEnv::default();
+    begin_models_move(&w.data, &w.to, &env, || Ok(())).unwrap();
+    assert_eq!(models_phase(&w.data), Some(Phase::Interrupted));
+    run_models(&w, &env, &MoveControl::new(), Some(&w.to)).unwrap();
+    assert_eq!(models_root(&w.data), Some(w.to.clone()));
+    assert_eq!(read_models_journal(&w.data), None);
+}
+
+#[test]
+fn killed_during_models_cleanup_is_finished_on_the_next_start() {
+    let w = models_world("m-kill-cleanup");
+    kill_models_then_recover(&w, "cleanup");
+    assert_eq!(models_root(&w.data), Some(w.to.clone()));
+    assert_eq!(read_models_journal(&w.data), None);
+    assert!(!w.data.join("models").exists());
+    assert!(w.data.join("engine").join("0.3.3").is_dir());
+}
+
+#[test]
+fn another_target_abandons_the_interrupted_models_move() {
+    let w = models_world("m-other");
+    kill_models_then_recover(&w, "switching");
+    let other = w.to.parent().unwrap().join("Other");
+    let env = FakeEnv::default();
+    begin_models_move(&w.data, &other, &env, || Ok(())).unwrap();
+    assert_eq!(read_models_journal(&w.data), None);
+    assert!(!w.to.exists(), "скопированное в брошенную папку убрано");
+    assert!(w
+        .data
+        .join("models")
+        .join("gigaam")
+        .join("v3.ckpt")
+        .is_file());
+}
+
+#[test]
+fn cancel_during_the_models_copy_clears_the_new_folder() {
+    let w = models_world("m-cancel");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        control: Some(&control),
+        cancel_in_install: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        run_models(&w, &env, &control, Some(&w.to)),
+        Err(CANCELLED_MODELS.to_string())
+    );
+    assert_eq!(read_models_journal(&w.data), None);
+    assert_eq!(models_root(&w.data), None);
+    assert!(!w.to.exists(), "новая папка очищена");
+    assert!(w
+        .data
+        .join("models")
+        .join("gigaam")
+        .join("v3.ckpt")
+        .is_file());
+    assert_eq!(env.called("hold"), 0);
+}
+
+#[test]
+fn failed_copy_is_an_interrupted_models_move() {
+    let w = models_world("m-fail");
+    let env = FakeEnv {
+        fail_copy: true,
+        ..Default::default()
+    };
+    let error = run_models(&w, &env, &MoveControl::new(), Some(&w.to)).unwrap_err();
+    assert!(error.contains("места"));
+    assert_eq!(models_phase(&w.data), Some(Phase::Interrupted));
+    assert!(
+        w.to.join("gigaam").join("v3.ckpt").is_file(),
+        "скопированное остаётся"
+    );
+    // «Отменить» прерванный: папка — в очередь и убирается.
+    abandon_models(&w.data, &read_models_journal(&w.data).unwrap()).unwrap();
+    drain_once(&w.data, &FakeEnv::default());
+    assert!(!w.to.exists());
+}
+
+#[test]
+fn resident_without_the_new_models_folder_brings_the_old_one_back() {
+    let w = models_world("m-restart");
+    let env = FakeEnv {
+        restart_fails: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        run_models(&w, &env, &MoveControl::new(), Some(&w.to)),
+        Err(START_FAILED_MODELS.to_string())
+    );
+    assert_eq!(models_root(&w.data), None);
+    assert!(!w.data.join(LEFTOVERS).exists());
+    assert_eq!(env.called("respawn"), 1);
+    assert_eq!(models_phase(&w.data), Some(Phase::Interrupted));
+    assert!(w
+        .data
+        .join("models")
+        .join("gigaam")
+        .join("v3.ckpt")
+        .is_file());
+}
+
+#[test]
+fn abandoned_move_back_to_the_engine_drops_partial_copies_but_never_the_live_folder() {
+    let w = models_world("m-abandon-back");
+    run_models(&w, &FakeEnv::default(), &MoveControl::new(), Some(&w.to)).unwrap();
+    let env = FakeEnv {
+        models_copy_into: RefCell::new(Some(default_dir(&w.data))),
+        fail_copy: true,
+        ..Default::default()
+    };
+    assert!(run_models(&w, &env, &MoveControl::new(), None).is_err());
+    assert!(w.data.join("models").join("gigaam").is_dir());
+    abandon_models(&w.data, &read_models_journal(&w.data).unwrap()).unwrap();
+    assert!(
+        !w.data.join("models").exists(),
+        "недокопированное к движку убрано"
+    );
+    assert!(
+        w.to.join("gigaam").join("v3.ckpt").is_file(),
+        "живая папка цела"
+    );
+    assert_eq!(models_root(&w.data), Some(w.to.clone()));
+}
+
+#[test]
+fn drain_never_deletes_the_live_models_folder() {
+    let w = models_world("m-drain-live");
+    write_models_pointer(&w.data, Some(&w.to)).unwrap();
+    put(&w.to, "gigaam/v3.ckpt");
+    queue_discard(&w.data, &w.to, Scope::Models);
+    let env = FakeEnv::default();
+    assert_eq!(drain_once(&w.data, &env), 0);
+    assert!(w.to.join("gigaam").join("v3.ckpt").is_file());
+    // Отключённый диск моделей — очередь ждёт.
+    let gone = w.to.parent().unwrap().join("unplugged");
+    write_models_pointer(&w.data, Some(&gone)).unwrap();
+    let other = w.to.parent().unwrap().join("Other");
+    fs::create_dir_all(&other).unwrap();
+    write_mark(&other, &w.data).unwrap();
+    queue_discard(&w.data, &other, Scope::Models);
+    assert_eq!(drain_once(&w.data, &env), 1);
+    assert!(other.is_dir());
+}
+
+#[test]
+fn engine_move_leaves_separate_models_where_they_are() {
+    let w = models_world("m-engine");
+    run_models(&w, &FakeEnv::default(), &MoveControl::new(), Some(&w.to)).unwrap();
+    let engine_to = w.to.parent().unwrap().join("Meet");
+    let env = FakeEnv::default();
+    let journal = Journal::new(None, engine_to.clone(), Phase::Engine);
+    execute(
+        &env,
+        &MoveControl::new(),
+        &w.data,
+        journal,
+        "cuda",
+        VERSION_APP,
+    )
+    .unwrap();
+    assert_eq!(root(&w.data), Some(engine_to.clone()));
+    assert_eq!(
+        env.called("copy"),
+        0,
+        "модели не копируются: {:?}",
+        env.calls.borrow()
+    );
+    assert_eq!(models_root(&w.data), Some(w.to.clone()));
+    assert!(w.to.join("gigaam").join("v3.ckpt").is_file());
+    assert!(!engine_to.join("models").exists());
+    assert_eq!(default_dir(&w.data), engine_to.join("models"));
+}
+
+#[test]
+fn moves_go_one_at_a_time() {
+    let w = models_world("m-one");
+    kill_models_then_recover(&w, "switching");
+    let env = FakeEnv::default();
+    let engine_to = w.to.parent().unwrap().join("Meet");
+    assert_eq!(
+        begin_move(&w.data, &engine_to, &env, || Ok(())),
+        Err(MODELS_INTERRUPTED.to_string())
+    );
+    abandon_models(&w.data, &read_models_journal(&w.data).unwrap()).unwrap();
+    let journal = Journal::new(None, engine_to.clone(), Phase::Interrupted);
+    write_journal(&w.data, &journal).unwrap();
+    assert_eq!(
+        begin_models_move(&w.data, &w.to, &env, || Ok(())),
+        Err(ENGINE_INTERRUPTED.to_string())
+    );
+    // Уборка после переключения моделей доводится перед переносом движка.
+    remove_file(&w.data.join(JOURNAL)).unwrap();
+    let mut cleanup = ModelsJournal::new(&w.data, Some(w.to.clone()));
+    cleanup.phase = Phase::Cleanup;
+    write_models_journal(&w.data, &cleanup).unwrap();
+    write_models_pointer(&w.data, Some(&w.to)).unwrap();
+    begin_move(&w.data, &engine_to, &env, || Ok(())).unwrap();
+    assert_eq!(read_models_journal(&w.data), None);
+    assert!(!w.data.join("models").exists());
+}
+
+#[test]
+fn engine_and_models_folders_never_overlap() {
+    let w = models_world("m-overlap");
+    let base = w.to.parent().unwrap().to_path_buf();
+    write_models_pointer(&w.data, Some(&w.to)).unwrap();
+    // Движок — не в папку моделей, не внутрь неё и не вокруг неё.
+    assert_eq!(
+        check_target(&w.to, &w.data, &w.data),
+        Err(MODELS_HERE.to_string())
+    );
+    assert_eq!(
+        check_target(&w.to.join("Engine"), &w.data, &w.data),
+        Err(MODELS_HERE.to_string())
+    );
+    write_models_pointer(&w.data, None).unwrap();
+    // Модели — не в папку движка, не в папку данных, не туда, где уже лежат.
+    assert_eq!(check_models_target(&base.join("Fresh"), &w.data), Ok(()));
+    assert!(check_models_target(&w.data.join("models"), &w.data)
+        .unwrap_err()
+        .contains("уже в этой папке"));
+    assert!(check_models_target(&w.data, &w.data).is_err());
+    assert!(check_models_target(&w.data.join("voices"), &w.data).is_err());
+    let engine = base.join("Meet");
+    write_pointer(&w.data, Some(&engine)).unwrap();
+    // Модели сейчас отдельно — и всё равно не в папку движка.
+    write_models_pointer(&w.data, Some(&w.to)).unwrap();
+    assert!(check_models_target(&engine, &w.data)
+        .unwrap_err()
+        .contains("движка"));
+    put(&base.join("Photos"), "cat.jpg");
+    assert!(check_models_target(&base.join("Photos"), &w.data)
+        .unwrap_err()
+        .contains("не пуста"));
+    assert_eq!(
+        resolve_models_target(&base.join("Photos"), &w.data),
+        base.join("Photos").join("Meet Models")
+    );
+    assert!(check_models_target(Path::new("relative"), &w.data).is_err());
+}
+
+#[test]
+fn reset_models_forgets_an_unplugged_folder() {
+    let w = models_world("m-reset");
+    let gone = w.to.parent().unwrap().join("unplugged");
+    write_models_pointer(&w.data, Some(&gone)).unwrap();
+    let mut journal = ModelsJournal::new(&w.data, Some(w.to.clone()));
+    journal.phase = Phase::Interrupted;
+    write_models_journal(&w.data, &journal).unwrap();
+    reset_models(&w.data).unwrap();
+    assert_eq!(models_pointer(&w.data), Pointer::Absent);
+    assert_eq!(read_models_journal(&w.data), None);
+    assert!(discards_pending(&w.data), "брошенная папка — в очереди");
+}
+
+#[test]
+fn unreadable_models_journal_is_quarantined() {
+    let w = models_world("m-bad-journal");
+    fs::write(w.data.join(MODELS_JOURNAL), "{").unwrap();
+    assert_eq!(recover_models_journal(&w.data), None);
+    assert!(!w.data.join(MODELS_JOURNAL).exists());
+    assert!(w.data.join(format!("{MODELS_JOURNAL}.bad")).is_file());
 }

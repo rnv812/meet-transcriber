@@ -73,6 +73,19 @@ test("выбор папки — сколько нужно и сколько св
   expect(screen.getByRole("button", { name: "Перенести" })).toBeEnabled();
 });
 
+test("модели в отдельной папке — общий перенос двигает только движок", async () => {
+  vi.mocked(api.getStorage).mockResolvedValue(info({ models_root: "F:\\Models" }));
+  vi.mocked(shell.storageStatus).mockResolvedValue(status({ models_root: "F:\\Models" }));
+  vi.mocked(shell.pickFolder).mockResolvedValue("E:\\");
+  vi.mocked(shell.storageCheck).mockResolvedValue(plan({ needs_gb: 8.5, models_gb: 0 }));
+  render(<StoragePane endpoint={ep} />);
+  expect(await screen.findByText("F:\\Models")).toBeInTheDocument();
+  expect(screen.getByText(/Модели — отдельно/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Выбрать папку…" }));
+  expect(await screen.findByText(/Модели не переносятся — у них своя папка/)).toBeInTheDocument();
+  expect(screen.queryByText(/модели — 0/)).toBeNull();
+});
+
 test("идёт запись — перенести нельзя, причина видна", async () => {
   vi.mocked(shell.pickFolder).mockResolvedValue("E:\\Meet");
   vi.mocked(shell.storageCheck).mockResolvedValue(plan({ busy: "идёт запись" }));

@@ -384,6 +384,12 @@ def ensure(name: str, on_line=None, opener=None) -> None:
     Под замком модели (`_files_lock`): одну модель качает один процесс."""
     if name not in FILES:
         raise Unavailable(f"GigaAM: неизвестная модель {name}")
+    from meet import paths
+
+    if (missing := paths.models_unavailable()) is not None:
+        # Диск с моделями отключён: не создавать папку на системном диске.
+        raise Unavailable(f"GigaAM: папка моделей недоступна ({missing}) — подключите диск "
+                          "или выберите папку моделей в окне Meet")
     root = cache_dir()
     root.mkdir(parents=True, exist_ok=True)
     with _files_lock(name, on_line):

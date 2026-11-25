@@ -137,7 +137,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: "asr", label: "Компоненты", keywords: ["pytorch", "cuda"] },
   { section: "asr", label: "Расположение", hint: "Где установлен движок", keywords: ["путь"] },
   { section: "asr", label: "Где хранить движок и модели", hint: "Перенос на другой диск", keywords: ["диск", "перенос", "место"] },
-  { section: "asr", label: "Папка моделей", keywords: ["кэш", "hugging face"] },
+  { section: "asr", label: "Папка моделей", hint: "Перенос моделей на другой диск", keywords: ["кэш", "hugging face", "перенос", "диск"] },
   { section: "asr", label: "Папка моделей GigaAM", keywords: ["gigaam"] },
   // ИИ
   { section: "models", label: "Модели", hint: "Какие включены и какая по умолчанию", keywords: ["провайдер", "claude", "codex", "opencode", "antigravity", "agy", "gemini", "локальная"] },

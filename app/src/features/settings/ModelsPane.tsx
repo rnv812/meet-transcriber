@@ -12,6 +12,7 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { Tip } from "../../ui/Tip";
+import { ModelsFolder } from "./ModelsFolder";
 import { PathText, Row } from "./Section";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "разделение на спикеров", align: "время слов" };
@@ -192,11 +193,9 @@ export function ModelsPane({ endpoint, usage = {} }: {
           onConfirmRemove={() => void remove(m.id)} onCancelRemove={() => setConfirmRemove(null)}
         />
       ))}
-      <Row label="Папка моделей" hint="Общая с библиотеками движка: скачанные модели не загружаются повторно">
-        <span className="folder"><PathText path={models.cache} /></span>
-      </Row>
+      <ModelsFolder cache={models.cache} />
       {models.gigaam_cache && (
-        <Row label="Папка моделей GigaAM" hint="В папке данных приложения; после загрузки работает без сети">
+        <Row label="Папка моделей GigaAM" hint="Внутри папки моделей; после загрузки работает без сети">
           <span className="folder"><PathText path={models.gigaam_cache} /></span>
         </Row>
       )}

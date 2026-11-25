@@ -1,10 +1,11 @@
 // Перенос движка и моделей в приложении: настоящее окружение переноса
 // (`AppEnv`: установщик, копирование, резидент, события окна), проверка перед
 // переносом и команды окна. Сама логика шагов, журнала, отката и уборки —
-// в `storage.rs` (там же тесты на подделке).
+// в `storage.rs` и `storage/models_move.rs` (перенос одних моделей; там же
+// тесты на подделке).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,10 +16,14 @@ use crate::api;
 use crate::engine;
 use crate::logs::shell_log;
 use crate::resident::{self, ResidentStatus, Supervisor};
+use crate::storage::models_move::{
+    self, check_models_default, check_models_target, execute_models, models_blocked,
+    models_pointer, read_models_journal, resolve_models_target, ModelsEnv, ModelsJournal,
+};
 use crate::storage::{
     self, abandon, check_target, dir_bytes, execute, home, needs_gb, parse_copy_line, pointer,
     read_journal, resolve_target, same_path, Blocked, CopyLine, Journal, MoveControl, MoveEnv,
-    Phase, Pointer, Recover,
+    Phase, Pointer, Recover, SwitchEnv,
 };
 
 /// Событие хода переноса: `{phase, text, done, total}`.
@@ -32,15 +37,23 @@ const START_TIMEOUT: Duration = Duration::from_secs(180);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(75);
 const POLL: Duration = Duration::from_millis(250);
 
-static MOVING: AtomicBool = AtomicBool::new(false);
+/// Какой перенос идёт сейчас: переносы — по одному (движок или модели).
+static MOVING: AtomicU8 = AtomicU8::new(IDLE);
+const IDLE: u8 = 0;
+const ENGINE_MOVE: u8 = 1;
+const MODELS_MOVE: u8 = 2;
 static CONTROL: MoveControl = MoveControl::new();
+
+fn moving_now() -> bool {
+    MOVING.load(Ordering::SeqCst) != IDLE
+}
 
 struct Moving;
 
 impl Moving {
-    fn begin() -> Result<Moving, String> {
+    fn begin(kind: u8) -> Result<Moving, String> {
         MOVING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(IDLE, kind, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| "Перенос уже идёт".to_string())?;
         CONTROL.reset();
         Ok(Moving)
@@ -49,7 +62,7 @@ impl Moving {
 
 impl Drop for Moving {
     fn drop(&mut self) {
-        MOVING.store(false, Ordering::SeqCst);
+        MOVING.store(IDLE, Ordering::SeqCst);
     }
 }
 
@@ -117,9 +130,24 @@ impl Recover for StartupEnv {
 
 /// Уборка очереди в фоне, с повторами (`storage::DRAIN_RETRIES`).
 fn drain_in_background(data: PathBuf, cleanup: Option<Journal>) {
+    drain_all_in_background(data, cleanup, None);
+}
+
+/// То же с доведением уборки после переноса моделей.
+fn drain_all_in_background(
+    data: PathBuf,
+    cleanup: Option<Journal>,
+    models_cleanup: Option<ModelsJournal>,
+) {
     let spawned = thread::Builder::new()
         .name("meet-storage-cleanup".into())
         .spawn(move || {
+            if let Some(journal) = models_cleanup {
+                match models_move::finish_models(&data, &journal) {
+                    Ok(()) => shell_log!("прежние модели удалены"),
+                    Err(error) => shell_log!("прежние модели удалены не все: {error}"),
+                }
+            }
             let mut left = storage::recover_slow(&data, cleanup, &StartupEnv);
             for delay in storage::DRAIN_RETRIES.iter().skip(1) {
                 if left == 0 {
@@ -144,8 +172,9 @@ fn drain_in_background(data: PathBuf, cleanup: Option<Journal>) {
 pub fn recover_at_startup() {
     let data = resident::data_dir();
     let cleanup = storage::recover_journal(&data);
-    if cleanup.is_some() || storage::discards_pending(&data) {
-        drain_in_background(data, cleanup);
+    let models_cleanup = models_move::recover_models_journal(&data);
+    if cleanup.is_some() || models_cleanup.is_some() || storage::discards_pending(&data) {
+        drain_all_in_background(data, cleanup, models_cleanup);
     }
 }
 
@@ -170,13 +199,69 @@ impl MoveEnv for AppEnv<'_> {
     }
 
     fn copy_models(&self, to: &Path) -> Result<(), String> {
-        copy_models(self.app, &self.data, to, &self.version)
+        let python = engine::python_of(&engine::env_dir(to, &self.version));
+        let args = [
+            "copy".to_string(),
+            "--to".into(),
+            to.to_string_lossy().into_owned(),
+        ];
+        copy_models(self.app, &self.data, &python, &args)
     }
 
     fn smoke(&self, env: &Path) -> Result<(), String> {
         smoke(&self.data, env)
     }
 
+    fn restart_from(&self, env: &Path) -> bool {
+        let supervisor = self.app.state::<Supervisor>();
+        supervisor.respawn(self.app);
+        started_from(&supervisor, env)
+    }
+}
+
+impl ModelsEnv for AppEnv<'_> {
+    fn copy_models_to(&self, to: Option<&Path>) -> Result<(), String> {
+        // Python нынешнего движка: движок при переносе моделей не переезжает.
+        let python = engine::python_of(&engine::env_dir(&home(&self.data), &self.version));
+        let mut args = vec!["copy-models".to_string()];
+        if let Some(to) = to {
+            args.push("--to".into());
+            args.push(to.to_string_lossy().into_owned());
+        }
+        copy_models(self.app, &self.data, &python, &args)
+    }
+
+    fn restart_with_models(&self, models_dir: &Path) -> bool {
+        let supervisor = self.app.state::<Supervisor>();
+        supervisor.respawn(self.app);
+        let env = engine::env_dir(&home(&self.data), &self.version);
+        if !started_from(&supervisor, &env) {
+            return false;
+        }
+        // Резидент сам называет папку моделей, которой пользуется (её же
+        // наследуют задачи и job_worker): не та — переключение не удалось.
+        let named = client()
+            .and_then(|(_, client)| client.get("/storage").ok())
+            .and_then(|value| value.get("models_dir")?.as_str().map(PathBuf::from));
+        match named {
+            Some(named) if same_path(&named, models_dir) => true,
+            Some(named) => {
+                shell_log!(
+                    "резидент берёт модели из {}, а не из {}",
+                    named.display(),
+                    models_dir.display()
+                );
+                false
+            }
+            None => {
+                shell_log!("резидент не назвал папку моделей");
+                false
+            }
+        }
+    }
+}
+
+impl SwitchEnv for AppEnv<'_> {
     fn hold(&self) -> Result<Option<String>, String> {
         if self.app.state::<Supervisor>().status() != ResidentStatus::Running {
             return Err(NOT_RUNNING.into());
@@ -202,12 +287,6 @@ impl MoveEnv for AppEnv<'_> {
         if let Some((_, client)) = client() {
             let _ = client.delete(&format!("/storage/hold?id={}", self.hold_id));
         }
-    }
-
-    fn restart_from(&self, env: &Path) -> bool {
-        let supervisor = self.app.state::<Supervisor>();
-        supervisor.respawn(self.app);
-        started_from(&supervisor, env)
     }
 
     fn respawn(&self) {
@@ -247,16 +326,14 @@ fn emit(app: &AppHandle, phase: &'static str, text: &str, done: u64, total: u64)
     );
 }
 
-fn copy_models(app: &AppHandle, data: &Path, to: &Path, version: &str) -> Result<(), String> {
-    let python = engine::python_of(&engine::env_dir(to, version));
-    let argv: Vec<String> = vec![
+/// `python -m meet.storage <args>` (копирование моделей), ход — событиями.
+fn copy_models(app: &AppHandle, data: &Path, python: &Path, args: &[String]) -> Result<(), String> {
+    let mut argv: Vec<String> = vec![
         python.to_string_lossy().into_owned(),
         "-m".into(),
         "meet.storage".into(),
-        "copy".into(),
-        "--to".into(),
-        to.to_string_lossy().into_owned(),
     ];
+    argv.extend(args.iter().cloned());
     let envs: [(&str, std::ffi::OsString); 3] = [
         ("PYTHONIOENCODING", "utf-8".into()),
         ("PYTHONUTF8", "1".into()),
@@ -380,6 +457,12 @@ struct Plan {
 fn plan(app: &AppHandle, picked: &Path) -> Result<Plan, String> {
     let data = resident::data_dir();
     storage::ready(&data)?;
+    if models_pointer(&data) == Pointer::Unreadable {
+        return Err(format!(
+            "{} — сначала верните модели в папку по умолчанию (раздел «Модели»)",
+            models_move::MODELS_UNREADABLE_TITLE
+        ));
+    }
     let current = home(&data);
     let target = resolve_target(picked, &data);
     check_target(&target, &current, &data)?;
@@ -388,9 +471,14 @@ fn plan(app: &AppHandle, picked: &Path) -> Result<Plan, String> {
         .ok_or("Движок не установлен — перенос возможен после установки")?;
     let info = resident_info(app)?;
     let engine_gb = engine::space_for(&target, &profile);
+    // Модели в отдельной папке не переносятся: место — только под движок.
     // Продолжение: скопированное уже на месте и место не займёт снова.
     let present = dir_bytes(&target.join("models"));
-    let models = info.models_bytes.saturating_sub(present);
+    let models = if models_move::models_root(&data).is_some() {
+        0
+    } else {
+        info.models_bytes.saturating_sub(present)
+    };
     let models_gb = models as f64 / f64::from(1u32 << 30);
     let needs = needs_gb(engine_gb, models);
     let free = engine::free_gb(&target);
@@ -416,7 +504,7 @@ fn plan(app: &AppHandle, picked: &Path) -> Result<Plan, String> {
 
 fn run_move(app: &AppHandle, picked: &Path) -> Result<String, String> {
     let _install = engine::begin_install()?;
-    let _moving = Moving::begin()?;
+    let _moving = Moving::begin(ENGINE_MOVE)?;
     let data = resident::data_dir();
     let env = AppEnv {
         app,
@@ -455,6 +543,122 @@ fn run_move(app: &AppHandle, picked: &Path) -> Result<String, String> {
     Ok(target.to_string_lossy().into_owned())
 }
 
+// --- перенос одних моделей ----------------------------------------------------------
+
+struct ModelsPlan {
+    /// Новый выбор; `None` — обратно к движку.
+    to: Option<PathBuf>,
+    target: PathBuf,
+    check: StorageCheck,
+}
+
+/// Проверка перед переносом моделей в `picked` (`None` — обратно к движку).
+fn plan_models(app: &AppHandle, picked: Option<&Path>) -> Result<ModelsPlan, String> {
+    let data = resident::data_dir();
+    storage::ready(&data)?;
+    match models_blocked(&data) {
+        Some(Blocked::Missing(path)) => {
+            return Err(format!(
+                "{}: {} — подключите диск, чтобы перенести модели",
+                models_move::MODELS_MISSING_TITLE,
+                path.display()
+            ))
+        }
+        Some(Blocked::Unreadable) => {
+            return Err(format!(
+                "{} — верните модели в папку по умолчанию",
+                models_move::MODELS_UNREADABLE_TITLE
+            ))
+        }
+        None => {}
+    }
+    let (to, target) = match picked {
+        Some(picked) => {
+            let target = resolve_models_target(picked, &data);
+            check_models_target(&target, &data)?;
+            (Some(target.clone()), target)
+        }
+        None => (None, check_models_default(&data)?),
+    };
+    // Копирует Python нынешнего движка: без движка переносить нечем.
+    let version = app.package_info().version.to_string();
+    engine::installed_profile(&engine::env_dir(&home(&data), &version), &version)
+        .ok_or("Движок не установлен — перенос возможен после установки")?;
+    let info = resident_info(app)?;
+    // Продолжение: скопированное уже на месте и место не займёт снова.
+    let models = info.models_bytes.saturating_sub(dir_bytes(&target));
+    let models_gb = models as f64 / f64::from(1u32 << 30);
+    let needs = needs_gb(0.0, models);
+    let free = engine::free_gb(&target);
+    let error = free.and_then(|free| engine::space_error(needs, free));
+    let resume = read_models_journal(&data).is_some_and(|journal| {
+        journal.phase == Phase::Interrupted && same_path(&journal.to_dir, &target)
+    });
+    Ok(ModelsPlan {
+        check: StorageCheck {
+            target: target.to_string_lossy().into_owned(),
+            free_gb: free.map(|gb| (gb * 10.0).floor() / 10.0),
+            needs_gb: (needs * 10.0).ceil() / 10.0,
+            engine_gb: 0.0,
+            models_gb: (models_gb * 10.0).ceil() / 10.0,
+            busy: info.busy,
+            error,
+            resume,
+        },
+        to,
+        target,
+    })
+}
+
+fn run_models_move(app: &AppHandle, picked: Option<&Path>) -> Result<String, String> {
+    // Установка движка в это время не идёт: копирует Python движка.
+    let _install = engine::begin_install()?;
+    let _moving = Moving::begin(MODELS_MOVE)?;
+    let data = resident::data_dir();
+    let env = AppEnv {
+        app,
+        data: data.clone(),
+        version: app.package_info().version.to_string(),
+        hold_id: uuid::Uuid::new_v4().to_string(),
+    };
+    let wanted = match picked {
+        Some(picked) => resolve_models_target(picked, &data),
+        None => models_move::default_dir(&data),
+    };
+    let plan = models_move::begin_models_move(&data, &wanted, &env, || {
+        let plan = plan_models(app, picked)?;
+        if let Some(busy) = &plan.check.busy {
+            return Err(format!(
+                "Перенести сейчас нельзя: {busy}. Повторите, когда закончится"
+            ));
+        }
+        if let Some(error) = &plan.check.error {
+            return Err(error.clone());
+        }
+        Ok(plan)
+    })?;
+    if let Some(to) = &plan.to {
+        storage::claim(&data, to)?;
+    }
+    shell_log!(
+        "перенос моделей: {} -> {}",
+        models_move::models_dir(&data).display(),
+        plan.target.display()
+    );
+    let journal = ModelsJournal::new(&data, plan.to.clone());
+    execute_models(&env, &CONTROL, &data, journal)?;
+    shell_log!("перенос моделей закончен: {}", plan.target.display());
+    Ok(plan.target.to_string_lossy().into_owned())
+}
+
+/// Прерванный перенос моделей — для окна.
+#[derive(Serialize, Clone, Debug)]
+pub struct ModelsInterrupted {
+    /// Куда переносились; `None` — обратно к движку.
+    pub to: Option<String>,
+    pub to_dir: String,
+}
+
 // --- команды окна -----------------------------------------------------------------
 
 /// Где сейчас движок и модели.
@@ -477,14 +681,63 @@ pub struct StorageStatus {
     pub interrupted: Option<String>,
     /// Недоделанное ещё удаляется (файлы были заняты).
     pub discarding: bool,
+    /// Какой перенос идёт: `engine` или `models`; `None` — никакой.
+    pub moving_kind: Option<&'static str>,
+    /// Отдельная папка моделей; `None` — модели рядом с движком.
+    pub models_root: Option<String>,
+    /// Где модели сейчас и куда вернутся без отдельной папки.
+    pub models_dir: String,
+    pub models_default: String,
+    /// Отдельной папки моделей нет (диск отключён).
+    pub models_missing: Option<String>,
+    /// `storage-models.json` не прочитан.
+    pub models_unreadable: bool,
+    /// Перенос моделей прерван — «Продолжить» / «Отменить».
+    pub models_interrupted: Option<ModelsInterrupted>,
 }
 
 #[tauri::command]
 pub fn storage_status() -> StorageStatus {
     let data = resident::data_dir();
     let journal = read_journal(&data);
-    let moving = MOVING.load(Ordering::SeqCst);
+    let models_journal = read_models_journal(&data);
+    let kind = MOVING.load(Ordering::SeqCst);
+    let moving = kind != IDLE;
+    let engine_moving = kind == ENGINE_MOVE
+        || journal
+            .as_ref()
+            .is_some_and(|journal| journal.phase.moving());
+    let models_moving = kind == MODELS_MOVE
+        || models_journal
+            .as_ref()
+            .is_some_and(|journal| journal.phase.moving());
     StorageStatus {
+        moving_kind: if engine_moving {
+            Some("engine")
+        } else if models_moving {
+            Some("models")
+        } else {
+            None
+        },
+        models_root: models_move::models_root(&data)
+            .map(|root| root.to_string_lossy().into_owned()),
+        models_dir: models_move::models_dir(&data)
+            .to_string_lossy()
+            .into_owned(),
+        models_default: models_move::default_dir(&data)
+            .to_string_lossy()
+            .into_owned(),
+        models_missing: match models_blocked(&data) {
+            Some(Blocked::Missing(path)) => Some(path.to_string_lossy().into_owned()),
+            _ => None,
+        },
+        models_unreadable: models_pointer(&data) == Pointer::Unreadable,
+        models_interrupted: models_journal
+            .filter(|journal| !moving && journal.phase == Phase::Interrupted)
+            .map(|journal| ModelsInterrupted {
+                to: journal.to.map(|to| to.to_string_lossy().into_owned()),
+                to_dir: journal.to_dir.to_string_lossy().into_owned(),
+            }),
         root: storage::root(&data).map(|root| root.to_string_lossy().into_owned()),
         home: home(&data).to_string_lossy().into_owned(),
         default_home: data.to_string_lossy().into_owned(),
@@ -493,10 +746,7 @@ pub fn storage_status() -> StorageStatus {
             _ => None,
         },
         unreadable: pointer(&data) == Pointer::Unreadable,
-        moving: moving
-            || journal
-                .as_ref()
-                .is_some_and(|journal| journal.phase.moving()),
+        moving: moving || engine_moving || models_moving,
         cancellable: moving && CONTROL.cancellable(),
         interrupted: journal
             .filter(|journal| !moving && journal.phase == Phase::Interrupted)
@@ -529,8 +779,8 @@ pub async fn storage_move(app: AppHandle, target: String) -> Result<String, Stri
 /// копирование; `storage_move` ответит `CANCELLED` после очистки.
 #[tauri::command]
 pub fn storage_cancel() {
-    if MOVING.load(Ordering::SeqCst) && CONTROL.cancel() {
-        shell_log!("перенос движка и моделей отменён пользователем");
+    if moving_now() && CONTROL.cancel() {
+        shell_log!("перенос отменён пользователем");
         engine::cancel_installs();
     }
 }
@@ -539,7 +789,7 @@ pub fn storage_cancel() {
 #[tauri::command]
 pub async fn storage_abandon() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if MOVING.load(Ordering::SeqCst) {
+        if moving_now() {
             return Err("Перенос идёт — отмените его кнопкой «Отменить»".to_string());
         }
         let data = resident::data_dir();
@@ -562,7 +812,7 @@ pub async fn storage_abandon() -> Result<(), String> {
 #[tauri::command]
 pub async fn storage_reset(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if MOVING.load(Ordering::SeqCst) {
+        if moving_now() {
             return Err("Идёт перенос — дождитесь его конца".to_string());
         }
         let data = resident::data_dir();
@@ -583,7 +833,7 @@ pub async fn storage_reset(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn storage_repoint(app: AppHandle, folder: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if MOVING.load(Ordering::SeqCst) {
+        if moving_now() {
             return Err("Идёт перенос — дождитесь его конца".to_string());
         }
         let data = resident::data_dir();
@@ -607,4 +857,85 @@ pub async fn storage_retry(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || app.state::<Supervisor>().respawn(&app))
         .await
         .map_err(|error| error.to_string())
+}
+
+fn picked(target: Option<String>) -> Option<PathBuf> {
+    target
+        .map(|target| target.trim().to_string())
+        .filter(|target| !target.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Сколько места нужно и можно ли переносить модели в `target` (`None` —
+/// обратно в папку по умолчанию, рядом с движком).
+#[tauri::command]
+pub async fn models_storage_check(
+    app: AppHandle,
+    target: Option<String>,
+) -> Result<StorageCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        plan_models(&app, picked(target).as_deref()).map(|plan| plan.check)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Перенести модели в `target` (`None` — обратно к движку) или продолжить
+/// прерванный перенос туда же. Ответ — по окончании: папка моделей; ход —
+/// событиями `storage-progress`; отмена — `storage_cancel`.
+#[tauri::command]
+pub async fn models_storage_move(app: AppHandle, target: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_models_move(&app, picked(target).as_deref()))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// «Отменить» прерванный перенос моделей: скопированное в новую папку
+/// удаляется (в фоне, с повторами).
+#[tauri::command]
+pub async fn models_storage_abandon() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if moving_now() {
+            return Err("Перенос идёт — отмените его кнопкой «Отменить»".to_string());
+        }
+        let data = resident::data_dir();
+        let Some(journal) =
+            read_models_journal(&data).filter(|journal| journal.phase == Phase::Interrupted)
+        else {
+            return Ok(());
+        };
+        models_move::abandon_models(&data, &journal)?;
+        shell_log!(
+            "прерванный перенос моделей в {} отменён",
+            journal.to_dir.display()
+        );
+        drain_in_background(data, None);
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// «Вернуть в папку по умолчанию», когда отдельной папки моделей нет (диск
+/// отключён) или выбор не прочитан: без копирования — модели скачаются
+/// заново рядом с движком; резидент перезапускается.
+#[tauri::command]
+pub async fn models_storage_reset(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if moving_now() {
+            return Err("Идёт перенос — дождитесь его конца".to_string());
+        }
+        let data = resident::data_dir();
+        if models_blocked(&data).is_none() {
+            return Err(
+                "Папка моделей на месте — перенесите модели кнопкой «Перенести…»".to_string(),
+            );
+        }
+        models_move::reset_models(&data)?;
+        shell_log!("папка моделей недоступна — модели снова рядом с движком");
+        app.state::<Supervisor>().respawn(&app);
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

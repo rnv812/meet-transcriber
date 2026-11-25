@@ -44,6 +44,11 @@
 // гасится. Удаляется только своё: `engine`, `uv-cache` и наши папки в
 // `models`; чужая непустая папка (и корень диска) не выбирается — кладём в
 // подпапку `Meet`, своя помечена файлом `.meet-storage`.
+//
+// Модели можно вынести и отдельно от движка (`storage/models_move.rs`,
+// указатель `storage-models.json`, свой журнал). Тогда этот перенос двигает
+// только движок (шаг `models` пропускается), а папка движка не может
+// совпасть с папкой моделей или лежать в ней. Переносы — по одному.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -120,7 +125,12 @@ pub enum Pointer {
 }
 
 pub fn pointer(data_dir: &Path) -> Pointer {
-    let raw = match fs::read_to_string(data_dir.join(POINTER)) {
+    parse_pointer(&data_dir.join(POINTER))
+}
+
+/// Файл выбора папки (`storage.json`, `storage-models.json`): один формат.
+fn parse_pointer(file: &Path) -> Pointer {
+    let raw = match fs::read_to_string(file) {
         Ok(raw) => raw,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Pointer::Absent,
         Err(_) => return Pointer::Unreadable,
@@ -230,7 +240,11 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
 
 /// Записать выбор (`None` — по умолчанию: файла нет).
 pub fn write_pointer(data_dir: &Path, root: Option<&Path>) -> io::Result<()> {
-    let path = data_dir.join(POINTER);
+    write_pointer_file(&data_dir.join(POINTER), root)
+}
+
+fn write_pointer_file(path: &Path, root: Option<&Path>) -> io::Result<()> {
+    let path = path.to_path_buf();
     match root {
         None => remove_file(&path),
         Some(root) => {
@@ -248,7 +262,11 @@ pub fn write_pointer(data_dir: &Path, root: Option<&Path>) -> io::Result<()> {
 
 /// Id выбранной папки, записанный в `storage.json` (нет — `None`).
 pub fn pointer_folder(data_dir: &Path) -> Option<String> {
-    let raw = fs::read_to_string(data_dir.join(POINTER)).ok()?;
+    pointer_file_folder(&data_dir.join(POINTER))
+}
+
+fn pointer_file_folder(file: &Path) -> Option<String> {
+    let raw = fs::read_to_string(file).ok()?;
     let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
     value.get("folder")?.as_str().map(String::from)
 }
@@ -481,6 +499,11 @@ pub fn volume_root(path: &Path) -> bool {
 /// непустая — подпапка `Meet`: чужие файлы не перемешиваются с нашими, и
 /// очистка не заденет их.
 pub fn resolve_target(picked: &Path, data_dir: &Path) -> PathBuf {
+    resolve_target_in(picked, data_dir, NEST)
+}
+
+/// То же с именем подпапки (у папки моделей — своё, `models_move`).
+fn resolve_target_in(picked: &Path, data_dir: &Path, nest: &str) -> PathBuf {
     if same_path(picked, data_dir) {
         return data_dir.to_path_buf();
     }
@@ -491,7 +514,7 @@ pub fn resolve_target(picked: &Path, data_dir: &Path) -> PathBuf {
     {
         return picked.to_path_buf();
     }
-    let nested = picked.join(NEST);
+    let nested = picked.join(nest);
     if same_path(&nested, data_dir) {
         data_dir.to_path_buf()
     } else {
@@ -513,6 +536,21 @@ pub fn check_target(target: &Path, current: &Path, data_dir: &Path) -> Result<()
     if inside(target, data_dir) {
         return Err("Выберите папку вне папки данных Meet".into());
     }
+    // Отдельная папка моделей: её уборка (и уборка папки движка) задела бы
+    // другую.
+    if let Some(models) = models_move::models_root(data_dir) {
+        if same_path(target, &models) || inside(target, &models) || inside(&models, target) {
+            return Err(models_move::MODELS_HERE.into());
+        }
+    }
+    check_place(target, data_dir, true)
+}
+
+/// Общие проверки новой папки (движка или моделей): папка, диск на месте,
+/// не чужая, не внутри помеченной, пустая или наша, подходящий том.
+/// `symlinks` — нужны ли тому символические ссылки (окружению движка — да,
+/// моделям — нет: копия моделей — настоящие файлы).
+fn check_place(target: &Path, data_dir: &Path, symlinks: bool) -> Result<(), String> {
     if target.exists() && !target.is_dir() {
         return Err("Это не папка".into());
     }
@@ -546,7 +584,7 @@ pub fn check_target(target: &Path, current: &Path, data_dir: &Path) -> Result<()
             target.display()
         ));
     }
-    vet::volume(target)
+    vet::volume_for(target, symlinks)
 }
 
 /// Места нужно, ГБ: движок, модели и запас.
@@ -635,8 +673,15 @@ pub mod vet {
         text.encode_wide().chain(Some(0)).collect()
     }
 
-    #[cfg(windows)]
+    /// Том годится для папки движка (с проверкой символических ссылок).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn volume(target: &Path) -> Result<(), String> {
+        volume_for(target, true)
+    }
+
+    /// На Windows ссылки не проверяются: движок без них обходится.
+    #[cfg(windows)]
+    pub fn volume_for(target: &Path, _symlinks: bool) -> Result<(), String> {
         let text = target.to_string_lossy();
         if text.starts_with(r"\\") && !text.starts_with(r"\\?\") {
             return Err(NETWORK.into());
@@ -846,8 +891,10 @@ pub mod vet {
         status == ERROR_SUCCESS && value == 1
     }
 
+    /// `symlinks` — проверять ли символические ссылки (окружению движка они
+    /// нужны; копии моделей — настоящие файлы, им — нет).
     #[cfg(unix)]
-    pub fn volume(target: &Path) -> Result<(), String> {
+    pub fn volume_for(target: &Path, symlinks: bool) -> Result<(), String> {
         let place = existing(target);
         if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
             let home = PathBuf::from(home);
@@ -862,20 +909,20 @@ pub mod vet {
         if !local(&place) {
             return Err(NETWORK.into());
         }
-        probe(&place)
+        probe(&place, symlinks)
     }
 
     /// Сначала обычный файл (права), потом ссылка (файловая система): нет
     /// прав — так и говорим, а не «exFAT?».
     #[cfg(unix)]
-    pub fn probe(place: &Path) -> Result<(), String> {
+    pub fn probe(place: &Path, symlinks: bool) -> Result<(), String> {
         let file = place.join(format!(".meet-write-probe-{}", std::process::id()));
         let written = std::fs::write(&file, b"");
         let _ = std::fs::remove_file(&file);
         if written.is_err() {
             return Err(NO_ACCESS.into());
         }
-        if !symlinks_work(place) {
+        if symlinks && !symlinks_work(place) {
             return Err(NO_SYMLINKS.into());
         }
         Ok(())
@@ -1023,6 +1070,9 @@ pub enum Scope {
     Engine,
     /// Всё наше в папке (отмена переноса).
     All,
+    /// Отдельная папка моделей (отмена переноса моделей): `hf`, `gigaam`,
+    /// `xet`, метка и сама папка, если опустела.
+    Models,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -1175,12 +1225,22 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
     if blocked(data_dir).is_some() {
         return read_discards(data_dir).len();
     }
+    // Так же папка моделей: не прочитан выбор или отключён её диск.
+    if models_move::models_blocked(data_dir).is_some() {
+        return read_discards(data_dir).len();
+    }
     let live = home(data_dir);
     let live_folder = pointer_folder(data_dir);
+    let live_models = models_move::models_dir(data_dir);
+    let models_folder = models_move::models_pointer_folder(data_dir);
     let mut left = Vec::new();
     for item in read_discards(data_dir) {
         if same_path(&item.path, &live) || inside(&live, &item.path) {
             shell_log!("{} — живая папка движка, не удаляю", item.path.display());
+            continue;
+        }
+        if same_path(&item.path, &live_models) || inside(&live_models, &item.path) {
+            shell_log!("{} — живая папка моделей, не удаляю", item.path.display());
             continue;
         }
         if !item.path.exists() {
@@ -1200,7 +1260,10 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
         // Папка данных опознаётся путём (она не переезжает).
         let here = folder_id(&item.path);
         let same_folder = same_path(&item.path, data_dir)
-            || (item.folder.is_some() && here == item.folder && here != live_folder);
+            || (item.folder.is_some()
+                && here == item.folder
+                && here != live_folder
+                && here != models_folder);
         if !same_folder {
             shell_log!(
                 "{} — папка не опознана как недоделанная (другой id), не удаляю",
@@ -1208,7 +1271,8 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
             );
             continue;
         }
-        if !env.stop_resident_in(&item.path) {
+        // В папке моделей движка нет — и резидента из неё тоже.
+        if item.scope != Scope::Models && !env.stop_resident_in(&item.path) {
             left.push(item);
             continue;
         }
@@ -1219,6 +1283,7 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
                 errors
             }
             Scope::All => remove_ours(&item.path, true, data_dir),
+            Scope::Models => models_move::remove_models(&item.path, true),
         };
         if errors.is_empty() {
             shell_log!("убрано недоделанное в {}", item.path.display());
@@ -1367,6 +1432,8 @@ pub fn begin_move<T>(
     check: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     let checked = check()?;
+    // Прерванный перенос моделей ждёт решения человека: переносы — по одному.
+    models_move::settle_models(data_dir)?;
     preamble(data_dir, wanted, env)?;
     Ok(checked)
 }
@@ -1537,21 +1604,14 @@ impl Default for MoveControl {
     }
 }
 
-/// Чем переносу нужен мир вокруг: установщик, копирование, резидент, окно.
-/// Настоящий — `storage_app::AppEnv`, в тестах — подделка.
-pub trait MoveEnv: Recover {
-    fn install(&self, home: &Path, profile: &str) -> Result<(), String>;
-    fn copy_models(&self, to: &Path) -> Result<(), String>;
-    /// Новый движок запускается (`python -c "import torch, ctranslate2"`):
-    /// сломанный путь, DLL или облако ловятся, пока прежний движок цел.
-    fn smoke(&self, env: &Path) -> Result<(), String>;
+/// Чем переключению папки (движка или моделей) нужен мир вокруг: резидент,
+/// окно, уборка. Настоящий — `storage_app::AppEnv`, в тестах — подделка.
+pub trait SwitchEnv: Recover {
     /// Удержать резидент перед переключением: `Ok(None)` — удержан, `Ok(Some)`
     /// — занят (чем), `Err` — не ответил.
     fn hold(&self) -> Result<Option<String>, String>;
     /// Снять удержание (переключение сорвалось до перезапуска).
     fn release(&self);
-    /// Перезапустить резидент и дождаться, что он поднялся из окружения `env`.
-    fn restart_from(&self, env: &Path) -> bool;
     /// Перезапустить резидент (возврат на прежнюю папку), не дожидаясь.
     fn respawn(&self);
     fn emit(&self, phase: &'static str, text: &str, done: u64, total: u64);
@@ -1560,6 +1620,63 @@ pub trait MoveEnv: Recover {
     fn drain(&self, data_dir: &Path);
     /// Точка «процесс убит» для тестов: после каждой записи журнала и выбора.
     fn checkpoint(&self, _what: &'static str) {}
+}
+
+/// Перенос движка и моделей: ещё установщик, копирование, проверка движка.
+pub trait MoveEnv: SwitchEnv {
+    fn install(&self, home: &Path, profile: &str) -> Result<(), String>;
+    fn copy_models(&self, to: &Path) -> Result<(), String>;
+    /// Новый движок запускается (`python -c "import torch, ctranslate2"`):
+    /// сломанный путь, DLL или облако ловятся, пока прежний движок цел.
+    fn smoke(&self, env: &Path) -> Result<(), String>;
+    /// Перезапустить резидент и дождаться, что он поднялся из окружения `env`.
+    fn restart_from(&self, env: &Path) -> bool;
+}
+
+/// Удержать резидент перед переключением и поставить защёлку отмены.
+/// Удержание: под замком резидента проверено, что ничего не идёт, и новое
+/// (запись, автозапись, ассистент, задачи, загрузки) не начнётся до
+/// перезапуска. Занят — ждём и спрашиваем снова; отмена — снять удержание.
+fn hold_and_latch(env: &impl SwitchEnv, control: &MoveControl) -> Result<(), String> {
+    let mut failures = 0;
+    let mut asked = false;
+    loop {
+        if control.cancelled() {
+            // Удержание могли выдать, а ответ потеряться: снять (по id —
+            // идемпотентно), иначе запись не начнётся ещё 5 минут.
+            if asked {
+                env.release();
+            }
+            return Err(CANCELLED.into());
+        }
+        asked = true;
+        let answer = match env.hold() {
+            Ok(answer) => answer,
+            // Ответ потерялся или резидент не успел: удержание идемпотентно
+            // (id), так что спросить снова безопасно; не вышло — снять.
+            Err(error) => {
+                failures += 1;
+                if failures >= HOLD_ATTEMPTS {
+                    env.release();
+                    return Err(error);
+                }
+                env.pause(IDLE_POLL);
+                continue;
+            }
+        };
+        match answer {
+            None => break,
+            Some(reason) => {
+                env.emit("waiting", &format!("Жду, пока закончится: {reason}"), 0, 0);
+                env.pause(IDLE_POLL);
+            }
+        }
+    }
+    if control.latch() {
+        env.release();
+        return Err(CANCELLED.into());
+    }
+    Ok(())
 }
 
 fn advance(
@@ -1634,56 +1751,19 @@ fn steps(
     cancel_check(control)?;
 
     advance(env, data_dir, journal, Phase::Models, "models")?;
-    env.emit("models", "Копирование моделей", 0, 0);
-    env.copy_models(&journal.to)?;
-    cancel_check(control)?;
+    // Модели в отдельной папке остаются там: переносится только движок.
+    if models_move::models_root(data_dir).is_none() {
+        env.emit("models", "Копирование моделей", 0, 0);
+        env.copy_models(&journal.to)?;
+        cancel_check(control)?;
+    }
     env.emit("smoke", "Проверка нового движка", 0, 0);
     env.smoke(&engine::env_dir(&journal.to, version))
         .map_err(|error| format!("Новый движок не запускается: {error}"))?;
     cancel_check(control)?;
 
     advance(env, data_dir, journal, Phase::Switching, "switching")?;
-    // Удержание: под замком резидента проверено, что ничего не идёт, и новое
-    // (запись, автозапись, ассистент, задачи, загрузки) не начнётся до
-    // перезапуска.
-    let mut failures = 0;
-    let mut asked = false;
-    loop {
-        if control.cancelled() {
-            // Удержание могли выдать, а ответ потеряться: снять (по id —
-            // идемпотентно), иначе запись не начнётся ещё 5 минут.
-            if asked {
-                env.release();
-            }
-            return Err(CANCELLED.into());
-        }
-        asked = true;
-        let answer = match env.hold() {
-            Ok(answer) => answer,
-            // Ответ потерялся или резидент не успел: удержание идемпотентно
-            // (id), так что спросить снова безопасно; не вышло — снять.
-            Err(error) => {
-                failures += 1;
-                if failures >= HOLD_ATTEMPTS {
-                    env.release();
-                    return Err(error);
-                }
-                env.pause(IDLE_POLL);
-                continue;
-            }
-        };
-        match answer {
-            None => break,
-            Some(reason) => {
-                env.emit("waiting", &format!("Жду, пока закончится: {reason}"), 0, 0);
-                env.pause(IDLE_POLL);
-            }
-        }
-    }
-    if control.latch() {
-        env.release();
-        return Err(CANCELLED.into());
-    }
+    hold_and_latch(env, control)?;
     env.emit("switching", "Перезапуск службы записи из новой папки", 0, 0);
     if let Err(error) = write_pointer(data_dir, Some(&journal.to)) {
         env.release();
@@ -1758,6 +1838,8 @@ pub const DRAIN_RETRIES: [Duration; 4] = [
     Duration::from_secs(30),
     Duration::from_secs(120),
 ];
+
+pub mod models_move;
 
 #[cfg(test)]
 mod tests;
