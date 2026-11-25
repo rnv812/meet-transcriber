@@ -312,3 +312,63 @@ test("как действует ассистент — «Действует са
   rerender(<SessionBar agent={consent({ agent_mode: "auto", auto: false })} summary={summary} onFrequency={() => {}} compact />);
   expect(bar().querySelector(".session-bar__mode--warn")).toHaveTextContent("Сам действовать не может — спрашивает каждое");
 });
+
+// --- YOLO (0.6.2) и «Скрыть строку» ---------------------------------------------------------
+
+const consentCan = { mode: "consent" as const, mcp: null, agent_mode: "auto" as const, auto: true };
+const askYolo = () => screen.getByRole("alertdialog", { name: "Включить YOLO до конца встречи?" });
+
+test("YOLO: выключен — молния «Включить YOLO»; включение — только после вопроса", async () => {
+  const onYolo = vi.fn();
+  render(<SessionBar agent={agentInfo({ can: consentCan, yolo: false, yolo_available: true })} summary={summary}
+    onFrequency={() => {}} onYolo={onYolo} />);
+  expect(bar().querySelector(".session-bar__yolo")).toBeNull();
+  await userEvent.click(within(bar()).getByRole("button", { name: "Включить YOLO" }));
+  expect(askYolo()).toHaveTextContent("без вашей просьбы");
+  await userEvent.click(within(askYolo()).getByRole("button", { name: "Не включать" }));
+  expect(onYolo).not.toHaveBeenCalled();
+  await userEvent.click(within(bar()).getByRole("button", { name: "Включить YOLO" }));
+  await userEvent.click(within(askYolo()).getByRole("button", { name: "Включить YOLO" }));
+  expect(onYolo).toHaveBeenCalledWith(true);
+});
+
+test("YOLO включён: красный бейдж при любой ширине, щелчок выключает без вопроса; «Действия: YOLO — без вопросов»", async () => {
+  const onYolo = vi.fn();
+  const agent = agentInfo({ can: consentCan, yolo: true, yolo_available: true });
+  const { unmount } = render(<SessionBar agent={agent} summary={summary} onFrequency={() => {}} onYolo={onYolo} />);
+  const badge = within(bar()).getByRole("button", { name: /YOLO включён/ });
+  expect(badge).toHaveClass("badge", "badge--error");
+  expect(badge).toHaveAttribute("aria-pressed", "true");
+  expect(bar()).not.toHaveTextContent("Действует сам");
+  expect(await know()).toHaveTextContent("Действия: YOLO — без вопросов");
+  await userEvent.click(badge);
+  expect(onYolo).toHaveBeenCalledWith(false);
+  expect(screen.queryByRole("alertdialog", { name: "Включить YOLO до конца встречи?" })).toBeNull();
+  unmount();
+  render(<SessionBar agent={agent} summary={summary} compact onFrequency={() => {}} />);
+  expect(bar().querySelector(".session-bar__yolo")).toHaveTextContent("YOLO");      // и без переключателя
+});
+
+test("YOLO недоступен (без свободы) — переключателя нет; узкая — кнопка в «Что я знаю»", async () => {
+  const onYolo = vi.fn();
+  const { unmount } = render(<SessionBar agent={agentInfo({ yolo_available: false })} summary={summary}
+    onFrequency={() => {}} onYolo={onYolo} />);
+  expect(within(bar()).queryByRole("button", { name: "Включить YOLO" })).toBeNull();
+  unmount();
+  render(<SessionBar agent={agentInfo({ can: consentCan, yolo_available: true })} summary={summary} compact
+    onFrequency={() => {}} onYolo={onYolo} />);
+  expect(within(bar()).queryByRole("button", { name: "Включить YOLO" })).toBeNull();
+  await userEvent.click(within(await know()).getByRole("button", { name: "Включить YOLO" }));
+  await userEvent.click(within(askYolo()).getByRole("button", { name: "Включить YOLO" }));
+  expect(onYolo).toHaveBeenCalledWith(true);
+});
+
+test("«Скрыть строку сессии» — кнопкой в самой строке, только когда её можно скрыть", async () => {
+  const onHide = vi.fn();
+  const { unmount } = render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} onHide={onHide} />);
+  await userEvent.click(within(bar()).getByRole("button", { name: "Скрыть строку сессии" }));
+  expect(onHide).toHaveBeenCalledTimes(1);
+  unmount();
+  render(<SessionBar agent={agentInfo()} summary={summary} onFrequency={() => {}} />);
+  expect(within(bar()).queryByRole("button", { name: "Скрыть строку сессии" })).toBeNull();
+});

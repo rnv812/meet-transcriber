@@ -912,6 +912,8 @@ _ROUTES = {
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
     ("POST", "/live/attach"): lambda h, p: _server_of(h).state.live_attach(h._body()),
     ("PUT", "/live/profile"): lambda h, p: _server_of(h).state.live_profile(h._body()),
+    # `{"on": bool}` — режим YOLO идущей встречи (0.6.2), в настройки не пишется.
+    ("PUT", "/live/yolo"): lambda h, p: _server_of(h).state.live_yolo(h._body()),
     ("POST", "/live/detach"): lambda h, p: _server_of(h).state.live_detach(),
     ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
     ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),

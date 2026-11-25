@@ -1105,6 +1105,10 @@ export type AgentInfo = {
   models?: AgentModel[];
   /** Разрешения «до конца встречи» (× — отозвать). */
   grants?: { id: string; label: string }[];
+  /** Режим YOLO этой встречи (0.6.2): действует без карточек; по умолчанию выключен. Старый ребёнок — нет поля. */
+  yolo?: boolean;
+  /** YOLO можно включить: модель со своими инструментами и расширенными возможностями, идёт встреча. */
+  yolo_available?: boolean;
 };
 
 /** `event: chat_partial`: текст ответа на сейчас (≤ 10 раз в секунду). */
@@ -1147,6 +1151,8 @@ export type ChatAttachResult = {
 export type AgentFrequencyResult = { frequency: AgentFrequency; label: AgentFrequencyLabel; live: boolean };
 /** Ответ `PUT /live/profile`: профиль идущей сессии сменён (настройка по умолчанию — нет). */
 export type AgentProfileResult = { profile: AgentProfile; label: string; live: boolean };
+/** Ответ `PUT /live/yolo`: режим YOLO идущей встречи (в настройки не пишется). */
+export type AgentYoloResult = { on: boolean; live: boolean };
 
 /** Прежний ассистент встречи до 0.3.6: подсказки и вопросы — только для чтения. */
 export type LegacyAssistant = { hints: LiveHint[]; qa: QaItem[] };

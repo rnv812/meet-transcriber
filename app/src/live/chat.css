@@ -74,7 +74,12 @@
 /* Предупреждение (не та модель) — бейдж Aurora «устарело»; длинный текст — с многоточием. */
 .session-bar__note { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow: hidden; }
 .session-bar__note-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.session-bar__end { flex: none; margin-left: auto; display: inline-flex; align-items: center; }
+.session-bar__end { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 2px; }
+/* YOLO (0.6.2): бейдж «ошибка» Aurora; включён — кнопка-бейдж (щелчок выключает). */
+.session-bar__yolo { flex: none; border: 0; font-weight: 600; letter-spacing: 0.04em; }
+button.session-bar__yolo { cursor: pointer; }
+button.session-bar__yolo:disabled { cursor: default; opacity: 0.6; }
+.session-bar__yolo-on { flex: none; }
 /* Поповер «Что я знаю»: вид — общий `.popover` (ui/popover.css, стекло Aurora);
    здесь — без внутренних полей, их задаёт содержимое. */
 .session-bar > .popover { padding: 0; white-space: normal; }

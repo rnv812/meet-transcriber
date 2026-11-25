@@ -62,7 +62,10 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
   (резидент сохраняет сам);
 - `PUT /agent/profile` `{"profile": "work|personal"}` → `{"profile", "label",
   "live"}`: профиль только этой сессии (0.3.7) — агенту пометка в ближайший
-  ход, журналу встречи — новое значение; настройка по умолчанию не меняется.
+  ход, журналу встречи — новое значение; настройка по умолчанию не меняется;
+- `PUT /agent/yolo` `{"on": bool}` → `{"on", "live"}`: режим YOLO этой встречи
+  (0.6.2) — без карточек согласия, в настройки не пишется; недоступен
+  (агент без свободы) — 400.
 
 SSE для чата (без `id:`): `chat_snapshot` (`GET /chat` — при подключении и
 если поток отстал от буфера `ChatFeed`), `chat` (событие журнала `{"seq",
@@ -1489,6 +1492,15 @@ def build_app(state) -> web.Application:
             participant.set_profile(key)
         return _json_response({"profile": key, "label": PROFILE_LABELS[key], "live": True})
 
+    async def agent_yolo(request):
+        body = await _json_body(request)
+        on = body.get("on")
+        if not isinstance(on, bool):
+            raise web.HTTPBadRequest(text="on — true или false")
+        participant = _participant(state)
+        on = await _guarded(participant.set_yolo(on))
+        return _json_response({"on": on, "live": True})
+
     # Картинка до 10 МБ в теле `/chat/paste` (по умолчанию aiohttp — 1 МБ).
     app = web.Application(middlewares=[_own_host, _same_origin_posts],
                           client_max_size=PASTE_MAX_BYTES + 64 * 1024)
@@ -1518,6 +1530,7 @@ def build_app(state) -> web.Application:
         web.post("/chat/{mid}/voice-cancel", chat_voice_cancel),
         web.put("/agent/frequency", agent_frequency),
         web.put("/agent/profile", agent_profile),
+        web.put("/agent/yolo", agent_yolo),
     ])
     return app
 

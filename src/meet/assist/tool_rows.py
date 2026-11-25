@@ -210,7 +210,9 @@ def output_preview(text) -> tuple[str, bool]:
 def gate_view(event: dict) -> dict:
     """Решение ворот (`claude_stream._gate_event`) → `{decision, label}`."""
     decision = str(event.get("decision") or "")
-    if decision in GATE_LABELS:
+    if decision == "allowed" and event.get("why") == "yolo":
+        label = "разрешено: YOLO"                 # режим YOLO встречи (0.6.2)
+    elif decision in GATE_LABELS:
         label = GATE_LABELS[decision]
     elif decision == "approved":
         label = "спросил вас · до конца встречи" if event.get("grant") else "спросил вас · разрешено"

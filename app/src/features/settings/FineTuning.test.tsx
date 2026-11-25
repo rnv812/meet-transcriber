@@ -67,6 +67,7 @@ const CASES: [string, (s: typeof screen) => HTMLElement[]][] = [
   ["assistant", (s) => [
     s.getByLabelText("Окно живой расшифровки, с"),
     s.getByRole("switch", { name: "Не отвлекать по умолчанию" }),
+    s.getByRole("switch", { name: "Строка сессии в окне ассистента" }),
   ]],
   ["jira", (s) => [s.getByRole("textbox", { name: "Шаблон ключа для текста" })]],
   ["advanced", (s) => [s.getByRole("textbox", { name: "Путь к файлу-маркеру" })]],

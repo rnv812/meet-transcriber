@@ -216,6 +216,19 @@ def _user_permission(work_dirs, exclude=(), sensitive=()) -> dict:
             "todowrite": "allow"}
 
 
+def _yolo_permission(exclude=(), sensitive=()) -> dict:
+    """Права хода в режиме YOLO встречи: всё (правка, команды, веб, MCP — где
+    угодно), кроме закрытых папок (`kb_exclude`), чувствительных путей и `.env`."""
+    closed = [v for e in (*(exclude or ()), *(sensitive or ())) if e for v in path_variants(e)]
+    read = {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow"}
+    external = {"*": "allow"}
+    for v in closed:
+        for pattern in (v, str(Path(v) / "*")):
+            read[pattern] = "deny"
+            external[pattern] = "deny"
+    return {"*": "allow", "read": read, "grep": "deny" if closed else "allow", "external_directory": external}
+
+
 def permission_for(access: str | None, dirs, exclude=(), sensitive=(), work_dirs=()) -> dict:
     """Права агента для уровня хода (`meet.llm.consent`): None и `none` —
     `readonly_permission(dirs)` (у `none` `dirs` — только папка встречи);
@@ -223,7 +236,10 @@ def permission_for(access: str | None, dirs, exclude=(), sensitive=(), work_dirs
     чувствительных путей (`sensitive`) и `.env`; больше ничего; `user` (0.4)
     — правка и команды в рабочих папках (`work_dirs`), веб; удаление,
     отправка наружу и MCP — нет (см. модуль). Запреты — последними
-    (побеждает последнее подходящее правило)."""
+    (побеждает последнее подходящее правило). `yolo` — режим YOLO встречи
+    (`_yolo_permission`)."""
+    if access == "yolo":
+        return _yolo_permission(exclude, sensitive)
     if access == "user":
         return _user_permission(work_dirs, exclude, sensitive)
     if access != "read":
@@ -667,6 +683,7 @@ async def run(
     deny_paths=(),
     access: str | None = None,
     work_dirs=(),
+    yolo: bool = False,
 ) -> AgentReply:
     """Один вызов `opencode run`; ошибки — в AgentReply.error. `model` —
     `llm.opencode_model` («провайдер/модель»), `proxy` — `llm.proxy`. Папки
@@ -678,7 +695,10 @@ async def run(
     `dropped_images` и NO_VISION_NOTE. `deny_paths` — закрытые папки
     (запрет в правах агента). `access` (0.3.7) — уровень согласия хода
     (`permission_for`); у `none` читать можно только первую из `allowed_dirs`
-    (папку встречи); у `user` (0.4) правка и команды — в `work_dirs`."""
+    (папку встречи); у `user` (0.4) правка и команды — в `work_dirs`;
+    `yolo` (с `user`, режим YOLO встречи) — всё, кроме закрытого."""
+    if yolo and access == "user":
+        access = "yolo"
     if resume and not _SESSION_ID.fullmatch(resume):
         return resume_failure(f"неверный id сеанса OpenCode: {resume!r}")
     exe = find_opencode()
@@ -686,7 +706,7 @@ async def run(
         return AgentReply(text="", error=OPENCODE_NOT_FOUND)
     dirs = tuple(allowed_dirs)[:1] if access == "none" else allowed_dirs
     sensitive = ()
-    if access in ("read", "user"):
+    if access in ("read", "user", "yolo"):
         from meet.llm.consent import sensitive_paths
 
         sensitive = [p for p in sensitive_paths() if p.exists()]

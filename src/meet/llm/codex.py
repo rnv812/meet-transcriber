@@ -308,9 +308,16 @@ def access_args(access: str | None, servers=(), work_dirs=(), *,
     выключены (`servers` None — список не прочитался — или имя, которое
     ключом не выключить, → `--ignore-user-config`; тогда `windows_sandbox` —
     значение `[windows] sandbox` пользователя — передаётся `-c`), приложения,
-    браузер и управление компьютером — тоже."""
+    браузер и управление компьютером — тоже. `yolo` (режим YOLO встречи) —
+    без песочницы и одобрений (`--dangerously-bypass-approvals-and-sandbox`),
+    MCP и веб-поиск — как в настройках Codex."""
     if access is None:
         return ["--sandbox", "read-only"]
+    if access == "yolo":
+        out = ["--dangerously-bypass-approvals-and-sandbox"]
+        for feature in _NONE_FEATURES:
+            out += ["--disable", feature]
+        return out
     if access == "user":
         out = ["--approve-for-me"]
         for d in work_dirs or ():
@@ -848,7 +855,9 @@ async def run(
                 pass
         from meet.llm import consent
 
-        if access == consent.USER and gate.mode != consent.MODE_AUTO:
+        if access == consent.USER and gate.mode == consent.MODE_YOLO:
+            access = consent.MODE_YOLO   # YOLO: exec без песочницы и одобрений
+        elif access == consent.USER and gate.mode != consent.MODE_AUTO:
             access = consent.READ        # exec спросить человека не умеет — просьба только читает
     call = _Call()
     try:

@@ -64,6 +64,8 @@ html, body { background: transparent; }
 .live-more__item--danger { color: var(--danger); }
 /* «Не отвлекать»: кроме нажатой кнопки — тихая метка у состояния (бейдж Aurora без точки). */
 .live-head__quiet-tag { flex: none; }
+/* YOLO (0.6.2): строки сессии не видно — бейдж «ошибка» Aurora в шапке. */
+.live-head__yolo { flex: none; font-weight: 600; letter-spacing: 0.04em; }
 /* Временная встреча: не сохранится — видно всегда, и в свёрнутой панели. */
 .live-temp {
   flex: none; display: flex; align-items: center; gap: 8px; min-width: 0;

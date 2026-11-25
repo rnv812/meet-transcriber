@@ -84,6 +84,9 @@ export function QuietTip() {
   );
 }
 
+/** Переключатель строки сессии в плавающем окне ассистента (`ui.live_session_bar`, 0.6.2). */
+export const SESSION_BAR_LABEL = "Строка сессии в окне ассистента";
+
 export function LiveHintsRows({ draft, set, provider, hints = true }: {
   draft: Raw; set: SetFn;
   /** Кто отвечает сейчас (для пояснения «Быстрее»), null — неизвестно. */
@@ -100,9 +103,14 @@ export function LiveHintsRows({ draft, set, provider, hints = true }: {
   const maxHints = typeof assist.max_hints === "number" ? assist.max_hints : 0;
   const choices = MAX_HINTS_CHOICES.includes(maxHints) ? MAX_HINTS_CHOICES : [...MAX_HINTS_CHOICES, maxHints].sort((a, b) => a - b);
   const quiet = (
-    <Switch label="Не отвлекать по умолчанию" help={<QuietTip />}
-      hint="Панель открывается без подсветки и счётчиков"
-      value={assist.quiet_default === true} onChange={(v) => set("assist", "quiet_default", v)} />
+    <>
+      <Switch label="Не отвлекать по умолчанию" help={<QuietTip />}
+        hint="Панель открывается без подсветки и счётчиков"
+        value={assist.quiet_default === true} onChange={(v) => set("assist", "quiet_default", v)} />
+      <Switch label={SESSION_BAR_LABEL}
+        hint="Модель, профиль, «Что я знаю» над чатом. Скрыть и вернуть можно и в меню «Ещё» окна ассистента"
+        value={draft.ui?.live_session_bar !== false} onChange={(v) => set("ui", "live_session_bar", v)} />
+    </>
   );
   if (!hints) return quiet;
   return (

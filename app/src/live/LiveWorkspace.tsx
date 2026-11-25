@@ -307,15 +307,18 @@ export function LiveWorkspace(props: {
   chat?: Chat | null;
   /** Пометка на месте строки ввода (условия не приняты, `TermsNotice`): писать нельзя. */
   notice?: ReactNode;
+  /** Строка сессии чата скрыта (плавающее окно, `ui.live_session_bar`); `onHideBar` — кнопка «Скрыть строку». */
+  barHidden?: boolean;
+  onHideBar?: () => void;
 }) {
-  const { chat, ...rest } = props;
+  const { chat, barHidden, onHideBar, ...rest } = props;
   const on = participantOn(props.live, chat);
   const loaded = props.live.loaded;
   // Флаг — только из пришедшего состояния: до него ничего не знаем.
   useEffect(() => { if (chat && loaded) rememberParticipant(on); }, [chat, loaded, on]);
   if (chat && (on || (!loaded && cachedParticipant()))) {
     return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place}
-      notice={props.notice} />;
+      notice={props.notice} barHidden={barHidden} onHideBar={onHideBar} />;
   }
   return <ClassicWorkspace {...rest} />;
 }

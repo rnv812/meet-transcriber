@@ -1314,6 +1314,11 @@ class LiveControl:
         return self._request(self._active_port(), "/agent/profile", {"profile": key},
                              REQUEST_TIMEOUT_S, method="PUT")
 
+    def agent_yolo(self, on: bool) -> dict:
+        """Режим YOLO идущей встречи (0.6.2) — только этот ассистент, настройки не трогаются."""
+        return self._request(self._active_port(), "/agent/yolo", {"on": bool(on)},
+                             REQUEST_TIMEOUT_S, method="PUT")
+
     def open_events(self, last_event_id: str | None = None) -> "LiveStream":
         """Подписка на поток ассистента для ретрансляции клиенту панели."""
         port = self._active_port()

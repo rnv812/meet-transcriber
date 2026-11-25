@@ -32,6 +32,10 @@
  *
  * Сводка с экрана ушла — она в поповере «Что я знаю» шапки сессии. Вся
  * область — зона перетаскивания вложений (`data-chat-drop`).
+ *
+ * В плавающем окне строку сессии можно скрыть (0.6.2, `barHidden`, настройка
+ * `ui.live_session_bar`): строки нет целиком, колонка расшифровки остаётся,
+ * какой была; ошибка ассистента и YOLO — в шапке панели, вернуть — меню «Ещё».
  */
 
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
@@ -114,7 +118,8 @@ export function composerBlock(live: Live, chat: Chat, disabled: boolean): string
   return null;
 }
 
-export function ChatWorkspace({ live, chat, view, disabled = false, place = "panel", compact: forced, notice }: {
+export function ChatWorkspace({ live, chat, view, disabled = false, place = "panel", compact: forced, notice, barHidden = false,
+  onHideBar }: {
   live: Live;
   chat: Chat;
   view: LiveView;
@@ -124,6 +129,10 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
   notice?: ReactNode;
   /** Задать плотность снаружи (тесты); иначе — по ширине. На раскладку не влияет. */
   compact?: boolean;
+  /** Строка сессии скрыта (плавающее окно). */
+  barHidden?: boolean;
+  /** «Скрыть строку» в самой строке; нет — кнопки нет. */
+  onHideBar?: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
@@ -160,7 +169,7 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
     <div ref={root} className={`chat-ws chat-ws--${place}${barCompact ? " chat-ws--compact" : ""}`} data-chat-drop="">
       {live.catchup?.active && <CatchupNote catchup={live.catchup} />}
       {/* Строка сессии: кнопка колонки расшифровки (всегда) и шапка сессии (когда агент известен). */}
-      <div className="chat-ws__bar">
+      {!barHidden && <div className="chat-ws__bar">
         <IconButton icon={hidden ? PanelLeftOpen : PanelLeftClose} className="chat-ws__side-toggle"
           label={hidden ? "Показать расшифровку" : "Убрать расшифровку"}
           tooltip={hidden ? "Показать расшифровку колонкой рядом с чатом" : "Убрать расшифровку — останется только чат"}
@@ -168,9 +177,10 @@ export function ChatWorkspace({ live, chat, view, disabled = false, place = "pan
         {agent && (
           <SessionBar agent={agent} summary={live.summary} writing={!!chat.writing} compact={barCompact} quiet={view.quiet}
             onFrequency={(f) => void chat.setFrequency(f)} onProfile={(p) => void chat.setProfile(p)}
-            disabled={!!block} onRevokeGrant={(id) => void chat.revokeGrant(id)} />
+            disabled={!!block} onRevokeGrant={(id) => void chat.revokeGrant(id)}
+            onYolo={chat.setYolo ? (on) => void chat.setYolo?.(on) : undefined} onHide={onHideBar} />
         )}
-      </div>
+      </div>}
       {/* Чат и строка ввода всегда на месте и не пересоздаются; меняется только колонка расшифровки. */}
       <div className={`chat-ws__body${hidden ? " is-hidden" : ""}`}>
         {!hidden && (

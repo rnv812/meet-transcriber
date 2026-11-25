@@ -405,6 +405,16 @@ test("живые подсказки (агент-участник выключе�
   }));
 });
 
+test("строка сессии в окне ассистента (0.6.2): по умолчанию показана; выключатель — в ui.live_session_bar", async () => {
+  openAssistant();
+  await userEvent.click(await screen.findByRole("button", { name: "Тонкая настройка" }));
+  const row = await screen.findByRole("switch", { name: "Строка сессии в окне ассистента" });
+  expect(row).toBeChecked();
+  await userEvent.click(row);
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { ui: { live_session_bar: false } }));
+});
+
 test("«Только сводка» — число подсказок не выбирается; у каждой настройки есть «?»", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0, participant: false } }));
   openAssistant();
