@@ -30,7 +30,10 @@ Client Protocol), действия — с согласия через ворот
 * `--cli_dir_name <имя>` — файл настроек читается из
   `<gemini-dir>/antigravity-cli/<имя>/settings.json`, а разговоры остаются в
   общей `antigravity-cli/conversations`: у каждого хода свой разовый файл
-  правил (`run_settings`), продолжение сеанса не теряется. Битый JSON agy
+  правил (`run_settings`), продолжение сеанса не теряется (проба без входа,
+  agy 1.5.11: журнал agy с `--cli_dir_name` пишет ту же «ACP app data
+  directory» `<gemini-dir>/antigravity-cli`; в разовой папке — только
+  settings.json и журнал сервера). Битый JSON agy
   молча заменяет настройками по умолчанию, а обратная косая черта в пути
   ломает его разбор — пути в правилах только с `/`.
 * Ключи настроек (из программы и журнала изменений): `agentMode` (`""` —
@@ -79,7 +82,9 @@ Client Protocol), действия — с согласия через ворот
 4. `session/prompt` — системный промпт Meet в начале первого сообщения
    нового сеанса (как у Codex), дальше — только сообщение;
 5. `session/update` → строки хода работы по ходу (`tool_use`, `gate`,
-   `tool_result`), текст — из `agent_message_chunk`;
+   `tool_result`), текст — из `agent_message_chunk` (по ходу — `on_text`;
+   сообщение после вызова инструмента — новое, ответ — последнее);
+   `stopReason: cancelled` без остановки Meet — сбой хода, не «Стоп»;
    `session/request_permission` → ворота Meet (`consent.agy_approval`):
    чтение, команды, правка, MCP — по уровню хода и таблице доступа;
    прочие запросы агента (fs, терминал) — отказ;
@@ -138,6 +143,7 @@ SHIM_UNSAFE = ("Antigravity CLI найден только как сценари�
                "которые cmd.exe понимает как команды: нужна программа agy.exe (установщик Antigravity "
                "CLI ставит её в %LOCALAPPDATA%\\agy\\bin)")
 SOFT_DENIED = "отклонено: нужно согласие"
+SELF_CANCELLED = "Antigravity прервал ход сам"
 _SOFT_DENY = re.compile(r"(\d+)?\s*tool\(s\)\s+required approval that headless mode cannot prompt for",
                         re.IGNORECASE)
 PERMISSION = "session/request_permission"
@@ -383,18 +389,51 @@ def _row_call(tool_call: dict) -> tuple[str, dict]:
 
 
 class _Turn:
-    """Состояние хода: вызовы, строки хода работы, текст."""
+    """Состояние хода: вызовы, строки хода работы, текст.
 
-    def __init__(self, approver, emit) -> None:
+    Текст — по сообщениям модели: `agent_message_chunk` после вызова
+    инструмента начинает новое сообщение (прежнее было
+    пояснением по ходу, как у Claude Code). Ответ хода — последнее непустое
+    сообщение (`answer`). `on_text(кусок)` — текст по ходу, `on_text(None)` —
+    началось новое сообщение (из потока чтения: вызывающий доставляет его в
+    свой цикл событий сам)."""
+
+    def __init__(self, approver, emit, on_text=None) -> None:
         self.approver = approver
         self.emit = emit or (lambda _e: None)
+        self.on_text = on_text
         self.peer: _Peer | None = None
         self.session_id: str | None = None
         self.calls: dict[str, dict] = {}
         self.open: set[str] = set()
         self.shown: set[str] = set()
-        self.text: list[str] = []
+        self.messages: list[list[str]] = [[]]
+        self._boundary = False          # после текста был вызов инструмента
         self.lock = threading.Lock()
+
+    def answer(self) -> str:
+        """Ответ хода: последнее непустое сообщение модели."""
+        for parts in reversed(self.messages):
+            text = "".join(parts).strip()
+            if text:
+                return text
+        return ""
+
+    def _say(self, piece) -> None:
+        if self.on_text is None:
+            return
+        try:
+            self.on_text(piece)
+        except Exception:
+            pass
+
+    def _message_chunk(self, text: str) -> None:
+        if self._boundary and self.messages[-1]:
+            self.messages.append([])
+            self._say(None)
+        self._boundary = False
+        self.messages[-1].append(text)
+        self._say(text)
 
     def _use(self, tid: str) -> None:
         from meet.llm.codex import _use_event
@@ -426,10 +465,11 @@ class _Turn:
         if kind == "agent_message_chunk":
             text = _text_of(update.get("content"))
             if text:
-                self.text.append(text)
+                self._message_chunk(text)
             return
         if kind not in ("tool_call", "tool_call_update"):
             return
+        self._boundary = True
         tid = update.get("toolCallId")
         if not isinstance(tid, str) or not tid:
             return
@@ -540,17 +580,18 @@ class _Outcome:
 def run_turn(cmd: list[str], *, env: dict | None, cwd: str, text: str, resume: str | None = None,
              keep_session: bool = False, model: str | None = None, mcp: dict | None = None,
              approver=None, emit=None, timeout_s: float = 180.0, call: _Call | None = None,
-             exe: str | None = None) -> _Outcome:
+             exe: str | None = None, on_text=None) -> _Outcome:
     """Один ход через `agy acp` (блокирующее; см. модуль). Не подошёл до
     начала сеанса — `Unavailable`. `approver(toolCall) -> (разрешить?,
-    решение ворот | None)`; `emit` — события хода работы."""
+    решение ворот | None)`; `emit` — события хода работы; `on_text` — текст
+    модели по ходу (`_Turn`), из потока чтения."""
     deadline = time.monotonic() + timeout_s
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=env, **popen_kwargs())
     except OSError as e:
         raise Unavailable(f"не запустился ({type(e).__name__})") from None
-    turn = _Turn(approver, emit)
+    turn = _Turn(approver, emit, on_text)
     peer = _Peer(proc, on_notify=turn.notify, on_request=turn.request)
     turn.peer = peer
     stopper = _Stopper(peer, proc, turn)
@@ -663,7 +704,7 @@ def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, resume, ke
         if stopper.stopped and time.monotonic() > deadline + CANCEL_GRACE_S + 1:
             break
     turn.abort_rows()
-    answer = "".join(turn.text).strip()
+    answer = turn.answer()
     if cancelled():
         return _Outcome(AgentReply(text="", error=CANCELLED_ERROR, cancelled=True, session_id=sid_out(sid)),
                         sid, closable=closable)
@@ -684,7 +725,9 @@ def _drive(peer: _Peer, turn: _Turn, stopper: _Stopper, *, cwd, text, resume, ke
     result = msg.get("result") if isinstance(msg.get("result"), dict) else {}
     stop = result.get("stopReason")
     if stop == "cancelled":
-        return _Outcome(AgentReply(text="", error=CANCELLED_ERROR, cancelled=True, session_id=sid_out(sid)),
+        # Остановки Meet не было (она — выше): agy прервал ход сам. Это сбой хода,
+        # а не «Стоп»: иначе ход по репликам повторялся бы без паузы.
+        return _Outcome(AgentReply(text="", error=SELF_CANCELLED, session_id=sid_out(sid)),
                         sid, closable=closable)
     if stop == "refusal":
         return _Outcome(AgentReply(text="", error="модель отказалась отвечать", session_id=sid_out(sid)),
@@ -959,9 +1002,11 @@ async def run(
     папки хода USER (`--add-dir`). `deny_paths` — запрет в разовых правилах и
     просьба в тексте. `model` — `session/set_model` (имя проверяется).
     `on_event` — ход работы по ходу вызова (`tool_use`, `gate`,
-    `tool_result`). Изображения agy не уходят (пометка в тексте и
+    `tool_result`); `on_text` — текст модели по ходу (`agent_message_chunk`;
+    `on_text(None)` — новое сообщение после вызова инструмента), оба — в
+    цикл событий вызывающего. Изображения agy не уходят (пометка в тексте и
     `notes`). Отмена задачи («Стоп») — `session/cancel`, затем дерево
-    процессов. `effort`, `max_turns`, `on_text`, `session_id`, `cwd` — не
+    процессов. `effort`, `max_turns`, `session_id`, `cwd` — не
     используются. ACP не подошёл до начала сеанса — ход через `agy -p`
     (`_print_turn`), в `log` — строка с причиной (без текста встречи)."""
     from meet.llm import consent
@@ -1002,6 +1047,7 @@ async def run(
     from meet.llm.codex import _deliver
 
     emit = _deliver(loop, on_event) if on_event is not None else (lambda _e: None)
+    said = _deliver(loop, on_text) if on_text is not None else None
     call = _Call()
     outcome = None
     try:
@@ -1009,7 +1055,7 @@ async def run(
             outcome = await asyncio.to_thread(
                 run_turn, command(exe, flags), env=env, cwd=workdir, text=text, resume=resume,
                 keep_session=keep_session, model=model, mcp=mcp, approver=approver, emit=emit,
-                timeout_s=timeout_s, call=call, exe=exe)
+                timeout_s=timeout_s, call=call, exe=exe, on_text=said)
         except Unavailable as e:
             if log is not None:
                 try:

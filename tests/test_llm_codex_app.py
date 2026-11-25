@@ -58,14 +58,14 @@ class Harness:
         self.cards.append(card)
         return self.answers.pop(0) if self.answers else "deny"
 
-    def run(self, text: str, *, level=consent.USER, resume=None, keep_session=True, timeout_s=30.0):
+    def run(self, text: str, *, level=consent.USER, resume=None, keep_session=True, timeout_s=30.0, **kw):
         self.gate.begin(level)
         try:
             return asyncio.run(codex.run(
                 text, system_prompt="СИСТЕМА", resume=resume, keep_session=keep_session and not resume,
                 allowed_dirs=(str(self.meeting), str(self.kb)), access=level,
                 work_dirs=(str(self.meeting), str(self.kb)), gate=self.gate,
-                on_event=self.events.append, log=self.lines.append, timeout_s=timeout_s))
+                on_event=self.events.append, log=self.lines.append, timeout_s=timeout_s, **kw))
         finally:
             self.gate.end()
 
@@ -540,3 +540,24 @@ def test_schema_excerpt_covers_the_methods_the_client_uses():
     assert names == {"initialize", "thread/start", "thread/resume", "turn/start", "turn/interrupt",
                      "mcpServerStatus/list"}
     assert "codex-cli 0.160.0" in SCHEMA["source"]
+
+
+# --- текст модели по ходу -----------------------------------------------------------------------
+
+
+def test_agent_message_deltas_stream_and_a_new_message_is_marked(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    pieces: list = []
+    reply = h.run('SAY Посмотрю план.\nRUN cat plan.md\nSAY {"say": "Срок 15.11"}', level=consent.NONE,
+                  on_text=pieces.append)
+    assert reply.error is None and reply.text == '{"say": "Срок 15.11"}'
+    first, rest = pieces[:2], pieces[2:]
+    assert "".join(first) == "Посмотрю план." and rest[0] is None
+    assert "".join(rest[1:]) == '{"say": "Срок 15.11"}'
+
+
+def test_message_without_deltas_comes_whole_on_completion(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    pieces: list = []
+    reply = h.run("привет", level=consent.NONE, on_text=pieces.append)
+    assert reply.text == "ok" and pieces == ["ok"]

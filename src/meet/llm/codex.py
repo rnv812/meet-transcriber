@@ -728,10 +728,11 @@ def _reply(proc, stdout: str, stderr: str, text: str, event_sid, event_errors, k
 
 async def _app_turn(exe: str, env: dict, workdir: str, text: str, images, resume, keep_session: bool,
                     access: str, work_dirs: tuple, model, effort, gate, on_event,
-                    timeout_s: float) -> tuple[AgentReply | None, str]:
+                    timeout_s: float, on_text=None) -> tuple[AgentReply | None, str]:
     """Ход через `codex app-server` (`codex_app.run_turn`, в потоке) → (ответ,
     ""); не подошёл до начала хода — (None, причина). «Стоп» (отмена задачи) —
-    `turn/interrupt`, затем дерево процессов."""
+    `turn/interrupt`, затем дерево процессов. `on_event` и `on_text` — по ходу,
+    в цикл событий вызывающего."""
     from functools import partial
 
     from meet.llm import codex_app, consent
@@ -750,7 +751,7 @@ async def _app_turn(exe: str, env: dict, workdir: str, text: str, images, resume
             policy=codex_app.turn_policy(access, gate.mode, work_dirs), model=model, effort=effort,
             approver=partial(consent.codex_approval, gate, windows=_ON_WINDOWS),
             emit=_deliver(loop, on_event) if on_event is not None else None,
-            timeout_s=timeout_s, call=call)
+            timeout_s=timeout_s, call=call, on_text=_deliver(loop, on_text) if on_text is not None else None)
     except codex_app.Unavailable as e:
         return None, e.reason
     except asyncio.CancelledError:
@@ -804,7 +805,8 @@ async def run(
     `on_event` — ход работы по ходу вызова: события `tool_use`/`tool_result`
     (`ToolStream`) приходят в цикл событий вызывающего, пока Codex работает
     (с `--json`); прерванные вызовы закрываются «прервано». `reply.tools` —
-    те же события после вызова, как и без `on_event`.
+    те же события после вызова, как и без `on_event`. `on_text` — текст
+    модели по ходу (только app-server; `on_text(None)` — новое сообщение).
 
     `gate` (0.6.2, `consent.ConsentGate` агента-участника, вместе с
     `access`) — ход через `codex app-server` (`codex_app`): выход за
@@ -835,7 +837,8 @@ async def run(
     drop_session_markers(env)  # сеанс сам по себе, не «вложенный» (llm.base)
     if gate is not None and access is not None:
         reply, reason = await _app_turn(exe, env, workdir, stdin_text, sent, resume, keep_session, access,
-                                        tuple(work_dirs or ()), model, effort, gate, on_event, timeout_s)
+                                        tuple(work_dirs or ()), model, effort, gate, on_event, timeout_s,
+                                        on_text=on_text)
         if reply is not None:
             reply.error = netproxy.with_hint(reply.error)
             reply.dropped_images = [path for path, _ in dropped]

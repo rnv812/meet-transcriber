@@ -23,10 +23,14 @@ stdio, как Antigravity CLI 1.5.11) — для тестов `meet.llm.antigrav
                     `_meta.readOnlyHint` — если `ro`);
   RAW <json>      — запрос разрешения с этим toolCall как есть;
   HANG            — ждёт `session/cancel`, затем ответ `cancelled`;
-  FAIL <текст>    — ошибка ответа на `session/prompt`.
+  FAIL <текст>    — ошибка ответа на `session/prompt`;
+  SAY <текст>     — текст модели двумя `agent_message_chunk` (по ходу хода);
+  THINK           — `agent_thought_chunk`;
+  SELFCANCEL      — ответ `stopReason: cancelled` без `session/cancel`;
+  EMPTY           — ход без текста модели.
 Ответ модели — `agent_message_chunk`: JSON-список выбранных optionId (или
-`cancelled`) по запросам хода, «ok» — если запросов не было; затем ответ
-`session/prompt` со `stopReason: end_turn`.
+`cancelled`) по запросам хода, «ok» — если запросов не было (с SAY или
+EMPTY — без него); затем ответ `session/prompt` со `stopReason: end_turn`.
 """
 
 import json
@@ -112,8 +116,24 @@ class Server:
         text = "".join(b.get("text", "") for b in params.get("prompt") or () if b.get("type") == "text")
         decisions = []
         n = -1
+        quiet = False
         for line in text.splitlines():
             head, _, rest = line.partition(" ")
+            if head == "SAY":
+                half = len(rest) // 2
+                for piece in (rest[:half], rest[half:]):
+                    self.update("agent_message_chunk", content={"type": "text", "text": piece})
+                quiet = True
+                continue
+            if head == "THINK":
+                self.update("agent_thought_chunk", content={"type": "text", "text": "думаю"})
+                continue
+            if head == "SELFCANCEL":
+                send({"id": msg["id"], "result": {"stopReason": "cancelled"}})
+                return
+            if head == "EMPTY":
+                quiet = True
+                continue
             if head not in ("EXEC", "READ", "EDIT", "MCP", "RAW", "HANG", "FAIL"):
                 continue
             n += 1
@@ -158,8 +178,9 @@ class Server:
             self.update("tool_call_update", toolCallId=cid, status="completed" if ok else "failed",
                         content=[{"type": "content", "content": {"type": "text",
                                                                  "text": "вывод" if ok else "отклонено"}}])
-        answer = json.dumps(decisions, ensure_ascii=False) if decisions else "ok"
-        self.update("agent_message_chunk", content={"type": "text", "text": answer})
+        if not quiet:
+            answer = json.dumps(decisions, ensure_ascii=False) if decisions else "ok"
+            self.update("agent_message_chunk", content={"type": "text", "text": answer})
         send({"id": msg["id"], "result": {"stopReason": "end_turn"}})
 
 

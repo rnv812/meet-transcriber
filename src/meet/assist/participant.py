@@ -40,7 +40,11 @@
 идёт окну событиями `chat_partial`, затем `parse_reply`: `say` — сообщение
 (`finish_reply`), `silent` — скрытая реплика (`dropped`, `silent: True`),
 `read` / `search` / `list` — только у модели без инструментов (иначе —
-пометка в журнал процесса).
+пометка в журнал процесса). Ход по репликам без ответа (сбой модели, ответ
+не по протоколу) скрыт, но `PROACTIVE_FAILS_LINE` таких подряд — одна
+строка `system` на серию с короткой причиной; молчание модели — счётчиком в
+журнал процесса. Причину отказа ворот agy и Codex не видят в ответе на свой
+запрос — она уходит им заметкой в следующий ход (`REASONLESS_PROVIDERS`).
 
 **Свобода** (0.3.7, A1; 0.4 — «как CLI»; `freedom`, настройка
 `assist.agent_freedom`, по умолчанию вкл.; `agent_mode` — `assist.agent_mode`:
@@ -170,6 +174,20 @@ MODE_NOTICE = ("Ассистент теперь сам выполняет обы
 # фактически только читает (`codex.sandbox_missing`). Строка — одна на встречу.
 CODEX_SANDBOX_NOTICE = ("Codex сможет только читать: настройте песочницу Codex — ключ "
                         "[windows] sandbox в его config.toml. Meet этот ключ не меняет.")
+# Ходы по репликам, которые подряд не дали ответа (сбой модели или ответ не по
+# протоколу), скрыты в ленте; столько подряд — одна строка в чате на серию
+# (причина без текста встречи), чтобы ассистент не молчал всю встречу незаметно.
+PROACTIVE_FAILS_LINE = 3
+PROACTIVE_FAILED = ("Ассистент ({label}) не ответил на реплики встречи {count} раза подряд — Meet продолжит "
+                    "пробовать, написать ассистенту можно как обычно. Причина: {reason}")
+NOT_PROTOCOL = "ответ модели не по протоколу Meet"
+REASON_MAX = 160
+# Причины молчания модели, которые — её ответ, а не сбой (`pp.parse_reply`).
+_SILENT_NOTES = ("", "молчание обычным текстом")
+# Провайдеры, которым отказ ворот не объяснить в самом ответе на запрос разрешения
+# (ACP agy, одобрения Codex app-server): причина — заметкой в следующий ход.
+REASONLESS_PROVIDERS = ("agy", "codex")
+DENIAL_NOTES_MAX = 2
 
 
 # --- разбор потока: текст сообщения, который уже можно показать ---
@@ -617,6 +635,11 @@ class Participant:
         self._quiet_until = 0.0        # лимит запросов подряд исчерпан: пауза
         self._failures = 0
         self._retry_at = 0.0
+        # Ходы по репликам подряд: без ответа (сбой, не протокол) и молча;
+        # строка о серии сбоев уже в чате.
+        self._proactive_fails = 0
+        self._proactive_silent = 0
+        self._fails_noted = False
         # ход и лента
         self._turn: _Turn | None = None
         self._partial: dict | None = None
@@ -1447,7 +1470,9 @@ class Participant:
     async def _note_denials(self, session) -> None:
         """Ворота отказали агенту в этом ходе — короткая строка в чате."""
         take = getattr(session, "take_denials", None)
-        line = consent.denial_line(take() if take is not None else [])
+        denials = take() if take is not None else []
+        self._denial_notes(denials)
+        line = consent.denial_line(denials)
         if not line:
             return
         try:
@@ -1456,6 +1481,23 @@ class Participant:
             self._log(f"агент: строка об отказе не записана ({type(e).__name__}: {e})")
             return
         self._emit_chat([added.event])
+
+    def _denial_notes(self, denials) -> None:
+        """Причины отказов ворот — заметкой в следующий ход тем провайдерам,
+        которым их не передать в самом ответе на запрос (`REASONLESS_PROVIDERS`):
+        agy и Codex видят только «отклонено» и не знают, что предложить
+        пользователю. Claude Code получает причину сразу (хук)."""
+        if self.provider not in REASONLESS_PROVIDERS:
+            return
+        reasons: list[str] = []
+        for d in denials or ():
+            reason = " ".join(str(getattr(d, "reason", "") or "").split())
+            if reason and reason not in reasons:
+                reasons.append(reason)
+        for reason in reasons[:DENIAL_NOTES_MAX]:
+            note = f"В прошлом ходе: {reason}"
+            if note not in self._notes:
+                self._notes.append(note)
 
     async def _store_session(self, session) -> None:
         """Id сеанса — после каждого хода: ветка после картинки его меняет."""
@@ -1722,6 +1764,9 @@ class Participant:
                         self._chatlog.finish_reply, turn.reply_id,
                         status="failed" if turn.addressed else "dropped",
                         text=turn.shown, error=f"{type(e).__name__}: {e}"[:300])])
+            if not turn.addressed:
+                with _quiet():
+                    await self._proactive_failed(f"сбой Meet ({type(e).__name__})")
         finally:
             if self._turn is turn:
                 self._turn = None
@@ -2036,6 +2081,53 @@ class Participant:
         self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
                                         status=status, text="", error=error)])
         self._failed(error)
+        if not turn.addressed:
+            await self._proactive_failed(error)
+
+    # --- ходы по репликам: серия без ответа видна (не молчать всю встречу) ---
+
+    async def _proactive_failed(self, reason: str) -> None:
+        """Ход по репликам не дал ответа (сбой модели или ответ не по
+        протоколу): в журнал — счётчик; `PROACTIVE_FAILS_LINE` подряд — одна
+        строка `system` на серию с короткой причиной (без текста встречи)."""
+        self._proactive_silent = 0
+        self._proactive_fails += 1
+        count = self._proactive_fails
+        self._log(f"агент: ход по репликам без ответа модели, подряд: {count}")
+        if count < PROACTIVE_FAILS_LINE or self._fails_noted:
+            return
+        self._fails_noted = True
+        line = PROACTIVE_FAILED.format(label=self.provider_label, count=count, reason=_short_reason(reason))
+        try:
+            added = await self._io(self._chatlog.append, "system", text=line, level="error")
+        except (OSError, RuntimeError, ValueError) as e:
+            self._log(f"агент: строка о сбоях не записана ({type(e).__name__}: {e})")
+            return
+        self._emit_chat([added.event])
+
+    async def _proactive_outcome(self, actions, spoke) -> None:
+        """Итог хода по репликам по разбору ответа: сообщение или запрос —
+        ответ; молчание (`{"silent": true}`, «молчу») — тоже ответ; пусто,
+        мусор, JSON без полей протокола — сбой серии (`_proactive_failed`)."""
+        note = actions[0].note if actions and not spoke else ""
+        if spoke or note in _SILENT_NOTES:
+            self._proactive_answered(silent=not spoke)
+        else:
+            await self._proactive_failed(NOT_PROTOCOL)
+
+    def _proactive_answered(self, *, silent: bool) -> None:
+        """Ход по репликам — ответ модели (сообщение или молчание): серия
+        сбоев кончилась. Молчание подряд — счётчиком в журнал (1, 3, 10, 20…):
+        по нему видно, что модель отвечает, но молчит."""
+        self._proactive_fails = 0
+        self._fails_noted = False
+        if not silent:
+            self._proactive_silent = 0
+            return
+        self._proactive_silent += 1
+        n = self._proactive_silent
+        if n in (1, 3) or n % 10 == 0:
+            self._log(f"агент: ход по репликам — модель промолчала, подряд: {n}")
 
     # --- ход-команда (слэш-команда CLI, `slash`) ---
 
@@ -2272,6 +2364,8 @@ class Participant:
             self._log("агент: запросы к Meet пропущены — у модели свои инструменты ("
                       + ", ".join(a.kind for a in requests) + ")")
             requests = []
+        if not turn.addressed:
+            await self._proactive_outcome(actions, says or requests)
         if not says:
             note = "запрос к Meet" if requests else (actions[0].note if actions else "")
             fields = {"status": "dropped", "silent": True}
@@ -3038,6 +3132,27 @@ class _JournalUntil:
 
     def context(self, budget: int, **kwargs) -> str:
         return self._chatlog.context(budget, until=self._until, **kwargs)
+
+
+def _short_reason(error) -> str:
+    """Причина сбоя для строки в чате: первая непустая строка, до REASON_MAX
+    символов (хвост stderr CLI бывает длинным и многострочным); ошибка API
+    JSON-ом (`{"error": {"message": …}}`, так отвечает Codex) — её `message`."""
+    import json
+
+    text = next((s.strip() for s in str(error or "").splitlines() if s.strip()), "") or "ошибка модели"
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        inner = data.get("error") if isinstance(data, dict) else None
+        message = (inner.get("message") if isinstance(inner, dict) else None) or (
+            data.get("message") if isinstance(data, dict) else None)
+        if isinstance(message, str) and message.strip():
+            text = message.strip()
+    text = " ".join(text.split()).rstrip(" .")
+    return text if len(text) <= REASON_MAX else text[:REASON_MAX - 1].rstrip() + "…"
 
 
 def _map_has_kb(text: str) -> bool:
