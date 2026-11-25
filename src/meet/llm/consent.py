@@ -31,6 +31,15 @@
 `run_in_background`, расписания), обращения к локальным адресам (API Meet),
 скрытые символы, огромные вызовы, свой вопрос CLI (`AskUserQuestion`).
 
+**YOLO** (0.6.2, `ConsentGate.set_yolo`) — режим одной встречи: человек
+включает его в окне ассистента, по умолчанию выключен. Карточек нет: всё,
+кроме «всегда запрещённого» выше (закрытые и чувствительные пути, фон,
+локальные адреса, скрытые символы, свой вопрос CLI), разрешается сразу
+(`allow`, `why="yolo"`) на любом уровне хода — удаление, запись вне рабочих
+папок, отправка наружу, изменения через MCP, запуск программ. `mode` ворот
+тогда — `MODE_YOLO`: по нему провайдеры снимают свои песочницы
+(`codex_app.turn_policy`), у Antigravity нет запретов команд (`agy_approval`).
+
 `ConsentGate.decide(tool, input)` — решение без ожидания (`allow` / `auto` /
 `deny` / `ask`); `ConsentGate.check(...)` — то же с карточкой: им отвечает
 `claude_stream.Conversation` на хук PreToolUse (он приходит на **каждый**
@@ -73,6 +82,9 @@ ALLOW, AUTO, DENY, ASK = "allow", "auto", "deny", "ask"
 # Как действует ассистент в ходе USER (`assist.agent_mode`).
 MODE_AUTO, MODE_CONFIRM = "auto", "confirm"
 MODES = (MODE_AUTO, MODE_CONFIRM)
+# YOLO (0.6.2): режим встречи из окна ассистента, не настройка — в `MODES` его нет.
+MODE_YOLO = "yolo"
+YOLO = "yolo"                        # причина разрешения (`Decision.why`)
 ALLOW_MEETING = "allow_meeting"      # «Разрешать такое до конца встречи»
 # Ключ разрешения на правки файлов в папке (Write, Edit, MultiEdit, NotebookEdit).
 FILES_GRANT = "write:files:"
@@ -2052,7 +2064,7 @@ _WHY_LABELS = {
     DELETE: "удаление", SEND: "отправка наружу", "outside": "запись вне рабочих папок",
     "sandbox": "без песочницы", "mcp-write": "изменение через MCP", "mcp-address": "адрес в MCP",
     "recursive": "обход рядом с закрытым", UNPARSED: "непонятная команда",
-    "launch": "запуск программы", "agy-denied": "не для Antigravity",
+    "launch": "запуск программы", "agy-denied": "не для Antigravity", YOLO: "YOLO",
 }
 
 
@@ -2098,7 +2110,7 @@ class Decision:
             return "действует сам"
         if self.outcome == ALLOW:
             return {"confirmed": "разрешили вы", "granted-now": "разрешили вы до конца встречи",
-                    "granted": "разрешено до конца встречи"}.get(self.why, "разрешено автоматически")
+                    "granted": "разрешено до конца встречи", YOLO: "разрешено: YOLO"}.get(self.why, "разрешено автоматически")
         if self.outcome == ASK:
             return "спрашиваю вас" + (f": {why}" if why else "")
         return "запрещено" + (f": {why}" if why else "")
@@ -2179,6 +2191,7 @@ class ConsentGate:
         sens = sensitive_paths() if sensitive is None else sensitive
         self._sensitive = [r for r in (self._root(d) for d in sens or () if d) if r]
         self._mode = mode if mode in MODES else MODE_AUTO
+        self._yolo = False
         self._ask_text = ask_text or ASK_FIRST
         self._attached: set[str] = set()
         self._lock = threading.RLock()   # решение берёт замок и внутри (разрешения)
@@ -2217,8 +2230,20 @@ class ConsentGate:
     @property
     def mode(self) -> str:
         """`auto` / `confirm` — как действует ассистент в ходе USER
-        (`claude_stream` берёт отсюда `--permission-mode`)."""
-        return self._mode
+        (`claude_stream` берёт отсюда `--permission-mode`); `yolo` — включён
+        YOLO (`set_yolo`)."""
+        with self._lock:
+            return MODE_YOLO if self._yolo else self._mode
+
+    @property
+    def yolo(self) -> bool:
+        with self._lock:
+            return self._yolo
+
+    def set_yolo(self, on: bool) -> None:
+        """YOLO на эту встречу: без карточек, всё, кроме всегда запрещённого."""
+        with self._lock:
+            self._yolo = bool(on)
 
     def begin(self, level: str) -> None:
         """Ход начинается: согласие на этот ход (NONE / READ / USER)."""
@@ -2545,6 +2570,15 @@ class ConsentGate:
             return Decision(ALLOW, what=what, kind=kind)
         if kind == "read" and paths and all(self._free_read(p) for p in paths):
             return Decision(ALLOW, what=what, kind=kind)
+        if self._yolo:
+            # YOLO: что не закрыто всегда (выше), — сразу, на любом уровне хода. Команда
+            # чтения с закрытым путём или обходом над закрытой папкой — по-прежнему нет.
+            plan = self._read_plan(tool, data)
+            if plan == "recursive":
+                return self._deny_why("excluded", what, kind)
+            if plan:
+                return self._deny_why(plan, what, kind)
+            return Decision(ALLOW, what=what, kind=kind, why=YOLO)
         # Ход только по репликам встречи: ничего, кроме чтения рабочих папок, —
         # что бы ни прозвучало (инъекция из речи), в любом режиме.
         if level not in (READ, USER):
@@ -2599,6 +2633,8 @@ class ConsentGate:
             host = urlsplit(url.strip()).hostname or ""
             if not url.strip().lower().startswith(("http://", "https://")) or not host or is_local_host(host):
                 return self._deny_why("local", what, kind)
+        if self._yolo:
+            return Decision(ALLOW, what=what, kind=kind, why=YOLO)
         if kind == "meet-read":
             if level in (READ, USER):
                 return Decision(ALLOW, what=what, kind=kind)
@@ -2723,6 +2759,8 @@ class ConsentGate:
             elif decision.outcome != ASK:
                 return decision
         elif via != "hook":
+            if decision.why == YOLO and decision.allow:
+                return decision          # YOLO: и вопрос самого CLI — без карточки
             if level != USER:
                 if decision.outcome == ALLOW:
                     return decision
@@ -3054,6 +3092,8 @@ def codex_elicitation(gate: "ConsentGate", params: dict, item: dict | None = Non
     schema = params.get("requestedSchema")
     fields = schema.get("properties") if isinstance(schema, dict) else None
     confirmer = gate.confirmer
+    if gate.yolo and params.get("mode") == "form" and fields == {}:
+        return "accept", Decision(ALLOW, what=f"вопрос MCP {server}", kind="mcp", why=YOLO)
     if gate.level != USER or params.get("mode") != "form" or not isinstance(fields, dict) or fields \
             or confirmer is None:
         return "decline", None
@@ -3283,6 +3323,9 @@ def agy_approval(gate: "ConsentGate", tool_call: dict, *, windows: bool) -> Deci
         return gate._record(Decision(DENY, "", what, "other", UNPARSED))
     tool, data = call
     raw = tool_call.get("rawInput") if isinstance(tool_call.get("rawInput"), dict) else {}
+    if gate.yolo:
+        # YOLO: запретов команд нет — решают ворота (всегда запрещённое закрыто и тут).
+        return gate.check(tool, data, tool_use_id=tid, via=AGY, read_only=agy_read_only(tool_call))
     if tool in SHELL and (_agy_inline_code(_agy_str(raw, _AGY_COMMAND_KEYS))
                           or _agy_inline_code(str(data.get("command") or ""))):
         kind, what = describe(tool, data)

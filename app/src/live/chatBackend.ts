@@ -15,7 +15,7 @@ import {
   type Endpoint, attachChatFile, cancelJob, clickChat, confirmChat, revokeChatGrant, cancelVoicePress, continueChat, getChat, getRecordingChat,
   pasteChatImage, postChat, reactChat, recordingChatAttach, recordingChatClick, recordingChatConfirm,
   recordingChatPaste, recordingChatReact,
-  recordingChatRemove, removeChatAttachment, setAgentFrequency, setAgentProfile, stopChat,
+  recordingChatRemove, removeChatAttachment, setAgentFrequency, setAgentProfile, setAgentYolo, stopChat,
 } from "../lib/api";
 import type {
   AgentFrequencyLabel, AgentProfile, ChatAttachResult, ChatPost, ChatReaction, ChatSnapshot, Job, RecordingChat,
@@ -39,6 +39,8 @@ export type ChatBackend = {
   frequency: (ep: Endpoint, label: AgentFrequencyLabel) => Promise<unknown>;
   /** Профиль идущей сессии (после встречи — ничего: профиль у сессии уже был). */
   profile: (ep: Endpoint, profile: AgentProfile) => Promise<unknown>;
+  /** Режим YOLO идущей встречи (0.6.2); после встречи его нет. */
+  yolo?: (ep: Endpoint, on: boolean) => Promise<unknown>;
   paste: (ep: Endpoint, blob: Blob, name?: string) => Promise<ChatAttachResult>;
   attach: (ep: Endpoint, path: string) => Promise<ChatAttachResult>;
   remove: (ep: Endpoint, id: string) => Promise<unknown>;
@@ -58,6 +60,7 @@ export const LIVE_CHAT: ChatBackend = {
   stop: (ep, id) => stopChat(ep, id),
   frequency: (ep, label) => setAgentFrequency(ep, label),
   profile: (ep, profile) => setAgentProfile(ep, profile),
+  yolo: (ep, on) => setAgentYolo(ep, on),
   paste: (ep, blob, name) => pasteChatImage(ep, blob, name),
   attach: (ep, path) => attachChatFile(ep, path),
   remove: (ep, id) => removeChatAttachment(ep, id),

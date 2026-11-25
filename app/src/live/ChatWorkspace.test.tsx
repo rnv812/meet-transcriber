@@ -5,12 +5,13 @@ vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   setAgentFrequency: vi.fn(async () => ({ frequency: "less", label: "реже", live: true })),
   setAgentProfile: vi.fn(async () => ({ profile: "personal", label: "Личный", live: true })),
+  setAgentYolo: vi.fn(async () => ({ on: true, live: true })),
   pasteChatImage: vi.fn(async () => ({ id: "a1", status: "ready", attachment: { id: "a1", kind: "attachment" } })),
   postChat: vi.fn(async () => ({ id: "m9", queued: false, attachments: [] })),
   newChatClientId: vi.fn(() => "c1"),
 }));
 import { TermsNotice } from "../features/legal/TermsNotice";
-import { postChat, setAgentFrequency, setAgentProfile } from "../lib/api";
+import { postChat, setAgentFrequency, setAgentProfile, setAgentYolo } from "../lib/api";
 import { TERMS_NEEDED } from "../lib/terms";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
@@ -531,4 +532,39 @@ describe("исправления 1", () => {
     render(<Host live={makeLive({ loaded: false })} />);
     expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeInTheDocument();
   });
+});
+
+// --- строка сессии скрыта, YOLO (0.6.2) -------------------------------------------------------
+
+function BarHost({ live, hidden, onHide }: { live: Live; hidden: boolean; onHide?: () => void }) {
+  chat = useChat(ep);
+  const view = useLiveView(live, { open: true, wide: false, quiet: false });
+  return <LiveWorkspace live={live} view={view} onAsk={() => {}} chat={chat} barHidden={hidden} onHideBar={onHide} />;
+}
+
+test("строка сессии скрыта — её нет целиком, чат и строка ввода на месте; «Скрыть» — в самой строке", async () => {
+  width(600);
+  const onHide = vi.fn();
+  const { rerender } = render(<BarHost live={makeLive({ agent: agentInfo() })} hidden={false} onHide={onHide} />);
+  load();
+  await userEvent.click(within(screen.getByRole("group", { name: "Сессия ассистента" }))
+    .getByRole("button", { name: "Скрыть строку сессии" }));
+  expect(onHide).toHaveBeenCalledTimes(1);
+  rerender(<BarHost live={makeLive({ agent: agentInfo() })} hidden onHide={onHide} />);
+  expect(screen.queryByRole("group", { name: "Сессия ассистента" })).toBeNull();
+  expect(document.querySelector(".chat-ws__bar")).toBeNull();
+  expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toHaveTextContent("Срок другой");
+  expect(screen.getByRole("combobox", { name: "Сообщение ассистенту" })).toBeInTheDocument();
+});
+
+test("YOLO из строки сессии: после вопроса — PUT /live/yolo, бейдж сразу", async () => {
+  width(600);
+  const agent = agentInfo({ can: { mode: "consent", mcp: null, agent_mode: "auto", auto: true }, yolo_available: true });
+  render(<BarHost live={makeLive({ agent })} hidden={false} />);
+  act(() => chat.sink.onChatSnapshot({ messages: [], seq: 1, agent } as ChatSnapshot));
+  const bar = screen.getByRole("group", { name: "Сессия ассистента" });
+  await userEvent.click(within(bar).getByRole("button", { name: "Включить YOLO" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Включить YOLO" }));
+  expect(setAgentYolo).toHaveBeenCalledWith(ep, true);
+  expect(bar.querySelector(".session-bar__yolo")).toHaveTextContent("YOLO");
 });

@@ -39,6 +39,11 @@
  * содержимого панели (свёрнутую на это время разворачиваем — в строку он не
  * помещается).
  *
+ * С агентом-участником в «Ещё» (0.6.2) — YOLO на эту встречу (включение — с
+ * вопросом на месте содержимого) и «Скрыть / Показать строку сессии»
+ * (`useSessionBar`, `ui.live_session_bar`). Строка скрыта или панель свёрнута —
+ * бейдж «YOLO» и ошибка ассистента — в шапке.
+ *
  * Размер и место помнит оболочка (`useLiveWindow`). Фокус панель не берёт:
  * окно создаётся без фокуса, и ни один элемент не фокусируется сам —
  * клавиатура остаётся у звонка, пока человек не щёлкнет в панель.
@@ -60,8 +65,9 @@ import {
 import { inTauri, invoke, trayPanelOpen } from "../lib/shell";
 import type { AgentProfile, ChatMessage, LiveHint } from "../lib/types";
 import {
-  Bell, BellOff, Check, ChevronDown, ChevronUp, Copy, CornerDownRight, Maximize2, Minimize2, MoreHorizontal, Pin,
-  PowerOff, RefreshCw, Save, ShieldQuestion, SlidersHorizontal, Square, Trash2, TriangleAlert, X,
+  Bell, BellOff, Check, ChevronDown, ChevronUp, Copy, CornerDownRight, Maximize2, Minimize2, MoreHorizontal,
+  PanelTopClose, PanelTopOpen, Pin, PowerOff, RefreshCw, Save, ShieldQuestion, SlidersHorizontal, Square, Trash2,
+  TriangleAlert, X, Zap, ZapOff,
 } from "lucide-react";
 import { AgentMark, type AgentState } from "../ui/AgentMark";
 import { BADGE_CLASS } from "../ui/badge";
@@ -82,7 +88,9 @@ import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
 import { useLiveWindow } from "./useLiveWindow";
+import { useSessionBar } from "./useSessionBar";
 import { useWide } from "./useWide";
+import { YOLO_BADGE, YOLO_CONFIRM, YOLO_OFF_LABEL, YOLO_ON_LABEL, YOLO_TITLE, yoloSwitchable } from "./yolo";
 import { LIVE_NUDGE_LEAD, OwnerVoiceNudge, wantsOwnerSample } from "../features/settings/OwnerVoiceDialog";
 import { useAppearance } from "../theme/useAppearance";
 import type { PanelStatus } from "./useLiveStatus";
@@ -227,6 +235,8 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const ws = useLiveView(live, { open, wide, quiet });
   const shown = useShownHint(live.hints, quiet);
   const hintNote = useHintNote(live.hintError);
+  // Строка сессии чата (0.6.2): скрыта — настройкой на все встречи.
+  const sessionBar = useSessionBar(endpoint);
   // Агент-участник: свёрнутая строка — закреплённый вопрос или последнее сообщение агента.
   const agentKeys = chat.items.flatMap((it) => (it.type === "message" && isFinalAgent(it.message) ? [it.message.id] : []));
   const unseenAgent = useUnseen(agentKeys, open, chat.loaded);
@@ -265,9 +275,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   if (status?.temporary) wasTemporary.current = true;
   // Вопрос «Остановить без сохранения?» / конец временной встречи. Свёрнутую
   // панель на время вопроса разворачиваем (в строку он не помещается), потом — обратно.
-  const [asking, setAsking] = useState<"discard" | "temp-end" | null>(null);
+  const [asking, setAsking] = useState<"discard" | "temp-end" | "yolo" | null>(null);
   const unfolded = useRef(false);
-  const askStop = (what: "discard" | "temp-end") => {
+  const askStop = (what: "discard" | "temp-end" | "yolo") => {
     unfolded.current = !(view.expanded || view.maximized);
     if (unfolded.current) setExpanded(true);
     setAsking(what);
@@ -331,6 +341,20 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // всегда «Слушает»: знак один, и состояния не спорят (ревью live-chat, M6).
   const agent = participant ? chat.agent ?? live.agent ?? null : null;
   const agentState = agent ? stateOf(agent, !!chat.writing) : { key: "listening", text: "слушает" };
+  const yolo = agent?.yolo === true;
+  // «Ещё» с агентом-участником (0.6.2): YOLO и строка сессии — перед остановкой.
+  const menu: typeof more = [
+    ...(agent && chat.setYolo && yoloSwitchable(agent) ? [yolo
+      ? { label: YOLO_OFF_LABEL, icon: ZapOff, run: () => void chat.setYolo?.(false) }
+      : { label: YOLO_ON_LABEL, icon: Zap, danger: true, run: () => askStop("yolo") }] : []),
+    ...(agent ? [sessionBar.shown
+      ? { label: "Скрыть строку сессии", icon: PanelTopClose, run: () => sessionBar.setShown(false) }
+      : { label: "Показать строку сессии", icon: PanelTopOpen, run: () => sessionBar.setShown(true) }] : []),
+    ...more,
+  ];
+  // Строки сессии не видно (скрыта или панель свёрнута): ошибка ассистента и YOLO — в шапке.
+  const barOut = !open || !sessionBar.shown;
+  const agentError = barOut && agent?.state === "error" ? agent.error || "Ошибка ассистента" : null;
   const head: { word: string; mark: AgentState | null } = stopping
     ? { word: attached && !fullStop ? "Выключаю…" : "Останавливаю…", mark: "wait" }
     : failed ? { word: "Ошибка", mark: null }
@@ -421,7 +445,8 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const urgentHint = !participant && !!shown && isUrgent(shown);
   // Строка состояния шапки (одна, по важности) и подсказка шапки: есть строка — её полный
   // текст (в шапке обрезается), иначе — что с ассистентом. Одна подсказка Aurora на всю шапку.
-  const headStatus = stopError || hintNote || live.error || (!stopping && live.status) || "";
+  const note = hintNote ?? sessionBar.error;
+  const headStatus = stopError || note || live.error || agentError || (!stopping && live.status) || "";
   const headTip = headStatus || (failed ? status?.error ?? state : stopping || warming ? state : "Ассистент слушает встречу");
   return (
     <div ref={root} className={`live-panel glass glass--dense${mods}${quiet ? " live-panel--quiet" : ""}`}
@@ -436,6 +461,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             : <Icon as={TriangleAlert} className="live-head__alert" />}
           <span className="live-head__state">{state}</span>
           {quiet && <span className={`${BADGE_CLASS.plain} live-head__quiet-tag`}>тихо</span>}
+          {yolo && barOut && (
+            <span className={`${BADGE_CLASS.err} live-head__yolo`} aria-label={YOLO_TITLE}>{YOLO_BADGE}</span>
+          )}
           {/* Ошибки и связь — в той же строке состояния шапки (одна, по важности):
               не закрывают поле вопроса и действия и не сдвигают содержимое. */}
           {stopError ? (
@@ -443,15 +471,20 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{stopError}</span>
             </span>
-          ) : hintNote ? (
+          ) : note ? (
             <span className="live-status live-status--error" role="alert">
               <span className="live-status__dot" aria-hidden="true" />
-              <span className="live-status__text">{hintNote}</span>
+              <span className="live-status__text">{note}</span>
             </span>
           ) : live.error ? (
             <span className="live-status" role="status">
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{live.error}</span>
+            </span>
+          ) : agentError ? (
+            <span className="live-status live-status--error" role={quiet ? undefined : "status"}>
+              <span className="live-status__dot" aria-hidden="true" />
+              <span className="live-status__text">{agentError}</span>
             </span>
           ) : live.status && !stopping && (
             <span className="live-status" role="status">
@@ -498,9 +531,10 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             tooltip={`${sizeLabel} (двойной щелчок по шапке)`} onClick={() => setMaximized(!view.maximized)} />
           <IconButton icon={open ? ChevronUp : ChevronDown} label={open ? "Свернуть" : "Развернуть"}
             aria-expanded={open} onClick={() => setExpanded(!open)} />
-          {more.length > 0 && (
+          {menu.length > 0 && (
             <IconButton icon={MoreHorizontal} label="Ещё" aria-haspopup="menu" aria-expanded={!!moreAnchor}
-              tooltip="Выключить ассистента, остановить без сохранения" className="live-head__more" disabled={stopping}
+              tooltip={more.length > 0 ? "Выключить ассистента, остановить без сохранения" : "YOLO, строка сессии"}
+              className="live-head__more" disabled={stopping}
               onClick={(e) => { const b = e.currentTarget; setMoreAnchor((cur) => (cur ? null : b)); }} />
           )}
           {inTauri() && (
@@ -510,10 +544,10 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           )}
         </span>
       </header>
-      {moreAnchor && more.length > 0 && (
+      {moreAnchor && menu.length > 0 && (
         <Popover anchor={moreAnchor} onClose={() => setMoreAnchor(null)} label="Ещё" width={260} align="end" anchorToggles>
           <div className="live-more" role="menu" aria-label="Ещё">
-            {more.map((m) => (
+            {menu.map((m) => (
               <button key={m.label} type="button" role="menuitem"
                 className={`live-more__item${m.danger ? " live-more__item--danger" : ""}`}
                 onClick={() => { setMoreAnchor(null); m.run(); }}>
@@ -533,11 +567,15 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       )}
       {asking ? (
         <div className="live-panel__confirm">
-          <ConfirmDialog inline {...(asking === "discard" ? discardConfirm(status?.forget_gaps) : TEMP_END_CONFIRM)}
+          <ConfirmDialog inline {...(asking === "discard" ? discardConfirm(status?.forget_gaps)
+            : asking === "yolo" ? YOLO_CONFIRM : TEMP_END_CONFIRM)}
             onCancel={closeAsk}
             onConfirm={() => {
               if (asking === "discard") discard();
-              else {
+              else if (asking === "yolo") {
+                closeAsk();
+                void chat.setYolo?.(true);
+              } else {
                 closeAsk();
                 stop(false);
               }
@@ -549,7 +587,8 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           {wantsOwnerSample(live.mic) && (
             <OwnerVoiceNudge endpoint={endpoint} lead={LIVE_NUDGE_LEAD} className="live-nudge" />
           )}
-          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} notice={termsNotice} />
+          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} chat={chat} notice={termsNotice}
+            barHidden={!sessionBar.shown} onHideBar={() => sessionBar.setShown(false)} />
         </div>
       ) : failure ? failure
       : participant && chat.cards[0] ? (

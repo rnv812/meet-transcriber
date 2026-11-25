@@ -13,9 +13,14 @@
  *
  * Компактная (узкая область): «Что я знаю» — значком, предупреждение — цветом
  * модели и текстом для экранного диктора.
+ *
+ * YOLO (0.6.2, `yolo.ts`): включён — красный бейдж «YOLO» в строке при любой
+ * ширине (щелчок выключает), в «Что я знаю» — «Действия: YOLO — без вопросов»;
+ * выключен — значок-молния (в узкой — кнопка в «Что я знаю»), включение — с
+ * вопросом. `onHide` — «Скрыть строку» (плавающее окно, `ui.live_session_bar`).
  */
 
-import { BookOpen, X } from "lucide-react";
+import { BookOpen, X, Zap } from "lucide-react";
 import { useId, useState } from "react";
 
 import { effortText } from "../lib/effort";
@@ -23,6 +28,7 @@ import { plural } from "../lib/format";
 import type { AgentFrequencyLabel, AgentInfo, AgentProfile, LiveSummary as Summary } from "../lib/types";
 import { BADGE_CLASS } from "../ui/badge";
 import { Button } from "../ui/Button";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { IconButton } from "../ui/IconButton";
 import { Popover } from "../ui/Popover";
 import { Segmented } from "../ui/Segmented";
@@ -30,6 +36,9 @@ import { Select } from "../ui/Select";
 import { Tip } from "../ui/Tip";
 import { LiveSummary } from "./LiveSummary";
 import { PROFILES, PROFILE_LABELS, PROFILE_NOTES, profileOf } from "./profiles";
+import {
+  YOLO_ACTIONS, YOLO_BADGE, YOLO_CONFIRM, YOLO_OFFER, YOLO_OFF_LABEL, YOLO_ON_LABEL, YOLO_TITLE, yoloSwitchable,
+} from "./yolo";
 import "./chat.css";
 import "./live.css";
 
@@ -227,7 +236,7 @@ export function profileTitle(profile: AgentProfile): string {
 }
 
 export function SessionBar({ agent, summary, writing = false, compact = false, quiet = false, onFrequency, onProfile,
-  disabled = false, onRevokeGrant }: {
+  disabled = false, onRevokeGrant, onYolo, onHide }: {
   agent: AgentInfo;
   summary: Summary;
   /** Ответ пишется и виден в ленте. */
@@ -241,8 +250,19 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
   disabled?: boolean;
   /** Отозвать «Разрешать такое до конца встречи». */
   onRevokeGrant?: (id: string) => void;
+  /** Режим YOLO этой встречи (включение — после вопроса здесь же); нет — без переключателя. */
+  onYolo?: (on: boolean) => void;
+  /** Скрыть строку (плавающее окно); нет — кнопки нет. */
+  onHide?: () => void;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [askYolo, setAskYolo] = useState(false);
+  const yolo = agent.yolo === true;
+  const canYolo = !!onYolo && yoloSwitchable(agent);
+  const switchYolo = (on: boolean) => {
+    if (on) setAskYolo(true);
+    else onYolo?.(false);
+  };
   const [grantsAnchor, setGrantsAnchor] = useState<HTMLElement | null>(null);
   const state = stateOf(agent, writing);
   const notes = agentNotes(agent);
@@ -293,8 +313,24 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
         <Select size="sm" aria-label="Как часто писать" className="session-bar__select" options={FREQUENCY_OPTIONS}
           value={frequency} onChange={onFrequency} disabled={disabled} />
       )}
+      {/* YOLO (0.6.2): включён — бейдж при любой ширине, щелчок выключает. */}
+      {yolo && (
+        <Tip content={YOLO_TITLE}>
+          {canYolo ? (
+            <button type="button" className={`${BADGE_CLASS.err} session-bar__yolo`} aria-pressed="true"
+              aria-label={`${YOLO_BADGE} включён — ${YOLO_OFF_LABEL.toLowerCase()}`} disabled={disabled}
+              onClick={() => switchYolo(false)}>
+              {YOLO_BADGE}
+            </button>
+          ) : <span className={`${BADGE_CLASS.err} session-bar__yolo`}>{YOLO_BADGE}</span>}
+        </Tip>
+      )}
+      {!yolo && canYolo && !compact && (
+        <IconButton icon={Zap} size="sm" label={YOLO_ON_LABEL} className="session-bar__yolo-on"
+          tooltip={`${YOLO_OFFER} — с вашего подтверждения`} disabled={disabled} onClick={() => switchYolo(true)} />
+      )}
       {/* Как действует по просьбе (0.4): в узкой — только «автомод недоступен». */}
-      {mode && (!compact || mode.warn) && (
+      {mode && !yolo && (!compact || mode.warn) && (
         <Tip content={canTitle}>
           <span className={`${mode.warn ? BADGE_CLASS.temp : `${BADGE_CLASS.plain}`} session-bar__mode${mode.warn ? " session-bar__mode--warn" : ""}`}>
             <span className="session-bar__note-text">{mode.text}</span>
@@ -321,6 +357,10 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
         ) : (
           <Button icon={BookOpen} aria-expanded={!!anchor} onClick={toggle}>Что я знаю</Button>
         )}
+        {onHide && (
+          <IconButton icon={X} size="xs" label="Скрыть строку сессии" className="session-bar__hide"
+            tooltip="Скрыть строку — вернуть можно в меню «Ещё» окна или в настройках ассистента" onClick={onHide} />
+        )}
       </span>
       {anchor && (
         <Popover anchor={anchor} onClose={() => setAnchor(null)} label="Что я знаю" width={340} align="end" anchorToggles>
@@ -329,8 +369,8 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
               <p className="session-know__line"><span className="session-know__key">Модель:</span> {agent.label || agent.provider}{effortText(agent.effort) ? `, уровень рассуждений — ${effortText(agent.effort)}` : ""}</p>
               <p className="session-know__line"><span className="session-know__key">Профиль:</span> {PROFILE_LABELS[profile]}</p>
               <p className="session-know__line"><span className="session-know__key">Видит:</span> {sees}</p>
-              {mode && (
-                <p className="session-know__line"><span className="session-know__key">Действия:</span> {mode.text}</p>
+              {(mode || yolo) && (
+                <p className="session-know__line"><span className="session-know__key">Действия:</span> {yolo ? YOLO_ACTIONS : mode!.text}</p>
               )}
               {can && (
                 <div className="session-bar__can">
@@ -351,6 +391,12 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
               <div className="session-know__controls">
                 {onProfile && <ProfileSelect value={profile} onChange={onProfile} disabled={disabled} />}
                 <FrequencySelect value={frequency} onChange={onFrequency} disabled={disabled} />
+                {canYolo && (
+                  <Button size="sm" variant={yolo ? "danger" : "secondary"} icon={Zap} disabled={disabled}
+                    onClick={() => { setAnchor(null); switchYolo(!yolo); }}>
+                    {yolo ? YOLO_OFF_LABEL : YOLO_ON_LABEL}
+                  </Button>
+                )}
               </div>
             )}
             <section className="session-know__section">
@@ -359,6 +405,10 @@ export function SessionBar({ agent, summary, writing = false, compact = false, q
             </section>
           </div>
         </Popover>
+      )}
+      {askYolo && (
+        <ConfirmDialog {...YOLO_CONFIRM} onCancel={() => setAskYolo(false)}
+          onConfirm={() => { setAskYolo(false); onYolo?.(true); }} />
       )}
       {grantsAnchor && !compact && grants.length > 0 && (
         <Popover anchor={grantsAnchor} onClose={() => setGrantsAnchor(null)} label="Разрешено до конца встречи"

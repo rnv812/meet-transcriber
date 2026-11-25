@@ -143,6 +143,8 @@ export type Chat = {
   setFrequency: (label: AgentFrequencyLabel) => Promise<void>;
   /** Профиль идущей сессии: сразу в шапке, на резиденте — `PUT /live/profile`. */
   setProfile: (profile: AgentProfile) => Promise<void>;
+  /** Режим YOLO идущей встречи (0.6.2): сразу в шапке, на резиденте — `PUT /live/yolo`; null — нельзя (после встречи). */
+  setYolo: ((on: boolean) => Promise<void>) | null;
   paste: (blob: Blob, name?: string) => Promise<ChatAttachResult>;
   attach: (path: string) => Promise<ChatAttachResult>;
   /** Вложение убрали из строки ввода до отправки: у агента его не будет. */
@@ -201,6 +203,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
   const previews = useRef(new Map<string, string>());
   const [frequency, setFrequencyLocal] = useState<AgentFrequencyLabel | null>(null);
   const [profile, setProfileLocal] = useState<AgentProfile | null>(null);
+  const [yolo, setYoloLocal] = useState<boolean | null>(null);
   const [text, setText] = useState("");
   const [drafts, setDraftList] = useState<ChatDraft[]>([]);
   const dropped = useRef(new Set<string>());
@@ -413,6 +416,24 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     if (profile && agentProfile === profile) setProfileLocal(null);
   }, [agentProfile, profile]);
 
+  const yoloCall = backend.yolo;
+  const setYolo = useCallback(async (on: boolean) => {
+    if (!ep || !yoloCall) return;
+    setYoloLocal(on);
+    try {
+      await yoloCall(ep, on);
+    } catch (e) {
+      setNote(`YOLO не удалось ${on ? "включить" : "выключить"}: ${errorText(e)}`);
+      setYoloLocal(null);
+    }
+  }, [ep, yoloCall]);
+
+  // Пришло состояние агента с тем же YOLO — своё значение больше не нужно.
+  const agentYolo = state.agent?.yolo;
+  useEffect(() => {
+    if (yolo !== null && (agentYolo ?? false) === yolo) setYoloLocal(null);
+  }, [agentYolo, yolo]);
+
   const paste = useCallback(async (blob: Blob, name?: string) => {
     if (!ep) throw new Error("Нет связи с ассистентом");
     const reply = await backend.paste(ep, blob, name);
@@ -511,10 +532,11 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
 
   const items = useMemo(() => feedItems(state, now), [state, now]);
   const agent = useMemo(
-    () => (state.agent && (frequency || profile)
-      ? { ...state.agent, ...(frequency ? { frequency } : {}), ...(profile ? { profile } : {}) }
+    () => (state.agent && (frequency || profile || yolo !== null)
+      ? { ...state.agent, ...(frequency ? { frequency } : {}), ...(profile ? { profile } : {}),
+        ...(yolo !== null ? { yolo } : {}) }
       : state.agent),
-    [state.agent, frequency, profile],
+    [state.agent, frequency, profile, yolo],
   );
   const lastAgent = useMemo(() => {
     for (let k = state.order.length - 1; k >= 0; k--) {
@@ -533,6 +555,7 @@ export function useChat(ep: Endpoint | null, backend: ChatBackend = LIVE_CHAT,
     preview: (id) => previews.current.get(id),
     used: (id) => used.get(id) ?? null,
     send, retry, click, confirm, revokeGrant, cancelVoice, cards: pendingCards(state, now), react, stop, setFrequency, setProfile,
+    setYolo: yoloCall ? setYolo : null,
     paste, attach,
     removeAttachment, hidePin, sources, open, more, composer, sink,
     commands: agent?.commands?.length ? agent.commands : MEET_COMMANDS,

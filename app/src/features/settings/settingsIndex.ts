@@ -172,6 +172,11 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
     keywords: ["живая расшифровка", "секунды"], advanced: true,
   },
   { section: "assistant", label: "Не отвлекать по умолчанию", keys: ["assist.quiet_default"], hint: "Без подсветки и счётчиков", keywords: ["тихо", "колокольчик"], advanced: true },
+  {
+    section: "assistant", label: "Строка сессии в окне ассистента", keys: ["ui.live_session_bar"],
+    hint: "Модель, профиль и «Что я знаю» над чатом", keywords: ["скрыть строку", "шапка сессии", "панель", "live_session_bar"],
+    advanced: true,
+  },
   { section: "assistant", label: "Активность подсказок", keys: ["assist.activity"], hint: "Прежний режим (участник выключен)", keywords: ["подсказки", "сводка"], advanced: true },
   { section: "assistant", label: "Модель для живых подсказок", keys: ["assist.hints_model"], hint: "Прежний режим (участник выключен)", keywords: ["подсказки", "быстрее"], advanced: true },
   { section: "assistant", label: "Сколько подсказок держать", keys: ["assist.max_hints"], hint: "Прежний режим (участник выключен)", keywords: ["подсказки"], advanced: true },

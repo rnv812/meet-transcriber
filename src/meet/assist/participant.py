@@ -93,7 +93,8 @@ USER он правит рабочие папки и выполняет кома�
 потоках `asyncio.to_thread`. Цикл событий не блокируется.
 
 API для окна (задача 6): `post_user_message`, `attach`, `click`, `react`,
-`stop_reply`, `set_frequency`, `set_profile`, `snapshot`, `view`; «Продолжить разговор»
+`stop_reply`, `set_frequency`, `set_profile`, `set_yolo` (режим YOLO встречи, 0.6.2),
+`snapshot`, `view`; «Продолжить разговор»
 после встречи — `queue_existing` и `add_note`; события —
 `add_listener(fn(name, data))`: `chat` (событие журнала), `chat_partial`
 (`{"id","text"}`), `agent` (`view()`).
@@ -170,6 +171,9 @@ _ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
 # Однократная строка первой сессии после обновления до 0.4 (спец. §7, решение 1).
 MODE_NOTICE = ("Ассистент теперь сам выполняет обычные действия, рискованные — с вашего разрешения. "
                "Вернуть подтверждение каждого действия — Настройки → Ассистент.")
+# Режим YOLO встречи (0.6.2): строки в чате при включении и выключении.
+YOLO_ON_LINE = "Включён режим YOLO: ассистент действует без вопросов до конца встречи"
+YOLO_OFF_LINE = "YOLO выключен: ассистент снова спрашивает о рискованном"
 # Codex на Windows без `[windows] sandbox` в своём config.toml: ход по просьбе
 # фактически только читает (`codex.sandbox_missing`). Строка — одна на встречу.
 CODEX_SANDBOX_NOTICE = ("Codex сможет только читать: настройте песочницу Codex — ключ "
@@ -313,6 +317,7 @@ class _RunnerSession:
     (`log`) — выход Codex за песочницу спрашивает человека карточкой."""
 
     mcp_servers = None
+    yolo = False                   # режим YOLO встречи (ставит `Participant`)
 
     def __init__(self, runner, provider: str, *, system, session_id: str | None,
                  resumable: bool, allowed_dirs=(), deny_paths=(), call_kwargs=None,
@@ -348,9 +353,12 @@ class _RunnerSession:
         if self._freedom:
             # Уровень хода → флаги и права вызова. Без ворот (OpenCode) спросить
             # каждое действие нельзя: в режиме `confirm` просьба — только чтение.
-            downgrade = level == consent.USER and self._mode != consent.MODE_AUTO and self.gate is None
+            downgrade = (level == consent.USER and self._mode != consent.MODE_AUTO and self.gate is None
+                         and not self.yolo)
             extra["access"] = consent.READ if downgrade else level
             extra["work_dirs"] = self._work
+            if self.yolo and self.gate is None:
+                extra["yolo"] = True     # OpenCode; у Codex и agy YOLO — в воротах (`gate.mode`)
         if self.gate is not None:
             extra["gate"] = self.gate
             extra["log"] = self._log
@@ -583,6 +591,8 @@ class Participant:
         # Свобода по согласию — только у модели со своими инструментами.
         self.freedom = bool(freedom) and self.tools
         self.agent_mode = agent_mode if agent_mode in consent.MODES else consent.MODE_AUTO
+        # Режим YOLO (0.6.2): только эта встреча и этот процесс, по умолчанию выключен.
+        self.yolo = False
         self._gate: consent.ConsentGate | None = None
         self._mcp: list[str] | None = None
         # Режим, в котором CLI на самом деле запустился (`system/init` →
@@ -765,6 +775,7 @@ class Participant:
                 "frequency": self.frequency, "profile": self.profile,
                 "session": self.session_state,
                 "freedom": self.freedom, "can": self._can(),
+                "yolo": self.yolo, "yolo_available": self.yolo_available,
                 "grants": [{"id": gid, "label": self._grant_labels.get(gid, key)}
                            for gid, key in self._grant_ids.items()],
                 "writing": self._turn.reply_id if self._turn is not None else None,
@@ -1035,6 +1046,39 @@ class Participant:
                 self._background_task(self._save_profile())
         return name
 
+    @property
+    def yolo_available(self) -> bool:
+        """YOLO — у модели со своими инструментами и свободой, во время встречи
+        («Продолжить разговор» — без него)."""
+        return self.freedom and not self._after_meeting
+
+    async def set_yolo(self, on: bool) -> bool:
+        """Режим YOLO на эту встречу (0.6.2): ворота пропускают всё, кроме всегда
+        закрытого, ходы по репликам — как по просьбе (`consent_level`), агенту —
+        пометка в ближайший ход, в чат — строка. Недоступен — ValueError."""
+        on = bool(on)
+        if on and not self.yolo_available:
+            raise ValueError("YOLO недоступен: у ассистента нет своих инструментов или расширенных возможностей")
+        if on == self.yolo:
+            return on
+        self.yolo = on
+        if self._gate is not None:
+            self._gate.set_yolo(on)
+        if isinstance(self._session, _RunnerSession):
+            self._session.yolo = on
+        self._notes = [n for n in self._notes if n not in (pp.YOLO_ON, pp.YOLO_OFF)]
+        self._notes.append(pp.YOLO_ON if on else pp.YOLO_OFF)
+        self._log(f"агент: YOLO {'включён' if on else 'выключен'}")
+        self._changed()
+        try:
+            added = await self._io(self._chatlog.append, "system", text=YOLO_ON_LINE if on else YOLO_OFF_LINE,
+                                   notice="yolo", on=on)
+        except (OSError, RuntimeError, ValueError) as e:
+            self._log(f"агент: строка о YOLO не записана ({type(e).__name__})")
+        else:
+            self._emit_chat([added.event])
+        return on
+
     async def _save_profile(self) -> None:
         set_profile = getattr(self._chatlog, "set_profile", None)
         # Временная встреча следов не оставляет: и профиль — только в памяти.
@@ -1214,6 +1258,7 @@ class Participant:
                 freedom=self.freedom, mode=self.agent_mode,
                 work_dirs=[str(self._folder), *self._work_dirs()],
                 gate=gate, log=self._log if gate is not None else None)
+            self._session.yolo = self.yolo
         self._session_profile = self.profile
         self._changed()
         return self._session
@@ -1229,6 +1274,7 @@ class Participant:
             sensitive=sensitive, cwd=cwd, log=self._log, confirmer=self._confirm_sync,
             mode=self.agent_mode,
             ask_text=pp.ASK_FIRST_PERSONAL if self.profile == pp.PERSONAL else consent.ASK_FIRST)
+        self._gate.set_yolo(self.yolo)
         self._gate.allow_paths(await self._io(self._attached_paths))
         for gid, key, label in await self._io(self._load_grants):
             self._grant_ids[gid], self._grant_labels[gid] = key, label
@@ -1254,7 +1300,10 @@ class Participant:
         реплики встречи, 👍/👎 — NONE. Повтор после сбоя (`_replayed`)
         уровня не даёт: его даёт только свежий ввод пользователя. Кто
         просил, решает Meet: просьбу из речи встречи классификатор CLI не
-        отличит."""
+        отличит. YOLO (0.6.2) — всякий ход как по просьбе: человек разрешил
+        действовать и по услышанному."""
+        if self.yolo:
+            return consent.USER
         level = consent.NONE
         for m in inputs.user:
             if m.get("_replayed"):
@@ -1885,9 +1934,12 @@ class Participant:
             self.session_state = "seeded" if journal is not None and self._chatlog_has_history() else "new"
         elif self.session_state is None:
             self.session_state = "resumed"
+        notes = inputs.notes
+        if parts and self.yolo and pp.YOLO_ON not in notes:
+            notes = [*notes, pp.YOLO_ON]      # новый сеанс не знает, что YOLO включён
         delta = pp.delta(inputs.lines, inputs.user, (), inputs.reactions,
                          owner_speaker=self._owner_speaker, tool_results=inputs.tools,
-                         notes=inputs.notes, frequency=inputs.frequency,
+                         notes=notes, frequency=inputs.frequency,
                          agent_texts=self._agent_texts, profile=self.profile,
                          profile_changed=inputs.profile, people=self._new_people(inputs.lines))
         # Карта при возврате в «Рабочую встречу» — только системным промптом:
@@ -1963,7 +2015,7 @@ class Participant:
     async def _send(self, turn: _Turn, session, text: str) -> AgentReply:
         kwargs = {"level": self.consent_level(turn.inputs)} if self.freedom else {}
         if (kwargs.get("level") == consent.USER and self.provider == "codex"
-                and self.agent_mode == consent.MODE_AUTO and not self._sandbox_checked):
+                and self.agent_mode == consent.MODE_AUTO and not self.yolo and not self._sandbox_checked):
             await self._note_codex_sandbox()
         task = asyncio.ensure_future(session.send(
             text, images=turn.inputs.images if self.vision else (),

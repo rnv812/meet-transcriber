@@ -1907,6 +1907,18 @@ class TrayControl:
         live = isinstance(reply, dict) and reply.get("live") is True
         return {"profile": key, "label": settings.PROFILE_LABELS[key], "live": live}
 
+    def live_yolo(self, body: dict | None) -> dict:
+        """Режим YOLO идущей встречи (`{"on": bool}`, 0.6.2): ассистент
+        действует без карточек до конца встречи или до выключения; в настройки
+        не пишется, следующая встреча начинается без него. Ассистента нет —
+        409. → `{"on", "live"}`."""
+        on = (body or {}).get("on")
+        if not isinstance(on, bool):
+            raise _bad_request("on — true или false")
+        reply = self._live_call(self.live.agent_yolo, on)
+        live = isinstance(reply, dict) and reply.get("live") is True
+        return {"on": bool(reply.get("on")) if isinstance(reply, dict) else on, "live": live}
+
     def adopt_recording(self) -> dict:
         """Автозапись → ручная: детектор её больше не остановит."""
         if not self.tray.recording:

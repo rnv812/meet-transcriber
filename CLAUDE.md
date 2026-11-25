@@ -289,6 +289,18 @@ git не попадают.
   агенту и пересоздание сеанса: Claude Code — с продолжением, Codex и
   OpenCode — новый с затравкой), хранится в `assistant/sessions.json`
   (`ChatLog.profile`).
+- **YOLO (0.6.2)** — режим одной встречи, по умолчанию выключен (в
+  `config.json` не пишется): `PUT /live/yolo {"on"}` → ребёнку `PUT /agent/yolo`
+  → `Participant.set_yolo` (строка `system` `notice: "yolo"`, пометка агенту
+  `pp.YOLO_ON`/`YOLO_OFF`, в `view` — `yolo`, `yolo_available`). Ворота
+  (`ConsentGate.set_yolo`, `mode` → `MODE_YOLO`) разрешают всё без карточек,
+  кроме всегда закрытого (`kb_exclude`, чувствительные пути, фон, локальные
+  адреса, скрытые символы); всякий ход — `USER`. Codex app-server —
+  `dangerFullAccess`, `codex exec` — `--dangerously-bypass-approvals-and-sandbox`,
+  `agy` — без запретов команд, OpenCode — права `yolo`. «Продолжить разговор» —
+  без YOLO. Окно: бейдж и молния в `SessionBar`, пункт «Ещё» панели (`live/yolo.ts`).
+  Строку сессии плавающего окна можно скрыть — `ui.live_session_bar`
+  (`live/useSessionBar.ts`).
 - **Прежний режим** (`assist.participant=false`): подсказки и «Спросить»
   (`digester.py`, `qa.py`, `LiveHints`/`LiveAsk`/`LiveSummary`, `web.PAGE`)
   — запасной в 0.3.6, удаление запланировано на 0.3.7. Пока он есть, оба

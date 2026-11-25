@@ -1771,6 +1771,9 @@ class Ui:
     # пишется (см. _keep_default_terms_unset): и новый, и обновившийся пользователь
     # увидят условия один раз.
     terms_accepted: str = ""
+    # Строка сессии (модель, профиль, «Что я знаю») в плавающем окне ассистента:
+    # человек скрыл её — скрыта на всех следующих встречах (0.6.2).
+    live_session_bar: bool = True
 
     @classmethod
     def from_raw(cls, raw: dict, *, default_theme: str = UI_THEMES[0]) -> "Ui":
@@ -1784,6 +1787,7 @@ class Ui:
             aurora_style=as_choice(raw.get("aurora_style"), AURORA_STYLES, AURORA_STYLES[0]),
             motion=as_flag(raw.get("motion"), True),
             terms_accepted=as_terms_version(raw.get("terms_accepted")),
+            live_session_bar=as_flag(raw.get("live_session_bar"), True),
         )
 
     def to_raw(self) -> dict:
@@ -1795,6 +1799,7 @@ class Ui:
             "aurora_style": self.aurora_style,
             "motion": self.motion,
             "terms_accepted": self.terms_accepted,
+            "live_session_bar": self.live_session_bar,
         }
 
 

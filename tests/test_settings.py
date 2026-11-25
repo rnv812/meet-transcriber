@@ -393,7 +393,7 @@ def test_ui_defaults_notify_everything_and_wizard_not_done():
         "notifications": "all", "wizard_done": False,
         # Конфиг с version — обновившийся пользователь: окно остаётся тёмным.
         "theme": "dark", "aurora": "violet", "aurora_style": "glow", "motion": True,
-        "terms_accepted": "",
+        "terms_accepted": "", "live_session_bar": True,
     }
 
 

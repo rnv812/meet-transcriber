@@ -12,7 +12,7 @@ import { IS_MAC } from "./platform";
 import { inTauri, invoke } from "./shell";
 import type { SegmentWords } from "./words";
 import type {
-  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
+  AgentFrequency, AgentFrequencyLabel, AgentFrequencyResult, AgentInfo, AgentProfile, AgentProfileResult, AgentYoloResult, ChatAttachResult, ChatEvent, ChatPartial, ChatPost,
   ChatPostResult, ChatReaction, ChatSnapshot, ContinueChatResult, KbDocs, RecordingChat,
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, ExportRelocated, ExportRelocation, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, LocalModels, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
@@ -785,6 +785,9 @@ export const setAgentFrequency = (ep: Endpoint, frequency: AgentFrequency | Agen
 /** Профиль идущей сессии ассистента (только эта сессия; профиль по умолчанию — в настройках). 409 — ассистента нет. */
 export const setAgentProfile = (ep: Endpoint, profile: AgentProfile) =>
   json<AgentProfileResult>(ep, "/live/profile", body("PUT", { profile }));
+/** Режим YOLO идущей встречи (0.6.2): без карточек до конца встречи; в настройки не пишется. 409 — ассистента нет. */
+export const setAgentYolo = (ep: Endpoint, on: boolean) =>
+  json<AgentYoloResult>(ep, "/live/yolo", body("PUT", { on }));
 /** Чат записи после встречи; у встреч до 0.3.6 — `legacy` (прежние подсказки и вопросы). */
 export const getRecordingChat = (ep: Endpoint, id: string) =>
   json<RecordingChat>(ep, `/recordings/${enc(id)}/chat`);

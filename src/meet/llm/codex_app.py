@@ -123,8 +123,13 @@ def turn_policy(access: str, mode: str, work_dirs=()) -> dict:
     (`mode`): ключи `approvalPolicy`, `approvalsReviewer`, `sandbox` (режим
     для `thread/*`), `sandboxPolicy` (для `turn/start`). ❓ (READ) —
     только-чтение, но с одобрениями: через них идут вызовы MCP, а ворота
-    Meet в этом ходе пропускают только чтение, без карточек."""
+    Meet в этом ходе пропускают только чтение, без карточек. `yolo` (режим
+    YOLO встречи, `consent.MODE_YOLO`) — ход без песочницы (`dangerFullAccess`:
+    любые файлы и сеть), редкие одобрения ворота принимают сами."""
     read_only = {"type": "readOnly", "networkAccess": False}
+    if mode == "yolo":
+        return {"approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "danger-full-access",
+                "sandboxPolicy": {"type": "dangerFullAccess"}}
     if access == "read":
         return {"approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "read-only",
                 "sandboxPolicy": read_only}

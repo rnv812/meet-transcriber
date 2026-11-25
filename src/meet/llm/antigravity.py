@@ -242,15 +242,16 @@ def _command_prefixes() -> list[str]:
     return out
 
 
-def run_settings(*, sensitive=(), deny_paths=(), roots=(), strict: bool = False) -> dict:
+def run_settings(*, sensitive=(), deny_paths=(), roots=(), strict: bool = False, yolo: bool = False) -> dict:
     """Разовые настройки хода (`<home>/antigravity-cli/<разовая>/settings.json`):
     режим Default (`agentMode: ""`), проверка `strict` (agy спрашивает о
     правке и командах), запреты — команды удаления, отправки и публикации
     (`command(…)`), чтение и запись закрытых папок (`kb_exclude`), путей
     `consent.sensitive_paths` и `.env` в корне рабочих папок (их agy читает
     без вопроса). Разрешающих правил нет. `strict` — ещё и запрет всех
-    команд и записи (запасной путь `-p` вне хода по просьбе)."""
-    deny = [f"command({p})" for p in _command_prefixes()]
+    команд и записи (запасной путь `-p` вне хода по просьбе). `yolo` (режим
+    YOLO встречи) — без запретов команд: закрытые папки и пути остаются."""
+    deny = [] if yolo else [f"command({p})" for p in _command_prefixes()]
     own = _rule_path(home())
     for p in (*(deny_paths or ()), *(sensitive or ())):
         rp = _rule_path(p)
@@ -902,7 +903,7 @@ def _print_run(exe: str, argv: list[str], stdin_text: str, timeout_s: float, env
 
 def _print_turn(exe: str, *, env: dict, text: str, resume: str | None, keep_session: bool, model: str | None,
                 access: str | None, add_dirs: list[str], sensitive, deny_paths, timeout_s: float,
-                call: _Call, emit) -> AgentReply:
+                call: _Call, emit, yolo: bool = False) -> AgentReply:
     """Ход через `agy -p` (ACP недоступен): спросить человека agy здесь не
     может — несогласованное отклоняет сам; ход по просьбе — только чтение и
     разрешённое правилами. Настройки пользователя `-p` загружает (флага
@@ -911,7 +912,7 @@ def _print_turn(exe: str, *, env: dict, text: str, resume: str | None, keep_sess
     from meet.llm import consent
 
     settings = run_settings(sensitive=sensitive, deny_paths=deny_paths, roots=add_dirs,
-                            strict=access != consent.USER)
+                            strict=access != consent.USER, yolo=yolo)
     folder = Path(tempdirs.system_temp()) / f"{RUN_PREFIX}{os.getpid()}-{uuid.uuid4().hex[:12]}"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "settings.json"
@@ -1037,7 +1038,8 @@ async def run(
     workdir = await asyncio.to_thread(keep_dir)
     roots = [*add_dirs, workdir]
     approver = _gate_approver(gate) if gate is not None else _readonly_approver(roots)
-    settings = run_settings(sensitive=sensitive, deny_paths=deny_paths, roots=add_dirs)
+    yolo = gate is not None and gate.yolo       # режим YOLO встречи: без запретов команд
+    settings = run_settings(sensitive=sensitive, deny_paths=deny_paths, roots=add_dirs, yolo=yolo)
     run_name, run_folder = await asyncio.to_thread(_write_run, settings)
     flags = ["--gemini-dir", str(home()), "--cli_dir_name", run_name, "--disable-telemetry"]
     for d in add_dirs:
@@ -1065,7 +1067,7 @@ async def run(
             reply = await asyncio.to_thread(
                 _print_turn, exe, env=env, text=text, resume=resume, keep_session=keep_session, model=model,
                 access=access, add_dirs=add_dirs, sensitive=sensitive, deny_paths=deny_paths,
-                timeout_s=timeout_s, call=call, emit=emit)
+                timeout_s=timeout_s, call=call, emit=emit, yolo=yolo)
             reply.error = netproxy.with_hint(reply.error)
             reply.dropped_images, reply.notes = dropped, notes
             return reply
